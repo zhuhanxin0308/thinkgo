@@ -1,0 +1,61 @@
+package framework
+
+import (
+	"testing"
+
+	"thinkgo/framework/db"
+	"thinkgo/framework/env"
+)
+
+// TestApplyDatabaseEnvOverridesReadsPoolSettings 验证数据库连接池参数可从环境变量覆盖。
+func TestApplyDatabaseEnvOverridesReadsPoolSettings(t *testing.T) {
+	t.Setenv("DB_TYPE", "mysql")
+	t.Setenv("DB_HOST", "10.0.0.8")
+	t.Setenv("DB_PORT", "3307")
+	t.Setenv("DB_USER", "tester")
+	t.Setenv("DB_PASS", "secret")
+	t.Setenv("DB_NAME", "demo")
+	t.Setenv("DB_MAX_OPEN_CONNS", "64")
+	t.Setenv("DB_MAX_IDLE_CONNS", "16")
+	t.Setenv("DB_CONN_MAX_LIFETIME_SECONDS", "180")
+	t.Setenv("DB_CONN_MAX_IDLE_TIME_SECONDS", "45")
+	t.Setenv("DB_TIMESTAMP_VALUE_TYPE", "unix")
+
+	app := &App{Env: env.NewEnv()}
+	config := db.Config{}
+	applyDatabaseEnvOverrides(app, &config)
+
+	if config.Type != "mysql" || config.Hostname != "10.0.0.8" || config.Hostport != "3307" {
+		t.Fatalf("数据库基础连接参数覆盖错误，实际为 %#v", config)
+	}
+	if config.MaxOpenConns != 64 || config.MaxIdleConns != 16 || config.ConnMaxLifetimeSeconds != 180 || config.ConnMaxIdleTimeSeconds != 45 {
+		t.Fatalf("数据库连接池参数覆盖错误，实际为 %#v", config)
+	}
+	if config.TimestampValueType != db.TimestampValueTypeUnix {
+		t.Fatalf("时间戳值类型环境变量覆盖错误，实际为 %q", config.TimestampValueType)
+	}
+}
+
+// TestReadDatabaseConfigReadsTimestampValueType 验证数据库配置文件中的时间戳值类型能正确读入。
+func TestReadDatabaseConfigReadsTimestampValueType(t *testing.T) {
+	config := readDatabaseConfig(map[string]interface{}{
+		"type":                 "mysql",
+		"auto_timestamp":       true,
+		"timestamp_value_type": "unix",
+	})
+
+	if config.TimestampValueType != db.TimestampValueTypeUnix {
+		t.Fatalf("时间戳值类型读取错误，实际为 %q", config.TimestampValueType)
+	}
+}
+
+// TestApplyDatabaseFallbacksUsesUnixTimestampValueTypeByDefault 验证数据库配置缺省时仍回退到 Unix 秒模式，
+// 避免运行环境漏配后重新写入 datetime 字符串。
+func TestApplyDatabaseFallbacksUsesUnixTimestampValueTypeByDefault(t *testing.T) {
+	config := db.Config{}
+	applyDatabaseFallbacks(&config)
+
+	if config.TimestampValueType != db.TimestampValueTypeUnix {
+		t.Fatalf("默认时间戳值类型应为 unix，实际为 %q", config.TimestampValueType)
+	}
+}

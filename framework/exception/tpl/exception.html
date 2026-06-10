@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.ErrorType}} - ThinkGo</title>
+<style>
+:root {
+    --bg: #141821;
+    --surface: #1d2330;
+    --surface-soft: #252d3d;
+    --border: #313a4c;
+    --text: #d8deea;
+    --muted: #98a3b7;
+    --accent: #65a7ff;
+    --danger: #ef6b73;
+    --warning: #f0bf68;
+    --font-sans: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    --font-mono: "JetBrains Mono", "Cascadia Code", Consolas, monospace;
+}
+* { box-sizing: border-box; }
+body {
+    margin: 0;
+    font-family: var(--font-sans);
+    background: radial-gradient(circle at top, #1d2330 0%, #141821 55%);
+    color: var(--text);
+}
+.page {
+    max-width: 1360px;
+    margin: 0 auto;
+    padding: 32px;
+}
+.hero {
+    background: linear-gradient(135deg, rgba(239,107,115,0.18), rgba(101,167,255,0.12));
+    border: 1px solid rgba(239,107,115,0.35);
+    border-radius: 20px;
+    padding: 28px 32px;
+    margin-bottom: 24px;
+}
+.eyebrow {
+    display: inline-block;
+    color: var(--danger);
+    font-size: 13px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    margin-bottom: 12px;
+}
+.title {
+    margin: 0;
+    font-size: 30px;
+    font-weight: 700;
+}
+.meta {
+    margin-top: 12px;
+    color: var(--muted);
+    font-family: var(--font-mono);
+    font-size: 13px;
+}
+.grid {
+    display: grid;
+    grid-template-columns: 2fr 1fr;
+    gap: 20px;
+}
+.card {
+    background: rgba(29, 35, 48, 0.88);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    overflow: hidden;
+}
+.card-title {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+    font-size: 14px;
+    color: var(--muted);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+.card-body {
+    padding: 20px;
+}
+.stack-item {
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 14px;
+    margin-bottom: 14px;
+    overflow: hidden;
+    background: rgba(255,255,255,0.02);
+}
+.stack-head {
+    padding: 14px 16px;
+    background: rgba(255,255,255,0.03);
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+.stack-func {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--text);
+    word-break: break-all;
+}
+.stack-file {
+    margin-top: 6px;
+    color: var(--accent);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    word-break: break-all;
+}
+.source {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: var(--font-mono);
+    font-size: 12px;
+}
+.source td {
+    padding: 6px 10px;
+    border-top: 1px solid rgba(255,255,255,0.04);
+    vertical-align: top;
+}
+.source .line-no {
+    width: 72px;
+    text-align: right;
+    color: var(--muted);
+    border-right: 1px solid rgba(255,255,255,0.06);
+}
+.source tr.current {
+    background: rgba(239,107,115,0.16);
+}
+.source tr.near {
+    background: rgba(240,191,104,0.08);
+}
+.kv {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+.kv th,
+.kv td {
+    padding: 10px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    vertical-align: top;
+}
+.kv th {
+    width: 120px;
+    color: var(--muted);
+    text-align: left;
+    font-weight: 500;
+}
+.kv td {
+    font-family: var(--font-mono);
+    word-break: break-all;
+}
+pre {
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--text);
+}
+.env-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+.env-pill {
+    padding: 8px 12px;
+    border-radius: 999px;
+    background: rgba(101,167,255,0.12);
+    border: 1px solid rgba(101,167,255,0.22);
+    font-size: 12px;
+    color: var(--text);
+}
+@media (max-width: 960px) {
+    .page {
+        padding: 18px;
+    }
+    .grid {
+        grid-template-columns: 1fr;
+    }
+}
+</style>
+</head>
+<body>
+<div class="page">
+    <section class="hero">
+        <div class="eyebrow">{{.ErrorType}}</div>
+        <h1 class="title">{{.Message}}</h1>
+        {{if .ErrorFile}}
+        <div class="meta">{{.ErrorFile}} : {{.ErrorLine}}</div>
+        {{end}}
+    </section>
+
+    <div class="grid">
+        <section class="card">
+            <div class="card-title">堆栈追踪 ({{.FrameCount}})</div>
+            <div class="card-body">
+                {{if .Frames}}
+                    {{range .Frames}}
+                    <article class="stack-item">
+                        <div class="stack-head">
+                            <div class="stack-func">{{.Function}}</div>
+                            <div class="stack-file">{{.File}} : {{.Line}}</div>
+                        </div>
+                        {{if .Source}}
+                        <table class="source">
+                            <tbody>
+                            {{range .Source}}
+                            <tr class="{{if .IsCurrent}}current{{else if .IsNear}}near{{end}}">
+                                <td class="line-no">{{.Number}}</td>
+                                <td>{{.Content}}</td>
+                            </tr>
+                            {{end}}
+                            </tbody>
+                        </table>
+                        {{end}}
+                    </article>
+                    {{end}}
+                {{else}}
+                    <div>暂无堆栈信息</div>
+                {{end}}
+            </div>
+        </section>
+
+        <section>
+            <article class="card" style="margin-bottom: 20px;">
+                <div class="card-title">请求信息</div>
+                <div class="card-body">
+                    <table class="kv">
+                        <tr><th>方法</th><td>{{.Request.Method}}</td></tr>
+                        <tr><th>地址</th><td>{{.Request.URL}}</td></tr>
+                        <tr><th>客户端</th><td>{{.Request.IP}}</td></tr>
+                        <tr><th>协议</th><td>{{.Request.Proto}}</td></tr>
+                        {{if .Request.Body}}
+                        <tr><th>请求体</th><td><pre>{{.Request.Body}}</pre></td></tr>
+                        {{end}}
+                    </table>
+                </div>
+            </article>
+
+            <article class="card" style="margin-bottom: 20px;">
+                <div class="card-title">请求头</div>
+                <div class="card-body">
+                    <table class="kv">
+                        {{range $key, $values := .Request.Headers}}
+                        <tr><th>{{$key}}</th><td>{{index $values 0}}</td></tr>
+                        {{end}}
+                    </table>
+                </div>
+            </article>
+
+            <article class="card">
+                <div class="card-title">运行环境</div>
+                <div class="card-body">
+                    <div class="env-list">
+                        <div class="env-pill">ThinkGo {{.Env.FrameworkVersion}}</div>
+                        <div class="env-pill">Go {{.Env.GoVersion}}</div>
+                        <div class="env-pill">{{.Env.Mode}}</div>
+                        <div class="env-pill">{{.Env.OS}} / {{.Env.Arch}}</div>
+                    </div>
+                </div>
+            </article>
+        </section>
+    </div>
+</div>
+</body>
+</html>

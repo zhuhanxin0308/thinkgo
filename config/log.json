@@ -1,0 +1,17 @@
+{
+    "default": "file",
+    "channels": {
+        "file": {
+            "type": "file",
+            "path": "./runtime/log",
+            "level": [
+                "info",
+                "warning",
+                "error",
+                "debug",
+                "sql"
+            ],
+            "max_file_size": 10485760
+        }
+    }
+}

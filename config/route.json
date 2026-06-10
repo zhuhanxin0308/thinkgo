@@ -1,0 +1,10 @@
+{
+    "url_route_must": false,
+    "url_case_sensitive": false,
+    "route_complete_match": false,
+    "default_controller": "Index",
+    "default_action": "index",
+    "controller_layer": "controller",
+    "url_html_suffix": "html",
+    "remove_slash": false
+}

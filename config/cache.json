@@ -1,0 +1,19 @@
+{
+    "default": "file",
+    "stores": {
+        "file": {
+            "type": "file",
+            "path": "./runtime/cache",
+            "expire": 0
+        },
+        "redis": {
+            "type": "redis",
+            "host": "192.168.3.100",
+            "port": 6379,
+            "password": "",
+            "select": 0,
+            "timeout": 0,
+            "expire": 0
+        }
+    }
+}

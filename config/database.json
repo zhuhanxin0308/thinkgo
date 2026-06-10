@@ -1,0 +1,20 @@
+{
+    "default": "mysql",
+    "connections": {
+        "mysql": {
+            "type": "mysql",
+            "hostname": "127.0.0.1",
+            "database": "your_database",
+            "username": "your_username",
+            "password": "",
+            "hostport": "3306",
+            "charset": "utf8mb4",
+            "prefix": "",
+            "debug": false,
+            "auto_timestamp": true,
+            "create_time_field": "create_time",
+            "update_time_field": "update_time",
+            "timestamp_value_type": "unix"
+        }
+    }
+}

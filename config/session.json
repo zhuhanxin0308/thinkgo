@@ -1,0 +1,10 @@
+{
+    "name": "PHPSESSID",
+    "type": "file",
+    "path": "./runtime/session",
+    "expire": 1440,
+    "domain": "",
+    "secure": false,
+    "httponly": true,
+    "samesite": "Lax"
+}
