@@ -32,9 +32,17 @@ thinkgo/
 业务代码放在 `app`、`route`、`config` 和 `cmd`。框架核心能力放在 `framework`，除修复框架能力外不要把业务逻辑写入框架目录。
 
 ## 启动方式
-
+正式环境
 ```bash
 go run main.go
+```
+
+开发环境--支持热重载
+```bash
+#linux
+go run cmd/think/main.go run -p 8080
+# window
+go run .\cmd\think\main.go run -p 8080 
 ```
 
 默认 HTTP 配置在 `config/app.json`。命令行工具使用：
@@ -717,40 +725,11 @@ func (c *DemoCommand) Execute(input *console.Input, output *console.Output) {
 - 国内网络可用镜像代理：`GOPROXY=https://goproxy.cn,https://goproxy.io`。
 - 提交前用 `go mod verify` 校验依赖完整性。
 
-## 测试规范
-
-- 新功能、修复和重构必须先写有意义的测试。
-- 测试必须验证行为，不要只追求覆盖率。
-- 涉及文件、缓存、数据库、会话等 IO 的测试必须清理数据。
-- 框架核心逻辑测试放在对应 `framework` 子包。
-- 应用集成测试可放在项目根目录，验证入口、注册链路和实际 HTTP 行为。
-- 提交前必须运行 `go test ./...`。
-
-当前应用层集成测试验证：
-
-- `app/controller` 控制器注册。
-- `app/middleware` 全局中间件注册。
-- `route` 路由加载器注册。
-- HTTP 内核可以通过 `/api/users` 调度到 `User@Index`。
 
 ## 编码规范
 
 > 完整、可执行的强制约束见 [`docs/开发规范.md`](docs/开发规范.md)，下面是要点摘录。
 
-- 代码注释必须使用中文。
-- 不允许空实现、占位实现或只有注释没有行为的代码。
-- 不允许通过放宽类型检查、放宽规则或降低测试质量来规避问题。
-- 不允许把请求级状态写入全局变量。
-- 不允许新增无意义 demo 文件；示例必须能运行或由测试覆盖。
-- 不允许批量脚本式修改代码，修改必须逐文件进行。
-- 优先复用框架已有组件、配置、容器、日志、事件和中间件能力。
-- 数据库写操作必须显式处理错误，行集迭代后必须检查 `rows.Err()`。
-- 用户输入进入 SQL 时必须参数化；表名/字段名/操作符必须走白名单校验。
-- 读取配置用 `GetBool`/`GetInt`/`GetString`/`GetMap`，禁止对裸 `Get` 返回值做类型断言（会在配置异常时启动崩溃）。
-- 共享可变状态（map、单例、计数器）必须加锁；请求级状态用 `req.Set`/`req.GetData` 传递。
-- 控制器、路由、中间件、验证器、模型的文件命名使用小写蛇形。
-- Go 导出类型和方法使用 PascalCase，非导出标识使用 camelCase。
-- 业务错误应返回结构化响应，内部错误在生产环境不要暴露敏感细节。
 
 ## 当前应用入口
 
