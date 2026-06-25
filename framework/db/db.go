@@ -2,6 +2,7 @@ package db
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -216,7 +217,7 @@ func (db *DB) Query(sql string, args ...interface{}) ([]map[string]interface{}, 
 		if err != nil {
 			return nil, db.reportError("query", err, map[string]interface{}{
 				"sql":  sql,
-				"args": append([]interface{}(nil), args...),
+				"args": redactArgCount(args),
 			})
 		}
 		return rows, nil
@@ -224,7 +225,7 @@ func (db *DB) Query(sql string, args ...interface{}) ([]map[string]interface{}, 
 
 	return nil, db.reportError("query", fmt.Errorf("current connection does not support raw queries"), map[string]interface{}{
 		"sql":  sql,
-		"args": append([]interface{}(nil), args...),
+		"args": redactArgCount(args),
 	})
 }
 
@@ -236,7 +237,7 @@ func (db *DB) Execute(sql string, args ...interface{}) (int64, error) {
 		if err != nil {
 			return 0, db.reportError("execute", err, map[string]interface{}{
 				"sql":  sql,
-				"args": append([]interface{}(nil), args...),
+				"args": redactArgCount(args),
 			})
 		}
 		return affected, nil
@@ -244,8 +245,24 @@ func (db *DB) Execute(sql string, args ...interface{}) (int64, error) {
 
 	return 0, db.reportError("execute", fmt.Errorf("current connection does not support raw execution"), map[string]interface{}{
 		"sql":  sql,
-		"args": append([]interface{}(nil), args...),
+		"args": redactArgCount(args),
 	})
+}
+
+// redactDataKeys 仅保留写入数据的字段名用于排障，绝不记录字段值，
+// 避免密码、令牌、个人信息等通过错误日志泄露。
+func redactDataKeys(data map[string]interface{}) map[string]interface{} {
+	keys := make([]string, 0, len(data))
+	for key := range data {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return map[string]interface{}{"fields": keys}
+}
+
+// redactArgCount 把参数列表降级为数量描述，避免把绑定值（可能含敏感数据）写入日志。
+func redactArgCount(args []interface{}) string {
+	return fmt.Sprintf("%d args (redacted)", len(args))
 }
 
 // reportError 统一记录数据库错误并保留原始错误返回给上层调用方。

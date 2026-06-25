@@ -6,6 +6,7 @@ import (
 	"html/template"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -61,7 +62,10 @@ func (d *GoTemplate) Display(w io.Writer, tmplName string, data map[string]inter
 
 // Exists 检查模板文件是否存在
 func (d *GoTemplate) Exists(tmplName string) bool {
-	path := d.getTemplatePath(tmplName)
+	path, ok := d.safeTemplatePath(tmplName)
+	if !ok {
+		return false
+	}
 	_, err := os.Stat(path)
 	return err == nil
 }
@@ -73,7 +77,10 @@ func (d *GoTemplate) SetFuncMap(funcMap map[string]interface{}) {
 
 // getTemplate 从缓存获取或解析模板
 func (d *GoTemplate) getTemplate(tmplName string) (*template.Template, error) {
-	path := d.getTemplatePath(tmplName)
+	path, ok := d.safeTemplatePath(tmplName)
+	if !ok {
+		return nil, fmt.Errorf("非法模板名: %s", tmplName)
+	}
 
 	// 检查缓存
 	d.mutex.RLock()
@@ -84,7 +91,7 @@ func (d *GoTemplate) getTemplate(tmplName string) (*template.Template, error) {
 	d.mutex.RUnlock()
 
 	// 解析模板
-	if !d.Exists(tmplName) {
+	if _, err := os.Stat(path); err != nil {
 		return nil, fmt.Errorf("模板文件不存在: %s", path)
 	}
 
@@ -108,15 +115,41 @@ func (d *GoTemplate) getTemplate(tmplName string) (*template.Template, error) {
 	return tmpl, nil
 }
 
-// getTemplatePath 解析模板完整路径
-func (d *GoTemplate) getTemplatePath(tmplName string) string {
-	viewPath := d.config["view_path"].(string)
-	viewSuffix := d.config["view_suffix"].(string)
+// safeTemplatePath 解析模板完整路径，并阻断 ".." 越权与绝对路径逃逸，
+// 防止把用户可控的模板名变成任意文件读取（LFI）。
+// 返回 (绝对路径, 是否合法)。
+func (d *GoTemplate) safeTemplatePath(tmplName string) (string, bool) {
+	viewPath, _ := d.config["view_path"].(string)
+	viewSuffix, _ := d.config["view_suffix"].(string)
+	if viewSuffix == "" {
+		viewSuffix = "html"
+	}
 
-	// 如果模板名不包含后缀则自动追加
+	// 统一分隔符并清理路径，去除 ".." 等穿越片段。
+	tmplName = strings.ReplaceAll(tmplName, "\\", "/")
 	if !strings.HasSuffix(tmplName, "."+viewSuffix) {
 		tmplName += "." + viewSuffix
 	}
+	cleanRel := strings.TrimPrefix(path.Clean("/"+tmplName), "/")
 
-	return filepath.Join(viewPath, tmplName)
+	target := filepath.Join(viewPath, filepath.FromSlash(cleanRel))
+
+	// 未配置 view_path 时无基准目录可校验，按清理后的相对路径返回。
+	if strings.TrimSpace(viewPath) == "" {
+		return target, true
+	}
+
+	baseAbs, err := filepath.Abs(viewPath)
+	if err != nil {
+		return "", false
+	}
+	targetAbs, err := filepath.Abs(target)
+	if err != nil {
+		return "", false
+	}
+	// 解析后的路径必须仍位于视图目录内。
+	if targetAbs != baseAbs && !strings.HasPrefix(targetAbs, baseAbs+string(os.PathSeparator)) {
+		return "", false
+	}
+	return targetAbs, true
 }

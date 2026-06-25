@@ -72,7 +72,11 @@ func (c *Config) Load(file string, name string) error {
 	return nil
 }
 
-// Get gets a config value with dot notation
+// Get gets a config value with dot notation.
+//
+// 注意：返回的若是 map/slice，为内部配置的引用（出于性能不做拷贝）。
+// 调用方必须将其视为只读，禁止直接修改；如需可变副本请使用 GetMapCopy。
+// 所有写入必须经由 Set（持写锁并失效缓存）。
 func (c *Config) Get(name string, def ...interface{}) interface{} {
 	name = strings.ToLower(strings.TrimSpace(name))
 
@@ -112,6 +116,94 @@ func (c *Config) Get(name string, def ...interface{}) interface{} {
 		found: found,
 	}
 	return resolveLookupValue(c.lookupCache[name], def...)
+}
+
+// GetString 安全读取字符串配置，类型不符或不存在时返回默认值。
+func (c *Config) GetString(name string, def ...string) string {
+	fallback := ""
+	if len(def) > 0 {
+		fallback = def[0]
+	}
+	if v, ok := c.Get(name).(string); ok {
+		return v
+	}
+	return fallback
+}
+
+// GetBool 安全读取布尔配置，兼容字符串 "true"/"1" 写法，类型不符时返回默认值。
+func (c *Config) GetBool(name string, def ...bool) bool {
+	fallback := false
+	if len(def) > 0 {
+		fallback = def[0]
+	}
+	switch v := c.Get(name).(type) {
+	case bool:
+		return v
+	case string:
+		return v == "true" || v == "1"
+	case nil:
+		return fallback
+	default:
+		return fallback
+	}
+}
+
+// GetInt 安全读取整型配置，兼容 JSON float64，类型不符时返回默认值。
+func (c *Config) GetInt(name string, def ...int) int {
+	fallback := 0
+	if len(def) > 0 {
+		fallback = def[0]
+	}
+	switch v := c.Get(name).(type) {
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case float64:
+		return int(v)
+	default:
+		return fallback
+	}
+}
+
+// GetMap 安全读取 map 配置，类型不符或不存在时返回空 map（非 nil），避免调用方断言 panic。
+// 返回的是内部配置引用，调用方必须只读；需要修改请用 GetMapCopy。
+func (c *Config) GetMap(name string) map[string]interface{} {
+	if v, ok := c.Get(name).(map[string]interface{}); ok {
+		return v
+	}
+	return make(map[string]interface{})
+}
+
+// GetMapCopy 返回 map 配置的深拷贝，供需要在本地修改而不污染共享配置的调用方使用。
+// 仅在确需可变副本时调用，普通读取请用 GetMap 以避免不必要的拷贝开销。
+func (c *Config) GetMapCopy(name string) map[string]interface{} {
+	return deepCopyMap(c.GetMap(name))
+}
+
+// deepCopyMap 递归深拷贝配置 map，隔离嵌套 map/slice，避免修改副本影响内部配置。
+func deepCopyMap(src map[string]interface{}) map[string]interface{} {
+	dst := make(map[string]interface{}, len(src))
+	for key, value := range src {
+		dst[key] = deepCopyValue(value)
+	}
+	return dst
+}
+
+// deepCopyValue 深拷贝配置中的常见 JSON 值类型；标量直接返回。
+func deepCopyValue(value interface{}) interface{} {
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		return deepCopyMap(typed)
+	case []interface{}:
+		cloned := make([]interface{}, len(typed))
+		for index, item := range typed {
+			cloned[index] = deepCopyValue(item)
+		}
+		return cloned
+	default:
+		return value
+	}
 }
 
 // Set sets a config value

@@ -27,6 +27,7 @@ type cacheState struct {
 	debug       *debug.Debug
 	stores      map[string]Driver
 	defaultName string
+	storesMu    sync.RWMutex // 保护 stores 的并发注册与读取
 	tagMu       sync.Mutex
 	lockSeq     uint64
 }
@@ -72,7 +73,9 @@ func (c *Cache) RegisterStore(name string, driver Driver) *Cache {
 	if c == nil || c.state == nil || name == "" || driver == nil {
 		return c
 	}
+	c.state.storesMu.Lock()
 	c.state.stores[name] = driver
+	c.state.storesMu.Unlock()
 	return c
 }
 
@@ -81,7 +84,10 @@ func (c *Cache) Store(name string) *Cache {
 	if c == nil || c.state == nil || name == "" {
 		return c
 	}
-	if _, ok := c.state.stores[name]; !ok {
+	c.state.storesMu.RLock()
+	_, ok := c.state.stores[name]
+	c.state.storesMu.RUnlock()
+	if !ok {
 		return c
 	}
 	return &Cache{
@@ -262,6 +268,8 @@ func (c *Cache) driver() Driver {
 	if c == nil || c.state == nil {
 		return nil
 	}
+	c.state.storesMu.RLock()
+	defer c.state.storesMu.RUnlock()
 	if driver, ok := c.state.stores[c.storeName]; ok && driver != nil {
 		return driver
 	}

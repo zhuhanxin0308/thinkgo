@@ -2,6 +2,7 @@ package driver
 
 import (
 	"encoding/json"
+	"fmt"
 	"thinkgo/framework/db"
 	"time"
 )
@@ -34,15 +35,46 @@ func (c *DB) Get(key string) interface{} {
 		return nil
 	}
 
-	expiry := int64(res["expiry"].(float64)) // JSON numbers are float64
+	// 不同驱动可能把整型列返回为 float64/int64/[]byte/string，统一安全解析，避免类型断言 panic。
+	expiry := toInt64(res["expiry"])
 	if expiry > 0 && time.Now().Unix() > expiry {
 		c.Delete(key)
 		return nil
 	}
 
+	value, ok := res["value"].(string)
+	if !ok {
+		return nil
+	}
 	var val interface{}
-	json.Unmarshal([]byte(res["value"].(string)), &val)
+	if err := json.Unmarshal([]byte(value), &val); err != nil {
+		return nil
+	}
 	return val
+}
+
+// toInt64 把数据库返回的多种数值类型安全转换为 int64。
+func toInt64(raw interface{}) int64 {
+	switch v := raw.(type) {
+	case int64:
+		return v
+	case int:
+		return int64(v)
+	case int32:
+		return int64(v)
+	case float64:
+		return int64(v)
+	case []byte:
+		var n int64
+		fmt.Sscanf(string(v), "%d", &n)
+		return n
+	case string:
+		var n int64
+		fmt.Sscanf(v, "%d", &n)
+		return n
+	default:
+		return 0
+	}
 }
 
 func (c *DB) Set(key string, val interface{}, ttl time.Duration) {
@@ -76,7 +108,8 @@ func (c *DB) Delete(key string) {
 }
 
 func (c *DB) Clear() {
-	db.NewDB(c.conn).Table(c.table).Delete()
+	// Delete() 禁止无 WHERE 条件执行，这里用恒真条件清空全表缓存。
+	db.NewDB(c.conn).Table(c.table).WhereRaw("1 = 1").Delete()
 }
 
 func (c *DB) Inc(key string, step int64) int64 {

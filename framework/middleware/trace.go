@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
+	"net"
 	"sort"
 	"strings"
 	"time"
@@ -83,7 +84,9 @@ window.TgDebug = window.TgDebug || {
 // Handle 处理请求并在 HTML 响应中注入调试面板。
 // 面板内容全部在服务端完成转义，避免把未转义数据再交给前端 innerHTML 渲染。
 func (t *Trace) Handle(req *context.Request, next func(*context.Request) *context.Response) *context.Response {
-	enabled := t.Debug != nil && t.Debug.Enabled
+	// 与异常调试页保持一致的门禁：即使开启 Trace，也仅对本机回环请求注入调试条与提供调试资源，
+	// 避免把 SQL 语句、客户端 IP、耗时等内部信息泄露给远程客户端。
+	enabled := t.Debug != nil && t.Debug.Enabled && isLocalTraceRequest(req)
 	if enabled {
 		if assetResp := t.serveTraceAsset(req); assetResp != nil {
 			return assetResp
@@ -96,6 +99,23 @@ func (t *Trace) Handle(req *context.Request, next func(*context.Request) *contex
 	start := time.Now()
 	resp := next(req)
 	duration := time.Since(start).Seconds()
+
+	if resp == nil {
+		return resp
+	}
+
+	// 未通过门禁（Trace 未启用或非本机回环请求）时，绝不注入调试条，避免信息泄露。
+	if !enabled {
+		reqDebug.Clear()
+		return resp
+	}
+
+	// 仅对 HTML 响应注入调试条：先按 Content-Type 过滤，避免对 JSON/二进制等
+	// 非 HTML 响应也整体小写化大字符串造成无谓的内存与 CPU 开销。
+	if !isHTMLResponse(resp) {
+		reqDebug.Clear()
+		return resp
+	}
 
 	strContent := string(resp.GetBody())
 	lowerContent := strings.ToLower(strContent)
@@ -117,6 +137,35 @@ func (t *Trace) Handle(req *context.Request, next func(*context.Request) *contex
 
 	reqDebug.Clear()
 	return resp
+}
+
+// isLocalTraceRequest 仅当请求来自本机回环地址时才允许暴露调试条。
+// 直接基于底层连接的 RemoteAddr 判断，不信任任何客户端可伪造的代理头。
+func isLocalTraceRequest(req *context.Request) bool {
+	if req == nil {
+		return false
+	}
+	raw := req.Raw()
+	if raw == nil {
+		return false
+	}
+	host := raw.RemoteAddr
+	if h, _, err := net.SplitHostPort(raw.RemoteAddr); err == nil {
+		host = h
+	} else {
+		host = strings.Trim(host, "[]")
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// isHTMLResponse 判断响应是否为 HTML：优先看 Content-Type，未显式声明时按可注入处理。
+func isHTMLResponse(resp *context.Response) bool {
+	contentType := strings.ToLower(resp.Headers().Get("Content-Type"))
+	if contentType == "" {
+		return true
+	}
+	return strings.Contains(contentType, "text/html")
 }
 
 // serveTraceAsset 为调试面板提供静态 CSS/JS 资源，避免每个响应都重复内联整段样式与脚本。

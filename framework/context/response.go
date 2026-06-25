@@ -8,7 +8,10 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
+	"path/filepath"
 	"regexp"
+	"strings"
 )
 
 var jsonpCallbackPattern = regexp.MustCompile(`^[A-Za-z_$][A-Za-z0-9_$\.\[\]]*$`)
@@ -108,14 +111,26 @@ func (r *Response) Jsonp(callback string, data interface{}) *Response {
 }
 
 // Redirect 设置重定向响应。
+// target 中的 CR/LF 等控制字符会被剥离，防止 Location 头注入与 HTTP 响应拆分。
+// 注意：本方法不限制跳转目标的来源，若 target 来自用户输入，调用方需自行防范开放重定向。
 func (r *Response) Redirect(target string, code ...int) *Response {
 	status := http.StatusFound
 	if len(code) > 0 {
 		status = code[0]
 	}
-	r.Header("Location", target)
+	r.Header("Location", sanitizeHeaderValue(target))
 	r.Code(status)
 	return r
+}
+
+// sanitizeHeaderValue 移除可能导致响应头注入/拆分的控制字符（CR、LF、NUL）。
+func sanitizeHeaderValue(value string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '\r' || r == '\n' || r == 0 {
+			return -1
+		}
+		return r
+	}, value)
 }
 
 // Stream 设置流式响应回调。
@@ -238,22 +253,92 @@ func (r *Response) Cookie(name, value string, maxAge int, path, domain string, s
 }
 
 // Download 设置文件下载响应。
-func (r *Response) Download(filepath, filename string) *Response {
+//
+// filePath 由调用方负责，必须是受信任的路径：若该路径可能来自用户输入，
+// 请改用 DownloadSafe 把路径限制在允许的根目录内，避免目录穿越读取任意文件。
+// filename 会被净化（取末段文件名并去除引号与换行），防止 Content-Disposition 头注入。
+func (r *Response) Download(filePath, filename string) *Response {
+	safeName := sanitizeDownloadFilename(filename)
 	r.Header("Content-Description", "File Transfer")
 	r.Header("Content-Type", "application/octet-stream")
 	r.Header(
 		"Content-Disposition",
-		fmt.Sprintf(`attachment; filename="%s"; filename*=UTF-8''%s`, filename, url.PathEscape(filename)),
+		fmt.Sprintf(`attachment; filename="%s"; filename*=UTF-8''%s`, safeName, url.PathEscape(safeName)),
 	)
 	r.Header("Content-Transfer-Encoding", "binary")
 	r.Header("Expires", "0")
 	r.Header("Cache-Control", "must-revalidate")
 	r.Header("Pragma", "public")
-	r.filePath = filepath
+	r.filePath = filePath
 	r.streamWriter = nil
 	r.chunks = nil
 	r.body = nil
 	return r
+}
+
+// DownloadSafe 在限定根目录内安全地提供文件下载。
+// baseDir 是允许下载的根目录；relativePath 可能来自用户输入，框架会清理并阻断
+// ".." 与绝对路径逃逸，确保最终文件落在 baseDir 内。解析越界时返回 403。
+// filename 为空时使用解析后的文件名。
+func (r *Response) DownloadSafe(baseDir, relativePath, filename string) *Response {
+	target, ok := resolveWithinBase(baseDir, relativePath)
+	if !ok {
+		return r.Abort(http.StatusForbidden, map[string]interface{}{
+			"message": "invalid download path",
+		})
+	}
+	if strings.TrimSpace(filename) == "" {
+		filename = filepath.Base(target)
+	}
+	return r.Download(target, filename)
+}
+
+// sanitizeDownloadFilename 取路径末段作为下载文件名，并去除可能破坏
+// Content-Disposition 头的引号与换行，防止头注入/截断。
+func sanitizeDownloadFilename(name string) string {
+	if idx := strings.LastIndexAny(name, `/\`); idx >= 0 {
+		name = name[idx+1:]
+	}
+	name = strings.NewReplacer("\r", "", "\n", "", `"`, "").Replace(name)
+	name = strings.TrimSpace(name)
+	if name == "" || name == "." || name == ".." {
+		return "download"
+	}
+	return name
+}
+
+// resolveWithinBase 把可能来自用户输入的相对路径解析到 baseDir 内。
+// 返回 (绝对路径, 是否合法)。绝对路径、清理后仍试图越出根目录（".." 逃逸）
+// 或最终落在 baseDir 之外的路径一律拒绝（返回 false），而非静默截断。
+func resolveWithinBase(baseDir, relativePath string) (string, bool) {
+	normalized := strings.ReplaceAll(relativePath, "\\", "/")
+
+	// 绝对路径直接拒绝。
+	if path.IsAbs(normalized) || filepath.IsAbs(relativePath) {
+		return "", false
+	}
+
+	cleaned := path.Clean(normalized)
+	// 清理后为空目录、上级目录或仍以 ".." 开头，均视为非法。
+	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, "../") {
+		return "", false
+	}
+
+	target := filepath.Join(baseDir, filepath.FromSlash(cleaned))
+
+	baseAbs, err := filepath.Abs(baseDir)
+	if err != nil {
+		return "", false
+	}
+	targetAbs, err := filepath.Abs(target)
+	if err != nil {
+		return "", false
+	}
+	// 双重保险：解析后的绝对路径必须仍在 baseDir 内。
+	if targetAbs != baseAbs && !strings.HasPrefix(targetAbs, baseAbs+string(os.PathSeparator)) {
+		return "", false
+	}
+	return targetAbs, true
 }
 
 // Xml 设置 XML 响应。

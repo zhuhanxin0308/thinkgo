@@ -57,12 +57,13 @@ func GenerateCert(certFile, keyFile string) error {
 		return err
 	}
 
-	keyOut, err := os.Create(keyFile)
+	// 私钥文件必须限制为仅属主可读写（0600），避免多用户主机上其他用户读取 TLS 私钥。
+	keyOut, err := os.OpenFile(keyFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return err
 	}
 	defer keyOut.Close()
-	
+
 	b, err := x509.MarshalECPrivateKey(priv)
 	if err != nil {
 		return err

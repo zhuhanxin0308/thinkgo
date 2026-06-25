@@ -11,10 +11,17 @@ import (
 	"thinkgo/framework/debug"
 )
 
+// newLocalTraceRequest 构造一个来自本机回环地址的请求，使其满足 Trace 调试条的暴露门禁。
+func newLocalTraceRequest(method, target string) *fwcontext.Request {
+	raw := httptest.NewRequest(method, target, nil)
+	raw.RemoteAddr = "127.0.0.1:54321"
+	return fwcontext.NewRequest(raw)
+}
+
 // TestTraceEscapesDebugPanelContent 验证调试面板会把危险内容转义后再输出到 HTML。
 func TestTraceEscapesDebugPanelContent(t *testing.T) {
 	trace := &Trace{Debug: &debug.Debug{Enabled: true}}
-	req := fwcontext.NewRequest(httptest.NewRequest(http.MethodGet, "http://example.com/search?q=ok", nil))
+	req := newLocalTraceRequest(http.MethodGet, "http://example.com/search?q=ok")
 
 	resp := trace.Handle(req, func(req *fwcontext.Request) *fwcontext.Response {
 		reqDebug, ok := req.GetData("_debug").(*debug.Debug)
@@ -60,7 +67,7 @@ func TestTraceEscapesDebugPanelContent(t *testing.T) {
 // TestTraceInjectsExternalAssetsInsteadOfInlineBundle 验证调试面板改为注入外部静态资源，而不是每次响应都拼接整段内联样式和脚本。
 func TestTraceInjectsExternalAssetsInsteadOfInlineBundle(t *testing.T) {
 	trace := &Trace{Debug: &debug.Debug{Enabled: true}}
-	req := fwcontext.NewRequest(httptest.NewRequest(http.MethodGet, "http://example.com/debug-page", nil))
+	req := newLocalTraceRequest(http.MethodGet, "http://example.com/debug-page")
 
 	resp := trace.Handle(req, func(req *fwcontext.Request) *fwcontext.Response {
 		return fwcontext.NewResponse().Content("<html><body>ok</body></html>")
@@ -78,6 +85,38 @@ func TestTraceInjectsExternalAssetsInsteadOfInlineBundle(t *testing.T) {
 	}
 	if strings.Contains(body, "var TgDebug = {") {
 		t.Fatalf("调试面板不应继续把完整脚本内联到每个响应中，响应内容为 %s", body)
+	}
+}
+
+// TestTraceNotExposedToRemoteRequests 验证即便开启 Trace，非本机回环请求也不会被注入调试条，
+// 避免向远程客户端泄露 SQL、客户端 IP、耗时等内部信息。
+func TestTraceNotExposedToRemoteRequests(t *testing.T) {
+	trace := &Trace{Debug: &debug.Debug{Enabled: true}}
+	// httptest 默认 RemoteAddr 为 192.0.2.1（非回环）。
+	req := fwcontext.NewRequest(httptest.NewRequest(http.MethodGet, "http://example.com/page", nil))
+
+	resp := trace.Handle(req, func(req *fwcontext.Request) *fwcontext.Response {
+		return fwcontext.NewResponse().Content("<html><body>ok</body></html>")
+	})
+
+	body := string(resp.GetBody())
+	if strings.Contains(body, "tg-debug-bar") || strings.Contains(body, "__thinkgo_debug__") {
+		t.Fatalf("远程请求不应被注入调试条，响应为 %s", body)
+	}
+}
+
+// TestTraceAssetsNotServedToRemoteRequests 验证调试静态资源端点对远程请求不可用。
+func TestTraceAssetsNotServedToRemoteRequests(t *testing.T) {
+	trace := &Trace{Debug: &debug.Debug{Enabled: true}}
+	req := fwcontext.NewRequest(httptest.NewRequest(http.MethodGet, "http://example.com/__thinkgo_debug__/trace.css", nil))
+
+	nextCalled := false
+	trace.Handle(req, func(req *fwcontext.Request) *fwcontext.Response {
+		nextCalled = true
+		return fwcontext.NewResponse().Content("business")
+	})
+	if !nextCalled {
+		t.Fatal("远程请求访问调试资源端点时应继续进入业务链路（即资源不对外暴露）")
 	}
 }
 
@@ -107,7 +146,7 @@ func TestTraceServesStaticAssets(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		req := fwcontext.NewRequest(httptest.NewRequest(http.MethodGet, "http://example.com"+tc.path, nil))
+		req := newLocalTraceRequest(http.MethodGet, "http://example.com"+tc.path)
 		resp := trace.Handle(req, func(req *fwcontext.Request) *fwcontext.Response {
 			nextCalled = true
 			return fwcontext.NewResponse().Content("unexpected")

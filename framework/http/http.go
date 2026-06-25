@@ -493,19 +493,94 @@ func (h *Http) dispatch(matchedRoute *route.Route, req *context.Request) *contex
 			plan.initMethod.Func.Call([]reflect.Value{controllerValue, reflect.ValueOf(h.app), reflect.ValueOf(req)})
 		}
 
-		args := []reflect.Value{controllerValue}
-		if plan.actionMethod.Type.NumIn() > 1 && plan.actionMethod.Type.In(1) == reflect.TypeOf(req) {
-			args = append(args, reflect.ValueOf(req))
+		// 实际执行控制器动作的闭包。
+		invokeAction := func(req *context.Request) *context.Response {
+			args := []reflect.Value{controllerValue}
+			if plan.actionMethod.Type.NumIn() > 1 && plan.actionMethod.Type.In(1) == reflect.TypeOf(req) {
+				args = append(args, reflect.ValueOf(req))
+			}
+
+			results := plan.actionMethod.Func.Call(args)
+			if len(results) > 0 {
+				return h.toResponse(results[0].Interface())
+			}
+			return context.NewResponse()
 		}
 
-		results := plan.actionMethod.Func.Call(args)
-		if len(results) > 0 {
-			return h.toResponse(results[0].Interface())
+		// 应用控制器级中间件（对应 ThinkPHP 控制器 $middleware 声明）。
+		if handlers := h.resolveControllerMiddleware(controllerInstance, parts[1]); len(handlers) > 0 {
+			controllerPipeline := middleware.NewPipeline()
+			for _, handler := range handlers {
+				controllerPipeline.Pipe(handler)
+			}
+			return controllerPipeline.Then(req, invokeAction)
 		}
-		return context.NewResponse()
+
+		return invokeAction(req)
 	}
 
 	return h.dispatchInternalError("", fmt.Errorf("invalid route handler"))
+}
+
+// controllerMiddlewareProvider 抽象“能声明控制器级中间件”的控制器，
+// 通常由嵌入 framework.Controller 自动满足。
+type controllerMiddlewareProvider interface {
+	GetMiddleware() []framework.ControllerMiddleware
+}
+
+// resolveControllerMiddleware 解析控制器声明的中间件，按别名查找处理器，
+// 并依据 Only/Except 过滤出对当前动作生效的中间件列表。
+func (h *Http) resolveControllerMiddleware(controllerInstance interface{}, action string) []middleware.Handler {
+	provider, ok := controllerInstance.(controllerMiddlewareProvider)
+	if !ok {
+		return nil
+	}
+
+	declarations := provider.GetMiddleware()
+	if len(declarations) == 0 {
+		return nil
+	}
+
+	handlers := make([]middleware.Handler, 0, len(declarations))
+	for _, declaration := range declarations {
+		if !controllerMiddlewareApplies(declaration, action) {
+			continue
+		}
+		handler := h.app.Middleware.ResolveAlias(declaration.Name)
+		if handler == nil {
+			if h.app.Log != nil {
+				h.app.Log.WarningCtx("controller middleware alias not found", map[string]interface{}{
+					"alias":  declaration.Name,
+					"action": action,
+				})
+			}
+			continue
+		}
+		handlers = append(handlers, handler)
+	}
+	return handlers
+}
+
+// controllerMiddlewareApplies 判断某条控制器中间件声明是否对指定动作生效。
+// Only 非空时仅命中列表内动作；Except 非空时排除列表内动作；动作名大小写不敏感。
+func controllerMiddlewareApplies(declaration framework.ControllerMiddleware, action string) bool {
+	if len(declaration.Only) > 0 {
+		return containsFold(declaration.Only, action)
+	}
+	if len(declaration.Except) > 0 {
+		return !containsFold(declaration.Except, action)
+	}
+	return true
+}
+
+// containsFold 大小写不敏感地判断切片是否包含目标字符串。
+func containsFold(items []string, target string) bool {
+	for _, item := range items {
+		if strings.EqualFold(item, target) {
+			return true
+		}
+	}
+	return false
 }
 
 // reservedControllerMethods 收集嵌入式基类 framework.Controller 暴露的方法名集合。

@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"strings"
@@ -31,7 +32,23 @@ type Query struct {
 	setExprs           []string // Inc/Dec 生成的 SET 表达式（如 "score = score + 5"）
 	lockMode           string   // 悲观锁子句（如 "FOR UPDATE" / "LOCK IN SHARE MODE"），追加到语句末尾
 	txExecutor         *sql.Tx  // 绑定的事务对象（若在事务内执行）
+	ctx                context.Context // 查询上下文，用于超时/取消（默认 context.Background()）
 	err                error
+}
+
+// WithContext 绑定查询上下文，使底层 SQL 执行可随请求超时/取消（需连接支持 context）。
+// 对应将 HTTP 请求的 context 传入 ORM，避免慢查询在请求结束后仍占用连接。
+func (q *Query) WithContext(ctx context.Context) *Query {
+	q.ctx = ctx
+	return q
+}
+
+// context 返回查询上下文，未设置时回退到 context.Background()。
+func (q *Query) context() context.Context {
+	if q.ctx != nil {
+		return q.ctx
+	}
+	return context.Background()
 }
 
 // joinClause 描述一条 JOIN 子句。
@@ -39,6 +56,7 @@ type joinClause struct {
 	joinType  string
 	table     string
 	condition string
+	rawTable  bool // true 表示 table 已是完整表名，构建时不再追加前缀
 }
 
 // newQuery 实例化查询构建器。
@@ -398,7 +416,7 @@ func (q *Query) Join(table, condition string) *Query {
 		return q.setError(fmt.Errorf("unsafe join condition: %w", err))
 	}
 
-	q.joins = append(q.joins, joinClause{joinType: "JOIN", table: table, condition: condition})
+	q.joins = append(q.joins, joinClause{joinType: "JOIN", table: table, condition: condition, rawTable: q.rawTableName})
 	return q
 }
 
@@ -412,7 +430,7 @@ func (q *Query) LeftJoin(table, condition string) *Query {
 		return q.setError(fmt.Errorf("unsafe leftJoin condition: %w", err))
 	}
 
-	q.joins = append(q.joins, joinClause{joinType: "LEFT JOIN", table: table, condition: condition})
+	q.joins = append(q.joins, joinClause{joinType: "LEFT JOIN", table: table, condition: condition, rawTable: q.rawTableName})
 	return q
 }
 
@@ -426,7 +444,7 @@ func (q *Query) RightJoin(table, condition string) *Query {
 		return q.setError(fmt.Errorf("unsafe rightJoin condition: %w", err))
 	}
 
-	q.joins = append(q.joins, joinClause{joinType: "RIGHT JOIN", table: table, condition: condition})
+	q.joins = append(q.joins, joinClause{joinType: "RIGHT JOIN", table: table, condition: condition, rawTable: q.rawTableName})
 	return q
 }
 

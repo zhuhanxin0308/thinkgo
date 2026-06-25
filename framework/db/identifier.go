@@ -158,8 +158,12 @@ func validateJoinCondition(condition string) error {
 		for op := range joinConditionOperators {
 			// 用空格包裹操作符避免匹配字段名中的字符
 			padded := " " + op + " "
-			idx := strings.Index(part, padded)
-			if idx < 0 {
+			var left, right string
+			if idx := strings.Index(part, padded); idx >= 0 {
+				// 带空格形式：操作符两侧含空格，右操作数从 padded 之后开始。
+				left = strings.TrimSpace(part[:idx])
+				right = strings.TrimSpace(part[idx+len(padded):])
+			} else {
 				// 尝试无空格的紧凑格式（如 "a.id=b.id"）
 				idx = strings.Index(part, op)
 				if idx <= 0 || idx+len(op) >= len(part) {
@@ -174,10 +178,10 @@ func validateJoinCondition(condition string) error {
 				if rightChar == '>' || rightChar == '<' || rightChar == '!' || rightChar == '=' {
 					continue
 				}
+				left = strings.TrimSpace(part[:idx])
+				right = strings.TrimSpace(part[idx+len(op):])
 			}
 
-			left := strings.TrimSpace(part[:idx])
-			right := strings.TrimSpace(part[idx+len(op):])
 			if left == "" || right == "" {
 				continue
 			}

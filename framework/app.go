@@ -82,10 +82,25 @@ type App struct {
 	startupErr    error
 	providers     []ServiceProvider // 服务提供者列表
 	sessionGCStop func()            // 停止后台会话回收协程
+	// skipDatabaseInit 为 true 时，Initialize 跳过数据库连接。
+	// 供不需要数据库的控制台命令（version/list/make:* 等）使用，
+	// 避免每次执行命令都尝试连库并打印连接失败日志。
+	skipDatabaseInit bool
 }
 
 // NewApp creates a new App instance
 func NewApp(basePath ...string) *App {
+	return newApp(false, basePath...)
+}
+
+// NewConsoleApp 创建用于控制台命令的应用实例，跳过数据库连接。
+// version/list/make:* 等命令不需要数据库；需要数据库的命令（如 run）应使用 NewApp。
+func NewConsoleApp(basePath ...string) *App {
+	return newApp(true, basePath...)
+}
+
+// newApp 构建并初始化应用实例，skipDatabase 控制是否跳过数据库连接。
+func newApp(skipDatabase bool, basePath ...string) *App {
 	var path string
 	if len(basePath) > 0 {
 		path = basePath[0]
@@ -94,20 +109,27 @@ func NewApp(basePath ...string) *App {
 	}
 
 	app := &App{
-		Container:  NewContainer(),
-		BasePath:   path,
-		Route:      route.NewRouter(),
-		Middleware: middleware.NewPipeline(),
-		Config:     config.NewConfig(),
-		Env:        env.NewEnv(),
-		Log:        log.NewLog(logDriver.NewFile(path + RuntimeLogDir)),
-		Event:      event.NewDispatcher(),
-		Lang:       lang.NewLang(),
-		Debug:      debug.NewDebug(),
+		Container:        NewContainer(),
+		BasePath:         path,
+		Route:            route.NewRouter(),
+		Middleware:       middleware.NewPipeline(),
+		Config:           config.NewConfig(),
+		Env:              env.NewEnv(),
+		Log:              log.NewLog(logDriver.NewFile(path + RuntimeLogDir)),
+		Event:            event.NewDispatcher(),
+		Lang:             lang.NewLang(),
+		Debug:            debug.NewDebug(),
+		skipDatabaseInit: skipDatabase,
 	}
 	app.Initialize()
 
 	return app
+}
+
+// StartupError 返回初始化阶段记录的启动错误（无错误时为 nil）。
+// 供绕过 App.Run 直接驱动内核的调用方（如控制台 run 命令）在启动前自检。
+func (app *App) StartupError() error {
+	return app.startupErr
 }
 
 // Run 启动应用
@@ -233,41 +255,36 @@ func (app *App) Initialize() {
 	if val := app.Env.Get("APP_TRACE"); val != "" {
 		app.Config.Set("app.app_trace", val == "true")
 	}
-	app.DebugMode = app.Config.Get("app.app_debug", false).(bool)
-	app.Debug.Enabled = app.Config.Get("app.app_trace", false).(bool)
+	app.DebugMode = app.Config.GetBool("app.app_debug", false)
+	app.Debug.Enabled = app.Config.GetBool("app.app_trace", false)
 
 	// Server Config
-	serverConfig := app.Config.Get("app.server", make(map[string]interface{})).(map[string]interface{})
+	// 通过点路径 Set 覆盖，所有写入经由持锁的 Set 完成，
+	// 不再依赖修改 Get 返回的内部 map 引用（Set 会自动创建缺失的 tls 子树）。
 	if val := app.Env.Get("SERVER_HOST"); val != "" {
-		serverConfig["host"] = val
+		app.Config.Set("app.server.host", val)
 	}
 	if val := app.Env.Get("SERVER_PORT"); val != "" {
 		// 环境变量覆盖端口配置（字符串类型，由 Http.parseConfig 处理类型转换）
-		serverConfig["port"] = val
+		app.Config.Set("app.server.port", val)
 	}
 	if val := app.Env.Get("SERVER_HTTP3"); val != "" {
-		serverConfig["http3"] = val == "true"
+		app.Config.Set("app.server.http3", val == "true")
 	}
 
 	// TLS Config
-	tlsConfig, ok := serverConfig["tls"].(map[string]interface{})
-	if !ok {
-		tlsConfig = make(map[string]interface{})
-		serverConfig["tls"] = tlsConfig
-	}
 	if val := app.Env.Get("SERVER_TLS_ENABLE"); val != "" {
-		tlsConfig["enable"] = val == "true"
+		app.Config.Set("app.server.tls.enable", val == "true")
 	}
 	if val := app.Env.Get("SERVER_TLS_CERT"); val != "" {
-		tlsConfig["cert_file"] = val
+		app.Config.Set("app.server.tls.cert_file", val)
 	}
 	if val := app.Env.Get("SERVER_TLS_KEY"); val != "" {
-		tlsConfig["key_file"] = val
+		app.Config.Set("app.server.tls.key_file", val)
 	}
-	app.Config.Set("app.server", serverConfig)
 
 	// 3.5 Init Log
-	logConfig := app.Config.Get("log", make(map[string]interface{})).(map[string]interface{})
+	logConfig := app.Config.GetMap("log")
 	defaultChannel := "file"
 	if v, ok := logConfig["default"].(string); ok {
 		defaultChannel = v
@@ -333,7 +350,7 @@ func (app *App) Initialize() {
 	}
 
 	// 4. Init Lang（从 config/lang.json 读取完整多语言配置）
-	langConfig := app.Config.Get("lang", make(map[string]interface{})).(map[string]interface{})
+	langConfig := app.Config.GetMap("lang")
 	// 兼容旧配置：如果 lang 配置没有 default_lang，从 app 配置读取
 	if _, ok := langConfig["default_lang"]; !ok {
 		langConfig["default_lang"] = app.Config.Get("app.default_lang", "zh-cn")
@@ -341,7 +358,7 @@ func (app *App) Initialize() {
 	app.Lang.Init(langConfig)
 	app.Lang.LoadAll(app.BasePath + "/app/lang")
 	// 5. Init Cache
-	cacheConfig := app.Config.Get("cache", make(map[string]interface{})).(map[string]interface{})
+	cacheConfig := app.Config.GetMap("cache")
 	defaultStore := "file"
 	if v, ok := cacheConfig["default"].(string); ok {
 		defaultStore = v
@@ -350,7 +367,8 @@ func (app *App) Initialize() {
 	var cDriver cache.Driver
 	if stores, ok := cacheConfig["stores"].(map[string]interface{}); ok {
 		if storeConfig, ok := stores[defaultStore].(map[string]interface{}); ok {
-			driverType := storeConfig["type"].(string)
+			// 缺省或类型非法时回退到 file，避免启动期类型断言 panic。
+			driverType, _ := storeConfig["type"].(string)
 			switch driverType {
 			case "redis":
 				cDriver = cacheDriver.NewRedis(storeConfig)
@@ -384,7 +402,7 @@ func (app *App) Initialize() {
 	app.Instance("cache", app.Cache)
 
 	// 6. Init View
-	viewConfig := app.Config.Get("view", make(map[string]interface{})).(map[string]interface{})
+	viewConfig := app.Config.GetMap("view")
 	normalizeViewPath(app.BasePath, viewConfig)
 	app.View = view.NewView(app.Debug, viewConfig)
 	app.View.SetDriver(driver.NewGoTemplate())
@@ -399,11 +417,11 @@ func (app *App) Initialize() {
 	app.Instance("view", app.View)
 
 	// 7. Init Cookie
-	cookieConfig := app.Config.Get("cookie", make(map[string]interface{})).(map[string]interface{})
+	cookieConfig := app.Config.GetMap("cookie")
 	app.Cookie = cookie.NewCookie(cookieConfig)
 
 	// 8. Init Session
-	sessionConfig := app.Config.Get("session", make(map[string]interface{})).(map[string]interface{})
+	sessionConfig := app.Config.GetMap("session")
 	sessDriverType := "file"
 	if t, ok := sessionConfig["type"].(string); ok {
 		sessDriverType = t
@@ -425,13 +443,77 @@ func (app *App) Initialize() {
 	app.Session.SetLogger(app.Log)
 
 	// 9. Init Database
-	dbConfigData := app.Config.Get("database", make(map[string]interface{})).(map[string]interface{})
+	dbConfigData := app.Config.GetMap("database")
 	defaultConn := "mysql"
 	if v, ok := dbConfigData["default"].(string); ok {
 		defaultConn = v
 	}
 	app.DBManager = db.NewManager(defaultConn)
 
+	// 控制台命令可跳过数据库连接（version/list/make:* 等不依赖数据库）。
+	if !app.skipDatabaseInit {
+		app.initDatabaseConnections(dbConfigData, defaultConn)
+	}
+
+	// 10. 注册控制器类型到容器（使用工厂模式，避免并发请求复用同一实例）
+	for name, controllerType := range ControllerRegistry {
+		app.BindFactory(name, controllerType)
+	}
+
+	// 11. Register Global Middleware
+	recovery := &middleware.Recovery{
+		App:    app,
+		Log:    app.Log,
+		TplDir: app.BasePath + "/framework/exception/tpl",
+	}
+	app.Middleware.Pipe(recovery.Handle)
+
+	// Session
+	if app.Config.GetBool("app.session_enable", false) {
+		sessionMiddleware := &middleware.Session{Manager: app.Session}
+		app.Middleware.Pipe(sessionMiddleware.Handle)
+		// 启动后台会话回收，避免文件型会话在磁盘无限堆积。
+		app.sessionGCStop = app.Session.StartGarbageCollector(time.Hour)
+	}
+
+	// Trace
+	if app.Config.GetBool("app.app_trace", false) {
+		trace := &middleware.Trace{Debug: app.Debug}
+		app.Middleware.Pipe(trace.Handle)
+	}
+
+	// CSRF：注册别名供路由/控制器按需启用；当 app.csrf_enable=true 时对全局生效。
+	app.Middleware.Alias("csrf", middleware.Csrf())
+	if app.Config.GetBool("app.csrf_enable", false) {
+		app.Middleware.PipeByName("csrf")
+	}
+
+	// Lang
+	app.Middleware.Pipe(app.LoadLangPack())
+
+	// User Middleware
+	for _, handler := range MiddlewareRegistry {
+		app.Middleware.Pipe(handler)
+	}
+
+	// 11.5 应用路由配置（对应 ThinkPHP 的 config/route.php）。
+	// 默认 url_route_must=true（安全基线，仅显式路由）；显式设为 false 才开启自动路由。
+	app.applyRouteConfig()
+
+	// 12. Load Routes
+	for _, loader := range RouteRegistry {
+		loader(app)
+	}
+
+	// 触发路由加载完成事件（对应 ThinkPHP 的 RouteLoaded）
+	app.Event.Dispatch(event.NewRouteLoadedEvent())
+
+	// 触发应用初始化完成事件（对应 ThinkPHP 的 AppInit）
+	app.Event.Dispatch(event.NewAppInitEvent())
+}
+
+// initDatabaseConnections 按配置建立数据库连接，并把默认连接绑定到 app.DB。
+func (app *App) initDatabaseConnections(dbConfigData map[string]interface{}, defaultConn string) {
 	if conns, ok := dbConfigData["connections"].(map[string]interface{}); ok && len(conns) > 0 {
 		for name, rawConnConfig := range conns {
 			connConfig, ok := rawConnConfig.(map[string]interface{})
@@ -481,52 +563,34 @@ func (app *App) Initialize() {
 			app.DBManager.Add(defaultConn, database)
 		}
 	}
+}
 
-	// 10. 注册控制器类型到容器（使用工厂模式，避免并发请求复用同一实例）
-	for name, controllerType := range ControllerRegistry {
-		app.BindFactory(name, controllerType)
+// applyRouteConfig 把 config/route.json 配置接入路由器。
+// 此前该配置被加载但从未被消费，导致 url_route_must / default_controller / default_action 形同摆设。
+func (app *App) applyRouteConfig() {
+	routeConfig := app.Config.GetMap("route")
+	if len(routeConfig) == 0 {
+		return
 	}
 
-	// 11. Register Global Middleware
-	recovery := &middleware.Recovery{
-		App:    app,
-		Log:    app.Log,
-		TplDir: app.BasePath + "/framework/exception/tpl",
+	if controller, ok := routeConfig["default_controller"].(string); ok && controller != "" {
+		app.Route.SetDefaultController(controller)
 	}
-	app.Middleware.Pipe(recovery.Handle)
-
-	// Session
-	if app.Config.Get("app.session_enable", false).(bool) {
-		sessionMiddleware := &middleware.Session{Manager: app.Session}
-		app.Middleware.Pipe(sessionMiddleware.Handle)
-		// 启动后台会话回收，避免文件型会话在磁盘无限堆积。
-		app.sessionGCStop = app.Session.StartGarbageCollector(time.Hour)
+	if action, ok := routeConfig["default_action"].(string); ok && action != "" {
+		app.Route.SetDefaultAction(action)
 	}
 
-	// Trace
-	if app.Config.Get("app.app_trace", false).(bool) {
-		trace := &middleware.Trace{Debug: app.Debug}
-		app.Middleware.Pipe(trace.Handle)
+	// 安全基线：默认仅允许显式注册的路由（mustRoute=true）。
+	// 只有显式配置 url_route_must=false 才开启 URL 自动解析（/控制器/动作 → Controller@Action），
+	// 避免配置缺失时 fail-open 把所有导出方法暴露成端点。
+	mustRoute := true
+	switch v := routeConfig["url_route_must"].(type) {
+	case bool:
+		mustRoute = v
+	case string:
+		mustRoute = !(v == "false" || v == "0")
 	}
-
-	// Lang
-	app.Middleware.Pipe(app.LoadLangPack())
-
-	// User Middleware
-	for _, handler := range MiddlewareRegistry {
-		app.Middleware.Pipe(handler)
-	}
-
-	// 12. Load Routes
-	for _, loader := range RouteRegistry {
-		loader(app)
-	}
-
-	// 触发路由加载完成事件（对应 ThinkPHP 的 RouteLoaded）
-	app.Event.Dispatch(event.NewRouteLoadedEvent())
-
-	// 触发应用初始化完成事件（对应 ThinkPHP 的 AppInit）
-	app.Event.Dispatch(event.NewAppInitEvent())
+	app.Route.EnableAutoRoute(!mustRoute)
 }
 
 // normalizeViewPath 规范化视图目录配置，避免空字符串触发越界，并统一相对路径基准。

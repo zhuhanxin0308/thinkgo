@@ -25,19 +25,53 @@ func (o *Oracle) Rebind(query string) string {
 	return rebindNumbered(query, ":")
 }
 
+// QuoteIdentifier 用双引号引用标识符。
+func (o *Oracle) QuoteIdentifier(name string) string {
+	return oracleQuote(name)
+}
+
 // Select builds a SELECT query
 func (o *Oracle) Select(table string, fields string, where []string, order string, limit int, offset int) string {
 	query := fmt.Sprintf("SELECT %s FROM %s", oracleQuoteFields(fields), oracleQuote(table))
 	if len(where) > 0 {
 		query += " WHERE " + strings.Join(where, " AND ")
 	}
+	orderClause, limitClause := o.Pagination(order, limit, offset)
+	return query + orderClause + limitClause
+}
+
+// Pagination Oracle 12c+ 使用 OFFSET..FETCH。
+func (o *Oracle) Pagination(order string, limit int, offset int) (string, string) {
+	orderClause := ""
 	if order != "" {
-		query += " ORDER BY " + order
+		orderClause = " ORDER BY " + order
 	}
-	if limit > 0 {
-		query += fmt.Sprintf(" OFFSET %d ROWS FETCH NEXT %d ROWS ONLY", offset, limit)
+	limitClause := ""
+	if limit > 0 || offset > 0 {
+		limitClause = fmt.Sprintf(" OFFSET %d ROWS", offset)
+		if limit > 0 {
+			limitClause += fmt.Sprintf(" FETCH NEXT %d ROWS ONLY", limit)
+		}
 	}
-	return query
+	return orderClause, limitClause
+}
+
+// LockClause Oracle 支持 FOR UPDATE。
+func (o *Oracle) LockClause(mode string) string {
+	switch mode {
+	case "FOR UPDATE", "LOCK IN SHARE MODE":
+		return " FOR UPDATE"
+	default:
+		return ""
+	}
+}
+
+// SupportsLastInsertId Oracle 不支持 LastInsertId，需走 RETURNING INTO（此处保守标记，交由上层处理）。
+func (o *Oracle) SupportsLastInsertId() bool { return false }
+
+// InsertReturning Oracle 的 RETURNING INTO 需绑定输出参数，标准 database/sql 难以统一表达，返回不支持。
+func (o *Oracle) InsertReturning(string, map[string]interface{}, string) (string, []interface{}, bool) {
+	return "", nil, false
 }
 
 // Insert builds an INSERT query

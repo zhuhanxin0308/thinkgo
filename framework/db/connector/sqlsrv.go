@@ -6,7 +6,7 @@ import (
 	"thinkgo/framework/db"
 	"thinkgo/framework/db/builder"
 
-	_ "github.com/denisenkom/go-mssqldb"
+	_ "github.com/microsoft/go-mssqldb"
 )
 
 // Sqlsrv connector

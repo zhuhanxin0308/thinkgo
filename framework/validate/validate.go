@@ -3,12 +3,32 @@ package validate
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"thinkgo/framework/lang"
 )
+
+// regexCache 缓存按规则参数编译的正则，避免每次校验都重新编译同一模式。
+var regexCache sync.Map // map[string]*regexp.Regexp
+
+// compileCachedRegex 返回缓存的编译结果，非法模式返回 nil。
+func compileCachedRegex(pattern string) *regexp.Regexp {
+	if cached, ok := regexCache.Load(pattern); ok {
+		re, _ := cached.(*regexp.Regexp)
+		return re
+	}
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		regexCache.Store(pattern, (*regexp.Regexp)(nil))
+		return nil
+	}
+	regexCache.Store(pattern, re)
+	return re
+}
 
 var (
 	emailRegex       = regexp.MustCompile(`^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$`)
@@ -108,20 +128,31 @@ func (v *Validator) Check(data map[string]interface{}) bool {
 	v.errors = make([]string, 0)
 	rules := v.Rule
 
+	// 字段遍历顺序：场景指定了字段则按场景顺序；否则按字段名排序，
+	// 保证非批量模式下“第一条错误”稳定可复现（修复 map 无序导致的随机错误）。
+	var fieldOrder []string
 	if v.currentScene != "" {
 		if fields, ok := v.Scene[v.currentScene]; ok && len(fields) > 0 {
 			filtered := make(map[string]string, len(fields))
 			for _, field := range fields {
 				if rule, exists := rules[field]; exists {
 					filtered[field] = rule
+					fieldOrder = append(fieldOrder, field)
 				}
 			}
 			rules = filtered
 		}
 	}
+	if fieldOrder == nil {
+		fieldOrder = make([]string, 0, len(rules))
+		for field := range rules {
+			fieldOrder = append(fieldOrder, field)
+		}
+		sort.Strings(fieldOrder)
+	}
 
-	for field, ruleText := range rules {
-		for _, rule := range strings.Split(ruleText, "|") {
+	for _, field := range fieldOrder {
+		for _, rule := range strings.Split(rules[field], "|") {
 			if !v.validateField(data, field, strings.TrimSpace(rule)) {
 				if !v.batch {
 					v.currentScene = ""
@@ -239,7 +270,7 @@ func (v *Validator) validateField(data map[string]interface{}, field string, rul
 	case "elt":
 		valid = compareNumeric(fmt.Sprintf("%v", val), ruleParam, "<=")
 	case "regex":
-		if re, err := regexp.Compile(ruleParam); err == nil {
+		if re := compileCachedRegex(ruleParam); re != nil {
 			valid = re.MatchString(fmt.Sprintf("%v", val))
 		} else {
 			valid = false

@@ -24,22 +24,51 @@ func (m *Mysql) Rebind(query string) string {
 	return query
 }
 
+// QuoteIdentifier 用反引号引用标识符。
+func (m *Mysql) QuoteIdentifier(name string) string {
+	return quoteIdentifier(name)
+}
+
 // Select 构建 SELECT 查询
 func (m *Mysql) Select(table string, fields string, where []string, order string, limit int, offset int) string {
 	query := fmt.Sprintf("SELECT %s FROM %s", quoteFields(fields), quoteIdentifier(table))
 	if len(where) > 0 {
 		query += " WHERE " + strings.Join(where, " AND ")
 	}
+	orderClause, limitClause := m.Pagination(order, limit, offset)
+	return query + orderClause + limitClause
+}
+
+// Pagination MySQL 使用 LIMIT/OFFSET 语法。
+func (m *Mysql) Pagination(order string, limit int, offset int) (string, string) {
+	orderClause := ""
 	if order != "" {
-		query += " ORDER BY " + order
+		orderClause = " ORDER BY " + order
 	}
+	limitClause := ""
 	if limit > 0 {
-		query += fmt.Sprintf(" LIMIT %d", limit)
+		limitClause += fmt.Sprintf(" LIMIT %d", limit)
 	}
 	if offset > 0 {
-		query += fmt.Sprintf(" OFFSET %d", offset)
+		limitClause += fmt.Sprintf(" OFFSET %d", offset)
 	}
-	return query
+	return orderClause, limitClause
+}
+
+// LockClause MySQL 直接使用 FOR UPDATE / LOCK IN SHARE MODE。
+func (m *Mysql) LockClause(mode string) string {
+	if mode == "" {
+		return ""
+	}
+	return " " + mode
+}
+
+// SupportsLastInsertId MySQL 支持 LastInsertId。
+func (m *Mysql) SupportsLastInsertId() bool { return true }
+
+// InsertReturning MySQL 无需 RETURNING 写法。
+func (m *Mysql) InsertReturning(string, map[string]interface{}, string) (string, []interface{}, bool) {
+	return "", nil, false
 }
 
 // Insert 构建 INSERT 查询

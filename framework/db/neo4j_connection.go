@@ -15,6 +15,16 @@ type Neo4jConnection struct {
 	Driver neo4j.DriverWithContext
 }
 
+// neo4jIdentifier 对将被直接拼接进 Cypher 的标签/属性名做纵深校验。
+// 即便上层查询构建器已校验，连接层仍独立把关，避免任何绕过路径导致 Cypher 注入。
+func neo4jIdentifier(name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if err := validateIdentifier(name); err != nil {
+		return "", fmt.Errorf("不安全的 Neo4j 标识符 %q: %w", name, err)
+	}
+	return name, nil
+}
+
 // Select 查询节点
 // table 作为 Label 使用
 func (c *Neo4jConnection) Select(table string, fields string, where []string, args []interface{}, order string, limit int, offset int) ([]map[string]interface{}, error) {
@@ -22,11 +32,19 @@ func (c *Neo4jConnection) Select(table string, fields string, where []string, ar
 	session := c.Driver.NewSession(ctx, neo4j.SessionConfig{AccessMode: neo4j.AccessModeRead})
 	defer session.Close(ctx)
 
+	label, err := neo4jIdentifier(table)
+	if err != nil {
+		return nil, err
+	}
+
 	// 构建 Cypher 查询
-	cypher := fmt.Sprintf("MATCH (n:%s)", table)
+	cypher := fmt.Sprintf("MATCH (n:%s)", label)
 
 	// WHERE 子句
-	whereClause, params := c.buildCypherWhere(where, args)
+	whereClause, params, err := c.buildCypherWhere(where, args)
+	if err != nil {
+		return nil, err
+	}
 	if whereClause != "" {
 		cypher += " WHERE " + whereClause
 	}
@@ -35,8 +53,11 @@ func (c *Neo4jConnection) Select(table string, fields string, where []string, ar
 	if fields != "" && fields != "*" {
 		returnFields := make([]string, 0)
 		for _, f := range strings.Split(fields, ",") {
-			f = strings.TrimSpace(f)
-			returnFields = append(returnFields, fmt.Sprintf("n.%s AS %s", f, f))
+			field, err := neo4jIdentifier(f)
+			if err != nil {
+				return nil, err
+			}
+			returnFields = append(returnFields, fmt.Sprintf("n.%s AS %s", field, field))
 		}
 		cypher += " RETURN " + strings.Join(returnFields, ", ")
 	} else {
@@ -48,15 +69,18 @@ func (c *Neo4jConnection) Select(table string, fields string, where []string, ar
 		orderParts := make([]string, 0)
 		for _, part := range strings.Split(order, ",") {
 			part = strings.TrimSpace(part)
+			direction := ""
 			if strings.HasSuffix(strings.ToLower(part), " desc") {
-				field := strings.TrimSpace(part[:len(part)-5])
-				orderParts = append(orderParts, fmt.Sprintf("n.%s DESC", field))
-			} else {
-				field := strings.TrimSuffix(strings.TrimSpace(part), " asc")
-				field = strings.TrimSuffix(field, " ASC")
-				field = strings.TrimSpace(field)
-				orderParts = append(orderParts, fmt.Sprintf("n.%s", field))
+				part = strings.TrimSpace(part[:len(part)-5])
+				direction = " DESC"
+			} else if strings.HasSuffix(strings.ToLower(part), " asc") {
+				part = strings.TrimSpace(part[:len(part)-4])
 			}
+			field, err := neo4jIdentifier(part)
+			if err != nil {
+				return nil, err
+			}
+			orderParts = append(orderParts, fmt.Sprintf("n.%s%s", field, direction))
 		}
 		cypher += " ORDER BY " + strings.Join(orderParts, ", ")
 	}
@@ -104,7 +128,12 @@ func (c *Neo4jConnection) Insert(table string, data map[string]interface{}) (int
 	session := c.Driver.NewSession(ctx, neo4j.SessionConfig{AccessMode: neo4j.AccessModeWrite})
 	defer session.Close(ctx)
 
-	cypher := fmt.Sprintf("CREATE (n:%s $props) RETURN elementId(n)", table)
+	label, err := neo4jIdentifier(table)
+	if err != nil {
+		return 0, err
+	}
+
+	cypher := fmt.Sprintf("CREATE (n:%s $props) RETURN elementId(n)", label)
 	result, err := session.Run(ctx, cypher, map[string]interface{}{"props": data})
 	if err != nil {
 		return 0, err
@@ -124,9 +153,17 @@ func (c *Neo4jConnection) Update(table string, data map[string]interface{}, wher
 	session := c.Driver.NewSession(ctx, neo4j.SessionConfig{AccessMode: neo4j.AccessModeWrite})
 	defer session.Close(ctx)
 
-	cypher := fmt.Sprintf("MATCH (n:%s)", table)
+	label, err := neo4jIdentifier(table)
+	if err != nil {
+		return 0, err
+	}
 
-	whereClause, params := c.buildCypherWhere(where, args)
+	cypher := fmt.Sprintf("MATCH (n:%s)", label)
+
+	whereClause, params, err := c.buildCypherWhere(where, args)
+	if err != nil {
+		return 0, err
+	}
 	if whereClause != "" {
 		cypher += " WHERE " + whereClause
 	}
@@ -134,8 +171,12 @@ func (c *Neo4jConnection) Update(table string, data map[string]interface{}, wher
 	// SET 子句
 	setParts := make([]string, 0, len(data))
 	for k, v := range data {
-		paramKey := "set_" + k
-		setParts = append(setParts, fmt.Sprintf("n.%s = $%s", k, paramKey))
+		field, err := neo4jIdentifier(k)
+		if err != nil {
+			return 0, err
+		}
+		paramKey := "set_" + field
+		setParts = append(setParts, fmt.Sprintf("n.%s = $%s", field, paramKey))
 		params[paramKey] = v
 	}
 	cypher += " SET " + strings.Join(setParts, ", ")
@@ -160,18 +201,18 @@ func (c *Neo4jConnection) Delete(table string, where []string, args []interface{
 	session := c.Driver.NewSession(ctx, neo4j.SessionConfig{AccessMode: neo4j.AccessModeWrite})
 	defer session.Close(ctx)
 
-	cypher := fmt.Sprintf("MATCH (n:%s)", table)
-
-	whereClause, params := c.buildCypherWhere(where, args)
-	if whereClause != "" {
-		cypher += " WHERE " + whereClause
+	label, err := neo4jIdentifier(table)
+	if err != nil {
+		return 0, err
 	}
 
-	// DETACH DELETE 删除节点及其所有关系
-	cypher += " DETACH DELETE n RETURN count(n)"
+	whereClause, params, err := c.buildCypherWhere(where, args)
+	if err != nil {
+		return 0, err
+	}
 
 	// Neo4j 不直接返回删除计数，先计数再删除
-	countCypher := fmt.Sprintf("MATCH (n:%s)", table)
+	countCypher := fmt.Sprintf("MATCH (n:%s)", label)
 	if whereClause != "" {
 		countCypher += " WHERE " + whereClause
 	}
@@ -189,7 +230,7 @@ func (c *Neo4jConnection) Delete(table string, where []string, args []interface{
 	}
 
 	// 执行删除
-	deleteCypher := fmt.Sprintf("MATCH (n:%s)", table)
+	deleteCypher := fmt.Sprintf("MATCH (n:%s)", label)
 	if whereClause != "" {
 		deleteCypher += " WHERE " + whereClause
 	}
@@ -208,9 +249,17 @@ func (c *Neo4jConnection) Count(table string, where []string, args []interface{}
 	session := c.Driver.NewSession(ctx, neo4j.SessionConfig{AccessMode: neo4j.AccessModeRead})
 	defer session.Close(ctx)
 
-	cypher := fmt.Sprintf("MATCH (n:%s)", table)
+	label, err := neo4jIdentifier(table)
+	if err != nil {
+		return 0, err
+	}
 
-	whereClause, params := c.buildCypherWhere(where, args)
+	cypher := fmt.Sprintf("MATCH (n:%s)", label)
+
+	whereClause, params, err := c.buildCypherWhere(where, args)
+	if err != nil {
+		return 0, err
+	}
 	if whereClause != "" {
 		cypher += " WHERE " + whereClause
 	}
@@ -233,11 +282,11 @@ func (c *Neo4jConnection) Close() error {
 }
 
 // buildCypherWhere 将 SQL 风格 where 条件转换为 Cypher WHERE 子句
-// 返回 (Cypher WHERE 表达式, 参数 map)
-func (c *Neo4jConnection) buildCypherWhere(where []string, args []interface{}) (string, map[string]interface{}) {
+// 返回 (Cypher WHERE 表达式, 参数 map, error)。属性名会经过标识符校验，值统一参数化。
+func (c *Neo4jConnection) buildCypherWhere(where []string, args []interface{}) (string, map[string]interface{}, error) {
 	params := make(map[string]interface{})
 	if len(where) == 0 {
-		return "", params
+		return "", params, nil
 	}
 
 	clauses := make([]string, 0, len(where))
@@ -250,12 +299,18 @@ func (c *Neo4jConnection) buildCypherWhere(where []string, args []interface{}) (
 		// IS NULL / IS NOT NULL
 		upperCond := strings.ToUpper(cond)
 		if strings.HasSuffix(upperCond, " IS NULL") {
-			field := strings.TrimSpace(cond[:len(cond)-8])
+			field, err := neo4jIdentifier(cond[:len(cond)-8])
+			if err != nil {
+				return "", nil, err
+			}
 			clauses = append(clauses, fmt.Sprintf("n.%s IS NULL", field))
 			continue
 		}
 		if strings.HasSuffix(upperCond, " IS NOT NULL") {
-			field := strings.TrimSpace(cond[:len(cond)-12])
+			field, err := neo4jIdentifier(cond[:len(cond)-12])
+			if err != nil {
+				return "", nil, err
+			}
 			clauses = append(clauses, fmt.Sprintf("n.%s IS NOT NULL", field))
 			continue
 		}
@@ -265,7 +320,10 @@ func (c *Neo4jConnection) buildCypherWhere(where []string, args []interface{}) (
 		for _, op := range []string{">=", "<=", "!=", ">", "<", "="} {
 			if strings.Contains(cond, " "+op+" ") {
 				parts := strings.SplitN(cond, " "+op+" ", 2)
-				field := strings.TrimSpace(parts[0])
+				field, err := neo4jIdentifier(parts[0])
+				if err != nil {
+					return "", nil, err
+				}
 				cypherOp := op
 				if op == "!=" {
 					cypherOp = "<>"
@@ -285,5 +343,5 @@ func (c *Neo4jConnection) buildCypherWhere(where []string, args []interface{}) (
 		}
 	}
 
-	return strings.Join(clauses, " AND "), params
+	return strings.Join(clauses, " AND "), params, nil
 }

@@ -379,7 +379,7 @@ func (m *Model) BelongsToMany(relatedModel *Model, pivotTable string, foreignKey
 	}
 
 	// 3. 查询关联模型
-	return relatedModel.query().WhereIn("id", relatedKeys).Select()
+	return relatedModel.query().WhereIn(relatedModel.primaryKeyField(), relatedKeys).Select()
 }
 
 // query 返回当前模型对应的查询对象。

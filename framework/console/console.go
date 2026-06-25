@@ -60,7 +60,9 @@ func (c *Console) Run() {
 		input := NewInput()
 		// Pass args excluding command name
 		input.Args = args[1:]
-		
+		// 依据命令声明的参数/选项定义解析输入，填充 Options/Arguments。
+		input.Parse(cmd.GetArgumentDefinitions(), cmd.GetOptionDefinitions())
+
 		output := NewOutput()
 		cmd.Execute(input, output)
 	} else {
@@ -79,7 +81,16 @@ func (c *Console) ShowHelp() {
 		sig := cmd.GetSignature()
 		parts := strings.Split(sig, " ")
 		name := parts[0]
-		
+
 		fmt.Printf("  %-20s %s\n", name, cmd.GetDescription())
+
+		// 展示命令声明的选项（如 run 的 --port），让帮助不再隐藏可用参数。
+		for _, opt := range cmd.GetOptionDefinitions() {
+			flag := "--" + opt.Name
+			if opt.Short != "" {
+				flag = "-" + opt.Short + ", " + flag
+			}
+			fmt.Printf("    %-18s %s\n", flag, opt.Description)
+		}
 	}
 }

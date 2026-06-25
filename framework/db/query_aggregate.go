@@ -83,8 +83,10 @@ func (q *Query) Value(field string) (interface{}, error) {
 		return nil, q.reportError("value", fmt.Errorf("unsafe field name: %w", err), nil)
 	}
 
-	q.fields = field
-	rows, err := q.Select()
+	cloned := q.clone()
+	cloned.fields = field
+	cloned.limit = 1
+	rows, err := cloned.Select()
 	if err != nil {
 		return nil, err
 	}
@@ -105,16 +107,17 @@ func (q *Query) Column(field string, key ...string) (interface{}, error) {
 		return nil, q.reportError("column", fmt.Errorf("unsafe field name: %w", err), nil)
 	}
 
+	cloned := q.clone()
 	if len(key) > 0 && key[0] != "" {
 		if err := validateIdentifier(key[0]); err != nil {
 			return nil, q.reportError("column", fmt.Errorf("unsafe key field name: %w", err), nil)
 		}
-		q.fields = field + ", " + key[0]
+		cloned.fields = field + ", " + key[0]
 	} else {
-		q.fields = field
+		cloned.fields = field
 	}
 
-	rows, err := q.Select()
+	rows, err := cloned.Select()
 	if err != nil {
 		return nil, err
 	}

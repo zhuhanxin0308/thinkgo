@@ -66,6 +66,9 @@ func (c *Container) Instance(abstract string, instance interface{}) {
 // Make 从容器解析服务
 // Singleton 模式：首次创建后缓存，后续返回缓存实例
 // Factory 模式：每次创建新实例
+//
+// 单例创建使用双重检查锁，确保并发 Make 同一未缓存单例时只构建并缓存一个实例，
+// 避免“重复构建 + 后写覆盖先写”导致不同 goroutine 拿到不同单例。
 func (c *Container) Make(abstract string, params ...interface{}) (interface{}, error) {
 	c.lock.RLock()
 	// 检查单例缓存
@@ -80,18 +83,22 @@ func (c *Container) Make(abstract string, params ...interface{}) (interface{}, e
 		return nil, fmt.Errorf("binding not found: %s", abstract)
 	}
 
+	// Factory 模式：每次都构建新实例，无需加锁缓存。
+	if b.lifecycle != Singleton {
+		return c.build(b.concrete, params...)
+	}
+
+	// Singleton 模式：在写锁内二次检查缓存，保证仅构建一次。
+	c.lock.Lock()
+	defer c.lock.Unlock()
+	if instance, ok := c.instances[abstract]; ok {
+		return instance, nil
+	}
 	instance, err := c.build(b.concrete, params...)
 	if err != nil {
 		return nil, err
 	}
-
-	// Singleton 模式：缓存实例
-	if b.lifecycle == Singleton {
-		c.lock.Lock()
-		c.instances[abstract] = instance
-		c.lock.Unlock()
-	}
-
+	c.instances[abstract] = instance
 	return instance, nil
 }
 

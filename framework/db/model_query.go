@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"fmt"
 	"time"
 )
@@ -39,8 +40,10 @@ func (mq *ModelQuery) clone() *ModelQuery {
 }
 
 // prepareQuery 准备最终执行的 Query 对象，注入软删除等限制。
+// 在克隆上追加软删除条件，避免污染共享的 mq.query —— 否则对同一个 ModelQuery
+// 先后调用 Count()/Select() 会重复追加 "delete_time IS NULL"，且使终端方法不可重复执行。
 func (mq *ModelQuery) prepareQuery() *Query {
-	q := mq.query
+	q := mq.query.clone()
 	if mq.model.softDelete && !mq.withTrashed {
 		if mq.onlyTrashed {
 			q = q.Where(mq.model.deleteTimeField + " IS NOT NULL")
@@ -116,7 +119,8 @@ func (mq *ModelQuery) Insert(data map[string]interface{}) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	data["id"] = id
+	// 回填自增主键时使用模型配置的主键字段名，而非硬编码 "id"。
+	data[mq.model.primaryKeyField()] = id
 	mq.model.fireEvent(ModelAfterInsert, data)
 	return id, nil
 }
@@ -240,6 +244,22 @@ func (mq *ModelQuery) Chunk(count int, callback func(rows []map[string]interface
 	return nil
 }
 
+// ChunkById 基于主键游标分批遍历（避免 OFFSET 深分页问题），自动应用软删除限制与获取器。
+func (mq *ModelQuery) ChunkById(count int, pkField string, callback func(rows []map[string]interface{}) bool) error {
+	if pkField == "" {
+		pkField = mq.model.primaryKeyField()
+	}
+	hasGetters := len(mq.model.getters) > 0
+	return mq.prepareQuery().ChunkById(count, pkField, func(rows []map[string]interface{}) bool {
+		if hasGetters {
+			for _, row := range rows {
+				mq.model.applyGetters(row)
+			}
+		}
+		return callback(rows)
+	})
+}
+
 // Sum 统计字段总和。
 func (mq *ModelQuery) Sum(field string) (float64, error) {
 	return mq.prepareQuery().Sum(field)
@@ -322,6 +342,12 @@ func (mq *ModelQuery) InsertAll(dataList []map[string]interface{}) (int64, error
 // ==========================================
 // 链式构建代理方法 (全部返回 *ModelQuery)
 // ==========================================
+
+// WithContext 绑定查询上下文，使底层 SQL 执行可随请求超时/取消。
+func (mq *ModelQuery) WithContext(ctx context.Context) *ModelQuery {
+	mq.query.WithContext(ctx)
+	return mq
+}
 
 // Where 添加查询条件。
 func (mq *ModelQuery) Where(condition interface{}, args ...interface{}) *ModelQuery {
@@ -597,11 +623,12 @@ func (mq *ModelQuery) loadRelation(rows []map[string]interface{}, relation Relat
 				allRelatedKeys = append(allRelatedKeys, rk)
 			}
 		}
-		relatedRows, err := relation.Related.query().WhereIn("id", allRelatedKeys).Select()
+		relatedPK := relation.Related.primaryKeyField()
+		relatedRows, err := relation.Related.query().WhereIn(relatedPK, allRelatedKeys).Select()
 		if err != nil {
 			return err
 		}
-		relatedIndex := indexRelationRows(relatedRows, "id")
+		relatedIndex := indexRelationRows(relatedRows, relatedPK)
 		for _, row := range rows {
 			lk := fmt.Sprint(row[relation.LocalKey])
 			relatedIds := pivotMap[lk]

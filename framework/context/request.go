@@ -15,18 +15,20 @@ import (
 )
 
 // Request 封装原生 HTTP 请求，并补齐框架层常用的参数访问能力。
-// data 字段通过读写锁保护，避免中间件在并发场景下读写 map 触发 panic。
+// data 字段通过读写锁保护；body/json/query/form 等惰性缓存通过 sync.Once 保护，
+// 使请求对象在被多个中间件/协程并发访问时仍然安全（与 data 的并发保护保持一致）。
 type Request struct {
 	raw                  *http.Request
 	dataMu               sync.RWMutex
 	data                 map[string]interface{}
 	jsonBody             map[string]interface{}
-	jsonRead             bool
+	jsonOnce             sync.Once
 	bodyCache            []byte
-	bodyRead             bool
+	bodyOnce             sync.Once
 	bodyErr              error
 	queryCache           url.Values
-	queryRead            bool
+	queryOnce            sync.Once
+	formOnce             sync.Once
 	trustedProxies       []*net.IPNet
 	multipartMemoryLimit int64
 }
@@ -108,17 +110,15 @@ func (r *Request) Param(key string, def ...string) string {
 }
 
 // queryValues 解析并缓存 URL 查询参数，避免每次参数访问都重新解析查询串。
-// 请求对象为单请求生命周期，非并发复用，无需额外加锁。
+// 通过 sync.Once 保证并发访问下只解析一次且无数据竞争。
 func (r *Request) queryValues() url.Values {
-	if r.queryRead {
-		return r.queryCache
-	}
-	r.queryRead = true
-	if r.raw == nil || r.raw.URL == nil {
-		r.queryCache = url.Values{}
-		return r.queryCache
-	}
-	r.queryCache = r.raw.URL.Query()
+	r.queryOnce.Do(func() {
+		if r.raw == nil || r.raw.URL == nil {
+			r.queryCache = url.Values{}
+			return
+		}
+		r.queryCache = r.raw.URL.Query()
+	})
 	return r.queryCache
 }
 
@@ -140,7 +140,7 @@ func (r *Request) Get(key string, def ...string) string {
 // Post 获取表单或 JSON 请求体中的参数。
 func (r *Request) Post(key string, def ...string) string {
 	if r.raw != nil {
-		_ = r.raw.ParseForm()
+		r.ensureFormParsed()
 		if value := r.raw.PostFormValue(key); value != "" {
 			return value
 		}
@@ -183,7 +183,7 @@ func (r *Request) All() map[string]interface{} {
 	}
 
 	if r.raw != nil {
-		_ = r.raw.ParseForm()
+		r.ensureFormParsed()
 		for key, values := range r.raw.PostForm {
 			result[key] = normalizeStringSliceValue(values)
 		}
@@ -581,48 +581,59 @@ func (r *Request) GetData(key string) interface{} {
 }
 
 // readBody 读取并缓存请求体，同时把原始 Body 复原给后续逻辑继续消费。
+// 通过 sync.Once 保证并发访问下只读取一次且无数据竞争。
 func (r *Request) readBody() []byte {
-	if r.bodyRead {
-		return r.bodyCache
-	}
+	r.bodyOnce.Do(func() {
+		if r.raw == nil || r.raw.Body == nil {
+			r.bodyCache = []byte{}
+			return
+		}
 
-	r.bodyRead = true
-	if r.raw == nil || r.raw.Body == nil {
-		r.bodyCache = []byte{}
-		return r.bodyCache
-	}
+		body, err := io.ReadAll(r.raw.Body)
+		if err != nil {
+			r.bodyErr = err
+			r.bodyCache = []byte{}
+			return
+		}
 
-	body, err := io.ReadAll(r.raw.Body)
-	if err != nil {
-		r.bodyErr = err
-		r.bodyCache = []byte{}
-		return r.bodyCache
-	}
-
-	r.bodyCache = body
-	r.raw.Body = io.NopCloser(bytes.NewReader(body))
+		r.bodyCache = body
+		r.raw.Body = io.NopCloser(bytes.NewReader(body))
+	})
 	return r.bodyCache
 }
 
 // parseJSONBody 只解析一次 JSON 请求体，并缓存结果。
+// 通过 sync.Once 保证并发访问下只解析一次且无数据竞争。
 func (r *Request) parseJSONBody() {
-	if r.jsonRead {
-		return
-	}
-
-	r.jsonRead = true
-	r.jsonBody = make(map[string]interface{})
-
-	body := r.readBody()
-	if len(body) == 0 {
-		return
-	}
-
-	decoder := json.NewDecoder(bytes.NewReader(body))
-	decoder.UseNumber()
-	if err := decoder.Decode(&r.jsonBody); err != nil {
+	r.jsonOnce.Do(func() {
 		r.jsonBody = make(map[string]interface{})
+
+		body := r.readBody()
+		if len(body) == 0 {
+			return
+		}
+
+		decoder := json.NewDecoder(bytes.NewReader(body))
+		decoder.UseNumber()
+		if err := decoder.Decode(&r.jsonBody); err != nil {
+			r.jsonBody = make(map[string]interface{})
+		}
+	})
+}
+
+// ensureFormParsed 解析表单参数，并保证只执行一次（并发安全）。
+// 对 urlencoded 表单先缓存并复原请求体，避免 ParseForm 消费 body 后 Body()/Json() 读到空；
+// multipart 表单交由 File()/ParseMultipartForm 流式处理，不在此整体缓冲，以免大文件被读入内存。
+func (r *Request) ensureFormParsed() {
+	if r.raw == nil {
+		return
 	}
+	r.formOnce.Do(func() {
+		if strings.Contains(r.Header("Content-Type"), "application/x-www-form-urlencoded") {
+			r.readBody()
+		}
+		_ = r.raw.ParseForm()
+	})
 }
 
 // getJSONBodyValue 从缓存的 JSON 请求体中提取值。
@@ -650,7 +661,7 @@ func (r *Request) paramValue(key string) (interface{}, bool) {
 	}
 
 	if r.raw != nil {
-		_ = r.raw.ParseForm()
+		r.ensureFormParsed()
 		if values, ok := r.raw.PostForm[key]; ok && len(values) > 0 {
 			return normalizeStringSliceValue(values), true
 		}

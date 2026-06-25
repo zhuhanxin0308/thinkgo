@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 )
 
 // File 基于文件系统实现缓存驱动，适合单机部署场景。
 type File struct {
-	path string
+	path  string
+	incMu sync.Mutex // 保护 Inc/Dec 的读-改-写，保证进程内原子性
 }
 
 type storedItem struct {
@@ -56,11 +58,34 @@ func (c *File) Set(key string, val interface{}, ttl time.Duration) {
 		expiry = time.Now().Add(ttl)
 	}
 
-	data, _ := json.Marshal(storedItem{
+	data, err := json.Marshal(storedItem{
 		Val:    val,
 		Expiry: expiry,
 	})
-	_ = os.WriteFile(c.cacheFilePath(key), data, 0o644)
+	if err != nil {
+		return
+	}
+
+	// 先写临时文件再原子改名，避免并发读取到半截内容或并发写互相覆盖出损坏文件。
+	target := c.cacheFilePath(key)
+	tmp, err := os.CreateTemp(c.path, ".tmp-cache-*")
+	if err != nil {
+		_ = os.WriteFile(target, data, 0o644)
+		return
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		return
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return
+	}
+	if err := os.Rename(tmpName, target); err != nil {
+		_ = os.Remove(tmpName)
+	}
 }
 
 func (c *File) Has(key string) bool {
@@ -77,6 +102,10 @@ func (c *File) Clear() {
 }
 
 func (c *File) Inc(key string, step int64) int64 {
+	// 单机文件缓存通过进程内互斥保证 Inc/Dec 原子性（跨进程仍需分布式锁）。
+	c.incMu.Lock()
+	defer c.incMu.Unlock()
+
 	value := c.Get(key)
 	current := int64(0)
 	switch typed := value.(type) {

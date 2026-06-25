@@ -12,11 +12,14 @@ import (
 
 // File 文件日志驱动。
 // 支持按日期分文件、按大小自动轮转。
+// 仅保留当前目标文件的单个句柄：目标文件名变化（跨天/轮转）时关闭旧句柄，
+// 避免长跑进程随天数累积泄漏文件句柄。
 type File struct {
 	path        string
 	maxFileSize int64
 	mu          sync.Mutex
-	openFiles   map[string]*os.File
+	currentName string
+	currentFile *os.File
 }
 
 // NewFile 创建文件日志驱动。
@@ -28,7 +31,6 @@ func NewFile(path string, maxFileSize ...int64) *File {
 	driver := &File{
 		path:        path,
 		maxFileSize: maxSize,
-		openFiles:   make(map[string]*os.File),
 	}
 	_ = driver.ensureDir()
 	return driver
@@ -97,51 +99,48 @@ func (d *File) SaveEntries(entries []*log.LogEntry) error {
 func (d *File) Close() error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-
-	var firstErr error
-	for filename, file := range d.openFiles {
-		if file == nil {
-			delete(d.openFiles, filename)
-			continue
-		}
-		if err := file.Close(); err != nil && firstErr == nil {
-			firstErr = err
-		}
-		delete(d.openFiles, filename)
-	}
-	if d.openFiles == nil {
-		d.openFiles = make(map[string]*os.File)
-	}
-	return firstErr
+	return d.closeCurrentLocked()
 }
 
-// getOrCreateFileLocked 获取或创建指定日志文件的缓存句柄。
-// 调用方必须先持有 d.mu，避免并发写入时重复打开同一文件。
+// getOrCreateFileLocked 获取当前目标日志文件句柄。
+// 目标文件名与已打开句柄不同（跨天/轮转）时，先关闭旧句柄再打开新文件。
+// 调用方必须先持有 d.mu。
 func (d *File) getOrCreateFileLocked(filename string) (*os.File, error) {
-	if file, ok := d.openFiles[filename]; ok && file != nil {
-		return file, nil
+	if d.currentFile != nil && d.currentName == filename {
+		return d.currentFile, nil
 	}
+
+	// 目标文件变化，关闭上一个句柄，避免句柄随天数累积泄漏。
+	_ = d.closeCurrentLocked()
 
 	file, err := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return nil, err
 	}
-	d.openFiles[filename] = file
+	d.currentName = filename
+	d.currentFile = file
 	return file, nil
 }
 
-// closeFileLocked 关闭指定缓存文件句柄，并从缓存中删除。
+// closeFileLocked 关闭指定文件句柄（若为当前句柄）。
 // 调用方必须先持有 d.mu。
 func (d *File) closeFileLocked(filename string) error {
-	file, ok := d.openFiles[filename]
-	if !ok {
+	if d.currentName != filename {
 		return nil
 	}
-	delete(d.openFiles, filename)
-	if file == nil {
+	return d.closeCurrentLocked()
+}
+
+// closeCurrentLocked 关闭并清空当前文件句柄。调用方必须先持有 d.mu。
+func (d *File) closeCurrentLocked() error {
+	if d.currentFile == nil {
+		d.currentName = ""
 		return nil
 	}
-	return file.Close()
+	err := d.currentFile.Close()
+	d.currentFile = nil
+	d.currentName = ""
+	return err
 }
 
 func (d *File) ensureDir() error {

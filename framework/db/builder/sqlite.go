@@ -21,22 +21,46 @@ func (s *Sqlite) Rebind(query string) string {
 	return query
 }
 
+// QuoteIdentifier 用双引号引用标识符。
+func (s *Sqlite) QuoteIdentifier(name string) string {
+	return sqliteQuote(name)
+}
+
 // Select builds a SELECT query
 func (s *Sqlite) Select(table string, fields string, where []string, order string, limit int, offset int) string {
 	query := fmt.Sprintf("SELECT %s FROM %s", sqliteQuoteFields(fields), sqliteQuote(table))
 	if len(where) > 0 {
 		query += " WHERE " + strings.Join(where, " AND ")
 	}
+	orderClause, limitClause := s.Pagination(order, limit, offset)
+	return query + orderClause + limitClause
+}
+
+// Pagination SQLite 使用 LIMIT/OFFSET 语法。
+func (s *Sqlite) Pagination(order string, limit int, offset int) (string, string) {
+	orderClause := ""
 	if order != "" {
-		query += " ORDER BY " + order
+		orderClause = " ORDER BY " + order
 	}
+	limitClause := ""
 	if limit > 0 {
-		query += fmt.Sprintf(" LIMIT %d", limit)
+		limitClause += fmt.Sprintf(" LIMIT %d", limit)
 	}
 	if offset > 0 {
-		query += fmt.Sprintf(" OFFSET %d", offset)
+		limitClause += fmt.Sprintf(" OFFSET %d", offset)
 	}
-	return query
+	return orderClause, limitClause
+}
+
+// LockClause SQLite 不支持行级悲观锁，忽略。
+func (s *Sqlite) LockClause(string) string { return "" }
+
+// SupportsLastInsertId SQLite 支持 LastInsertId。
+func (s *Sqlite) SupportsLastInsertId() bool { return true }
+
+// InsertReturning SQLite 无需 RETURNING 写法。
+func (s *Sqlite) InsertReturning(string, map[string]interface{}, string) (string, []interface{}, bool) {
+	return "", nil, false
 }
 
 // Insert builds an INSERT query

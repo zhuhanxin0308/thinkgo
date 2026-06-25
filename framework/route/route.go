@@ -27,6 +27,7 @@ type Route struct {
 	name             string
 	patterns         map[string]string
 	compiledPatterns map[string]*regexp.Regexp
+	pathParts        []string // 注册时预切分的路径片段，避免每次请求重复切分
 	domain           string
 	ext              string
 	router           *Router
@@ -225,19 +226,22 @@ func (r *Router) Match(req *context.Request) (*Route, map[string]string) {
 		return route, nil
 	}
 
+	// 请求路径只切分一次，供所有动态路由复用。
+	host := req.Host()
+	requestParts := splitPathParts(path)
 	for _, route := range r.dynamicRoutes[method] {
-		if !matchDomain(route.domain, req.Host()) {
+		if !matchDomain(route.domain, host) {
 			continue
 		}
-		if matched, params := route.matchPath(path); matched {
+		if matched, params := route.matchPathParts(path, requestParts); matched {
 			return route, params
 		}
 	}
 	for _, route := range r.dynamicRoutes["*"] {
-		if !matchDomain(route.domain, req.Host()) {
+		if !matchDomain(route.domain, host) {
 			continue
 		}
-		if matched, params := route.matchPath(path); matched {
+		if matched, params := route.matchPathParts(path, requestParts); matched {
 			return route, params
 		}
 	}
@@ -526,6 +530,10 @@ func (r *Router) currentGroupDomain() string {
 }
 
 func (r *Router) appendRoute(route *Route) {
+	// 预切分动态路由的路径片段，匹配时直接复用，避免每个请求重复 split。
+	if !isStaticRoute(route.Path) {
+		route.pathParts = splitPathParts(route.Path)
+	}
 	if isStaticRoute(route.Path) {
 		if _, ok := r.staticRoutes[route.Method]; !ok {
 			r.staticRoutes[route.Method] = make(map[string]*Route)
@@ -579,7 +587,14 @@ func (r *Router) matchStatic(method string, path string, host string) *Route {
 	return nil
 }
 
+// matchPath 匹配请求路径（自行切分），保留单参数签名供测试与外部调用。
 func (r *Route) matchPath(requestPath string) (bool, map[string]string) {
+	return r.matchPathParts(requestPath, splitPathParts(requestPath))
+}
+
+// matchPathParts 用预切分的请求路径片段匹配路由。
+// requestParts 由调用方一次性切分后传入，路由自身片段在注册时已预切分。
+func (r *Route) matchPathParts(requestPath string, requestParts []string) (bool, map[string]string) {
 	if r.Path == requestPath {
 		return true, nil
 	}
@@ -587,8 +602,13 @@ func (r *Route) matchPath(requestPath string) (bool, map[string]string) {
 		return false, nil
 	}
 
+	routeParts := r.pathParts
+	if routeParts == nil {
+		routeParts = splitPathParts(r.Path)
+	}
+
 	params := make(map[string]string)
-	if r.matchParts(splitPathParts(r.Path), splitPathParts(requestPath), 0, 0, params) {
+	if r.matchParts(routeParts, requestParts, 0, 0, params) {
 		if len(params) == 0 {
 			return true, nil
 		}

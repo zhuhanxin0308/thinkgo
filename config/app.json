@@ -8,11 +8,11 @@
     "default_lang": "zh-cn",
     "server": {
         "host": "0.0.0.0",
-        "port": 8081,
-        "http3": true,
+        "port": 80,
+        "http3": false,
         "trusted_proxies": [],
         "tls": {
-            "enable": true,
+            "enable": false,
             "cert_file": "./runtime/cert.pem",
             "key_file": "./runtime/key.pem"
         }

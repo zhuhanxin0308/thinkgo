@@ -51,13 +51,17 @@ func (e *Env) Load(file string) error {
 }
 
 // Get 获取环境变量值
-// 优先从 .env 文件加载的数据中读取，其次读取系统环境变量
+//
+// 优先级（遵循 12-factor 约定）：真实进程环境变量 > .env 文件 > 默认值。
+// 真实环境变量优先，使得部署期（容器/k8s/CI）或命令行（如 `run -p` 通过 os.Setenv
+// 注入 SERVER_PORT）注入的值能够覆盖仓库里 .env 的默认值；.env 仅作为本地兜底。
+// 注意：Load 仍然只写入内部存储、绝不调用 os.Setenv，避免把 .env 中的敏感值
+// （如 DB_PASS）泄露到整个进程环境并被子进程继承。
 func (e *Env) Get(key string, def ...string) string {
-	if val, ok := e.data[key]; ok {
+	if val := os.Getenv(key); val != "" {
 		return val
 	}
-	val := os.Getenv(key)
-	if val != "" {
+	if val, ok := e.data[key]; ok {
 		return val
 	}
 	if len(def) > 0 {

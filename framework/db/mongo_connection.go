@@ -3,6 +3,8 @@ package db
 import (
 	"context"
 	"fmt"
+	"reflect"
+	"regexp"
 	"strings"
 	"time"
 
@@ -11,6 +13,25 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
+
+// requireMongoScalar 拒绝把 map/slice 类型的值当作等值/比较条件，防止 NoSQL 运算符注入。
+// 例如从 JSON 请求体传入 {"$ne": null} 这类对象若被直接当作匹配值，会退化为运算符注入。
+// 统一查询 API 的条件值语义上只应是标量；切片仅由框架在 IN/NOT IN 内部构造。
+func requireMongoScalar(value interface{}) error {
+	if value == nil {
+		return nil
+	}
+	switch reflect.TypeOf(value).Kind() {
+	case reflect.Map, reflect.Slice, reflect.Array, reflect.Struct:
+		// []byte（二进制数据）属于合法标量值，单独放行。
+		if _, ok := value.([]byte); ok {
+			return nil
+		}
+		return fmt.Errorf("MongoDB 条件值必须为标量，检测到潜在的运算符注入: %T", value)
+	default:
+		return nil
+	}
+}
 
 // MongoConnection MongoDB 连接实现
 // 实现 Connection 接口，将框架的统一查询 API 转换为 MongoDB 操作
@@ -221,6 +242,9 @@ func (c *MongoConnection) buildFilter(where []string, args []interface{}) (bson.
 				}
 				inValues := make([]interface{}, 0, placeholderCount)
 				for i := 0; i < placeholderCount; i++ {
+					if err := requireMongoScalar(args[argIdx]); err != nil {
+						return nil, err
+					}
 					inValues = append(inValues, args[argIdx])
 					argIdx++
 				}
@@ -240,6 +264,9 @@ func (c *MongoConnection) buildFilter(where []string, args []interface{}) (bson.
 				}
 				notInValues := make([]interface{}, 0, placeholderCount)
 				for i := 0; i < placeholderCount; i++ {
+					if err := requireMongoScalar(args[argIdx]); err != nil {
+						return nil, err
+					}
 					notInValues = append(notInValues, args[argIdx])
 					argIdx++
 				}
@@ -256,12 +283,17 @@ func (c *MongoConnection) buildFilter(where []string, args []interface{}) (bson.
 				if argIdx >= len(args) {
 					return nil, fmt.Errorf("MongoDB LIKE 条件参数不足，无法解析 %q", cond)
 				}
-				pattern := fmt.Sprintf("%v", args[argIdx])
+				if err := requireMongoScalar(args[argIdx]); err != nil {
+					return nil, err
+				}
+				rawPattern := fmt.Sprintf("%v", args[argIdx])
 				argIdx++
-				// 将 SQL LIKE 通配符转换为正则
-				pattern = strings.ReplaceAll(pattern, "%", ".*")
-				pattern = strings.ReplaceAll(pattern, "_", ".")
-				filter[field] = bson.M{"$regex": pattern, "$options": "i"}
+				// 先对用户输入做正则转义（防止正则元字符注入与 ReDoS），
+				// 再把 SQL LIKE 通配符 %/_ 映射为正则 .*/.，最后整体锚定。
+				escaped := regexp.QuoteMeta(rawPattern)
+				escaped = strings.ReplaceAll(escaped, "%", ".*")
+				escaped = strings.ReplaceAll(escaped, "_", ".")
+				filter[field] = bson.M{"$regex": "^" + escaped + "$", "$options": "i"}
 				continue
 			}
 		}
@@ -273,6 +305,12 @@ func (c *MongoConnection) buildFilter(where []string, args []interface{}) (bson.
 				field := strings.TrimSpace(cond[:len(cond)-len(parts[1])-9])
 				if argIdx+2 > len(args) {
 					return nil, fmt.Errorf("MongoDB BETWEEN 条件参数不足，无法解析 %q", cond)
+				}
+				if err := requireMongoScalar(args[argIdx]); err != nil {
+					return nil, err
+				}
+				if err := requireMongoScalar(args[argIdx+1]); err != nil {
+					return nil, err
 				}
 				filter[field] = bson.M{"$gte": args[argIdx], "$lte": args[argIdx+1]}
 				argIdx += 2
@@ -298,6 +336,9 @@ func (c *MongoConnection) buildFilter(where []string, args []interface{}) (bson.
 				field := strings.TrimSpace(parts[0])
 				if argIdx >= len(args) {
 					return nil, fmt.Errorf("MongoDB 条件参数不足，无法解析 %q", cond)
+				}
+				if err := requireMongoScalar(args[argIdx]); err != nil {
+					return nil, err
 				}
 				if op.mongo == "" {
 					filter[field] = args[argIdx]

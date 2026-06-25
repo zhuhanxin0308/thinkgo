@@ -19,9 +19,15 @@ func main() {
 	// Generate key
 	priv, _ := rsa.GenerateKey(rand.Reader, 2048)
 
+	// Random serial number to avoid clients rejecting multiple certs sharing serial 1.
+	serialNumber, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		panic(err)
+	}
+
 	// Create template
 	template := x509.Certificate{
-		SerialNumber: big.NewInt(1),
+		SerialNumber: serialNumber,
 		Subject: pkix.Name{
 			Organization: []string{"ThinkGo Dev"},
 			CommonName:   "localhost", // Set CN to localhost
@@ -46,8 +52,11 @@ func main() {
 	pem.Encode(certOut, &pem.Block{Type: "CERTIFICATE", Bytes: derBytes})
 	certOut.Close()
 
-	// Save key
-	keyOut, _ := os.Create("runtime/key.pem")
+	// Save key with owner-only permissions (0600) — never world-readable for a private key.
+	keyOut, err := os.OpenFile("runtime/key.pem", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		panic(err)
+	}
 	pem.Encode(keyOut, &pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(priv)})
 	keyOut.Close()
 }

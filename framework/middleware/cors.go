@@ -90,6 +90,10 @@ func CorsWithConfig(config CorsConfig) Handler {
 
 		// 处理正常请求
 		resp := next(req)
+		if resp == nil {
+			// 下游返回 nil 时兜底为 204，避免后续设置响应头时空指针 panic。
+			resp = context.NewResponse().Code(204)
+		}
 		addCorsHeaders(resp, allowOrigin, allowMethodsStr, allowHeadersStr,
 			exposeHeadersStr, maxAgeStr, allowCredentials)
 		return resp

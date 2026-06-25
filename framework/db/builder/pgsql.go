@@ -22,22 +22,73 @@ func (p *Pgsql) Rebind(query string) string {
 	return rebindNumbered(query, "$")
 }
 
+// QuoteIdentifier 用双引号引用标识符。
+func (p *Pgsql) QuoteIdentifier(name string) string {
+	return pgQuote(name)
+}
+
 // Select builds a SELECT query
 func (p *Pgsql) Select(table string, fields string, where []string, order string, limit int, offset int) string {
 	query := fmt.Sprintf("SELECT %s FROM %s", pgQuoteFields(fields), pgQuote(table))
 	if len(where) > 0 {
 		query += " WHERE " + strings.Join(where, " AND ")
 	}
+	orderClause, limitClause := p.Pagination(order, limit, offset)
+	return query + orderClause + limitClause
+}
+
+// Pagination PostgreSQL 使用 LIMIT/OFFSET 语法。
+func (p *Pgsql) Pagination(order string, limit int, offset int) (string, string) {
+	orderClause := ""
 	if order != "" {
-		query += " ORDER BY " + order
+		orderClause = " ORDER BY " + order
 	}
+	limitClause := ""
 	if limit > 0 {
-		query += fmt.Sprintf(" LIMIT %d", limit)
+		limitClause += fmt.Sprintf(" LIMIT %d", limit)
 	}
 	if offset > 0 {
-		query += fmt.Sprintf(" OFFSET %d", offset)
+		limitClause += fmt.Sprintf(" OFFSET %d", offset)
 	}
-	return query
+	return orderClause, limitClause
+}
+
+// LockClause PostgreSQL 用 FOR UPDATE / FOR SHARE。
+func (p *Pgsql) LockClause(mode string) string {
+	switch mode {
+	case "FOR UPDATE":
+		return " FOR UPDATE"
+	case "LOCK IN SHARE MODE":
+		return " FOR SHARE"
+	case "":
+		return ""
+	default:
+		return " " + mode
+	}
+}
+
+// SupportsLastInsertId PostgreSQL（lib/pq）不支持 LastInsertId，需走 RETURNING。
+func (p *Pgsql) SupportsLastInsertId() bool { return false }
+
+// InsertReturning 构建 INSERT ... RETURNING 主键 的语句。
+func (p *Pgsql) InsertReturning(table string, data map[string]interface{}, primaryKey string) (string, []interface{}, bool) {
+	if primaryKey == "" {
+		primaryKey = "id"
+	}
+	keys := make([]string, 0, len(data))
+	values := make([]interface{}, 0, len(data))
+	placeholders := make([]string, 0, len(data))
+	for k, v := range data {
+		keys = append(keys, pgQuote(k))
+		values = append(values, v)
+		placeholders = append(placeholders, "?")
+	}
+	query := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s) RETURNING %s",
+		pgQuote(table),
+		strings.Join(keys, ", "),
+		strings.Join(placeholders, ", "),
+		pgQuote(primaryKey))
+	return query, values, true
 }
 
 // Insert builds an INSERT query

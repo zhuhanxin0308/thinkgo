@@ -105,9 +105,20 @@ func (c *Cookie) GetConfig() CookieConfig {
 func (c *Cookie) Set(name string, value string, options ...map[string]interface{}) {
 	opts := c.mergeOptions(options...)
 
-	// 签名
+	// 签名（绑定 Cookie 名称，避免签名值在不同 Cookie 间被调换）
 	if c.config.Secret != "" {
-		value = c.sign(value, c.config.Secret)
+		value = c.sign(c.config.Prefix+name, value, c.config.Secret)
+	}
+
+	secure := opts.Secure
+	// 纵深防御：HTTPS 请求下强制 Secure（即便配置未开启），避免会话/凭证 Cookie 走明文回传；
+	// 本地 HTTP 开发仍可正常工作。
+	if c.request != nil && c.request.TLS != nil {
+		secure = true
+	}
+	// 浏览器要求 SameSite=None 必须配合 Secure，否则 Cookie 会被丢弃。
+	if strings.EqualFold(opts.SameSite, "none") {
+		secure = true
 	}
 
 	cookie := &http.Cookie{
@@ -115,7 +126,7 @@ func (c *Cookie) Set(name string, value string, options ...map[string]interface{
 		Value:    value,
 		Path:     opts.Path,
 		Domain:   opts.Domain,
-		Secure:   opts.Secure,
+		Secure:   secure,
 		HttpOnly: opts.HttpOnly,
 	}
 
@@ -147,7 +158,7 @@ func (c *Cookie) Get(name string) string {
 
 	value := cookie.Value
 	if c.config.Secret != "" {
-		val, valid := c.unsign(value, c.config.Secret)
+		val, valid := c.unsign(c.config.Prefix+name, value, c.config.Secret)
 		if !valid {
 			return ""
 		}
@@ -219,19 +230,20 @@ func (c *Cookie) mergeOptions(options ...map[string]interface{}) cookieOptions {
 const signMaxAge = 7 * 24 * 3600
 
 // sign 签名值，格式: value|timestamp.signature
-// 时间戳嵌入签名内容中，防止签名值被永久重放。
-func (c *Cookie) sign(value, secret string) string {
+// 时间戳嵌入签名内容中，防止签名值被永久重放；
+// HMAC 额外覆盖 Cookie 名称（name），防止签名值在不同 Cookie 间被调换。
+func (c *Cookie) sign(name, value, secret string) string {
 	timestamp := fmt.Sprintf("%d", time.Now().Unix())
 	payload := value + "|" + timestamp
 	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write([]byte(payload))
+	mac.Write([]byte(name + "\x00" + payload))
 	signature := base64.URLEncoding.EncodeToString(mac.Sum(nil))
 	return payload + "." + signature
 }
 
-// unsign 验证签名并返回原始值
-// 支持新格式（含时间戳）和旧格式（向后兼容，无时效检查）。
-func (c *Cookie) unsign(value, secret string) (string, bool) {
+// unsign 验证签名并返回原始值。
+// HMAC 覆盖 Cookie 名称与时间戳，名称不匹配或已过期都会验签失败。
+func (c *Cookie) unsign(name, value, secret string) (string, bool) {
 	lastDot := strings.LastIndex(value, ".")
 	if lastDot < 0 {
 		return "", false
@@ -241,7 +253,7 @@ func (c *Cookie) unsign(value, secret string) (string, bool) {
 	sig := value[lastDot+1:]
 
 	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write([]byte(payload))
+	mac.Write([]byte(name + "\x00" + payload))
 	expectedSig := base64.URLEncoding.EncodeToString(mac.Sum(nil))
 
 	if !hmac.Equal([]byte(sig), []byte(expectedSig)) {

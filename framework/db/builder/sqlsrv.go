@@ -22,22 +22,51 @@ func (s *Sqlsrv) Rebind(query string) string {
 	return rebindNumbered(query, "@p")
 }
 
+// QuoteIdentifier 用方括号引用标识符。
+func (s *Sqlsrv) QuoteIdentifier(name string) string {
+	return sqlsrvQuote(name)
+}
+
 // Select builds a SELECT query
 func (s *Sqlsrv) Select(table string, fields string, where []string, order string, limit int, offset int) string {
-	// SQL Server 2012+ support OFFSET FETCH
 	query := fmt.Sprintf("SELECT %s FROM %s", sqlsrvQuoteFields(fields), sqlsrvQuote(table))
 	if len(where) > 0 {
 		query += " WHERE " + strings.Join(where, " AND ")
 	}
-	if order == "" {
-		order = "(SELECT NULL)" // Required for OFFSET FETCH if no order
-	}
-	query += " ORDER BY " + order
+	orderClause, limitClause := s.Pagination(order, limit, offset)
+	return query + orderClause + limitClause
+}
 
-	if limit > 0 {
-		query += fmt.Sprintf(" OFFSET %d ROWS FETCH NEXT %d ROWS ONLY", offset, limit)
+// Pagination SQL Server 2012+ 使用 OFFSET..FETCH，且分页必须存在 ORDER BY。
+func (s *Sqlsrv) Pagination(order string, limit int, offset int) (string, string) {
+	paging := limit > 0 || offset > 0
+	orderClause := ""
+	if order != "" {
+		orderClause = " ORDER BY " + order
+	} else if paging {
+		// OFFSET..FETCH 要求 ORDER BY，无显式排序时补一个确定性的占位排序。
+		orderClause = " ORDER BY (SELECT NULL)"
 	}
-	return query
+
+	limitClause := ""
+	if paging {
+		limitClause = fmt.Sprintf(" OFFSET %d ROWS", offset)
+		if limit > 0 {
+			limitClause += fmt.Sprintf(" FETCH NEXT %d ROWS ONLY", limit)
+		}
+	}
+	return orderClause, limitClause
+}
+
+// LockClause SQL Server 用表提示实现行锁，简单查询难以安全表达，这里不输出尾子句。
+func (s *Sqlsrv) LockClause(string) string { return "" }
+
+// SupportsLastInsertId 通过 SCOPE_IDENTITY() 返回，标记为支持。
+func (s *Sqlsrv) SupportsLastInsertId() bool { return true }
+
+// InsertReturning SQL Server 通过 Insert() 内的 SCOPE_IDENTITY() 处理，无需 RETURNING。
+func (s *Sqlsrv) InsertReturning(string, map[string]interface{}, string) (string, []interface{}, bool) {
+	return "", nil, false
 }
 
 // Insert builds an INSERT query

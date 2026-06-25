@@ -8,7 +8,40 @@ import (
 	"time"
 )
 
-var safeExpressionPattern = regexp.MustCompile(`^[A-Za-z0-9_\s\(\)\?\+\-\*\/\.,'=<>:%]+$`)
+// expressionCharPattern 限定表达式可用的字符集：标识符字符、空白、括号、占位符、
+// 算术运算符、点/逗号/取模。刻意排除引号、分号、冒号与注释符，杜绝字符串字面量、
+// 语句分隔与注释截断。
+var expressionCharPattern = regexp.MustCompile(`^[A-Za-z0-9_\s\(\)\?\+\-\*\/\.,%]+$`)
+
+// expressionWordPattern 提取表达式中的“单词” token（标识符或函数名）。
+var expressionWordPattern = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_\.]*`)
+
+// allowedExpressionFunctions 表达式中允许调用的安全函数白名单（无副作用的标量/聚合/时间函数）。
+// 需要更复杂的函数请改用 WhereRaw 显式承担安全责任。
+var allowedExpressionFunctions = map[string]bool{
+	"now": true, "curdate": true, "curtime": true, "current_timestamp": true,
+	"current_date": true, "current_time": true, "unix_timestamp": true,
+	"count": true, "sum": true, "avg": true, "min": true, "max": true,
+	"abs": true, "round": true, "floor": true, "ceil": true, "ceiling": true,
+	"mod": true, "length": true, "char_length": true,
+	"coalesce": true, "ifnull": true, "nullif": true, "greatest": true, "least": true,
+	"date": true, "year": true, "month": true, "day": true, "hour": true, "minute": true, "second": true,
+}
+
+// bannedExpressionKeywords 即便不带空格、即便被括号包裹也会被识别为独立 token 而拒绝的关键字。
+// 这是对“黑名单只匹配带空格关键字”绕过（如 (1)OR(1=1)）的纵深防御。
+var bannedExpressionKeywords = map[string]bool{
+	"select": true, "union": true, "insert": true, "update": true, "delete": true,
+	"drop": true, "alter": true, "create": true, "truncate": true, "rename": true,
+	"or": true, "and": true, "xor": true, "not": true,
+	"from": true, "where": true, "join": true, "into": true, "values": true,
+	"table": true, "database": true, "schema": true,
+	"exec": true, "execute": true, "call": true, "declare": true,
+	"case": true, "when": true, "then": true, "else": true, "end": true,
+	"like": true, "in": true, "is": true, "between": true, "exists": true, "having": true,
+	"sleep": true, "benchmark": true, "load_file": true, "outfile": true, "dumpfile": true,
+	"information_schema": true, "null": true, "true": true, "false": true,
+}
 
 // ConditionGroup 用于构建闭包风格的嵌套条件。
 type ConditionGroup struct {
@@ -212,19 +245,52 @@ func compileExpressionClause(field string, op string, expression string) (string
 	return fmt.Sprintf("%s %s %s", field, op, strings.TrimSpace(expression)), nil
 }
 
+// validateExpressionClause 以“字符白名单 + 逐 token 解析”的方式校验表达式，
+// 取代原先基于带空格关键字子串的黑名单（可被 (1)OR(1=1) 这类去空格写法绕过）。
+//
+// 规则：
+//  1. 仅允许有限字符集（无引号/分号/冒号/注释符），从源头杜绝字符串字面量与语句截断；
+//  2. 每个“单词” token 若紧跟 '(' 视为函数调用，函数名必须在白名单内；
+//  3. 其余单词 token 必须是合法标识符（列名，支持 table.col），且不得是被禁关键字；
+//  4. 纯数字字面量与 '?' 占位符天然允许。
+//
+// 复杂表达式请改用 WhereRaw（调用方自行保证参数化与安全）。
 func validateExpressionClause(expression string) error {
 	expression = strings.TrimSpace(expression)
 	if expression == "" {
 		return fmt.Errorf("expression is empty")
 	}
-	lower := " " + strings.ToLower(expression) + " "
-	for _, banned := range []string{";", "--", "/*", "*/", " select ", " union ", " insert ", " update ", " delete ", " drop ", " or ", " and "} {
-		if strings.Contains(lower, banned) {
-			return fmt.Errorf("unsafe expression %q", expression)
-		}
-	}
-	if !safeExpressionPattern.MatchString(expression) {
+	if !expressionCharPattern.MatchString(expression) {
 		return fmt.Errorf("unsafe expression %q", expression)
+	}
+
+	lower := strings.ToLower(expression)
+	for _, loc := range expressionWordPattern.FindAllStringIndex(lower, -1) {
+		word := lower[loc[0]:loc[1]]
+
+		// 判断该 token 是否为函数调用（其后第一个非空白字符为 '('）。
+		isFunc := false
+		for i := loc[1]; i < len(lower); i++ {
+			if lower[i] == ' ' || lower[i] == '\t' || lower[i] == '\n' || lower[i] == '\r' {
+				continue
+			}
+			isFunc = lower[i] == '('
+			break
+		}
+
+		if isFunc {
+			if strings.Contains(word, ".") || !allowedExpressionFunctions[word] {
+				return fmt.Errorf("unsafe expression function %q", word)
+			}
+			continue
+		}
+
+		if bannedExpressionKeywords[word] {
+			return fmt.Errorf("unsafe expression keyword %q", word)
+		}
+		if err := validateIdentifier(word); err != nil {
+			return fmt.Errorf("unsafe expression identifier %q", word)
+		}
 	}
 	return nil
 }
