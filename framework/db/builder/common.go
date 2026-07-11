@@ -13,8 +13,11 @@ func quoteWith(name, open, closing string) string {
 		return name
 	}
 	if strings.Contains(name, ".") {
-		parts := strings.SplitN(name, ".", 2)
-		return open + parts[0] + closing + "." + open + parts[1] + closing
+		parts := strings.Split(name, ".")
+		for index, part := range parts {
+			parts[index] = open + part + closing
+		}
+		return strings.Join(parts, ".")
 	}
 	return open + name + closing
 }

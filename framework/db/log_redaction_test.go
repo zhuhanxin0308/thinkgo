@@ -60,3 +60,43 @@ func TestSelectErrorDoesNotLogArgValues(t *testing.T) {
 		t.Fatalf("错误日志应以 arg_count 记录参数数量，实际 ctx: %s", dumped)
 	}
 }
+
+// TestDBQueryRedactsSensitiveRawSQLLiterals 验证原生 SQL 失败日志不会记录字面量中的敏感值。
+func TestDBQueryRedactsSensitiveRawSQLLiterals(t *testing.T) {
+	logger := &dbTestLogger{}
+	database := NewDB(&failingQueryConnection{queryErr: errors.New("boom")})
+	database.SetLogger(logger)
+
+	_, err := database.Query("SELECT * FROM users WHERE api_token = 'raw-secret-token'")
+	if err == nil {
+		t.Fatal("原生 SQL 查询失败应返回错误")
+	}
+
+	dumped := fmt.Sprintf("%#v", logger.errorCalls[0].ctx)
+	if strings.Contains(dumped, "raw-secret-token") {
+		t.Fatalf("原生 SQL 错误日志不应包含字面量敏感值，实际 ctx: %s", dumped)
+	}
+	if !strings.Contains(dumped, "[REDACTED]") {
+		t.Fatalf("原生 SQL 错误日志应保留脱敏标记，实际 ctx: %s", dumped)
+	}
+}
+
+// TestWhereRawErrorLogRedactsLiteralSecrets 验证 WhereRaw 失败日志不会记录原始条件中的敏感字面量。
+func TestWhereRawErrorLogRedactsLiteralSecrets(t *testing.T) {
+	logger := &dbTestLogger{}
+	database := NewDB(&failingQueryConnection{selectErr: errors.New("boom")})
+	database.SetLogger(logger)
+
+	_, err := database.Table("users").WhereRaw("api_token = 'where-raw-secret'").Select()
+	if err == nil {
+		t.Fatal("WhereRaw 查询失败应返回错误")
+	}
+
+	dumped := fmt.Sprintf("%#v", logger.errorCalls[0].ctx)
+	if strings.Contains(dumped, "where-raw-secret") {
+		t.Fatalf("WhereRaw 错误日志不应包含字面量敏感值，实际 ctx: %s", dumped)
+	}
+	if !strings.Contains(dumped, "[REDACTED]") {
+		t.Fatalf("WhereRaw 错误日志应保留脱敏标记，实际 ctx: %s", dumped)
+	}
+}

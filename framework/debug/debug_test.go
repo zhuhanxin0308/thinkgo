@@ -54,3 +54,37 @@ func TestMemStatsSamplerRefreshesAfterInterval(t *testing.T) {
 		t.Fatalf("重新采样后内存值应更新，第一次=%d，第二次=%d", first, second)
 	}
 }
+
+// TestDebugGetInfoReturnsSnapshot 验证 GetInfo 返回快照，调用方不能篡改内部调试数据。
+func TestDebugGetInfoReturnsSnapshot(t *testing.T) {
+	manager := NewRequestDebug(true)
+	manager.AddLog("info", "first")
+	manager.AddSql("select 1", time.Millisecond)
+	manager.AddCache("get", "user:1")
+	manager.AddVar("user", "alice")
+	manager.AddFile("app/controller/user.go")
+
+	info := manager.GetInfo()
+	info["vars"].(map[string]interface{})["user"] = "mallory"
+	info["logs"].([]map[string]interface{})[0]["msg"] = "changed"
+	info["sqls"].([]map[string]interface{})[0]["sql"] = "drop table users"
+	info["cache"].([]map[string]interface{})[0]["key"] = "changed"
+	info["files"].([]string)[0] = "changed.go"
+
+	next := manager.GetInfo()
+	if got := next["vars"].(map[string]interface{})["user"]; got != "alice" {
+		t.Fatalf("外部修改不应污染调试变量，实际为 %v", got)
+	}
+	if got := next["logs"].([]map[string]interface{})[0]["msg"]; got != "first" {
+		t.Fatalf("外部修改不应污染日志条目，实际为 %v", got)
+	}
+	if got := next["sqls"].([]map[string]interface{})[0]["sql"]; got != "select 1" {
+		t.Fatalf("外部修改不应污染 SQL 条目，实际为 %v", got)
+	}
+	if got := next["cache"].([]map[string]interface{})[0]["key"]; got != "user:1" {
+		t.Fatalf("外部修改不应污染缓存条目，实际为 %v", got)
+	}
+	if got := next["files"].([]string)[0]; got != "app/controller/user.go" {
+		t.Fatalf("外部修改不应污染文件列表，实际为 %v", got)
+	}
+}

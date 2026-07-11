@@ -195,12 +195,28 @@ func deepCopyValue(value interface{}) interface{} {
 	switch typed := value.(type) {
 	case map[string]interface{}:
 		return deepCopyMap(typed)
+	case map[string]string:
+		cloned := make(map[string]string, len(typed))
+		for key, item := range typed {
+			cloned[key] = item
+		}
+		return cloned
 	case []interface{}:
 		cloned := make([]interface{}, len(typed))
 		for index, item := range typed {
 			cloned[index] = deepCopyValue(item)
 		}
 		return cloned
+	case []string:
+		return append([]string(nil), typed...)
+	case []int:
+		return append([]int(nil), typed...)
+	case []int64:
+		return append([]int64(nil), typed...)
+	case []float64:
+		return append([]float64(nil), typed...)
+	case []bool:
+		return append([]bool(nil), typed...)
 	default:
 		return value
 	}
@@ -213,7 +229,7 @@ func (c *Config) Set(name string, value interface{}) {
 
 	name = strings.ToLower(name)
 	if !strings.Contains(name, ".") {
-		c.config[name] = value
+		c.config[name] = deepCopyValue(value)
 		c.invalidateLookupCacheLocked()
 		return
 	}
@@ -222,7 +238,7 @@ func (c *Config) Set(name string, value interface{}) {
 	var current map[string]interface{} = c.config
 	for i, part := range parts {
 		if i == len(parts)-1 {
-			current[part] = value
+			current[part] = deepCopyValue(value)
 			c.invalidateLookupCacheLocked()
 			return
 		}

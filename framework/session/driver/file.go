@@ -52,7 +52,10 @@ func (f *File) Delete(id string) error {
 	if err != nil {
 		return err
 	}
-	return os.Remove(file)
+	if err := os.Remove(file); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
 
 // Clear 文件驱动不执行批量删除，避免误删目录内其他内容。
@@ -79,7 +82,7 @@ func (f *File) GC(maxLifetime time.Duration) (int, error) {
 	deadline := time.Now().Add(-maxLifetime)
 	removed := 0
 	for _, entry := range entries {
-		if entry.IsDir() {
+		if entry.IsDir() || !isSafeFileSessionID(entry.Name()) {
 			continue
 		}
 		info, err := entry.Info()

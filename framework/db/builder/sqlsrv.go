@@ -61,12 +61,31 @@ func (s *Sqlsrv) Pagination(order string, limit int, offset int) (string, string
 // LockClause SQL Server 用表提示实现行锁，简单查询难以安全表达，这里不输出尾子句。
 func (s *Sqlsrv) LockClause(string) string { return "" }
 
-// SupportsLastInsertId 通过 SCOPE_IDENTITY() 返回，标记为支持。
-func (s *Sqlsrv) SupportsLastInsertId() bool { return true }
+// SupportsLastInsertId SQL Server 驱动不可靠支持 LastInsertId，需走 OUTPUT INSERTED。
+func (s *Sqlsrv) SupportsLastInsertId() bool { return false }
 
-// InsertReturning SQL Server 通过 Insert() 内的 SCOPE_IDENTITY() 处理，无需 RETURNING。
-func (s *Sqlsrv) InsertReturning(string, map[string]interface{}, string) (string, []interface{}, bool) {
-	return "", nil, false
+// InsertReturning 构建 INSERT ... OUTPUT INSERTED.<pk> 语句，让连接层可用 QueryRow 扫描主键。
+func (s *Sqlsrv) InsertReturning(table string, data map[string]interface{}, primaryKey string) (string, []interface{}, bool) {
+	if primaryKey == "" {
+		primaryKey = "id"
+	}
+	keys := make([]string, 0, len(data))
+	values := make([]interface{}, 0, len(data))
+	placeholders := make([]string, 0, len(data))
+
+	for k, v := range data {
+		keys = append(keys, sqlsrvQuote(k))
+		values = append(values, v)
+		placeholders = append(placeholders, "?")
+	}
+
+	query := fmt.Sprintf("INSERT INTO %s (%s) OUTPUT INSERTED.%s VALUES (%s)",
+		sqlsrvQuote(table),
+		strings.Join(keys, ", "),
+		sqlsrvQuote(primaryKey),
+		strings.Join(placeholders, ", "))
+
+	return query, values, true
 }
 
 // Insert builds an INSERT query
@@ -81,7 +100,7 @@ func (s *Sqlsrv) Insert(table string, data map[string]interface{}) (string, []in
 		placeholders = append(placeholders, "?")
 	}
 
-	query := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s); SELECT SCOPE_IDENTITY()",
+	query := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)",
 		sqlsrvQuote(table),
 		strings.Join(keys, ", "),
 		strings.Join(placeholders, ", "))

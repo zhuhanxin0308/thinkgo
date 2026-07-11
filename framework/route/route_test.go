@@ -37,6 +37,20 @@ func TestMatchPathParams(t *testing.T) {
 	}
 }
 
+// TestRoutePatternInvalidRegexFailsClosed 验证非法正则约束不会退化为无约束匹配。
+func TestRoutePatternInvalidRegexFailsClosed(t *testing.T) {
+	route := &Route{
+		Path:             "/api/users/:id",
+		compiledPatterns: make(map[string]*regexp.Regexp),
+		patterns:         make(map[string]string),
+	}
+	route.Pattern("id", "[0-9")
+
+	if matched, _ := route.matchPath("/api/users/abc"); matched {
+		t.Fatal("非法正则约束应失败关闭，不能匹配任意参数")
+	}
+}
+
 // TestMatchPathMultipleParams 验证多参数提取
 func TestMatchPathMultipleParams(t *testing.T) {
 	route := &Route{

@@ -1,8 +1,9 @@
 package connector
 
 import (
+	"context"
 	"database/sql"
-	"fmt"
+	"net"
 	"net/url"
 	"sort"
 	"time"
@@ -10,7 +11,7 @@ import (
 	"thinkgo/framework/db"
 	"thinkgo/framework/db/builder"
 
-	_ "github.com/go-sql-driver/mysql"
+	mysqlDriver "github.com/go-sql-driver/mysql"
 )
 
 // 连接池默认参数。
@@ -46,6 +47,13 @@ func (m *Mysql) Connect(config db.Config) (db.Connection, error) {
 	conn.SetMaxIdleConns(poolConfig.MaxIdleConns)
 	conn.SetConnMaxLifetime(poolConfig.ConnMaxLifetime)
 	conn.SetConnMaxIdleTime(poolConfig.ConnMaxIdleTime)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := conn.PingContext(ctx); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
 
 	return &db.SQLConnection{DB: conn, Builder: &builder.Mysql{}}, nil
 }
@@ -101,14 +109,30 @@ func buildMysqlDSN(config db.Config) string {
 		query.Set(key, params[key])
 	}
 
-	return fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?%s",
-		config.Username,
-		config.Password,
-		config.Hostname,
-		config.Hostport,
-		config.Database,
-		query.Encode(),
-	)
+	mysqlConfig := mysqlDriver.Config{
+		User:   config.Username,
+		Passwd: config.Password,
+		Net:    "tcp",
+		Addr:   joinHostPort(config.Hostname, config.Hostport),
+		DBName: config.Database,
+		Params: map[string]string{},
+	}
+	for key, values := range query {
+		if len(values) > 0 {
+			// 统一保留字符串参数，交给官方驱动负责 DSN 转义。
+			mysqlConfig.Params[key] = values[0]
+		}
+	}
+
+	return mysqlConfig.FormatDSN()
+}
+
+// joinHostPort 在端口存在时使用标准库组合地址，避免 IPv6 或特殊主机名被拼错。
+func joinHostPort(host string, port string) string {
+	if port == "" {
+		return host
+	}
+	return net.JoinHostPort(host, port)
 }
 
 func init() {

@@ -54,9 +54,13 @@ func (q *Query) ensureValid() error {
 // 注意：where 片段为参数化 SQL（如 "id = ?"），不含值；绑定参数仅记录数量，
 // 不记录具体值，避免敏感数据（密码/令牌/PII）通过错误日志泄露。
 func (q *Query) logContext() map[string]interface{} {
+	where := make([]string, 0, len(q.where))
+	for _, condition := range q.where {
+		where = append(where, redactSQLText(condition))
+	}
 	return map[string]interface{}{
 		"table":     q.table,
-		"where":     append([]string(nil), q.where...),
+		"where":     where,
 		"arg_count": len(q.args),
 		"order":     q.order,
 		"limit":     q.limit,

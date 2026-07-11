@@ -230,72 +230,67 @@ func (c *MongoConnection) buildFilter(where []string, args []interface{}) (bson.
 			continue
 		}
 
-		// IN 条件
-		if strings.Contains(upperCond, " IN (") {
-			parts := strings.SplitN(cond, " IN (", 2)
-			if len(parts) == 2 {
-				field := strings.TrimSpace(parts[0])
-				// 统计占位符数量
-				placeholderCount := strings.Count(parts[1], "?")
-				if argIdx+placeholderCount > len(args) {
-					return nil, fmt.Errorf("MongoDB 条件参数不足，无法解析 %q", cond)
-				}
-				inValues := make([]interface{}, 0, placeholderCount)
-				for i := 0; i < placeholderCount; i++ {
-					if err := requireMongoScalar(args[argIdx]); err != nil {
-						return nil, err
-					}
-					inValues = append(inValues, args[argIdx])
-					argIdx++
-				}
-				filter[field] = bson.M{"$in": inValues}
-				continue
+		// NOT IN 条件必须先于 IN 解析，避免字段名被误切成 "field NOT"。
+		if field, tail, ok := splitMongoCondition(cond, upperCond, " NOT IN ("); ok {
+			placeholderCount := strings.Count(tail, "?")
+			if argIdx+placeholderCount > len(args) {
+				return nil, fmt.Errorf("MongoDB 条件参数不足，无法解析 %q", cond)
 			}
-		}
-
-		// NOT IN 条件
-		if strings.Contains(upperCond, " NOT IN (") {
-			parts := strings.SplitN(cond, " NOT IN (", 2)
-			if len(parts) == 2 {
-				field := strings.TrimSpace(parts[0])
-				placeholderCount := strings.Count(parts[1], "?")
-				if argIdx+placeholderCount > len(args) {
-					return nil, fmt.Errorf("MongoDB 条件参数不足，无法解析 %q", cond)
-				}
-				notInValues := make([]interface{}, 0, placeholderCount)
-				for i := 0; i < placeholderCount; i++ {
-					if err := requireMongoScalar(args[argIdx]); err != nil {
-						return nil, err
-					}
-					notInValues = append(notInValues, args[argIdx])
-					argIdx++
-				}
-				filter[field] = bson.M{"$nin": notInValues}
-				continue
-			}
-		}
-
-		// LIKE 条件 → 正则
-		if strings.Contains(upperCond, " LIKE ") {
-			parts := strings.SplitN(upperCond, " LIKE ", 2)
-			if len(parts) == 2 {
-				field := strings.TrimSpace(cond[:len(cond)-len(parts[1])-6])
-				if argIdx >= len(args) {
-					return nil, fmt.Errorf("MongoDB LIKE 条件参数不足，无法解析 %q", cond)
-				}
+			notInValues := make([]interface{}, 0, placeholderCount)
+			for i := 0; i < placeholderCount; i++ {
 				if err := requireMongoScalar(args[argIdx]); err != nil {
 					return nil, err
 				}
-				rawPattern := fmt.Sprintf("%v", args[argIdx])
+				notInValues = append(notInValues, args[argIdx])
 				argIdx++
-				// 先对用户输入做正则转义（防止正则元字符注入与 ReDoS），
-				// 再把 SQL LIKE 通配符 %/_ 映射为正则 .*/.，最后整体锚定。
-				escaped := regexp.QuoteMeta(rawPattern)
-				escaped = strings.ReplaceAll(escaped, "%", ".*")
-				escaped = strings.ReplaceAll(escaped, "_", ".")
-				filter[field] = bson.M{"$regex": "^" + escaped + "$", "$options": "i"}
-				continue
 			}
+			filter[field] = bson.M{"$nin": notInValues}
+			continue
+		}
+
+		// IN 条件
+		if field, tail, ok := splitMongoCondition(cond, upperCond, " IN ("); ok {
+			// 统计占位符数量
+			placeholderCount := strings.Count(tail, "?")
+			if argIdx+placeholderCount > len(args) {
+				return nil, fmt.Errorf("MongoDB 条件参数不足，无法解析 %q", cond)
+			}
+			inValues := make([]interface{}, 0, placeholderCount)
+			for i := 0; i < placeholderCount; i++ {
+				if err := requireMongoScalar(args[argIdx]); err != nil {
+					return nil, err
+				}
+				inValues = append(inValues, args[argIdx])
+				argIdx++
+			}
+			filter[field] = bson.M{"$in": inValues}
+			continue
+		}
+
+		// NOT LIKE 条件必须先于 LIKE 解析，避免字段名被误切成 "field NOT"。
+		if field, _, ok := splitMongoCondition(cond, upperCond, " NOT LIKE "); ok {
+			if argIdx >= len(args) {
+				return nil, fmt.Errorf("MongoDB NOT LIKE 条件参数不足，无法解析 %q", cond)
+			}
+			if err := requireMongoScalar(args[argIdx]); err != nil {
+				return nil, err
+			}
+			filter[field] = bson.M{"$not": mongoLikeRegex(args[argIdx])}
+			argIdx++
+			continue
+		}
+
+		// LIKE 条件 → 正则
+		if field, _, ok := splitMongoCondition(cond, upperCond, " LIKE "); ok {
+			if argIdx >= len(args) {
+				return nil, fmt.Errorf("MongoDB LIKE 条件参数不足，无法解析 %q", cond)
+			}
+			if err := requireMongoScalar(args[argIdx]); err != nil {
+				return nil, err
+			}
+			filter[field] = mongoLikeRegex(args[argIdx])
+			argIdx++
+			continue
 		}
 
 		// BETWEEN 条件
@@ -357,4 +352,23 @@ func (c *MongoConnection) buildFilter(where []string, args []interface{}) (bson.
 		}
 	}
 	return filter, nil
+}
+
+func splitMongoCondition(cond string, upperCond string, keyword string) (string, string, bool) {
+	index := strings.Index(upperCond, keyword)
+	if index < 0 {
+		return "", "", false
+	}
+	field := strings.TrimSpace(cond[:index])
+	tail := cond[index+len(keyword):]
+	return field, tail, field != ""
+}
+
+func mongoLikeRegex(raw interface{}) bson.M {
+	// 先对用户输入做正则转义（防止正则元字符注入与 ReDoS），
+	// 再把 SQL LIKE 通配符 %/_ 映射为正则 .*/.，最后整体锚定。
+	escaped := regexp.QuoteMeta(fmt.Sprintf("%v", raw))
+	escaped = strings.ReplaceAll(escaped, "%", ".*")
+	escaped = strings.ReplaceAll(escaped, "_", ".")
+	return bson.M{"$regex": "^" + escaped + "$", "$options": "i"}
 }

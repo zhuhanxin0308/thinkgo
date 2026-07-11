@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"html"
 	"net"
+	"net/http"
 	"sort"
 	"strings"
 	"time"
@@ -140,7 +141,7 @@ func (t *Trace) Handle(req *context.Request, next func(*context.Request) *contex
 }
 
 // isLocalTraceRequest 仅当请求来自本机回环地址时才允许暴露调试条。
-// 直接基于底层连接的 RemoteAddr 判断，不信任任何客户端可伪造的代理头。
+// 底层连接必须是回环地址；如果存在代理头，代理链中的客户端也必须全部是回环地址。
 func isLocalTraceRequest(req *context.Request) bool {
 	if req == nil {
 		return false
@@ -156,7 +157,74 @@ func isLocalTraceRequest(req *context.Request) bool {
 		host = strings.Trim(host, "[]")
 	}
 	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
+	return ip != nil && ip.IsLoopback() && proxyDebugHeadersAreLocal(raw.Header)
+}
+
+// proxyDebugHeadersAreLocal 检查本机反代传入的客户端地址，未知或非回环地址一律拒绝调试输出。
+func proxyDebugHeadersAreLocal(header http.Header) bool {
+	candidates := proxyDebugAddressCandidates(header)
+	if len(candidates) == 0 {
+		return true
+	}
+	for _, candidate := range candidates {
+		ip := parseProxyDebugIP(candidate)
+		if ip == nil || !ip.IsLoopback() {
+			return false
+		}
+	}
+	return true
+}
+
+// proxyDebugAddressCandidates 提取常见代理头中的客户端地址。
+func proxyDebugAddressCandidates(header http.Header) []string {
+	if len(header) == 0 {
+		return nil
+	}
+
+	candidates := make([]string, 0)
+	for _, value := range header.Values("X-Forwarded-For") {
+		candidates = append(candidates, splitProxyDebugList(value)...)
+	}
+	for _, value := range header.Values("X-Real-IP") {
+		candidates = append(candidates, splitProxyDebugList(value)...)
+	}
+	for _, value := range header.Values("Forwarded") {
+		for _, segment := range strings.Split(value, ",") {
+			for _, part := range strings.Split(segment, ";") {
+				key, value, ok := strings.Cut(strings.TrimSpace(part), "=")
+				if ok && strings.EqualFold(strings.TrimSpace(key), "for") {
+					candidates = append(candidates, strings.TrimSpace(value))
+				}
+			}
+		}
+	}
+	return candidates
+}
+
+// splitProxyDebugList 拆分 X-Forwarded-For / X-Real-IP 中的地址列表。
+func splitProxyDebugList(value string) []string {
+	parts := strings.Split(value, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			result = append(result, part)
+		}
+	}
+	return result
+}
+
+// parseProxyDebugIP 解析代理头地址，兼容带端口、IPv6 方括号和引号的格式。
+func parseProxyDebugIP(value string) net.IP {
+	value = strings.TrimSpace(strings.Trim(value, `"`))
+	if value == "" {
+		return nil
+	}
+	if host, _, err := net.SplitHostPort(value); err == nil {
+		value = host
+	}
+	value = strings.Trim(value, "[]")
+	return net.ParseIP(value)
 }
 
 // isHTMLResponse 判断响应是否为 HTML：优先看 Content-Type，未显式声明时按可注入处理。

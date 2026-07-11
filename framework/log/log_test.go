@@ -257,6 +257,42 @@ func TestLogEntryFormat(t *testing.T) {
 	}
 }
 
+// TestLogEntryFormatRedactsSensitiveContext 验证格式化日志时会递归脱敏敏感上下文值。
+func TestLogEntryFormatRedactsSensitiveContext(t *testing.T) {
+	entry := &LogEntry{
+		Time:    time.Date(2026, 4, 7, 9, 30, 0, 0, time.Local),
+		Level:   "error",
+		Message: "登录失败",
+		Context: map[string]interface{}{
+			"password": "pw-value-123",
+			"nested": map[string]interface{}{
+				"api_token": "token-value-456",
+				"safe":      "visible-value",
+			},
+			"headers": []interface{}{
+				map[string]interface{}{"Authorization": "Bearer secret-value-789"},
+			},
+		},
+	}
+
+	formatted := entry.FormatEntry()
+
+	for _, secret := range []string{"pw-value-123", "token-value-456", "secret-value-789"} {
+		if strings.Contains(formatted, secret) {
+			t.Fatalf("格式化日志不应包含敏感值 %q，实际为 %s", secret, formatted)
+		}
+	}
+	if !strings.Contains(formatted, "[REDACTED]") {
+		t.Fatalf("格式化日志应包含脱敏占位符，实际为 %s", formatted)
+	}
+	if !strings.Contains(formatted, "visible-value") {
+		t.Fatalf("非敏感上下文应保留，实际为 %s", formatted)
+	}
+	if entry.Context["password"] != "pw-value-123" {
+		t.Fatal("日志脱敏不应修改原始上下文")
+	}
+}
+
 // TestLogContextMethods 验证带上下文的日志方法
 func TestLogContextMethods(t *testing.T) {
 	driver := newMockDriver()

@@ -96,6 +96,9 @@ func (q *Query) Insert(data map[string]interface{}) (int64, error) {
 	if err := q.ensureValid(); err != nil {
 		return 0, q.reportError("insert", err, nil)
 	}
+	if len(data) == 0 {
+		return 0, q.reportError("insert", fmt.Errorf("插入数据不能为空"), nil)
+	}
 	if err := validateDataKeys(data); err != nil {
 		wrappedErr := fmt.Errorf("unsafe insert fields: %w", err)
 		return 0, q.reportError("insert", wrappedErr, redactDataKeys(data))
@@ -152,6 +155,9 @@ func (q *Query) Update(data map[string]interface{}) (int64, error) {
 	}
 	if len(q.where) == 0 {
 		return 0, fmt.Errorf("禁止无 WHERE 条件的 UPDATE 操作，防止误更新全表数据（表: %s）", q.table)
+	}
+	if len(data) == 0 && len(q.setExprs) == 0 {
+		return 0, q.reportError("update", fmt.Errorf("更新数据不能为空"), nil)
 	}
 	if err := validateDataKeys(data); err != nil {
 		wrappedErr := fmt.Errorf("unsafe update fields: %w", err)

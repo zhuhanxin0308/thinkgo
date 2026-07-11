@@ -3,6 +3,9 @@ package framework
 import (
 	"fmt"
 	"reflect"
+	"runtime"
+	"strconv"
+	"strings"
 	"sync"
 )
 
@@ -22,12 +25,21 @@ type binding struct {
 	lifecycle LifecycleType // 生命周期类型
 }
 
+// buildState 记录单例正在构建的状态，用于并发等待同一个构建结果。
+type buildState struct {
+	done     chan struct{}
+	instance interface{}
+	err      error
+	owner    uint64
+}
+
 // Container 依赖注入容器
 // 对应 ThinkPHP 8 的 think\Container
 // 支持 Singleton 和 Factory 两种生命周期
 type Container struct {
 	bindings  map[string]binding     // 服务绑定注册表
 	instances map[string]interface{} // 单例实例缓存
+	building  map[string]*buildState // 正在构建的单例，避免并发重复构建
 	lock      sync.RWMutex           // 读写锁（保护并发访问）
 }
 
@@ -36,6 +48,7 @@ func NewContainer() *Container {
 	return &Container{
 		bindings:  make(map[string]binding),
 		instances: make(map[string]interface{}),
+		building:  make(map[string]*buildState),
 	}
 }
 
@@ -88,17 +101,33 @@ func (c *Container) Make(abstract string, params ...interface{}) (interface{}, e
 		return c.build(b.concrete, params...)
 	}
 
-	// Singleton 模式：在写锁内二次检查缓存，保证仅构建一次。
+	// Singleton 模式：登记构建状态后在锁外执行工厂。
+	// 这样既能让并发调用共享同一次构建结果，也允许工厂内部继续解析其它依赖。
 	c.lock.Lock()
-	defer c.lock.Unlock()
 	if instance, ok := c.instances[abstract]; ok {
+		c.lock.Unlock()
 		return instance, nil
 	}
-	instance, err := c.build(b.concrete, params...)
+	if state, ok := c.building[abstract]; ok {
+		if state.owner != 0 && state.owner == currentGoroutineID() {
+			c.lock.Unlock()
+			return nil, fmt.Errorf("circular singleton dependency detected: %s", abstract)
+		}
+		c.lock.Unlock()
+		<-state.done
+		return state.instance, state.err
+	}
+	state := &buildState{
+		done:  make(chan struct{}),
+		owner: currentGoroutineID(),
+	}
+	c.building[abstract] = state
+	c.lock.Unlock()
+
+	instance, err := c.buildSingleton(abstract, b.concrete, state, params...)
 	if err != nil {
 		return nil, err
 	}
-	c.instances[abstract] = instance
 	return instance, nil
 }
 
@@ -168,4 +197,44 @@ func (c *Container) build(concrete interface{}, params ...interface{}) (interfac
 
 	// 其他情况直接返回（作为值绑定）
 	return concrete, nil
+}
+
+// buildSingleton 在锁外构建单例，并在结束时唤醒所有等待相同服务的协程。
+func (c *Container) buildSingleton(abstract string, concrete interface{}, state *buildState, params ...interface{}) (instance interface{}, err error) {
+	defer func() {
+		recovered := recover()
+		if recovered != nil {
+			err = fmt.Errorf("build singleton %s panic: %v", abstract, recovered)
+		}
+
+		c.lock.Lock()
+		state.err = err
+		if err == nil {
+			c.instances[abstract] = instance
+			state.instance = instance
+		}
+		delete(c.building, abstract)
+		close(state.done)
+		c.lock.Unlock()
+
+		if recovered != nil {
+			panic(recovered)
+		}
+	}()
+
+	return c.build(concrete, params...)
+}
+
+func currentGoroutineID() uint64 {
+	var buf [64]byte
+	n := runtime.Stack(buf[:], false)
+	fields := strings.Fields(string(buf[:n]))
+	if len(fields) < 2 {
+		return 0
+	}
+	id, err := strconv.ParseUint(fields[1], 10, 64)
+	if err != nil {
+		return 0
+	}
+	return id
 }

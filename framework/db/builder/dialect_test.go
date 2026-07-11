@@ -75,3 +75,35 @@ func TestMysqlSupportsLastInsertId(t *testing.T) {
 		t.Fatal("MySQL 不应使用 InsertReturning")
 	}
 }
+
+// TestSqlsrvInsertReturningUsesOutputInserted 验证 SQL Server 不依赖 LastInsertId，
+// 而是生成可由 QueryRow 扫描的 OUTPUT INSERTED 主键回传语句。
+func TestSqlsrvInsertReturningUsesOutputInserted(t *testing.T) {
+	s := &Sqlsrv{}
+	if s.SupportsLastInsertId() {
+		t.Fatal("SQL Server 不应声明支持 LastInsertId")
+	}
+	query, values, ok := s.InsertReturning("users", map[string]interface{}{"name": "x"}, "id")
+	if !ok {
+		t.Fatal("SQL Server 应支持 InsertReturning")
+	}
+	if len(values) != 1 {
+		t.Fatalf("values 数量错误: %d", len(values))
+	}
+	final := s.Rebind(query)
+	want := "INSERT INTO [users] ([name]) OUTPUT INSERTED.[id] VALUES (@p1)"
+	if final != want {
+		t.Fatalf("SQL Server OUTPUT INSERTED SQL 错误:\n got %q\nwant %q", final, want)
+	}
+}
+
+// TestQuoteMultipartIdentifier 验证多级点分标识符会逐段引用，
+// 避免 schema/table/column 被错误合并成单段名称。
+func TestQuoteMultipartIdentifier(t *testing.T) {
+	if got := (&Sqlsrv{}).QuoteIdentifier("catalog.dbo.users"); got != "[catalog].[dbo].[users]" {
+		t.Fatalf("SQL Server 多级标识符引用错误: %q", got)
+	}
+	if got := (&Pgsql{}).QuoteIdentifier("public.audit.logs"); got != `"public"."audit"."logs"` {
+		t.Fatalf("PostgreSQL 多级标识符引用错误: %q", got)
+	}
+}

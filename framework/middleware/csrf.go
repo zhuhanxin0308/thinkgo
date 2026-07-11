@@ -55,7 +55,6 @@ func DefaultCSRFConfig() CSRFConfig {
 			http.MethodGet:     true,
 			http.MethodHead:    true,
 			http.MethodOptions: true,
-			http.MethodTrace:   true,
 		},
 	}
 }
@@ -105,6 +104,12 @@ func CsrfWithConfig(config CSRFConfig) Handler {
 		submitted := req.Header(config.HeaderName)
 		if submitted == "" {
 			submitted = req.Post(config.FieldName)
+		}
+		if submitted == "" && strings.Contains(req.ContentType(), "multipart/form-data") && req.Raw() != nil {
+			// multipart 表单不会被 Request.Post 的 urlencoded 快路径解析，这里按 CSRF 字段最小化读取。
+			if err := req.Raw().ParseMultipartForm(context.DefaultMultipartMemoryLimit); err == nil {
+				submitted = req.Raw().FormValue(config.FieldName)
+			}
 		}
 
 		if cookieToken == "" || submitted == "" ||

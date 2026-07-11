@@ -6,10 +6,11 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
-	"time"
+	"sync"
 	"thinkgo/framework/config"
 	"thinkgo/framework/db"
 	_ "thinkgo/framework/db/connector" // Register all drivers
+	"time"
 	// _ "thinkgo/framework/db/connector/mongo" // Register MongoDB driver
 	// _ "thinkgo/framework/db/connector/neo4j" // Register Neo4j driver
 	"thinkgo/framework/cache"
@@ -62,26 +63,28 @@ func RegisterGlobalMiddleware(handler middleware.Handler) {
 // 对应 ThinkPHP 8 的 think\App
 type App struct {
 	*Container
-	BasePath   string
-	DebugMode  bool
-	Route      *route.Router
-	Middleware *middleware.Pipeline
-	DB         *db.DB
-	DBManager  *db.Manager
-	Config     *config.Config
-	Env        *env.Env
-	Log        *log.Log
-	View       *view.View
-	Cache      *cache.Cache
-	Event      *event.Dispatcher
-	Lang       *lang.Lang
-	Cookie     *cookie.Cookie
-	Session    *session.Session
-	Debug      *debug.Debug
-	Kernel        Kernel
-	startupErr    error
-	providers     []ServiceProvider // 服务提供者列表
-	sessionGCStop func()            // 停止后台会话回收协程
+	BasePath        string
+	DebugMode       bool
+	Route           *route.Router
+	Middleware      *middleware.Pipeline
+	DB              *db.DB
+	DBManager       *db.Manager
+	Config          *config.Config
+	Env             *env.Env
+	Log             *log.Log
+	View            *view.View
+	Cache           *cache.Cache
+	Event           *event.Dispatcher
+	Lang            *lang.Lang
+	Cookie          *cookie.Cookie
+	Session         *session.Session
+	Debug           *debug.Debug
+	Kernel          Kernel
+	startupErr      error
+	providers       []ServiceProvider // 服务提供者列表
+	providerLock    sync.Mutex        // 保护 Provider 生命周期状态
+	providersBooted bool              // 标记 Provider 是否已启动
+	sessionGCStop   func()            // 停止后台会话回收协程
 	// skipDatabaseInit 为 true 时，Initialize 跳过数据库连接。
 	// 供不需要数据库的控制台命令（version/list/make:* 等）使用，
 	// 避免每次执行命令都尝试连库并打印连接失败日志。
@@ -176,14 +179,35 @@ func (app *App) Run() {
 // RegisterProvider 注册服务提供者
 // 对应 ThinkPHP 8 的 $app->register()
 func (app *App) RegisterProvider(provider ServiceProvider) {
-	app.providers = append(app.providers, provider)
+	if provider == nil {
+		return
+	}
+	// 先完成 Register，再进入可启动列表，避免并发 BootProviders 看到半注册 Provider。
 	provider.Register(app)
+
+	app.providerLock.Lock()
+	app.providers = append(app.providers, provider)
+	bootImmediately := app.providersBooted
+	app.providerLock.Unlock()
+
+	if bootImmediately {
+		provider.Boot(app)
+	}
 }
 
 // BootProviders 启动所有已注册的服务提供者
 // 在所有 Provider 的 Register 完成后调用各自的 Boot
 func (app *App) BootProviders() {
-	for _, provider := range app.providers {
+	app.providerLock.Lock()
+	if app.providersBooted {
+		app.providerLock.Unlock()
+		return
+	}
+	providers := append([]ServiceProvider(nil), app.providers...)
+	app.providersBooted = true
+	app.providerLock.Unlock()
+
+	for _, provider := range providers {
 		provider.Boot(app)
 	}
 }
@@ -356,7 +380,9 @@ func (app *App) Initialize() {
 		langConfig["default_lang"] = app.Config.Get("app.default_lang", "zh-cn")
 	}
 	app.Lang.Init(langConfig)
-	app.Lang.LoadAll(app.BasePath + "/app/lang")
+	if err := app.Lang.LoadAll(app.BasePath + "/app/lang"); err != nil && app.startupErr == nil {
+		app.startupErr = fmt.Errorf("load language files failed: %w", err)
+	}
 	// 5. Init Cache
 	cacheConfig := app.Config.GetMap("cache")
 	defaultStore := "file"
@@ -629,7 +655,7 @@ func applyDatabaseEnvOverrides(app *App, dbConfig *db.Config) {
 	if val := app.Env.Get("DB_USER"); val != "" {
 		dbConfig.Username = val
 	}
-	if val := app.Env.Get("DB_PASS"); val != "" {
+	if val, ok := app.Env.Lookup("DB_PASS"); ok {
 		dbConfig.Password = val
 	}
 	if val := app.Env.Get("DB_NAME"); val != "" {
@@ -681,7 +707,28 @@ func readDatabaseConfig(connConfig map[string]interface{}) db.Config {
 	config.MaxIdleConns = readConfigIntValue(connConfig["max_idle_conns"])
 	config.ConnMaxLifetimeSeconds = readConfigIntValue(connConfig["conn_max_lifetime_seconds"])
 	config.ConnMaxIdleTimeSeconds = readConfigIntValue(connConfig["conn_max_idle_time_seconds"])
+	config.Params = readDatabaseParams(connConfig["params"])
 	return config
+}
+
+// readDatabaseParams 把 JSON 配置中的连接参数统一转为字符串，供各数据库驱动安全构造 DSN。
+func readDatabaseParams(raw interface{}) map[string]string {
+	rawParams, ok := raw.(map[string]interface{})
+	if !ok || len(rawParams) == 0 {
+		return nil
+	}
+
+	params := make(map[string]string, len(rawParams))
+	for key, value := range rawParams {
+		if strings.TrimSpace(key) == "" || value == nil {
+			continue
+		}
+		params[key] = fmt.Sprint(value)
+	}
+	if len(params) == 0 {
+		return nil
+	}
+	return params
 }
 
 func applyDatabaseFallbacks(dbConfig *db.Config) {

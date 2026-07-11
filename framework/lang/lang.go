@@ -30,6 +30,7 @@ func NewLang() *Lang {
 // Init 初始化语言管理器
 func (l *Lang) Init(config map[string]interface{}) {
 	if defaultLang, ok := config["default_lang"].(string); ok {
+		defaultLang = strings.ToLower(defaultLang)
 		l.rangeL = defaultLang
 		l.defaultLang = defaultLang
 	}
@@ -42,7 +43,7 @@ func (l *Lang) GetDefaultLang() string {
 	return l.defaultLang
 }
 
-// SetLang sets the current language range
+// SetLang 设置当前语言标识。
 func (l *Lang) SetLang(lang string) {
 	l.lock.Lock()
 	defer l.lock.Unlock()
@@ -52,7 +53,7 @@ func (l *Lang) SetLang(lang string) {
 	}
 }
 
-// GetLang gets the current language range
+// GetLang 获取当前语言标识。
 func (l *Lang) GetLang() string {
 	l.lock.RLock()
 	defer l.lock.RUnlock()
@@ -133,7 +134,7 @@ func (l *Lang) flattenMap(data interface{}, prefix string, lang string) {
 	}
 }
 
-// Parse parses a file and returns data (helper)
+// Parse 解析扁平语言文件并返回键值表。
 func (l *Lang) Parse(file string) (map[string]string, error) {
 	content, err := os.ReadFile(file)
 	if err != nil {
@@ -146,7 +147,7 @@ func (l *Lang) Parse(file string) (map[string]string, error) {
 	return data, nil
 }
 
-// Has checks if a translation exists
+// Has 判断指定翻译键是否存在。
 func (l *Lang) Has(name string, lang string) bool {
 	l.lock.RLock()
 	defer l.lock.RUnlock()
@@ -164,7 +165,7 @@ func (l *Lang) Has(name string, lang string) bool {
 	return false
 }
 
-// Get gets a translation
+// Get 获取翻译文本，并替换 {:name} 形式的变量。
 func (l *Lang) Get(name string, vars map[string]interface{}, lang string) string {
 	l.lock.RLock()
 	defer l.lock.RUnlock()
@@ -175,14 +176,25 @@ func (l *Lang) Get(name string, vars map[string]interface{}, lang string) string
 	lang = strings.ToLower(lang)
 	lowerName := strings.ToLower(name)
 
-	var value string
+	var (
+		value string
+		found bool
+	)
 	if data, ok := l.data[lang]; ok {
 		if v, ok := data[lowerName]; ok {
 			value = v
-		} else {
-			value = name
+			found = true
 		}
-	} else {
+	}
+	if !found && lang != l.defaultLang {
+		if data, ok := l.data[l.defaultLang]; ok {
+			if v, ok := data[lowerName]; ok {
+				value = v
+				found = true
+			}
+		}
+	}
+	if !found {
 		value = name
 	}
 
@@ -196,17 +208,25 @@ func (l *Lang) Get(name string, vars map[string]interface{}, lang string) string
 	return value
 }
 
-// LoadAll loads all language files from a directory
-func (l *Lang) LoadAll(dir string) {
-	filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+// LoadAll 加载目录下全部 JSON 语言文件；目录不存在时视为未配置语言包。
+func (l *Lang) LoadAll(dir string) error {
+	if _, err := os.Stat(dir); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	return filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
 		if !info.IsDir() && strings.HasSuffix(path, ".json") {
-			// Filename as lang? e.g. zh-cn.json
+			// 文件名即语言标识，例如 zh-cn.json。
 			filename := filepath.Base(path)
 			lang := strings.TrimSuffix(filename, filepath.Ext(filename))
-			l.Load(path, lang)
+			if err := l.Load(path, lang); err != nil {
+				return fmt.Errorf("加载语言文件 %s 失败: %w", path, err)
+			}
 		}
 		return nil
 	})

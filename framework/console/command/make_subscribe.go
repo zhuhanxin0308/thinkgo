@@ -3,7 +3,7 @@ package command
 import (
 	"fmt"
 	"os"
-	"strings"
+	"path/filepath"
 	"thinkgo/framework/console"
 )
 
@@ -18,24 +18,24 @@ func (c *MakeSubscribe) Configure() {
 }
 
 func (c *MakeSubscribe) Execute(input *console.Input, output *console.Output) {
-	name := input.GetArgument(0)
-	if name == "" {
-		output.Error("Subscriber name is required.")
+	name, err := normalizeGeneratorName(input.GetArgument(0), "")
+	if err != nil {
+		output.Error("Invalid subscriber name: " + err.Error())
 		return
 	}
 
-	// Capitalize
-	name = strings.Title(name)
-
 	// Ensure directory exists
-	dir := fmt.Sprintf("%s/app/subscribe", c.App.BasePath)
+	dir := filepath.Join(c.App.BasePath, "app", "subscribe")
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		os.MkdirAll(dir, 0755)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			output.Error(fmt.Sprintf("Failed to create subscriber directory: %v", err))
+			return
+		}
 	}
 
 	// File path
-	filename := fmt.Sprintf("%s/%s.go", dir, strings.ToLower(name))
-	
+	filename := filepath.Join(dir, lowerGoFilename(name))
+
 	// Check if exists
 	if _, err := os.Stat(filename); !os.IsNotExist(err) {
 		output.Error(fmt.Sprintf("Subscriber %s already exists.", name))
@@ -49,13 +49,26 @@ import (
 	"thinkgo/framework/event"
 )
 
-// %s subscriber
-type %s struct{}
-
-func (s *%s) Subscribe(dispatcher *event.Dispatcher) {
-	// dispatcher.Listen("EventName", Listener)
+// %s 订阅者。
+type %s struct {
+	LastEventName string
 }
-`, name, name, name)
+
+// Subscribe 注册订阅者自身，默认监听全部事件并记录最近一次事件名。
+func (s *%s) Subscribe(dispatcher *event.Dispatcher) {
+	if dispatcher == nil {
+		return
+	}
+	dispatcher.Listen("*", s)
+}
+
+// Handle 记录最近一次收到的事件名称。
+func (s *%s) Handle(event event.Event) {
+	if event != nil {
+		s.LastEventName = event.Name()
+	}
+}
+`, name, name, name, name)
 
 	// Write file
 	if err := os.WriteFile(filename, []byte(content), 0644); err != nil {

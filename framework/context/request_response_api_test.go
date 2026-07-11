@@ -2,6 +2,8 @@ package context
 
 import (
 	"encoding/json"
+	"encoding/xml"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -53,6 +55,45 @@ func TestRequestTypedAccessorsAndBatchGetters(t *testing.T) {
 	if _, ok := except["nickname"]; ok {
 		t.Fatalf("Except 应排除指定字段，实际为 %#v", except)
 	}
+}
+
+// TestRequestParamPrefersBodyOverQuery 验证状态变更请求中 body 参数优先于 URL query，避免查询串覆盖提交内容。
+func TestRequestParamPrefersBodyOverQuery(t *testing.T) {
+	body := `{"role":"user"}`
+	raw := httptest.NewRequest(http.MethodPost, "/users?role=admin", strings.NewReader(body))
+	raw.Header.Set("Content-Type", "application/json")
+	req := NewRequest(raw)
+
+	if value := req.Param("role"); value != "user" {
+		t.Fatalf("Param 应优先返回 body 中的 role，实际为 %q", value)
+	}
+
+	req.Set("role", "owner")
+	if value := req.Param("role"); value != "owner" {
+		t.Fatalf("路由参数仍应拥有最高优先级，实际为 %q", value)
+	}
+}
+
+// TestRequestJsonReturnsBodyReadError 验证 JSON 绑定会返回底层请求体读取错误，而不是伪装成空 JSON。
+func TestRequestJsonReturnsBodyReadError(t *testing.T) {
+	readErr := errors.New("request body read failed")
+	raw := httptest.NewRequest(http.MethodPost, "/users", failingBodyReader{err: readErr})
+	raw.Header.Set("Content-Type", "application/json")
+	req := NewRequest(raw)
+
+	var payload map[string]interface{}
+	err := req.Json(&payload)
+	if !errors.Is(err, readErr) {
+		t.Fatalf("Json 应返回请求体读取错误，实际为 %v", err)
+	}
+}
+
+type failingBodyReader struct {
+	err error
+}
+
+func (r failingBodyReader) Read([]byte) (int, error) {
+	return 0, r.err
 }
 
 func TestResponseAdvancedHelpers(t *testing.T) {
@@ -111,4 +152,51 @@ func TestResponseAdvancedHelpers(t *testing.T) {
 	if payload["message"] != "denied" {
 		t.Fatalf("Abort 响应体不正确，实际为 %#v", payload)
 	}
+}
+
+// TestResponseHeaderRejectsInjection 验证通用 Header API 会阻断响应头注入。
+func TestResponseHeaderRejectsInjection(t *testing.T) {
+	resp := NewResponse().
+		Header("X-Trace", "ok\r\nSet-Cookie: bad=1\x00").
+		Header("Bad\r\nName", "value")
+
+	if got := resp.Headers().Get("X-Trace"); strings.ContainsAny(got, "\r\n\x00") {
+		t.Fatalf("响应头值不应包含控制字符，实际为 %q", got)
+	}
+	for key := range resp.Headers() {
+		if strings.ContainsAny(key, "\r\n") {
+			t.Fatalf("非法响应头名不应被写入，实际存在 %q", key)
+		}
+	}
+}
+
+// TestResponseSerializationErrorIsMasked 验证序列化失败时响应体不会泄露内部错误详情。
+func TestResponseSerializationErrorIsMasked(t *testing.T) {
+	for name, resp := range map[string]*Response{
+		"json":  NewResponse().Json(leakingJSON{}),
+		"jsonp": NewResponse().Jsonp("callback", leakingJSON{}),
+		"xml":   NewResponse().Xml(leakingXML{}),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if resp.GetStatus() != http.StatusInternalServerError {
+				t.Fatalf("序列化失败应返回 500，实际为 %d", resp.GetStatus())
+			}
+			body := string(resp.GetBody())
+			if strings.Contains(body, "secret-token") || strings.Contains(body, "internal encoder detail") {
+				t.Fatalf("序列化失败响应不应泄露内部错误，实际为 %q", body)
+			}
+		})
+	}
+}
+
+type leakingJSON struct{}
+
+func (leakingJSON) MarshalJSON() ([]byte, error) {
+	return nil, errors.New("secret-token: internal encoder detail")
+}
+
+type leakingXML struct{}
+
+func (leakingXML) MarshalXML(encoder *xml.Encoder, start xml.StartElement) error {
+	return errors.New("secret-token: internal encoder detail")
 }

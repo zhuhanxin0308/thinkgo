@@ -3,6 +3,7 @@ package command
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"thinkgo/framework/console"
 )
@@ -18,24 +19,24 @@ func (c *MakeCommand) Configure() {
 }
 
 func (c *MakeCommand) Execute(input *console.Input, output *console.Output) {
-	name := input.GetArgument(0)
-	if name == "" {
-		output.Error("Command name is required.")
+	name, err := normalizeGeneratorName(input.GetArgument(0), "")
+	if err != nil {
+		output.Error("Invalid command name: " + err.Error())
 		return
 	}
 
-	// Capitalize
-	name = strings.Title(name)
-
 	// Ensure directory exists
-	dir := fmt.Sprintf("%s/app/command", c.App.BasePath)
+	dir := filepath.Join(c.App.BasePath, "app", "command")
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		os.MkdirAll(dir, 0755)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			output.Error(fmt.Sprintf("Failed to create command directory: %v", err))
+			return
+		}
 	}
 
 	// File path
-	filename := fmt.Sprintf("%s/%s.go", dir, strings.ToLower(name))
-	
+	filename := filepath.Join(dir, lowerGoFilename(name))
+
 	// Check if exists
 	if _, err := os.Stat(filename); !os.IsNotExist(err) {
 		output.Error(fmt.Sprintf("Command %s already exists.", name))
@@ -56,11 +57,11 @@ type %s struct {
 
 func (c *%s) Configure() {
 	c.Signature = "app:%s"
-	c.Description = "Command description"
+	c.Description = "应用命令 %s"
 }
 
 func (c *%s) Execute(input *console.Input, output *console.Output) {
-	output.Info("Command %s executed")
+	output.Info(c.GetSignature() + " " + c.GetDescription())
 }
 `, name, name, name, strings.ToLower(name), name, name)
 

@@ -2,10 +2,18 @@ package db
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+)
+
+var (
+	sqlQuotedLiteralPattern        = regexp.MustCompile(`'([^']|'')*'`)
+	sqlSensitiveAssignmentPattern  = regexp.MustCompile(`(?i)\b(password|passwd|token|secret|authorization|api_key|refresh_token)\b\s*=\s*[^,\s)]+`)
+	sqlSensitiveComparisonPattern  = regexp.MustCompile(`(?i)\b([a-z0-9_]*(password|passwd|token|secret|authorization|api_key|refresh_token)[a-z0-9_]*)\b\s*=\s*[^,\s)]+`)
+	sqlSensitiveAssignmentReplacer = `${1} = [REDACTED]`
 )
 
 // Logger 抽象数据库层所需的最小日志能力，避免与具体日志实现形成循环依赖。
@@ -216,7 +224,7 @@ func (db *DB) Query(sql string, args ...interface{}) ([]map[string]interface{}, 
 		rows, err := raw.Query(sql, args...)
 		if err != nil {
 			return nil, db.reportError("query", err, map[string]interface{}{
-				"sql":  sql,
+				"sql":  redactSQLText(sql),
 				"args": redactArgCount(args),
 			})
 		}
@@ -224,7 +232,7 @@ func (db *DB) Query(sql string, args ...interface{}) ([]map[string]interface{}, 
 	}
 
 	return nil, db.reportError("query", fmt.Errorf("current connection does not support raw queries"), map[string]interface{}{
-		"sql":  sql,
+		"sql":  redactSQLText(sql),
 		"args": redactArgCount(args),
 	})
 }
@@ -236,7 +244,7 @@ func (db *DB) Execute(sql string, args ...interface{}) (int64, error) {
 		affected, err := raw.Execute(sql, args...)
 		if err != nil {
 			return 0, db.reportError("execute", err, map[string]interface{}{
-				"sql":  sql,
+				"sql":  redactSQLText(sql),
 				"args": redactArgCount(args),
 			})
 		}
@@ -244,7 +252,7 @@ func (db *DB) Execute(sql string, args ...interface{}) (int64, error) {
 	}
 
 	return 0, db.reportError("execute", fmt.Errorf("current connection does not support raw execution"), map[string]interface{}{
-		"sql":  sql,
+		"sql":  redactSQLText(sql),
 		"args": redactArgCount(args),
 	})
 }
@@ -263,6 +271,16 @@ func redactDataKeys(data map[string]interface{}) map[string]interface{} {
 // redactArgCount 把参数列表降级为数量描述，避免把绑定值（可能含敏感数据）写入日志。
 func redactArgCount(args []interface{}) string {
 	return fmt.Sprintf("%d args (redacted)", len(args))
+}
+
+func redactSQLText(sqlText string) string {
+	if sqlText == "" {
+		return ""
+	}
+	redacted := sqlQuotedLiteralPattern.ReplaceAllString(sqlText, "'[REDACTED]'")
+	redacted = sqlSensitiveAssignmentPattern.ReplaceAllString(redacted, sqlSensitiveAssignmentReplacer)
+	redacted = sqlSensitiveComparisonPattern.ReplaceAllString(redacted, sqlSensitiveAssignmentReplacer)
+	return redacted
 }
 
 // reportError 统一记录数据库错误并保留原始错误返回给上层调用方。

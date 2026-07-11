@@ -85,20 +85,27 @@ func (t *Tx) Rollback() error {
 	return err
 }
 
+// bindQuery 将查询绑定到当前事务；事务结束后创建的查询必须失败，
+// 不能因为 tx 为空而退回普通连接执行，避免突破事务边界。
+func (t *Tx) bindQuery(q *Query) *Query {
+	if t.tx == nil {
+		return q.setError(fmt.Errorf("事务未初始化或已结束"))
+	}
+	q.txExecutor = t.tx
+	q.ctx = t.ctx
+	return q
+}
+
 // Table 使用完整表名创建绑定事务的查询构建器（不自动拼接前缀）。
 // 对应 ThinkPHP 的 Tx.Table()
 func (t *Tx) Table(name string) *Query {
 	q := newQuery(t.db, name, true)
-	q.txExecutor = t.tx
-	q.ctx = t.ctx
-	return q
+	return t.bindQuery(q)
 }
 
 // Name 使用短表名创建绑定事务的查询构建器（自动拼接配置的表前缀）。
 // 对应 ThinkPHP 的 Tx.Name()
 func (t *Tx) Name(name string) *Query {
 	q := newQuery(t.db, name)
-	q.txExecutor = t.tx
-	q.ctx = t.ctx
-	return q
+	return t.bindQuery(q)
 }

@@ -187,12 +187,34 @@ func (d *Debug) GetInfo() map[string]interface{} {
 	defer d.lock.RUnlock()
 
 	return map[string]interface{}{
-		"logs":  d.logs,
-		"sqls":  d.sqls,
-		"cache": d.cache,
-		"vars":  d.vars,
-		"files": d.files,
+		"logs":  cloneDebugEntries(d.logs),
+		"sqls":  cloneDebugEntries(d.sqls),
+		"cache": cloneDebugEntries(d.cache),
+		"vars":  cloneDebugVars(d.vars),
+		"files": append([]string(nil), d.files...),
 		"time":  time.Since(d.start).Seconds(),
 		"mem":   d.memSampler.CurrentAlloc(),
 	}
+}
+
+// cloneDebugEntries 复制调试条目列表，避免调用方修改内部切片或 map。
+func cloneDebugEntries(entries []map[string]interface{}) []map[string]interface{} {
+	cloned := make([]map[string]interface{}, len(entries))
+	for index, entry := range entries {
+		item := make(map[string]interface{}, len(entry))
+		for key, value := range entry {
+			item[key] = value
+		}
+		cloned[index] = item
+	}
+	return cloned
+}
+
+// cloneDebugVars 复制调试变量表，保持 Debug 内部状态只由自身方法维护。
+func cloneDebugVars(vars map[string]interface{}) map[string]interface{} {
+	cloned := make(map[string]interface{}, len(vars))
+	for key, value := range vars {
+		cloned[key] = value
+	}
+	return cloned
 }

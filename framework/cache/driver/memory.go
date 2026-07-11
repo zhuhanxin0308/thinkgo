@@ -87,12 +87,21 @@ func (c *Memory) Inc(key string, step int64) int64 {
 	defer c.lock.Unlock()
 
 	it, ok := c.items[key]
+	if ok && !it.expiry.IsZero() && time.Now().After(it.expiry) {
+		// Inc/Dec 也必须遵守过期语义，避免基于旧值递增并继承已过期时间。
+		delete(c.items, key)
+		it = item{}
+		ok = false
+	}
+
 	var val int64 = 0
 	if ok {
 		if v, ok := it.val.(int); ok {
 			val = int64(v)
 		} else if v, ok := it.val.(int64); ok {
 			val = v
+		} else if v, ok := it.val.(float64); ok {
+			val = int64(v)
 		}
 	}
 

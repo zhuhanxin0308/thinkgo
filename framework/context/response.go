@@ -16,6 +16,8 @@ import (
 
 var jsonpCallbackPattern = regexp.MustCompile(`^[A-Za-z_$][A-Za-z0-9_$\.\[\]]*$`)
 
+const internalServerErrorMessage = "internal server error"
+
 // Response 封装框架响应对象，负责统一管理状态码、头部和输出内容。
 type Response struct {
 	status       int
@@ -46,7 +48,11 @@ func NewResponse() *Response {
 
 // Header 设置响应头。
 func (r *Response) Header(key, value string) *Response {
-	r.header.Set(key, value)
+	key = strings.TrimSpace(key)
+	if !isValidHeaderName(key) {
+		return r
+	}
+	r.header.Set(key, sanitizeHeaderValue(value))
 	return r
 }
 
@@ -79,7 +85,7 @@ func (r *Response) Json(data interface{}) *Response {
 	bytes, err := json.Marshal(data)
 	if err != nil {
 		r.status = http.StatusInternalServerError
-		r.body = []byte(err.Error())
+		r.body = []byte(`{"message":"` + internalServerErrorMessage + `"}`)
 		return r
 	}
 	r.body = bytes
@@ -97,9 +103,13 @@ func (r *Response) Jsonp(callback string, data interface{}) *Response {
 
 	payload, err := json.Marshal(data)
 	if err != nil {
-		return r.Abort(http.StatusInternalServerError, map[string]interface{}{
-			"message": err.Error(),
-		})
+		r.streamWriter = nil
+		r.chunks = nil
+		r.filePath = ""
+		r.Header("Content-Type", "application/javascript; charset=utf-8")
+		r.status = http.StatusInternalServerError
+		r.body = []byte(fmt.Sprintf("%s({\"message\":\"%s\"});", callback, internalServerErrorMessage))
+		return r
 	}
 
 	r.streamWriter = nil
@@ -131,6 +141,38 @@ func sanitizeHeaderValue(value string) string {
 		}
 		return r
 	}, value)
+}
+
+// isValidHeaderName 按 HTTP token 规则校验响应头名，非法头名直接拒绝写入。
+func isValidHeaderName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for index := 0; index < len(name); index++ {
+		if !isHeaderTokenChar(name[index]) {
+			return false
+		}
+	}
+	return true
+}
+
+// isHeaderTokenChar 判断字符是否可用于 HTTP 头字段名。
+func isHeaderTokenChar(char byte) bool {
+	if char >= 'a' && char <= 'z' {
+		return true
+	}
+	if char >= 'A' && char <= 'Z' {
+		return true
+	}
+	if char >= '0' && char <= '9' {
+		return true
+	}
+	switch char {
+	case '!', '#', '$', '%', '&', '\'', '*', '+', '-', '.', '^', '_', '`', '|', '~':
+		return true
+	default:
+		return false
+	}
 }
 
 // Stream 设置流式响应回调。
@@ -218,7 +260,8 @@ func (r *Response) Send(w http.ResponseWriter) {
 	if r.streamWriter != nil {
 		w.WriteHeader(r.status)
 		if err := r.streamWriter(w); err != nil {
-			_, _ = w.Write([]byte(err.Error()))
+			// 流式响应状态码已经写出，只能输出通用错误，避免泄露内部异常详情。
+			_, _ = w.Write([]byte(internalServerErrorMessage))
 		}
 		return
 	}
@@ -350,7 +393,7 @@ func (r *Response) Xml(data interface{}) *Response {
 	bytes, err := xml.Marshal(data)
 	if err != nil {
 		r.status = http.StatusInternalServerError
-		r.body = []byte(err.Error())
+		r.body = []byte(`<error><message>` + internalServerErrorMessage + `</message></error>`)
 		return r
 	}
 	r.body = bytes

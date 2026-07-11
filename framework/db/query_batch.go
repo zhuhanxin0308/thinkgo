@@ -8,9 +8,16 @@ import (
 	"time"
 )
 
-// maxBindParams 单条预编译语句的最大占位符数量（以 MySQL 的 65535 上限为基准，留有余量）。
-// 批量插入会据此自动分批，避免超过驱动占位符上限直接失败。
-const maxBindParams = 60000
+const (
+	// maxBindParams 是 MySQL/PostgreSQL 等高参数预算方言的保守默认值。
+	maxBindParams = 60000
+	// SQLite 默认编译参数上限常见为 999，按该值保守分批，避免嵌入式环境直接拒绝 SQL。
+	sqliteBindParams = 999
+	// SQL Server 单语句参数上限为 2100，批量插入必须按该值分批。
+	sqlsrvBindParams = 2100
+	// Oracle 单语句绑定变量常见上限为 1000；默认构建未启用 oracle tag 时也按类型名兜底。
+	oracleBindParams = 1000
+)
 
 // InsertAll 批量插入多条记录。
 // 对应 ThinkPHP 的 Db::name('user')->insertAll($data)
@@ -21,6 +28,11 @@ func (q *Query) InsertAll(dataList []map[string]interface{}) (int64, error) {
 	}
 	if len(dataList) == 0 {
 		return 0, nil
+	}
+	for index, data := range dataList {
+		if len(data) == 0 {
+			return 0, q.reportError("insert_all", fmt.Errorf("第 %d 行数据不能为空，批量插入要求每行至少包含一个字段", index), nil)
+		}
 	}
 
 	sqlConn, ok := q.db.connection.(*SQLConnection)
@@ -59,11 +71,8 @@ func (q *Query) InsertAll(dataList []map[string]interface{}) (int64, error) {
 		}
 	}
 
-	// 按占位符预算计算每批行数。
-	batchRows := maxBindParams / len(fields)
-	if batchRows < 1 {
-		batchRows = 1
-	}
+	// 按方言占位符预算计算每批行数，避免 SQL Server/SQLite 等低上限驱动拒绝执行。
+	batchRows := insertAllBatchRows(sqlConn.Builder, len(fields))
 
 	// 单批可容纳：保持原有单语句路径（无需开事务）。
 	if len(dataList) <= batchRows || q.txExecutor != nil {
@@ -143,6 +152,31 @@ func (q *Query) insertAllBatched(sqlConn *SQLConnection, fields []string, dataLi
 		}
 	}
 	return total, nil
+}
+
+func insertAllBatchRows(builder Builder, fieldCount int) int {
+	if fieldCount <= 0 {
+		return 1
+	}
+	maxParams := maxBindParamsForBuilder(builder)
+	rows := maxParams / fieldCount
+	if rows < 1 {
+		return 1
+	}
+	return rows
+}
+
+func maxBindParamsForBuilder(builder Builder) int {
+	switch fmt.Sprintf("%T", builder) {
+	case "*builder.Sqlite":
+		return sqliteBindParams
+	case "*builder.Sqlsrv":
+		return sqlsrvBindParams
+	case "*builder.Oracle":
+		return oracleBindParams
+	default:
+		return maxBindParams
+	}
 }
 
 // ChunkById 基于主键游标分批遍历，避免大表 OFFSET 深分页的性能衰减与遍历中数据增删导致的漏读/重复。

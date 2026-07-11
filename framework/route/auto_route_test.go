@@ -118,6 +118,29 @@ func TestAutoRouteCustomDefault(t *testing.T) {
 	}
 }
 
+// TestAutoRouteRejectsUnsafeSegments 验证自动路由只接受可映射到 Go 标识符的安全片段，
+// 避免畸形 URL 被解析成容器名或方法名后进入控制器分发阶段。
+func TestAutoRouteRejectsUnsafeSegments(t *testing.T) {
+	router := NewRouter()
+	router.EnableAutoRoute(true)
+
+	cases := []string{
+		"/../secret",
+		"/admin//edit",
+		"/user/show.json",
+		"/user/list-all",
+		"/123/index",
+	}
+
+	for _, path := range cases {
+		req := context.NewRequest(newTestHTTPRequest("GET", path))
+		route, _ := router.Match(req)
+		if route != nil {
+			t.Fatalf("非法自动路由片段 %q 不应生成路由，实际处理器为 %#v", path, route.Handler)
+		}
+	}
+}
+
 // newTestHTTPRequest 创建测试用的 HTTP 请求。
 func newTestHTTPRequest(method, path string) *http.Request {
 	req, _ := http.NewRequest(method, path, nil)

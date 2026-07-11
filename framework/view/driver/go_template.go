@@ -29,6 +29,9 @@ func NewGoTemplate() *GoTemplate {
 
 // Config 配置驱动参数
 func (d *GoTemplate) Config(config map[string]interface{}) {
+	if config == nil {
+		config = make(map[string]interface{})
+	}
 	d.config = config
 	if _, ok := d.config["view_path"]; !ok {
 		d.config["view_path"] = ""
@@ -125,7 +128,11 @@ func (d *GoTemplate) safeTemplatePath(tmplName string) (string, bool) {
 		viewSuffix = "html"
 	}
 
-	// 统一分隔符并清理路径，去除 ".." 等穿越片段。
+	if hasUnsafeTemplateName(tmplName) {
+		return "", false
+	}
+
+	// 统一分隔符并清理路径。
 	tmplName = strings.ReplaceAll(tmplName, "\\", "/")
 	if !strings.HasSuffix(tmplName, "."+viewSuffix) {
 		tmplName += "." + viewSuffix
@@ -152,4 +159,22 @@ func (d *GoTemplate) safeTemplatePath(tmplName string) (string, bool) {
 		return "", false
 	}
 	return targetAbs, true
+}
+
+// hasUnsafeTemplateName 检查模板名中的危险片段，发现后直接拒绝而不是清理后继续使用。
+func hasUnsafeTemplateName(tmplName string) bool {
+	if strings.Contains(tmplName, "\x00") || filepath.IsAbs(tmplName) {
+		return true
+	}
+
+	normalized := strings.ReplaceAll(tmplName, "\\", "/")
+	if path.IsAbs(normalized) || strings.Contains(normalized, ":") {
+		return true
+	}
+	for _, segment := range strings.Split(normalized, "/") {
+		if segment == ".." {
+			return true
+		}
+	}
+	return false
 }

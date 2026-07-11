@@ -46,6 +46,20 @@ func TestRequestUsesProxyHeadersFromTrustedProxy(t *testing.T) {
 	}
 }
 
+// TestRequestIgnoresSpoofedLeftMostForwardedFor 验证受信代理链会从右向左剥离受信节点，
+// 避免客户端预先伪造的 X-Forwarded-For 首段被误认为真实来源。
+func TestRequestIgnoresSpoofedLeftMostForwardedFor(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/profile", nil)
+	req.RemoteAddr = "10.0.0.10:4321"
+	req.Header.Set("X-Forwarded-For", "198.51.100.250, 203.0.113.8, 10.0.0.5")
+
+	wrapped := NewRequest(req, WithTrustedProxies([]string{"10.0.0.0/24"}))
+
+	if wrapped.Ip() != "203.0.113.8" {
+		t.Fatalf("应返回离受信代理最近的非受信客户端 IP，实际为 %q", wrapped.Ip())
+	}
+}
+
 // TestRequestCleanupRemovesMultipartTempFiles 验证 multipart 解析产生的临时文件会在请求结束后被清理。
 func TestRequestCleanupRemovesMultipartTempFiles(t *testing.T) {
 	tempDir := t.TempDir()

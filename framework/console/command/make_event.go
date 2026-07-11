@@ -3,7 +3,7 @@ package command
 import (
 	"fmt"
 	"os"
-	"strings"
+	"path/filepath"
 	"thinkgo/framework/console"
 )
 
@@ -18,24 +18,24 @@ func (c *MakeEvent) Configure() {
 }
 
 func (c *MakeEvent) Execute(input *console.Input, output *console.Output) {
-	name := input.GetArgument(0)
-	if name == "" {
-		output.Error("Event name is required.")
+	name, err := normalizeGeneratorName(input.GetArgument(0), "")
+	if err != nil {
+		output.Error("Invalid event name: " + err.Error())
 		return
 	}
 
-	// Capitalize
-	name = strings.Title(name)
-
 	// Ensure directory exists
-	dir := fmt.Sprintf("%s/app/event", c.App.BasePath)
+	dir := filepath.Join(c.App.BasePath, "app", "event")
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		os.MkdirAll(dir, 0755)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			output.Error(fmt.Sprintf("Failed to create event directory: %v", err))
+			return
+		}
 	}
 
 	// File path
-	filename := fmt.Sprintf("%s/%s.go", dir, strings.ToLower(name))
-	
+	filename := filepath.Join(dir, lowerGoFilename(name))
+
 	// Check if exists
 	if _, err := os.Stat(filename); !os.IsNotExist(err) {
 		output.Error(fmt.Sprintf("Event %s already exists.", name))
@@ -45,11 +45,16 @@ func (c *MakeEvent) Execute(input *console.Input, output *console.Output) {
 	// Content
 	content := fmt.Sprintf(`package event
 
-// %s event
+// %s 事件。
 type %s struct {
-	// Event data
+	Payload map[string]interface{}
 }
-`, name, name)
+
+// Name 返回事件名称。
+func (e *%s) Name() string {
+	return "%s"
+}
+`, name, name, name, name)
 
 	// Write file
 	if err := os.WriteFile(filename, []byte(content), 0644); err != nil {

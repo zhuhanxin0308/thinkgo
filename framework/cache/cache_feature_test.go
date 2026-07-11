@@ -52,3 +52,31 @@ func TestCacheStoresTagsAndLocks(t *testing.T) {
 		t.Fatal("释放后第二个锁应能获取成功")
 	}
 }
+
+// TestCacheWithoutDriverIsNoop 验证未配置缓存驱动时公开 API 不会 panic。
+func TestCacheWithoutDriverIsNoop(t *testing.T) {
+	cache := NewCache(nil, nil)
+
+	cache.Set("missing", "value", time.Minute)
+	if value := cache.Get("missing"); value != nil {
+		t.Fatalf("无驱动缓存读取应返回 nil，实际为 %#v", value)
+	}
+	if cache.Has("missing") {
+		t.Fatal("无驱动缓存不应报告键存在")
+	}
+	cache.Forever("forever", "value")
+	cache.Forget("missing")
+	cache.Flush()
+
+	if value := cache.Remember("remember", time.Minute, func() interface{} {
+		return "computed"
+	}); value != "computed" {
+		t.Fatalf("无驱动 Remember 应返回回调结果，实际为 %#v", value)
+	}
+	if value := cache.Inc("counter", 3); value != 0 {
+		t.Fatalf("无驱动 Inc 应返回 0，实际为 %d", value)
+	}
+	if value := cache.Dec("counter", 2); value != 0 {
+		t.Fatalf("无驱动 Dec 应返回 0，实际为 %d", value)
+	}
+}

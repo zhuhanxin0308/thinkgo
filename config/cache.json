@@ -12,7 +12,8 @@
             "port": 6379,
             "password": "",
             "select": 0,
-            "timeout": 0,
+            "timeout_ms": 0,
+            "prefix": "thinkgo:",
             "expire": 0
         }
     }

@@ -36,6 +36,19 @@ func TestApplyDatabaseEnvOverridesReadsPoolSettings(t *testing.T) {
 	}
 }
 
+// TestApplyDatabaseEnvOverridesAllowsEmptyPassword 验证显式空密码也能覆盖配置文件密码。
+func TestApplyDatabaseEnvOverridesAllowsEmptyPassword(t *testing.T) {
+	t.Setenv("DB_PASS", "")
+
+	app := &App{Env: env.NewEnv()}
+	config := db.Config{Password: "from-config"}
+	applyDatabaseEnvOverrides(app, &config)
+
+	if config.Password != "" {
+		t.Fatalf("显式空 DB_PASS 应覆盖配置文件密码，实际为 %q", config.Password)
+	}
+}
+
 // TestReadDatabaseConfigReadsTimestampValueType 验证数据库配置文件中的时间戳值类型能正确读入。
 func TestReadDatabaseConfigReadsTimestampValueType(t *testing.T) {
 	config := readDatabaseConfig(map[string]interface{}{
@@ -46,6 +59,25 @@ func TestReadDatabaseConfigReadsTimestampValueType(t *testing.T) {
 
 	if config.TimestampValueType != db.TimestampValueTypeUnix {
 		t.Fatalf("时间戳值类型读取错误，实际为 %q", config.TimestampValueType)
+	}
+}
+
+// TestReadDatabaseConfigReadsConnectionParams 验证数据库连接参数会从配置文件进入连接器。
+func TestReadDatabaseConfigReadsConnectionParams(t *testing.T) {
+	config := readDatabaseConfig(map[string]interface{}{
+		"type": "pgsql",
+		"params": map[string]interface{}{
+			"sslmode":         "verify-full",
+			"connect_timeout": float64(10),
+			"encrypt":         true,
+		},
+	})
+
+	if config.Params["sslmode"] != "verify-full" {
+		t.Fatalf("数据库连接参数 sslmode 读取错误，实际为 %q", config.Params["sslmode"])
+	}
+	if config.Params["connect_timeout"] != "10" || config.Params["encrypt"] != "true" {
+		t.Fatalf("数据库连接参数类型转换错误，实际为 %#v", config.Params)
 	}
 }
 

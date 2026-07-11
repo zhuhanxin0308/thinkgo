@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"thinkgo/framework/console"
 	modeldb "thinkgo/framework/db"
 )
@@ -20,14 +19,13 @@ func (c *MakeModel) Configure() {
 }
 
 func (c *MakeModel) Execute(input *console.Input, output *console.Output) {
-	name := input.GetArgument(0)
-	if name == "" {
-		output.Error("Model name is required.")
+	structName, err := normalizeGeneratorName(input.GetArgument(0), "")
+	if err != nil {
+		output.Error("Invalid model name: " + err.Error())
 		return
 	}
 
 	// 统一把命令参数转换成结构体名和默认文件名，避免新模型继续沿用旧复数化命名习惯。
-	structName := normalizeModelStructName(name)
 	fileBaseName := modeldb.ToSnakeCase(structName)
 
 	// File path
@@ -76,35 +74,4 @@ func New%s(database *db.DB) *%s {
 	}
 
 	output.Success(fmt.Sprintf("Model %s created successfully.", structName))
-}
-
-// normalizeModelStructName 把命令输入转换成 Go 结构体名，兼容 snake_case、kebab-case 和空格分隔写法。
-func normalizeModelStructName(raw string) string {
-	normalized := strings.TrimSpace(raw)
-	if normalized == "" {
-		return ""
-	}
-	if !strings.ContainsAny(normalized, "_- ") {
-		return strings.ToUpper(normalized[:1]) + normalized[1:]
-	}
-
-	parts := strings.FieldsFunc(normalized, func(r rune) bool {
-		return r == '_' || r == '-' || r == ' '
-	})
-	if len(parts) == 0 {
-		return ""
-	}
-
-	builder := strings.Builder{}
-	for _, part := range parts {
-		if part == "" {
-			continue
-		}
-		lower := strings.ToLower(part)
-		builder.WriteString(strings.ToUpper(lower[:1]))
-		if len(lower) > 1 {
-			builder.WriteString(lower[1:])
-		}
-	}
-	return builder.String()
 }

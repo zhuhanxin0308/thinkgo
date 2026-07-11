@@ -2,6 +2,7 @@ package console
 
 import (
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -43,6 +44,10 @@ func (i *Input) Parse(definitions []ArgumentDefinition, optionDefinitions []Opti
 	args := i.Args
 	for idx := 0; idx < len(args); idx++ {
 		arg := args[idx]
+		if arg == "--" {
+			positionals = append(positionals, args[idx+1:]...)
+			break
+		}
 
 		var body string
 		switch {
@@ -69,9 +74,10 @@ func (i *Input) Parse(definitions []ArgumentDefinition, optionDefinitions []Opti
 			continue
 		}
 
-		// 布尔开关不消费后续 token；其余选项在后一个 token 不是选项时将其作为取值。
+		// 布尔开关不消费后续 token；取值型选项只在后一个 token 是已声明选项时停止消费，
+		// 因此 --offset -1 这类负数值不会被误判为新选项。
 		def, isKnown := known[name]
-		if !(isKnown && def.Bool) && idx+1 < len(args) && !strings.HasPrefix(args[idx+1], "-") {
+		if !(isKnown && def.Bool) && idx+1 < len(args) && args[idx+1] != "--" && !isKnownOptionToken(args[idx+1], known, shortToName) {
 			i.Options[name] = args[idx+1]
 			idx++
 		} else {
@@ -114,8 +120,11 @@ func (i *Input) GetOption(name string) string {
 	prefixes := []string{"--", "-"}
 	for _, prefix := range prefixes {
 		for idx, arg := range i.Args {
+			if arg == "--" {
+				break
+			}
 			if arg == prefix+name {
-				if idx+1 < len(i.Args) {
+				if idx+1 < len(i.Args) && i.Args[idx+1] != "--" && (!looksLikeOptionToken(i.Args[idx+1]) || isNegativeNumber(i.Args[idx+1])) {
 					return i.Args[idx+1]
 				}
 				return "true" // Boolean flag
@@ -126,6 +135,43 @@ func (i *Input) GetOption(name string) string {
 		}
 	}
 	return ""
+}
+
+// isKnownOptionToken 判断 token 是否为已声明选项，避免把负数值误判成选项。
+func isKnownOptionToken(token string, known map[string]OptionDefinition, shortToName map[string]string) bool {
+	if token == "" || token == "-" || isNegativeNumber(token) {
+		return false
+	}
+	if strings.HasPrefix(token, "--") {
+		name := strings.TrimPrefix(token, "--")
+		name = strings.SplitN(name, "=", 2)[0]
+		_, ok := known[name]
+		return ok
+	}
+	if strings.HasPrefix(token, "-") {
+		name := strings.TrimPrefix(token, "-")
+		name = strings.SplitN(name, "=", 2)[0]
+		if _, ok := known[name]; ok {
+			return true
+		}
+		_, ok := shortToName[name]
+		return ok
+	}
+	return false
+}
+
+// looksLikeOptionToken 判断 token 是否具有选项形态，用于未 Parse 时的兼容扫描。
+func looksLikeOptionToken(token string) bool {
+	return strings.HasPrefix(token, "-") && token != "-"
+}
+
+// isNegativeNumber 判断 token 是否为负数值，允许 --offset -1 这类输入。
+func isNegativeNumber(token string) bool {
+	if len(token) < 2 || token[0] != '-' {
+		return false
+	}
+	_, err := strconv.ParseFloat(token, 64)
+	return err == nil
 }
 
 // ArgumentDefinition defines an argument

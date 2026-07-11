@@ -2,7 +2,7 @@ package connector
 
 import (
 	"context"
-	"fmt"
+	"net/url"
 	"time"
 
 	"thinkgo/framework/db"
@@ -16,14 +16,8 @@ type Mongo struct{}
 
 // Connect connects to MongoDB
 func (m *Mongo) Connect(config db.Config) (db.Connection, error) {
-	// Build URI: mongodb://user:pass@host:port/db
-	uri := fmt.Sprintf("mongodb://%s:%s@%s:%s",
-		config.Username,
-		config.Password,
-		config.Hostname,
-		config.Hostport,
-	)
-	
+	uri := buildMongoURI(config)
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -42,6 +36,23 @@ func (m *Mongo) Connect(config db.Config) (db.Connection, error) {
 		Client:   client,
 		Database: config.Database,
 	}, nil
+}
+
+// buildMongoURI 使用标准 URL 构造 MongoDB 地址，防止凭据中的特殊字符改写 URI 结构。
+func buildMongoURI(config db.Config) string {
+	query := url.Values{}
+	for key, value := range config.Params {
+		query.Set(key, value)
+	}
+
+	uri := url.URL{
+		Scheme:   "mongodb",
+		User:     url.UserPassword(config.Username, config.Password),
+		Host:     joinHostPort(config.Hostname, config.Hostport),
+		Path:     config.Database,
+		RawQuery: query.Encode(),
+	}
+	return uri.String()
 }
 
 func init() {

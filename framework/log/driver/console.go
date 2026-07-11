@@ -10,12 +10,12 @@ import (
 // ANSI 颜色常量
 const (
 	colorReset  = "\033[0m"
-	colorRed    = "\033[31m"  // ERROR / CRITICAL / EMERGENCY
-	colorYellow = "\033[33m"  // WARNING / NOTICE
-	colorGreen  = "\033[32m"  // INFO
-	colorCyan   = "\033[36m"  // DEBUG
-	colorBlue   = "\033[34m"  // SQL
-	colorGray   = "\033[90m"  // 附加信息（时间、调用位置）
+	colorRed    = "\033[31m" // ERROR / CRITICAL / EMERGENCY
+	colorYellow = "\033[33m" // WARNING / NOTICE
+	colorGreen  = "\033[32m" // INFO
+	colorCyan   = "\033[36m" // DEBUG
+	colorBlue   = "\033[34m" // SQL
+	colorGray   = "\033[90m" // 附加信息（时间、调用位置）
 )
 
 // Console 控制台日志驱动
@@ -45,9 +45,9 @@ func (d *Console) WriteEntry(entry *log.LogEntry) error {
 
 	sb.WriteString(entry.Message)
 
-	if len(entry.Context) > 0 {
+	if sanitizedContext := entry.SanitizedContext(); len(sanitizedContext) > 0 {
 		sb.WriteString(colorGray + " | ")
-		for k, v := range entry.Context {
+		for k, v := range sanitizedContext {
 			sb.WriteString(fmt.Sprintf("%s=%v ", k, v))
 		}
 		sb.WriteString(colorReset)

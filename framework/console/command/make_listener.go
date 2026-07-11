@@ -3,7 +3,7 @@ package command
 import (
 	"fmt"
 	"os"
-	"strings"
+	"path/filepath"
 	"thinkgo/framework/console"
 )
 
@@ -18,24 +18,24 @@ func (c *MakeListener) Configure() {
 }
 
 func (c *MakeListener) Execute(input *console.Input, output *console.Output) {
-	name := input.GetArgument(0)
-	if name == "" {
-		output.Error("Listener name is required.")
+	name, err := normalizeGeneratorName(input.GetArgument(0), "")
+	if err != nil {
+		output.Error("Invalid listener name: " + err.Error())
 		return
 	}
 
-	// Capitalize
-	name = strings.Title(name)
-
 	// Ensure directory exists
-	dir := fmt.Sprintf("%s/app/listener", c.App.BasePath)
+	dir := filepath.Join(c.App.BasePath, "app", "listener")
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		os.MkdirAll(dir, 0755)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			output.Error(fmt.Sprintf("Failed to create listener directory: %v", err))
+			return
+		}
 	}
 
 	// File path
-	filename := fmt.Sprintf("%s/%s.go", dir, strings.ToLower(name))
-	
+	filename := filepath.Join(dir, lowerGoFilename(name))
+
 	// Check if exists
 	if _, err := os.Stat(filename); !os.IsNotExist(err) {
 		output.Error(fmt.Sprintf("Listener %s already exists.", name))
@@ -47,13 +47,15 @@ func (c *MakeListener) Execute(input *console.Input, output *console.Output) {
 
 import (
 	"fmt"
+	"thinkgo/framework/event"
 )
 
-// %s listener
+// %s 监听器。
 type %s struct{}
 
-func (l *%s) Handle(event interface{}) {
-	fmt.Printf("Event received: %%v\n", event)
+// Handle 处理框架事件。
+func (l *%s) Handle(event event.Event) {
+	fmt.Printf("Event received: %%s\n", event.Name())
 }
 `, name, name, name)
 

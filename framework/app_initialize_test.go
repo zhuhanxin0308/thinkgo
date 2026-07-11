@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -164,6 +165,37 @@ func writeTestAppConfigFiles(t *testing.T, basePath string) {
 		if err := os.WriteFile(filepath.Join(configDir, name), []byte(content), 0o644); err != nil {
 			t.Fatalf("写入测试配置 %s 失败: %v", name, err)
 		}
+	}
+}
+
+// TestInitializeReportsLanguageLoadError 验证应用初始化不会吞掉语言包加载错误。
+func TestInitializeReportsLanguageLoadError(t *testing.T) {
+	basePath := t.TempDir()
+	writeTestAppConfigFiles(t, basePath)
+	langDir := filepath.Join(basePath, "app", "lang")
+	if err := os.MkdirAll(langDir, 0o755); err != nil {
+		t.Fatalf("创建语言目录失败: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(langDir, "zh-cn.json"), []byte(`{"auth":`), 0o644); err != nil {
+		t.Fatalf("写入损坏语言包失败: %v", err)
+	}
+
+	app := NewApp(basePath)
+	defer func() {
+		if app.Log != nil {
+			app.Log.Shutdown()
+		}
+		if app.DB != nil {
+			_ = app.DB.Close()
+		}
+	}()
+
+	err := app.StartupError()
+	if err == nil {
+		t.Fatal("损坏语言包应记录启动错误")
+	}
+	if !strings.Contains(err.Error(), "load language files failed") {
+		t.Fatalf("启动错误应指向语言包加载失败，实际为 %v", err)
 	}
 }
 

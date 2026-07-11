@@ -17,6 +17,8 @@ const (
 	defaultLockTTL = 10 * time.Second
 )
 
+var fallbackDriver Driver = noopDriver{}
+
 // DistributedLocker 定义缓存驱动可选实现的分布式锁能力。
 type DistributedLocker interface {
 	AcquireLock(key string, owner string, ttl time.Duration) bool
@@ -266,7 +268,7 @@ func (l *Lock) Release() bool {
 
 func (c *Cache) driver() Driver {
 	if c == nil || c.state == nil {
-		return nil
+		return fallbackDriver
 	}
 	c.state.storesMu.RLock()
 	defer c.state.storesMu.RUnlock()
@@ -276,7 +278,7 @@ func (c *Cache) driver() Driver {
 	if driver, ok := c.state.stores[c.state.defaultName]; ok {
 		return driver
 	}
-	return nil
+	return fallbackDriver
 }
 
 func (c *Cache) debug() *debug.Debug {

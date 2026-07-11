@@ -24,8 +24,8 @@ type pipelineEntry struct {
 // 同时支持 ThinkPHP 风格的别名注册和优先级排序。
 type Pipeline struct {
 	pipes    []pipelineEntry
-	aliases  map[string]Handler   // 中间件别名映射（对应 ThinkPHP config/middleware.php 的 alias）
-	priority []string             // 中间件优先级排序（对应 ThinkPHP config/middleware.php 的 priority）
+	aliases  map[string]Handler // 中间件别名映射（对应 ThinkPHP config/middleware.php 的 alias）
+	priority []string           // 中间件优先级排序（对应 ThinkPHP config/middleware.php 的 priority）
 }
 
 // NewPipeline 创建中间件管道。
@@ -170,15 +170,8 @@ func (p *Pipeline) orderedPipes() []pipelineEntry {
 // ThenWithTerminators 执行中间件管道，同时返回需要在响应发送后执行的 terminate 回调。
 func (p *Pipeline) ThenWithTerminators(request *context.Request, destination func(*context.Request) *context.Response) (*context.Response, []Terminator) {
 	pipeline := destination
-	terminators := make([]Terminator, 0)
-
+	existingTerminators := len(RequestTerminators(request))
 	pipes := p.orderedPipes()
-
-	for _, entry := range pipes {
-		if entry.terminator != nil {
-			terminators = append(terminators, entry.terminator)
-		}
-	}
 
 	for index := len(pipes) - 1; index >= 0; index-- {
 		entry := pipes[index]
@@ -188,5 +181,10 @@ func (p *Pipeline) ThenWithTerminators(request *context.Request, destination fun
 		}
 	}
 
-	return pipeline(request), terminators
+	response := pipeline(request)
+	terminators := RequestTerminators(request)
+	if len(terminators) <= existingTerminators {
+		return response, nil
+	}
+	return response, terminators[existingTerminators:]
 }

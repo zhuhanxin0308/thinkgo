@@ -3,7 +3,7 @@ package command
 import (
 	"fmt"
 	"os"
-	"strings"
+	"path/filepath"
 	"thinkgo/framework/console"
 )
 
@@ -18,24 +18,24 @@ func (c *MakeMiddleware) Configure() {
 }
 
 func (c *MakeMiddleware) Execute(input *console.Input, output *console.Output) {
-	name := input.GetArgument(0)
-	if name == "" {
-		output.Error("Middleware name is required.")
+	name, err := normalizeGeneratorName(input.GetArgument(0), "")
+	if err != nil {
+		output.Error("Invalid middleware name: " + err.Error())
 		return
 	}
 
-	// Capitalize
-	name = strings.Title(name)
-
 	// Ensure directory exists
-	dir := fmt.Sprintf("%s/app/middleware", c.App.BasePath)
+	dir := filepath.Join(c.App.BasePath, "app", "middleware")
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		os.MkdirAll(dir, 0755)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			output.Error(fmt.Sprintf("Failed to create middleware directory: %v", err))
+			return
+		}
 	}
 
 	// File path
-	filename := fmt.Sprintf("%s/%s.go", dir, strings.ToLower(name))
-	
+	filename := filepath.Join(dir, lowerGoFilename(name))
+
 	// Check if exists
 	if _, err := os.Stat(filename); !os.IsNotExist(err) {
 		output.Error(fmt.Sprintf("Middleware %s already exists.", name))
@@ -46,21 +46,20 @@ func (c *MakeMiddleware) Execute(input *console.Input, output *console.Output) {
 	content := fmt.Sprintf(`package middleware
 
 import (
+	"net/http"
 	"thinkgo/framework/context"
 	"thinkgo/framework/middleware"
 )
 
-// %s middleware
+// %s 中间件。
 type %s struct{}
 
+// Handle 处理请求链路，并在 next 缺失时返回明确错误响应。
 func (m *%s) Handle(req *context.Request, next middleware.Next) *context.Response {
-	// Before request
-	
-	resp := next(req)
-	
-	// After request
-	
-	return resp
+	if next == nil {
+		return context.NewResponse().Code(http.StatusInternalServerError).Content(http.StatusText(http.StatusInternalServerError))
+	}
+	return next(req)
 }
 `, name, name, name)
 

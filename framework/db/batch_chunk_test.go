@@ -3,6 +3,8 @@ package db
 import (
 	"strings"
 	"testing"
+
+	"thinkgo/framework/db/builder"
 )
 
 // batchRecorderConn 记录所有执行过的写 SQL，用于断言批量插入分批行为。
@@ -64,9 +66,45 @@ func TestInsertAllRequiresSQLConnection(t *testing.T) {
 	if err == nil {
 		t.Fatal("非 SQL 连接的批量插入应返回错误")
 	}
-	// 占位符分批阈值健全性检查（3 列 → 每批 20000 行）。
-	if maxBindParams/3 != 20000 {
-		t.Fatalf("批量阈值计算异常: %d", maxBindParams/3)
+}
+
+// TestInsertAllSplitsByDialectBindLimit 验证批量插入按不同 SQL 方言的参数上限计算分批大小。
+func TestInsertAllSplitsByDialectBindLimit(t *testing.T) {
+	cases := []struct {
+		name   string
+		build  Builder
+		fields int
+		want   int
+	}{
+		{name: "mysql", build: &builder.Mysql{}, fields: 3, want: 20000},
+		{name: "sqlserver", build: &builder.Sqlsrv{}, fields: 3, want: 700},
+		{name: "sqlite", build: &builder.Sqlite{}, fields: 3, want: 333},
+		{name: "postgresql", build: &builder.Pgsql{}, fields: 3, want: 20000},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := insertAllBatchRows(tc.build, tc.fields); got != tc.want {
+				t.Fatalf("%s 每批行数不正确，期望 %d，实际 %d", tc.name, tc.want, got)
+			}
+		})
+	}
+}
+
+// TestInsertAllRejectsEmptyRowWithoutPanic 验证空行会被明确拒绝，
+// 避免按字段数计算批次大小时触发除零崩溃。
+func TestInsertAllRejectsEmptyRowWithoutPanic(t *testing.T) {
+	database := NewDB(&SQLConnection{Builder: &builder.Sqlite{}})
+
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			t.Fatalf("InsertAll 遇到空行应返回错误而不是 panic: %v", recovered)
+		}
+	}()
+
+	_, err := database.Table("users").InsertAll([]map[string]interface{}{{}})
+	if err == nil {
+		t.Fatal("InsertAll 遇到空行应返回错误")
 	}
 }
 
@@ -75,7 +113,7 @@ func TestChunkByIdUsesKeysetCursor(t *testing.T) {
 	conn := &chunkRecorderConn{
 		pages: [][]map[string]interface{}{
 			{{"id": int64(1)}, {"id": int64(2)}}, // 第 1 批，满 2 条
-			{{"id": int64(5)}},                    // 第 2 批，不足 2 条 → 结束
+			{{"id": int64(5)}},                   // 第 2 批，不足 2 条 → 结束
 		},
 	}
 	database := NewDB(conn)

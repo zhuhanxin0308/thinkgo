@@ -47,6 +47,17 @@ func TestQueryRejectsUnsafeInsertField(t *testing.T) {
 	}
 }
 
+// TestQueryRejectsEmptyInsertData 验证空插入数据会被拒绝，
+// 避免生成 INSERT INTO table () VALUES () 这类跨方言不可靠 SQL。
+func TestQueryRejectsEmptyInsertData(t *testing.T) {
+	db := NewDB(&mockConnection{})
+
+	_, err := db.Table("users").Insert(map[string]interface{}{})
+	if err == nil {
+		t.Fatal("空插入数据应返回错误")
+	}
+}
+
 // ==================== 1.3 Delete/Update 无 WHERE 保护测试 ====================
 
 // TestDeleteWithoutWhereBlocked 验证无 WHERE 条件的 DELETE 被拦截。
@@ -92,6 +103,32 @@ func TestUpdateWithWhereAllowed(t *testing.T) {
 	_, err := db.Table("users").Where("id = ?", 1).Update(map[string]interface{}{"name": "test"})
 	if err != nil {
 		t.Fatalf("有 WHERE 条件的 UPDATE 应正常执行，错误: %v", err)
+	}
+}
+
+// TestUpdateRejectsEmptyDataWithoutSetExpression 验证普通 UPDATE 不接受空数据，
+// 但 Inc/Dec 这类显式 SET 表达式由单独路径负责。
+func TestUpdateRejectsEmptyDataWithoutSetExpression(t *testing.T) {
+	db := NewDB(&mockConnection{})
+
+	_, err := db.Table("users").Where("id = ?", 1).Update(map[string]interface{}{})
+	if err == nil {
+		t.Fatal("无 SET 字段且无 Inc/Dec 表达式的 UPDATE 应返回错误")
+	}
+}
+
+// TestUpdateAllowsOnlySetExpression 验证 Inc/Dec 可配合空 map 使用，
+// 这是文档承诺的自增自减写法，不能被空数据校验误伤。
+func TestUpdateAllowsOnlySetExpression(t *testing.T) {
+	conn := &batchRecorderConn{}
+	db := NewDB(conn)
+
+	_, err := db.Table("users").Where("id = ?", 1).Inc("score", 1).Update(map[string]interface{}{})
+	if err != nil {
+		t.Fatalf("仅包含 Inc/Dec 表达式的 UPDATE 应正常执行，实际错误: %v", err)
+	}
+	if len(conn.execSQL) != 1 || !strings.Contains(conn.execSQL[0], "score = score + 1") {
+		t.Fatalf("自增表达式未写入 UPDATE SQL，实际 SQL: %#v", conn.execSQL)
 	}
 }
 

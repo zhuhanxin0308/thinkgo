@@ -52,6 +52,32 @@ func TestFileCacheDeleteWithUnsafeKey(t *testing.T) {
 	}
 }
 
+// TestFileCacheClearKeepsUnmanagedFiles 验证 Clear 只删除驱动生成的缓存文件，不清空整个目录。
+func TestFileCacheClearKeepsUnmanagedFiles(t *testing.T) {
+	basePath := t.TempDir()
+	cacheDir := filepath.Join(basePath, "cache")
+	driver := NewFile(cacheDir)
+
+	unmanagedPath := filepath.Join(cacheDir, "keep.txt")
+	if err := os.WriteFile(unmanagedPath, []byte("origin"), 0o600); err != nil {
+		t.Fatalf("写入非缓存文件失败: %v", err)
+	}
+
+	driver.Set("managed", "cached-value", time.Minute)
+	if value := driver.Get("managed"); value != "cached-value" {
+		t.Fatalf("测试前提不成立：缓存应可读取，实际为 %v", value)
+	}
+
+	driver.Clear()
+
+	if value := driver.Get("managed"); value != nil {
+		t.Fatalf("Clear 后缓存项应被删除，实际为 %v", value)
+	}
+	if content, err := os.ReadFile(unmanagedPath); err != nil || string(content) != "origin" {
+		t.Fatalf("Clear 不应删除非缓存文件，content=%q err=%v", string(content), err)
+	}
+}
+
 // TestMemoryCacheRemovesExpiredEntry 验证内存缓存读取到过期项后会立即移除，避免长期堆积。
 func TestMemoryCacheRemovesExpiredEntry(t *testing.T) {
 	driver := NewMemory()
@@ -64,5 +90,30 @@ func TestMemoryCacheRemovesExpiredEntry(t *testing.T) {
 	}
 	if len(driver.items) != 0 {
 		t.Fatalf("读取过期缓存后应立即清理 map 项，实际残留 %d 项", len(driver.items))
+	}
+}
+
+// TestMemoryCacheIncIgnoresExpiredValue 验证过期计数项不会继续参与 Inc 计算。
+func TestMemoryCacheIncIgnoresExpiredValue(t *testing.T) {
+	driver := NewMemory()
+	driver.Set("counter", int64(5), time.Millisecond)
+
+	time.Sleep(5 * time.Millisecond)
+
+	if value := driver.Inc("counter", 2); value != 2 {
+		t.Fatalf("过期计数项应从 0 重新递增，实际为 %d", value)
+	}
+	if value := driver.Get("counter"); value != int64(2) {
+		t.Fatalf("Inc 后应写入新的未过期计数值，实际为 %#v", value)
+	}
+}
+
+// TestMemoryCacheIncAcceptsJSONNumber 验证内存驱动计数兼容 JSON 解码得到的 float64 数值。
+func TestMemoryCacheIncAcceptsJSONNumber(t *testing.T) {
+	driver := NewMemory()
+	driver.Set("counter", float64(5), 0)
+
+	if value := driver.Inc("counter", 2); value != 7 {
+		t.Fatalf("float64 计数值应按已有值递增，实际为 %d", value)
 	}
 }

@@ -82,8 +82,13 @@ func shouldTrustProxyHeaders(raw *http.Request, trusted []*net.IPNet) bool {
 		return false
 	}
 
+	return isTrustedProxyIP(remoteIP, trusted)
+}
+
+// isTrustedProxyIP 判断单个 IP 是否命中受信代理网段。
+func isTrustedProxyIP(ip net.IP, trusted []*net.IPNet) bool {
 	for _, network := range trusted {
-		if network.Contains(remoteIP) {
+		if network.Contains(ip) {
 			return true
 		}
 	}
@@ -93,11 +98,8 @@ func shouldTrustProxyHeaders(raw *http.Request, trusted []*net.IPNet) bool {
 // resolveClientIP 在可信代理链路下解析真实客户端 IP，否则回退到直接连接地址。
 func resolveClientIP(raw *http.Request, trusted []*net.IPNet) string {
 	if shouldTrustProxyHeaders(raw, trusted) {
-		if forwarded := raw.Header.Get("X-Forwarded-For"); forwarded != "" {
-			clientIP := strings.TrimSpace(strings.Split(forwarded, ",")[0])
-			if net.ParseIP(clientIP) != nil {
-				return clientIP
-			}
+		if clientIP := resolveForwardedFor(raw.Header.Get("X-Forwarded-For"), trusted); clientIP != "" {
+			return clientIP
 		}
 
 		if realIP := strings.TrimSpace(raw.Header.Get("X-Real-IP")); realIP != "" {
@@ -112,6 +114,37 @@ func resolveClientIP(raw *http.Request, trusted []*net.IPNet) string {
 		return remoteIP.String()
 	}
 	return raw.RemoteAddr
+}
+
+// resolveForwardedFor 从右向左剥离受信代理，返回离受信代理最近的非受信客户端 IP。
+// 这样即使客户端预先伪造 X-Forwarded-For 首段，也不会覆盖真实来源。
+func resolveForwardedFor(value string, trusted []*net.IPNet) string {
+	forwardedIPs := parseForwardedIPList(value)
+	if len(forwardedIPs) == 0 {
+		return ""
+	}
+
+	for index := len(forwardedIPs) - 1; index >= 0; index-- {
+		ip := forwardedIPs[index]
+		if !isTrustedProxyIP(ip, trusted) {
+			return ip.String()
+		}
+	}
+
+	return forwardedIPs[0].String()
+}
+
+// parseForwardedIPList 解析 X-Forwarded-For 中的 IP 列表，忽略空值和非法项。
+func parseForwardedIPList(value string) []net.IP {
+	parts := strings.Split(value, ",")
+	result := make([]net.IP, 0, len(parts))
+	for _, part := range parts {
+		ip := parseRemoteIP(strings.TrimSpace(part))
+		if ip != nil {
+			result = append(result, ip)
+		}
+	}
+	return result
 }
 
 // isHTTPS 在原生 TLS 或可信代理声明为 HTTPS 时返回 true。

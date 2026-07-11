@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"sync"
 	"testing"
+	"time"
 )
 
 // TestContainerBindAndMake 验证基本绑定和解析
@@ -168,5 +169,110 @@ func TestContainerConcurrentSafety(t *testing.T) {
 
 	for err := range errors {
 		t.Fatal(err)
+	}
+}
+
+// TestContainerSingletonFactoryCanResolveDependency 验证单例工厂执行期间仍可解析依赖，
+// 避免容器持有全局写锁调用工厂导致同协程递归解析时死锁。
+func TestContainerSingletonFactoryCanResolveDependency(t *testing.T) {
+	c := NewContainer()
+	c.Bind("dependency", "ready")
+	c.Bind("service", func(container *Container) (interface{}, error) {
+		value, err := container.Make("dependency")
+		if err != nil {
+			return nil, err
+		}
+		return "service:" + value.(string), nil
+	})
+
+	done := make(chan struct{})
+	var (
+		value interface{}
+		err   error
+	)
+	go func() {
+		defer close(done)
+		value, err = c.Make("service")
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(300 * time.Millisecond):
+		t.Fatal("单例工厂内解析依赖不应发生死锁")
+	}
+	if err != nil {
+		t.Fatalf("解析服务失败: %v", err)
+	}
+	if value != "service:ready" {
+		t.Fatalf("依赖解析结果错误，实际为 %v", value)
+	}
+}
+
+// TestContainerDetectsCircularSingletonDependency 验证同一构建链内的单例循环依赖会返回错误而不是死锁。
+func TestContainerDetectsCircularSingletonDependency(t *testing.T) {
+	c := NewContainer()
+	c.Bind("service", func(container *Container) (interface{}, error) {
+		return container.Make("service")
+	})
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.Make("service")
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("循环依赖应返回错误")
+		}
+	case <-time.After(300 * time.Millisecond):
+		t.Fatal("循环依赖不应导致容器死锁")
+	}
+}
+
+// TestContainerConcurrentSingletonFactoryBuildsOnce 验证并发解析同名单例时只构建一次。
+func TestContainerConcurrentSingletonFactoryBuildsOnce(t *testing.T) {
+	c := NewContainer()
+
+	type service struct{ id int }
+	counter := 0
+	var counterLock sync.Mutex
+	c.Bind("service", func() interface{} {
+		counterLock.Lock()
+		defer counterLock.Unlock()
+		counter++
+		return &service{id: counter}
+	})
+
+	var wg sync.WaitGroup
+	results := make(chan *service, 50)
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			value, err := c.Make("service")
+			if err != nil {
+				t.Errorf("并发解析服务失败: %v", err)
+				return
+			}
+			results <- value.(*service)
+		}()
+	}
+	wg.Wait()
+	close(results)
+
+	var first *service
+	for item := range results {
+		if first == nil {
+			first = item
+			continue
+		}
+		if item != first {
+			t.Fatal("并发解析同名单例应返回同一个实例")
+		}
+	}
+	if counter != 1 {
+		t.Fatalf("同名单例工厂应只执行一次，实际执行 %d 次", counter)
 	}
 }

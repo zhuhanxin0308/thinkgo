@@ -17,6 +17,8 @@ type LogEntry struct {
 	Caller  string                 // 调用位置（文件名:行号）
 }
 
+const logRedactedPlaceholder = "[REDACTED]"
+
 // FormatEntry 将日志条目格式化为字符串
 // 格式: [时间][级别][调用位置] 消息 | 上下文JSON
 func (e *LogEntry) FormatEntry() string {
@@ -37,11 +39,78 @@ func (e *LogEntry) FormatEntry() string {
 
 	// 上下文（如果有）
 	if len(e.Context) > 0 {
-		ctxBytes, _ := json.Marshal(e.Context)
+		ctxBytes, _ := json.Marshal(e.SanitizedContext())
 		sb.WriteString(" | " + string(ctxBytes))
 	}
 
 	return sb.String()
+}
+
+// SanitizedContext 返回脱敏后的上下文副本，避免日志落盘或控制台输出泄露凭据。
+func (e *LogEntry) SanitizedContext() map[string]interface{} {
+	if e == nil || len(e.Context) == 0 {
+		return nil
+	}
+	return sanitizeLogContext(e.Context)
+}
+
+func sanitizeLogContext(ctx map[string]interface{}) map[string]interface{} {
+	sanitized := make(map[string]interface{}, len(ctx))
+	for key, value := range ctx {
+		sanitized[key] = sanitizeLogValue(key, value)
+	}
+	return sanitized
+}
+
+func sanitizeLogValue(key string, value interface{}) interface{} {
+	if isSensitiveLogKey(key) {
+		return logRedactedPlaceholder
+	}
+
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		return sanitizeLogContext(typed)
+	case map[string]string:
+		sanitized := make(map[string]string, len(typed))
+		for innerKey, innerValue := range typed {
+			if isSensitiveLogKey(innerKey) {
+				sanitized[innerKey] = logRedactedPlaceholder
+			} else {
+				sanitized[innerKey] = innerValue
+			}
+		}
+		return sanitized
+	case []interface{}:
+		sanitized := make([]interface{}, len(typed))
+		for index, item := range typed {
+			sanitized[index] = sanitizeLogValue(key, item)
+		}
+		return sanitized
+	default:
+		return value
+	}
+}
+
+func isSensitiveLogKey(key string) bool {
+	normalized := strings.ToLower(strings.ReplaceAll(key, "-", "_"))
+	sensitiveParts := []string{
+		"authorization",
+		"cookie",
+		"password",
+		"passwd",
+		"secret",
+		"session",
+		"token",
+		"api_key",
+		"apikey",
+		"refresh_token",
+	}
+	for _, part := range sensitiveParts {
+		if strings.Contains(normalized, part) {
+			return true
+		}
+	}
+	return false
 }
 
 // Driver 日志驱动接口

@@ -3,7 +3,7 @@ package command
 import (
 	"fmt"
 	"os"
-	"strings"
+	"path/filepath"
 	"thinkgo/framework/console"
 )
 
@@ -18,24 +18,24 @@ func (c *MakeValidate) Configure() {
 }
 
 func (c *MakeValidate) Execute(input *console.Input, output *console.Output) {
-	name := input.GetArgument(0)
-	if name == "" {
-		output.Error("Validator name is required.")
+	name, err := normalizeGeneratorName(input.GetArgument(0), "")
+	if err != nil {
+		output.Error("Invalid validator name: " + err.Error())
 		return
 	}
 
-	// Capitalize
-	name = strings.Title(name)
-
 	// Ensure directory exists
-	dir := fmt.Sprintf("%s/app/validate", c.App.BasePath)
+	dir := filepath.Join(c.App.BasePath, "app", "validate")
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		os.MkdirAll(dir, 0755)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			output.Error(fmt.Sprintf("Failed to create validator directory: %v", err))
+			return
+		}
 	}
 
 	// File path
-	filename := fmt.Sprintf("%s/%s.go", dir, strings.ToLower(name))
-	
+	filename := filepath.Join(dir, lowerGoFilename(name))
+
 	// Check if exists
 	if _, err := os.Stat(filename); !os.IsNotExist(err) {
 		output.Error(fmt.Sprintf("Validator %s already exists.", name))
@@ -51,17 +51,17 @@ import (
 
 // %s validator
 type %s struct {
-	validate.Validate
+	validate.Validator
 }
 
 func New%s() *%s {
 	v := &%s{}
 	v.Rule = map[string]string{
-		"name": "require|max:25",
+		"name": "required|max:25",
 	}
 	v.Message = map[string]string{
-		"name.require": "Name is required",
-		"name.max":     "Name max length is 25",
+		"name.required": "名称不能为空",
+		"name.max":      "名称长度不能超过 25",
 	}
 	return v
 }

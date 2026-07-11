@@ -22,12 +22,19 @@ func (s *Session) Handle(req *context.Request, next func(*context.Request) *cont
 
 	// 执行后续中间件和控制器
 	resp := next(req)
+	if resp == nil {
+		// 下游返回 nil 属于异常响应路径，保持 nil 交给 HTTP 内核统一兜底，
+		// 避免在保存 Session Cookie 时对空响应写头导致 panic。
+		return nil
+	}
 
 	// 保存 Session 数据并将 Session Cookie 写入响应
 	reqSession.SetResponseWriter(&ResponseAdapter{resp})
 	if err := reqSession.Save(); err != nil {
-		// Save 内部已经统一记录错误日志，这里保留返回值处理避免静默丢失失败信号。
-		_ = err
+		// 会话保存失败意味着登录态或权限状态未落盘，不能继续返回业务成功响应。
+		return context.NewResponse().Abort(http.StatusInternalServerError, map[string]interface{}{
+			"message": "会话保存失败",
+		})
 	}
 
 	return resp

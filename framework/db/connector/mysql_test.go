@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"thinkgo/framework/db"
+
+	mysqlDriver "github.com/go-sql-driver/mysql"
 )
 
 // TestResolveMysqlConnectionPoolConfigUsesDefaults 验证未显式配置时仍使用安全默认连接池参数。
@@ -67,5 +69,27 @@ func TestBuildMysqlDSNIncludesHealthCheckParameters(t *testing.T) {
 		if !strings.Contains(dsn, fragment) {
 			t.Fatalf("DSN 应包含连接健康参数 %q，实际为 %s", fragment, dsn)
 		}
+	}
+}
+
+// TestBuildMysqlDSNEscapesCredentials 验证 DSN 构造不会被用户名、密码和库名中的特殊字符破坏。
+func TestBuildMysqlDSNEscapesCredentials(t *testing.T) {
+	dsn := buildMysqlDSN(db.Config{
+		Username: "root@example",
+		Password: "p@ss:word/with?x",
+		Hostname: "127.0.0.1",
+		Hostport: "3306",
+		Database: "think go",
+	})
+
+	parsed, err := mysqlDriver.ParseDSN(dsn)
+	if err != nil {
+		t.Fatalf("MySQL DSN 应可被官方驱动解析，实际错误: %v，DSN: %s", err, dsn)
+	}
+	if parsed.User != "root@example" || parsed.Passwd != "p@ss:word/with?x" || parsed.DBName != "think go" {
+		t.Fatalf("MySQL DSN 凭据或库名解析错误: user=%q password=%q database=%q", parsed.User, parsed.Passwd, parsed.DBName)
+	}
+	if parsed.Addr != "127.0.0.1:3306" {
+		t.Fatalf("MySQL DSN 地址解析错误，实际为 %q", parsed.Addr)
 	}
 }

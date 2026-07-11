@@ -74,6 +74,63 @@ func TestValidatorCommonRules(t *testing.T) {
 	}
 }
 
+// TestValidatorDateRejectsInvalidCalendarValue 验证 date 规则必须校验真实日期而不是只匹配前缀。
+func TestValidatorDateRejectsInvalidCalendarValue(t *testing.T) {
+	validator := NewValidator()
+	validator.Rule = map[string]string{
+		"start_date": "date",
+	}
+
+	invalidValues := []string{
+		"2024-13-01",
+		"2024-02-30",
+		"2024-01-01abc",
+	}
+	for _, value := range invalidValues {
+		if validator.Check(map[string]interface{}{"start_date": value}) {
+			t.Fatalf("date 规则应拒绝非法日期 %q", value)
+		}
+	}
+
+	if !validator.Check(map[string]interface{}{"start_date": "2024-02-29"}) {
+		t.Fatalf("date 规则应接受合法闰日，错误为 %#v", validator.GetErrors())
+	}
+}
+
+// TestValidatorIPRejectsOutOfRangeIPv4 验证 ip 规则必须拒绝超出 IPv4 段范围的地址。
+func TestValidatorIPRejectsOutOfRangeIPv4(t *testing.T) {
+	validator := NewValidator()
+	validator.Rule = map[string]string{
+		"client_ip": "ip",
+	}
+
+	if validator.Check(map[string]interface{}{"client_ip": "999.168.1.1"}) {
+		t.Fatal("ip 规则应拒绝超出 0-255 范围的 IPv4 地址")
+	}
+	if !validator.Check(map[string]interface{}{"client_ip": "192.168.1.1"}) {
+		t.Fatalf("ip 规则应接受合法 IPv4 地址，错误为 %#v", validator.GetErrors())
+	}
+}
+
+// TestValidatorUnknownRuleFailsClosed 验证未知规则不会因为字段存在或缺失而静默通过。
+func TestValidatorUnknownRuleFailsClosed(t *testing.T) {
+	validator := NewValidator()
+	validator.Rule = map[string]string{
+		"email": "emial",
+	}
+	if validator.Check(map[string]interface{}{"email": "tester@example.com"}) {
+		t.Fatal("未知规则在字段存在时应失败关闭")
+	}
+
+	missingFieldValidator := NewValidator()
+	missingFieldValidator.Rule = map[string]string{
+		"name": "require",
+	}
+	if missingFieldValidator.Check(map[string]interface{}{}) {
+		t.Fatal("未知规则在字段缺失时也应失败关闭")
+	}
+}
+
 func cloneValidateData(source map[string]interface{}) map[string]interface{} {
 	cloned := make(map[string]interface{}, len(source))
 	for key, value := range source {

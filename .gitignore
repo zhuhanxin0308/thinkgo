@@ -24,6 +24,9 @@ runtime/
 # Go 依赖缓存
 vendor/
 
+# 本地隔离工作树
+.worktrees/
+
 # 系统文件
 .DS_Store
 Thumbs.db

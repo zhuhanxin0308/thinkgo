@@ -1,6 +1,8 @@
 package middleware
 
 import (
+	"bytes"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -46,6 +48,25 @@ func TestCsrfBlocksUnsafeWithoutToken(t *testing.T) {
 	}
 }
 
+// TestCsrfBlocksTraceWithoutToken 验证 TRACE 不应被当作安全方法放行。
+func TestCsrfBlocksTraceWithoutToken(t *testing.T) {
+	handler := Csrf()
+	req := fwcontext.NewRequest(httptest.NewRequest(http.MethodTrace, "http://example.com/trace", nil))
+
+	called := false
+	resp := handler(req, func(r *fwcontext.Request) *fwcontext.Response {
+		called = true
+		return fwcontext.NewResponse().Content("done")
+	})
+
+	if called {
+		t.Fatal("缺少 CSRF token 的 TRACE 不应进入业务处理")
+	}
+	if resp.GetStatus() != http.StatusForbidden {
+		t.Fatalf("缺少 CSRF token 的 TRACE 应返回 403，实际 %d", resp.GetStatus())
+	}
+}
+
 // TestCsrfBlocksMismatchedToken 验证 Cookie 与请求头 token 不一致时被拦截。
 func TestCsrfBlocksMismatchedToken(t *testing.T) {
 	handler := Csrf()
@@ -77,5 +98,32 @@ func TestCsrfAllowsMatchingToken(t *testing.T) {
 	})
 	if !called || resp.GetStatus() != http.StatusOK {
 		t.Fatalf("匹配的 CSRF token 应放行，called=%v status=%d", called, resp.GetStatus())
+	}
+}
+
+// TestCsrfAllowsMultipartFormToken 验证 multipart 表单中的 _csrf 字段可用于状态变更请求。
+func TestCsrfAllowsMultipartFormToken(t *testing.T) {
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	if err := writer.WriteField(DefaultCSRFFieldName, "same-token"); err != nil {
+		t.Fatalf("写入 multipart 字段失败: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("关闭 multipart writer 失败: %v", err)
+	}
+
+	handler := Csrf()
+	raw := httptest.NewRequest(http.MethodPost, "http://example.com/upload", body)
+	raw.Header.Set("Content-Type", writer.FormDataContentType())
+	raw.AddCookie(&http.Cookie{Name: DefaultCSRFCookieName, Value: "same-token"})
+	req := fwcontext.NewRequest(raw)
+
+	called := false
+	resp := handler(req, func(r *fwcontext.Request) *fwcontext.Response {
+		called = true
+		return fwcontext.NewResponse().Content("done")
+	})
+	if !called || resp.GetStatus() != http.StatusOK {
+		t.Fatalf("multipart 表单 token 应放行，called=%v status=%d body=%q", called, resp.GetStatus(), string(resp.GetBody()))
 	}
 }

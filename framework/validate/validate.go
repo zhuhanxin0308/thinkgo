@@ -2,6 +2,7 @@ package validate
 
 import (
 	"fmt"
+	"net"
 	"regexp"
 	"sort"
 	"strconv"
@@ -32,7 +33,6 @@ func compileCachedRegex(pattern string) *regexp.Regexp {
 
 var (
 	emailRegex       = regexp.MustCompile(`^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$`)
-	dateRegex        = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}`)
 	alphaRegex       = regexp.MustCompile(`^[a-zA-Z]+$`)
 	alphaNumRegex    = regexp.MustCompile(`^[a-zA-Z0-9]+$`)
 	alphaDashRegex   = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
@@ -40,7 +40,6 @@ var (
 	chsAlphaRegex    = regexp.MustCompile(`^[\p{Han}a-zA-Z]+$`)
 	chsAlphaNumRegex = regexp.MustCompile(`^[\p{Han}a-zA-Z0-9]+$`)
 	chsDashRegex     = regexp.MustCompile(`^[\p{Han}a-zA-Z0-9_-]+$`)
-	ipRegex          = regexp.MustCompile(`^(\d{1,3}\.){3}\d{1,3}$`)
 	urlRegex         = regexp.MustCompile(`^((https|http|ftp|rtsp|mms)?://)[^\s]+`)
 	mobileRegex      = regexp.MustCompile(`^1[3-9]\d{9}$`)
 	idCardRegex      = regexp.MustCompile(`^\d{17}[\dXx]$`)
@@ -195,6 +194,12 @@ func (v *Validator) validateField(data map[string]interface{}, field string, rul
 		ruleParam = parts[1]
 	}
 
+	if !isKnownRule(ruleName) {
+		// 未知规则通常来自拼写错误，必须失败关闭，避免把业务必填或格式校验静默绕过。
+		v.addError(field, ruleName, ruleParam)
+		return false
+	}
+
 	if !exists && !requiresFieldPresence(ruleName) {
 		return true
 	}
@@ -226,7 +231,8 @@ func (v *Validator) validateField(data map[string]interface{}, field string, rul
 		text := strings.ToLower(fmt.Sprintf("%v", val))
 		valid = text == "yes" || text == "on" || text == "1" || text == "true"
 	case "date":
-		valid = dateRegex.MatchString(fmt.Sprintf("%v", val))
+		_, err := parseRuleTime(fmt.Sprintf("%v", val))
+		valid = err == nil
 	case "alpha":
 		valid = alphaRegex.MatchString(fmt.Sprintf("%v", val))
 	case "alphaNum":
@@ -242,7 +248,7 @@ func (v *Validator) validateField(data map[string]interface{}, field string, rul
 	case "chsDash":
 		valid = chsDashRegex.MatchString(fmt.Sprintf("%v", val))
 	case "ip":
-		valid = ipRegex.MatchString(fmt.Sprintf("%v", val))
+		valid = isValidIP(fmt.Sprintf("%v", val))
 	case "url":
 		valid = urlRegex.MatchString(fmt.Sprintf("%v", val))
 	case "in":
@@ -334,6 +340,54 @@ func (v *Validator) validateField(data map[string]interface{}, field string, rul
 		return false
 	}
 	return true
+}
+
+func isKnownRule(ruleName string) bool {
+	switch ruleName {
+	case "required",
+		"number",
+		"integer",
+		"float",
+		"boolean",
+		"email",
+		"array",
+		"accepted",
+		"date",
+		"alpha",
+		"alphaNum",
+		"alphaDash",
+		"chs",
+		"chsAlpha",
+		"chsAlphaNum",
+		"chsDash",
+		"ip",
+		"url",
+		"in",
+		"notIn",
+		"between",
+		"notBetween",
+		"length",
+		"max",
+		"min",
+		"eq",
+		"gt",
+		"lt",
+		"egt",
+		"elt",
+		"regex",
+		"confirm",
+		"different",
+		"mobile",
+		"dateFormat",
+		"after",
+		"before",
+		"requireIf",
+		"requireWith",
+		"idCard":
+		return true
+	default:
+		return false
+	}
 }
 
 func requiresFieldPresence(ruleName string) bool {
@@ -495,6 +549,16 @@ func isValidIDCard(value string) bool {
 		last -= 'a' - 'A'
 	}
 	return last == checkCode
+}
+
+// isValidIP 校验 IPv4 地址，确保每段在 0-255 范围内。
+func isValidIP(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	parsed := net.ParseIP(value)
+	return parsed != nil && parsed.To4() != nil
 }
 
 func (v *Validator) addError(field string, rule string, param string) {

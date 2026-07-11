@@ -58,14 +58,23 @@ func (e *Env) Load(file string) error {
 // 注意：Load 仍然只写入内部存储、绝不调用 os.Setenv，避免把 .env 中的敏感值
 // （如 DB_PASS）泄露到整个进程环境并被子进程继承。
 func (e *Env) Get(key string, def ...string) string {
-	if val := os.Getenv(key); val != "" {
-		return val
-	}
-	if val, ok := e.data[key]; ok {
+	if val, ok := e.Lookup(key); ok {
 		return val
 	}
 	if len(def) > 0 {
 		return def[0]
 	}
 	return ""
+}
+
+// Lookup 按优先级查找环境变量，并返回变量是否存在。
+// 与 Get 不同，它能区分“未设置”和“显式设置为空”，供配置覆盖逻辑使用。
+func (e *Env) Lookup(key string) (string, bool) {
+	if val, ok := os.LookupEnv(key); ok {
+		return val, true
+	}
+	if val, ok := e.data[key]; ok {
+		return val, true
+	}
+	return "", false
 }

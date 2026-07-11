@@ -12,11 +12,38 @@ func TestGetOSEnvOverridesFile(t *testing.T) {
 	e := NewEnv()
 	e.data["SERVER_PORT"] = "8081" // 模拟 .env 文件中的值
 
-	os.Setenv("SERVER_PORT", "9999")
-	defer os.Unsetenv("SERVER_PORT")
+	t.Setenv("SERVER_PORT", "9999")
 
 	if got := e.Get("SERVER_PORT"); got != "9999" {
 		t.Fatalf("真实环境变量应优先，期望 9999，得到 %q", got)
+	}
+}
+
+// TestGetEmptyOSEnvStillOverridesFile 验证显式设置为空的进程环境变量也优先于 .env。
+func TestGetEmptyOSEnvStillOverridesFile(t *testing.T) {
+	e := NewEnv()
+	e.data["SERVER_ALLOWED_HOSTS"] = "example.com"
+
+	t.Setenv("SERVER_ALLOWED_HOSTS", "")
+
+	if got := e.Get("SERVER_ALLOWED_HOSTS", "fallback"); got != "" {
+		t.Fatalf("空字符串进程环境变量应优先，期望空字符串，得到 %q", got)
+	}
+}
+
+// TestLookupReportsExplicitEmptyValue 验证 Lookup 能区分显式空值和未设置。
+func TestLookupReportsExplicitEmptyValue(t *testing.T) {
+	e := NewEnv()
+	e.data["DB_PASS"] = "from-file"
+
+	t.Setenv("DB_PASS", "")
+
+	got, ok := e.Lookup("DB_PASS")
+	if !ok {
+		t.Fatal("显式设置为空的环境变量应报告存在")
+	}
+	if got != "" {
+		t.Fatalf("显式空环境变量应返回空字符串，实际为 %q", got)
 	}
 }
 

@@ -68,6 +68,20 @@ func TestRouterWithoutMiddlewareAndDomainGroup(t *testing.T) {
 	}
 }
 
+// TestDomainRouteMatchesHostWithPort 验证域名路由会忽略 Host 端口后匹配。
+func TestDomainRouteMatchesHostWithPort(t *testing.T) {
+	router := NewRouter()
+	router.Domain("api.example.com", func() {
+		router.Get("/users", "User@Index")
+	})
+
+	req := fwcontext.NewRequest(httptest.NewRequest("GET", "http://api.example.com:8080/users", nil))
+	matchedRoute, _ := router.Match(req)
+	if matchedRoute == nil {
+		t.Fatal("域名路由应匹配带端口的合法 Host")
+	}
+}
+
 func TestResourceOnlyAndExcept(t *testing.T) {
 	router := NewRouter()
 	router.Resource("/posts", "Post").Only("index", "read")

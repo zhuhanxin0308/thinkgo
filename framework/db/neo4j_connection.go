@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/neo4j/neo4j-go-driver/v5/neo4j"
@@ -296,7 +297,6 @@ func (c *Neo4jConnection) buildCypherWhere(where []string, args []interface{}) (
 		cond = strings.TrimSpace(cond)
 		paramName := fmt.Sprintf("w%d", i)
 
-		// IS NULL / IS NOT NULL
 		upperCond := strings.ToUpper(cond)
 		if strings.HasSuffix(upperCond, " IS NULL") {
 			field, err := neo4jIdentifier(cond[:len(cond)-8])
@@ -315,9 +315,79 @@ func (c *Neo4jConnection) buildCypherWhere(where []string, args []interface{}) (
 			continue
 		}
 
-		// 比较运算符
+		if field, _, ok := splitCypherCondition(cond, " NOT IN "); ok {
+			field, err := neo4jIdentifier(field)
+			if err != nil {
+				return "", nil, err
+			}
+			values, err := consumeCypherValues(cond, args, &argIdx)
+			if err != nil {
+				return "", nil, err
+			}
+			params[paramName] = values
+			clauses = append(clauses, fmt.Sprintf("NOT (n.%s IN $%s)", field, paramName))
+			continue
+		}
+
+		if field, _, ok := splitCypherCondition(cond, " IN "); ok {
+			field, err := neo4jIdentifier(field)
+			if err != nil {
+				return "", nil, err
+			}
+			values, err := consumeCypherValues(cond, args, &argIdx)
+			if err != nil {
+				return "", nil, err
+			}
+			params[paramName] = values
+			clauses = append(clauses, fmt.Sprintf("n.%s IN $%s", field, paramName))
+			continue
+		}
+
+		if field, _, ok := splitCypherCondition(cond, " NOT LIKE "); ok {
+			field, err := neo4jIdentifier(field)
+			if err != nil {
+				return "", nil, err
+			}
+			if argIdx >= len(args) {
+				return "", nil, fmt.Errorf("Neo4j 条件参数不足，无法解析 %q", cond)
+			}
+			params[paramName] = cypherLikeRegex(fmt.Sprint(args[argIdx]))
+			argIdx++
+			clauses = append(clauses, fmt.Sprintf("NOT (n.%s =~ $%s)", field, paramName))
+			continue
+		}
+
+		if field, _, ok := splitCypherCondition(cond, " LIKE "); ok {
+			field, err := neo4jIdentifier(field)
+			if err != nil {
+				return "", nil, err
+			}
+			if argIdx >= len(args) {
+				return "", nil, fmt.Errorf("Neo4j 条件参数不足，无法解析 %q", cond)
+			}
+			params[paramName] = cypherLikeRegex(fmt.Sprint(args[argIdx]))
+			argIdx++
+			clauses = append(clauses, fmt.Sprintf("n.%s =~ $%s", field, paramName))
+			continue
+		}
+
+		if field, _, ok := splitCypherCondition(cond, " BETWEEN "); ok {
+			field, err := neo4jIdentifier(field)
+			if err != nil {
+				return "", nil, err
+			}
+			if argIdx+2 > len(args) {
+				return "", nil, fmt.Errorf("Neo4j BETWEEN 条件参数不足，无法解析 %q", cond)
+			}
+			params[paramName+"_start"] = args[argIdx]
+			params[paramName+"_end"] = args[argIdx+1]
+			argIdx += 2
+			clauses = append(clauses, fmt.Sprintf("n.%s >= $%s_start AND n.%s <= $%s_end", field, paramName, field, paramName))
+			continue
+		}
+
 		parsed := false
-		for _, op := range []string{">=", "<=", "!=", ">", "<", "="} {
+		for _, op := range []string{">=", "<=", "!=", "<>", ">", "<", "="} {
 			if strings.Contains(cond, " "+op+" ") {
 				parts := strings.SplitN(cond, " "+op+" ", 2)
 				field, err := neo4jIdentifier(parts[0])
@@ -332,16 +402,62 @@ func (c *Neo4jConnection) buildCypherWhere(where []string, args []interface{}) (
 					params[paramName] = args[argIdx]
 					argIdx++
 					clauses = append(clauses, fmt.Sprintf("n.%s %s $%s", field, cypherOp, paramName))
+				} else {
+					return "", nil, fmt.Errorf("Neo4j 条件参数不足，无法解析 %q", cond)
 				}
 				parsed = true
 				break
 			}
 		}
 		if !parsed {
-			// 无法解析的条件跳过
-			continue
+			// 条件解析必须 fail-closed，避免过滤条件被静默丢弃后误更新/删除整类节点。
+			return "", nil, fmt.Errorf("Neo4j 无法解析查询条件 %q，请使用受支持的条件形式", cond)
 		}
+	}
+	if argIdx != len(args) {
+		return "", nil, fmt.Errorf("Neo4j 条件参数数量不匹配，已使用 %d 个，实际传入 %d 个", argIdx, len(args))
 	}
 
 	return strings.Join(clauses, " AND "), params, nil
+}
+
+// splitCypherCondition 按关键字拆分条件，并保留原始大小写字段名。
+func splitCypherCondition(condition string, keyword string) (string, string, bool) {
+	index := strings.Index(strings.ToUpper(condition), keyword)
+	if index < 0 {
+		return "", "", false
+	}
+	return strings.TrimSpace(condition[:index]), strings.TrimSpace(condition[index+len(keyword):]), true
+}
+
+// consumeCypherValues 根据条件中的占位符数量消费参数，供 IN/NOT IN 条件复用。
+func consumeCypherValues(condition string, args []interface{}, argIndex *int) ([]interface{}, error) {
+	count := strings.Count(condition, "?")
+	if count == 0 {
+		return nil, fmt.Errorf("Neo4j 集合条件缺少占位符: %q", condition)
+	}
+	if *argIndex+count > len(args) {
+		return nil, fmt.Errorf("Neo4j 条件参数不足，无法解析 %q", condition)
+	}
+	values := append([]interface{}(nil), args[*argIndex:*argIndex+count]...)
+	*argIndex += count
+	return values, nil
+}
+
+// cypherLikeRegex 把 SQL LIKE 模式转换为 Cypher 正则，并转义用户输入中的正则元字符。
+func cypherLikeRegex(pattern string) string {
+	var builder strings.Builder
+	builder.WriteString("(?i)^")
+	for _, char := range pattern {
+		switch char {
+		case '%':
+			builder.WriteString(".*")
+		case '_':
+			builder.WriteByte('.')
+		default:
+			builder.WriteString(regexp.QuoteMeta(string(char)))
+		}
+	}
+	builder.WriteByte('$')
+	return builder.String()
 }

@@ -105,6 +105,24 @@ func TestTraceNotExposedToRemoteRequests(t *testing.T) {
 	}
 }
 
+// TestTraceNotExposedThroughLoopbackProxy 验证本机反向代理转发远程客户端时也不会暴露调试条。
+func TestTraceNotExposedThroughLoopbackProxy(t *testing.T) {
+	trace := &Trace{Debug: &debug.Debug{Enabled: true}}
+	raw := httptest.NewRequest(http.MethodGet, "http://example.com/page", nil)
+	raw.RemoteAddr = "127.0.0.1:54321"
+	raw.Header.Set("X-Forwarded-For", "198.51.100.10")
+	req := fwcontext.NewRequest(raw)
+
+	resp := trace.Handle(req, func(req *fwcontext.Request) *fwcontext.Response {
+		return fwcontext.NewResponse().Content("<html><body>ok</body></html>")
+	})
+
+	body := string(resp.GetBody())
+	if strings.Contains(body, "tg-debug-bar") || strings.Contains(body, "__thinkgo_debug__") {
+		t.Fatalf("本机反代后的远程请求不应被注入调试条，响应为 %s", body)
+	}
+}
+
 // TestTraceAssetsNotServedToRemoteRequests 验证调试静态资源端点对远程请求不可用。
 func TestTraceAssetsNotServedToRemoteRequests(t *testing.T) {
 	trace := &Trace{Debug: &debug.Debug{Enabled: true}}

@@ -3,6 +3,7 @@ package command
 import (
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"thinkgo/framework/console"
@@ -69,11 +70,16 @@ func (c *Run) Execute(input *console.Input, output *console.Output) {
 	}
 
 	// Run with air（热重载模式：构建出的二进制是独立进程，端口经环境变量传递）
+	if err := ensureServerBinaryDir(c.App.BasePath); err != nil {
+		output.Error("Failed to prepare server binary directory: " + err.Error())
+		return
+	}
 	buildCmd := "go build -o " + serverBinaryPath() + " main.go"
 	cmd := exec.Command(path,
 		"--build.cmd", buildCmd,
 		"--build.bin", "./"+serverBinaryPath(),
 	)
+	cmd.Dir = c.App.BasePath
 
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -95,4 +101,8 @@ func serverBinaryPath() string {
 		return "bin/server.exe"
 	}
 	return "bin/server"
+}
+
+func ensureServerBinaryDir(basePath string) error {
+	return os.MkdirAll(filepath.Join(basePath, filepath.Dir(serverBinaryPath())), 0755)
 }

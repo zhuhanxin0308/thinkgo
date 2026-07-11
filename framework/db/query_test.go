@@ -287,3 +287,15 @@ func TestQueryTransactionTableReturnsQuery(t *testing.T) {
 		t.Fatal("链式调用后应依然是 *Query")
 	}
 }
+
+// TestEndedTransactionQueryDoesNotFallBackToDB 验证已结束事务不能退回普通连接执行，
+// 防止提交/回滚后的误写绕过事务边界。
+func TestEndedTransactionQueryDoesNotFallBackToDB(t *testing.T) {
+	db := NewDB(&mockConnection{})
+	tx := &Tx{db: db}
+
+	_, err := tx.Table("users").Insert(map[string]interface{}{"name": "tester"})
+	if err == nil {
+		t.Fatal("已结束事务创建的查询应返回错误，不能退回普通连接执行")
+	}
+}

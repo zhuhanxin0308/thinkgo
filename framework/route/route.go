@@ -2,6 +2,7 @@ package route
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"reflect"
 	"regexp"
@@ -17,16 +18,17 @@ type HandlerFunc interface{}
 
 // Route 表示单条路由规则。
 type Route struct {
-	Method           string
-	Path             string
-	Handler          HandlerFunc
-	Middleware       []middleware.Handler
+	Method     string
+	Path       string
+	Handler    HandlerFunc
+	Middleware []middleware.Handler
 	// Auto 标记该路由由自动路由解析生成（URL → Controller@Action），
 	// 分发层会对其施加更严格的方法可达性限制，避免暴露控制器基类方法。
 	Auto             bool
 	name             string
 	patterns         map[string]string
 	compiledPatterns map[string]*regexp.Regexp
+	invalidPatterns  map[string]bool
 	pathParts        []string // 注册时预切分的路径片段，避免每次请求重复切分
 	domain           string
 	ext              string
@@ -130,6 +132,7 @@ func (r *Router) Add(method, path string, handler HandlerFunc, middlewares ...mi
 		Middleware:       allMiddleware,
 		patterns:         make(map[string]string),
 		compiledPatterns: make(map[string]*regexp.Regexp),
+		invalidPatterns:  make(map[string]bool),
 		router:           r,
 	}
 	if domain := r.currentGroupDomain(); domain != "" {
@@ -262,14 +265,18 @@ func (r *Router) Match(req *context.Request) (*Route, map[string]string) {
 
 // resolveAutoRoute 根据 URL 路径自动解析控制器和动作。
 // 支持的 URL 格式：
-//   / → Index@index（默认控制器默认动作）
-//   /user → User@index（指定控制器默认动作）
-//   /user/edit → User@Edit（指定控制器和动作）
-//   /admin/user/edit → Admin.User@Edit（多层级控制器）
+//
+//	/ → Index@index（默认控制器默认动作）
+//	/user → User@index（指定控制器默认动作）
+//	/user/edit → User@Edit（指定控制器和动作）
+//	/admin/user/edit → Admin.User@Edit（多层级控制器）
 func (r *Router) resolveAutoRoute(urlPath string) *Route {
 	// 去除前后斜杠并分割
 	trimmed := strings.Trim(urlPath, "/")
 	if trimmed == "" {
+		if !isValidAutoControllerName(r.defaultController) || !isValidAutoRouteSegment(r.defaultAction) {
+			return nil
+		}
 		// 根路径：默认控制器 + 默认动作
 		return &Route{
 			Method:  "*",
@@ -280,6 +287,12 @@ func (r *Router) resolveAutoRoute(urlPath string) *Route {
 	}
 
 	parts := strings.Split(trimmed, "/")
+	for _, part := range parts {
+		if !isValidAutoRouteSegment(part) {
+			return nil
+		}
+	}
+
 	var controller, action string
 
 	switch len(parts) {
@@ -304,6 +317,40 @@ func (r *Router) resolveAutoRoute(urlPath string) *Route {
 		Handler: controller + "@" + action,
 		Auto:    true,
 	}
+}
+
+// isValidAutoControllerName 校验自动路由控制器名，允许点号分隔多级控制器。
+func isValidAutoControllerName(name string) bool {
+	parts := strings.Split(name, ".")
+	for _, part := range parts {
+		if !isValidAutoRouteSegment(part) {
+			return false
+		}
+	}
+	return true
+}
+
+// isValidAutoRouteSegment 只允许可映射到 Go 标识符的 ASCII 片段。
+func isValidAutoRouteSegment(segment string) bool {
+	if segment == "" {
+		return false
+	}
+
+	for index := 0; index < len(segment); index++ {
+		char := segment[index]
+		isLetter := (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z')
+		isDigit := char >= '0' && char <= '9'
+		if index == 0 {
+			if !isLetter && char != '_' {
+				return false
+			}
+			continue
+		}
+		if !isLetter && !isDigit && char != '_' {
+			return false
+		}
+	}
+	return true
 }
 
 // ucfirst 将字符串首字母转大写。
@@ -405,9 +452,23 @@ func (r *Route) Name(name string) *Route {
 
 // Pattern 设置参数正则约束。
 func (r *Route) Pattern(param, pattern string) *Route {
+	if r.patterns == nil {
+		r.patterns = make(map[string]string)
+	}
+	if r.compiledPatterns == nil {
+		r.compiledPatterns = make(map[string]*regexp.Regexp)
+	}
+	if r.invalidPatterns == nil {
+		r.invalidPatterns = make(map[string]bool)
+	}
 	r.patterns[param] = pattern
 	if compiled, err := regexp.Compile("^" + pattern + "$"); err == nil {
 		r.compiledPatterns[param] = compiled
+		delete(r.invalidPatterns, param)
+	} else {
+		// 正则配置错误必须失败关闭，避免把受约束参数静默降级为任意匹配。
+		delete(r.compiledPatterns, param)
+		r.invalidPatterns[param] = true
 	}
 	return r
 }
@@ -666,6 +727,9 @@ func (r *Route) matchParts(routeParts []string, requestParts []string, routeInde
 }
 
 func (r *Route) validateRouteParam(paramName string, value string) bool {
+	if r.invalidPatterns[paramName] {
+		return false
+	}
 	if compiled, ok := r.compiledPatterns[paramName]; ok {
 		return compiled.MatchString(value)
 	}
@@ -685,11 +749,24 @@ func splitPathParts(path string) []string {
 }
 
 func matchDomain(routeDomain string, host string) bool {
-	routeDomain = strings.TrimSpace(routeDomain)
+	routeDomain = normalizeRouteHost(routeDomain)
 	if routeDomain == "" {
 		return true
 	}
-	return strings.EqualFold(routeDomain, host)
+	return routeDomain == normalizeRouteHost(host)
+}
+
+// normalizeRouteHost 规范化域名匹配用 Host，避免端口或大小写导致合法路由失配。
+func normalizeRouteHost(rawHost string) string {
+	host := strings.TrimSpace(rawHost)
+	if host == "" {
+		return ""
+	}
+	if parsedHost, _, err := net.SplitHostPort(host); err == nil {
+		host = parsedHost
+	}
+	host = strings.Trim(host, "[]")
+	return strings.TrimSuffix(strings.ToLower(host), ".")
 }
 
 func containsMiddleware(targets []middleware.Handler, candidate middleware.Handler) bool {

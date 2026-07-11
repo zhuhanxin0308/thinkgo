@@ -98,7 +98,7 @@ func (r *Request) Ext() string {
 	return ""
 }
 
-// Param 按“路由参数 > 表单/查询参数 > JSON 参数”的优先级读取参数。
+// Param 按“路由参数 > 请求体参数 > 查询参数”的优先级读取参数。
 func (r *Request) Param(key string, def ...string) string {
 	if value, ok := r.paramValue(key); ok {
 		return stringifyRequestValue(value)
@@ -388,9 +388,18 @@ func (r *Request) Body() ([]byte, error) {
 	return r.readBody(), r.bodyErr
 }
 
+// BodyReadError 返回已经发生的请求体读取错误，不会主动读取请求体。
+func (r *Request) BodyReadError() error {
+	return r.bodyErr
+}
+
 // Json 将 JSON 请求体绑定到目标结构体。
 func (r *Request) Json(target interface{}) error {
-	return json.Unmarshal(r.readBody(), target)
+	body := r.readBody()
+	if r.bodyErr != nil {
+		return r.bodyErr
+	}
+	return json.Unmarshal(body, target)
 }
 
 // Header 获取请求头。
@@ -609,6 +618,9 @@ func (r *Request) parseJSONBody() {
 		r.jsonBody = make(map[string]interface{})
 
 		body := r.readBody()
+		if r.bodyErr != nil {
+			return
+		}
 		if len(body) == 0 {
 			return
 		}
@@ -645,7 +657,7 @@ func (r *Request) getJSONBodyValue(key string) interface{} {
 	return r.jsonBody[key]
 }
 
-// paramValue 统一按路由参数 > 表单/查询参数 > JSON 参数的优先级取值。
+// paramValue 统一按路由参数 > 表单/JSON 请求体 > 查询参数的优先级取值。
 func (r *Request) paramValue(key string) (interface{}, bool) {
 	r.dataMu.RLock()
 	if value, ok := r.data[key]; ok {
@@ -653,12 +665,6 @@ func (r *Request) paramValue(key string) (interface{}, bool) {
 		return value, true
 	}
 	r.dataMu.RUnlock()
-
-	if r.raw != nil && r.raw.URL != nil {
-		if values, ok := r.queryValues()[key]; ok && len(values) > 0 {
-			return normalizeStringSliceValue(values), true
-		}
-	}
 
 	if r.raw != nil {
 		r.ensureFormParsed()
@@ -669,8 +675,17 @@ func (r *Request) paramValue(key string) (interface{}, bool) {
 
 	if strings.Contains(r.Header("Content-Type"), "application/json") {
 		r.parseJSONBody()
+		if r.bodyErr != nil {
+			return nil, false
+		}
 		if value, ok := r.jsonBody[key]; ok {
 			return value, true
+		}
+	}
+
+	if r.raw != nil && r.raw.URL != nil {
+		if values, ok := r.queryValues()[key]; ok && len(values) > 0 {
+			return normalizeStringSliceValue(values), true
 		}
 	}
 

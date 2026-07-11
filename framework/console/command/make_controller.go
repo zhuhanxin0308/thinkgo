@@ -3,7 +3,7 @@ package command
 import (
 	"fmt"
 	"os"
-	"strings"
+	"path/filepath"
 	"thinkgo/framework/console"
 )
 
@@ -18,21 +18,23 @@ func (c *MakeController) Configure() {
 }
 
 func (c *MakeController) Execute(input *console.Input, output *console.Output) {
-	name := input.GetArgument(0)
-	if name == "" {
-		output.Error("Controller name is required.")
+	name, err := normalizeGeneratorName(input.GetArgument(0), "Controller")
+	if err != nil {
+		output.Error("Invalid controller name: " + err.Error())
 		return
 	}
 
-	// Capitalize
-	name = strings.Title(name)
-	if !strings.HasSuffix(name, "Controller") {
-		name += "Controller"
+	dir := filepath.Join(c.App.BasePath, "app", "controller")
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			output.Error(fmt.Sprintf("Failed to create controller directory: %v", err))
+			return
+		}
 	}
 
 	// File path
-	filename := fmt.Sprintf("%s/app/controller/%s.go", c.App.BasePath, strings.ToLower(name))
-	
+	filename := filepath.Join(dir, lowerGoFilename(name))
+
 	// Check if exists
 	if _, err := os.Stat(filename); !os.IsNotExist(err) {
 		output.Error(fmt.Sprintf("Controller %s already exists.", name))
@@ -44,7 +46,6 @@ func (c *MakeController) Execute(input *console.Input, output *console.Output) {
 
 import (
 	"thinkgo/framework"
-	"thinkgo/framework/context"
 )
 
 func init() {

@@ -80,6 +80,60 @@ func TestServeHTTPPreventsStaticTraversal(t *testing.T) {
 	}
 }
 
+// TestServeHTTPRejectsUnlistedHost 验证配置主机白名单后，伪造 Host 会在入口被拒绝。
+func TestServeHTTPRejectsUnlistedHost(t *testing.T) {
+	basePath := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(basePath, "public"), 0o755); err != nil {
+		t.Fatalf("创建 public 目录失败: %v", err)
+	}
+
+	app := newTestHTTPApp(t, basePath, map[string]interface{}{"enable": false})
+	app.Config.Set("app.server.allowed_hosts", []interface{}{"app.example.com"})
+	app.Route.Get("/ok", func(req *fwcontext.Request) *fwcontext.Response {
+		return fwcontext.NewResponse().Content("ok")
+	})
+
+	handler := NewHttp(app)
+	req := httptest.NewRequest(stdhttp.MethodGet, "http://evil.example.com/ok", nil)
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, req)
+
+	if recorder.Code != stdhttp.StatusMisdirectedRequest {
+		t.Fatalf("未列入白名单的 Host 应返回 421，实际为 %d", recorder.Code)
+	}
+	if strings.Contains(recorder.Body.String(), "ok") {
+		t.Fatalf("未列入白名单的 Host 不应进入业务路由，响应为 %s", recorder.Body.String())
+	}
+}
+
+// TestServeHTTPAllowsConfiguredHost 验证 Host 白名单允许合法主机继续进入业务路由。
+func TestServeHTTPAllowsConfiguredHost(t *testing.T) {
+	basePath := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(basePath, "public"), 0o755); err != nil {
+		t.Fatalf("创建 public 目录失败: %v", err)
+	}
+
+	app := newTestHTTPApp(t, basePath, map[string]interface{}{"enable": false})
+	app.Config.Set("app.server.allowed_hosts", []interface{}{"app.example.com"})
+	app.Route.Get("/ok", func(req *fwcontext.Request) *fwcontext.Response {
+		return fwcontext.NewResponse().Content("ok")
+	})
+
+	handler := NewHttp(app)
+	req := httptest.NewRequest(stdhttp.MethodGet, "http://app.example.com:8080/ok", nil)
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, req)
+
+	if recorder.Code != stdhttp.StatusOK {
+		t.Fatalf("白名单内 Host 应正常响应，实际为 %d", recorder.Code)
+	}
+	if recorder.Body.String() != "ok" {
+		t.Fatalf("白名单内 Host 应进入业务路由，实际响应为 %s", recorder.Body.String())
+	}
+}
+
 // TestCompressionSkipsSmallResponse 验证小于压缩阈值的响应不会被无意义压缩。
 func TestCompressionSkipsSmallResponse(t *testing.T) {
 	basePath := t.TempDir()
@@ -229,5 +283,36 @@ func TestServeHTTPRejectsOversizedRequestBody(t *testing.T) {
 
 	if recorder.Code != stdhttp.StatusRequestEntityTooLarge {
 		t.Fatalf("超过限制的请求体应返回 413，实际为 %d", recorder.Code)
+	}
+}
+
+// TestServeHTTPRejectsChunkedOversizedRequestBody 验证未知长度/chunked 请求体超限后不会被业务当作空 body 处理。
+func TestServeHTTPRejectsChunkedOversizedRequestBody(t *testing.T) {
+	basePath := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(basePath, "public"), 0o755); err != nil {
+		t.Fatalf("创建 public 目录失败: %v", err)
+	}
+
+	app := newTestHTTPApp(t, basePath, map[string]interface{}{"enable": false})
+	app.Config.Set("app.server.max_body_bytes", 8)
+	app.Route.Post("/profile", func(req *fwcontext.Request) *fwcontext.Response {
+		name := req.Post("name", "empty")
+		return fwcontext.NewResponse().Content("name=" + name)
+	})
+
+	handler := NewHttp(app)
+	req := httptest.NewRequest(stdhttp.MethodPost, "http://example.com/profile?name=query", strings.NewReader(`{"name":"0123456789"}`))
+	req.ContentLength = -1
+	req.TransferEncoding = []string{"chunked"}
+	req.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, req)
+
+	if recorder.Code != stdhttp.StatusRequestEntityTooLarge {
+		t.Fatalf("chunked 超限请求体应返回 413，实际为 %d，body=%q", recorder.Code, recorder.Body.String())
+	}
+	if strings.Contains(recorder.Body.String(), "query") {
+		t.Fatalf("body 读取失败后不应回落到 query 参数，实际响应为 %q", recorder.Body.String())
 	}
 }

@@ -4,6 +4,7 @@ import (
 	stdcontext "context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -32,6 +33,7 @@ type serverConf struct {
 	CertFile          string
 	KeyFile           string
 	EnableHTTP3       bool
+	AllowedHosts      []string
 	TrustedProxies    []string
 	ReadHeaderTimeout time.Duration
 	ReadTimeout       time.Duration
@@ -102,6 +104,7 @@ func (h *Http) parseConfig() {
 		h.srvConf.Host = value
 	}
 	h.srvConf.Port = parseInt(serverConfig["port"], h.srvConf.Port)
+	h.srvConf.AllowedHosts = parseConfigStringList(serverConfig["allowed_hosts"])
 
 	tlsConfig, _ := serverConfig["tls"].(map[string]interface{})
 	if value, ok := tlsConfig["enable"].(bool); ok {
@@ -151,6 +154,9 @@ func (h *Http) parseConfig() {
 	}
 
 	if h.app.Env != nil {
+		if value := strings.TrimSpace(h.app.Env.Get("SERVER_ALLOWED_HOSTS", "")); value != "" {
+			h.srvConf.AllowedHosts = splitConfigStringList(value)
+		}
 		if value := strings.TrimSpace(h.app.Env.Get("SERVER_TRUSTED_PROXIES", "")); value != "" {
 			h.srvConf.TrustedProxies = h.srvConf.TrustedProxies[:0]
 			for _, proxy := range strings.Split(value, ",") {
@@ -287,6 +293,11 @@ func (h *Http) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.app.Event.Dispatch(event.NewHttpRunEvent())
 	}
 
+	if !h.isAllowedHost(r.Host) {
+		http.Error(w, http.StatusText(http.StatusMisdirectedRequest), http.StatusMisdirectedRequest)
+		return
+	}
+
 	if h.compressConf.Enable {
 		compressionWriter = NewCompressionResponseWriter(w, r, h.compressConf.MinSize, h.compressConf.Levels)
 		w = compressionWriter
@@ -355,8 +366,58 @@ func (h *Http) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			Code(http.StatusInternalServerError).
 			Content(http.StatusText(http.StatusInternalServerError))
 	}
+	if bodyErr := req.BodyReadError(); bodyErr != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(bodyErr, &maxBytesErr) {
+			resp = context.NewResponse().
+				Code(http.StatusRequestEntityTooLarge).
+				Content(http.StatusText(http.StatusRequestEntityTooLarge))
+		} else {
+			resp = context.NewResponse().
+				Code(http.StatusBadRequest).
+				Content(http.StatusText(http.StatusBadRequest))
+		}
+	}
 	resp.Send(w)
 	h.runTerminators(req, resp, middleware.RequestTerminators(req))
+}
+
+// isAllowedHost 在配置白名单时校验 Host，防止伪造 Host 影响路由域名匹配和绝对 URL 生成。
+func (h *Http) isAllowedHost(rawHost string) bool {
+	if len(h.srvConf.AllowedHosts) == 0 {
+		return true
+	}
+
+	host := normalizeHTTPHost(rawHost)
+	if host == "" {
+		return false
+	}
+	for _, allowed := range h.srvConf.AllowedHosts {
+		allowedHost := normalizeHTTPHost(allowed)
+		if allowedHost == "" {
+			continue
+		}
+		if allowedHost == "*" || strings.EqualFold(host, allowedHost) {
+			return true
+		}
+		if strings.HasPrefix(allowedHost, "*.") && strings.HasSuffix(host, strings.TrimPrefix(allowedHost, "*")) {
+			return true
+		}
+	}
+	return false
+}
+
+// normalizeHTTPHost 去掉端口和大小写差异，保留主机名本身用于白名单比较。
+func normalizeHTTPHost(rawHost string) string {
+	host := strings.TrimSpace(rawHost)
+	if host == "" {
+		return ""
+	}
+	if parsedHost, _, err := net.SplitHostPort(host); err == nil {
+		host = parsedHost
+	}
+	host = strings.Trim(host, "[]")
+	return strings.TrimSuffix(strings.ToLower(host), ".")
 }
 
 // spaIndexContent 返回 SPA 入口 index.html 内容，按文件修改时间缓存，
@@ -724,4 +785,43 @@ func parseInt64(value interface{}, defaultValue int64) int64 {
 		}
 	}
 	return defaultValue
+}
+
+// parseConfigStringList 读取 JSON 配置中的字符串列表，兼容数组和逗号分隔字符串。
+func parseConfigStringList(value interface{}) []string {
+	switch typed := value.(type) {
+	case []interface{}:
+		result := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if text, ok := item.(string); ok && strings.TrimSpace(text) != "" {
+				result = append(result, strings.TrimSpace(text))
+			}
+		}
+		return result
+	case []string:
+		result := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if strings.TrimSpace(item) != "" {
+				result = append(result, strings.TrimSpace(item))
+			}
+		}
+		return result
+	case string:
+		return splitConfigStringList(typed)
+	default:
+		return nil
+	}
+}
+
+// splitConfigStringList 拆分逗号分隔配置，忽略空项。
+func splitConfigStringList(value string) []string {
+	parts := strings.Split(value, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			result = append(result, part)
+		}
+	}
+	return result
 }

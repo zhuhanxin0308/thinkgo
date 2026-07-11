@@ -27,7 +27,17 @@ type Command struct {
 func (c *Command) Configure() {}
 
 // Execute executes the command
-func (c *Command) Execute(input *Input, output *Output) {}
+func (c *Command) Execute(input *Input, output *Output) {
+	if output == nil {
+		return
+	}
+	signature := c.Signature
+	if signature == "" {
+		signature = "unknown"
+	}
+	// 基础命令不提供业务行为，具体命令必须覆盖 Execute；这里显式报错避免静默成功。
+	output.Error("command " + signature + " missing implementation")
+}
 
 // GetSignature returns the signature
 func (c *Command) GetSignature() string {

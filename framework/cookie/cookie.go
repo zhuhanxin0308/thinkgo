@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -103,6 +104,11 @@ func (c *Cookie) GetConfig() CookieConfig {
 
 // Set 设置 Cookie
 func (c *Cookie) Set(name string, value string, options ...map[string]interface{}) {
+	if c == nil || c.writer == nil {
+		// 旧 API 可能在 Init/SetWriter 前被调用；方法无错误返回值，只能安全降级为无操作。
+		return
+	}
+
 	opts := c.mergeOptions(options...)
 
 	// 签名（绑定 Cookie 名称，避免签名值在不同 Cookie 间被调换）
@@ -113,7 +119,7 @@ func (c *Cookie) Set(name string, value string, options ...map[string]interface{
 	secure := opts.Secure
 	// 纵深防御：HTTPS 请求下强制 Secure（即便配置未开启），避免会话/凭证 Cookie 走明文回传；
 	// 本地 HTTP 开发仍可正常工作。
-	if c.request != nil && c.request.TLS != nil {
+	if isSecureCookieRequest(c.request) {
 		secure = true
 	}
 	// 浏览器要求 SameSite=None 必须配合 Secure，否则 Cookie 会被丢弃。
@@ -149,8 +155,37 @@ func (c *Cookie) Set(name string, value string, options ...map[string]interface{
 	http.SetCookie(c.writer, cookie)
 }
 
+// isSecureCookieRequest 判断当前请求是否处于安全链路，兼容本机 HTTPS 反向代理。
+func isSecureCookieRequest(req *http.Request) bool {
+	if req == nil {
+		return false
+	}
+	if req.TLS != nil {
+		return true
+	}
+	if !isLoopbackRemoteAddr(req.RemoteAddr) {
+		return false
+	}
+	proto := strings.TrimSpace(strings.Split(req.Header.Get("X-Forwarded-Proto"), ",")[0])
+	return strings.EqualFold(proto, "https")
+}
+
+// isLoopbackRemoteAddr 只允许本机代理声明 HTTPS，避免远程客户端伪造代理头。
+func isLoopbackRemoteAddr(remoteAddr string) bool {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		host = strings.Trim(remoteAddr, "[]")
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
 // Get 获取 Cookie 值
 func (c *Cookie) Get(name string) string {
+	if c == nil || c.request == nil {
+		return ""
+	}
+
 	cookie, err := c.request.Cookie(c.config.Prefix + name)
 	if err != nil {
 		return ""
@@ -170,8 +205,19 @@ func (c *Cookie) Get(name string) string {
 
 // Has 检查 Cookie 是否存在
 func (c *Cookie) Has(name string) bool {
-	_, err := c.request.Cookie(c.config.Prefix + name)
-	return err == nil
+	if c == nil || c.request == nil {
+		return false
+	}
+	cookie, err := c.request.Cookie(c.config.Prefix + name)
+	if err != nil {
+		return false
+	}
+	if c.config.Secret != "" {
+		// 签名 Cookie 的“存在”必须以验签通过为准，避免篡改值绕过业务的 Has 判断。
+		_, valid := c.unsign(c.config.Prefix+name, cookie.Value, c.config.Secret)
+		return valid
+	}
+	return true
 }
 
 // Delete 删除 Cookie

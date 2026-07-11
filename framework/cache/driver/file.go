@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -29,7 +30,7 @@ type fileLockPayload struct {
 // NewFile 创建文件缓存驱动。
 func NewFile(path string) *File {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
-		_ = os.MkdirAll(path, 0o755)
+		_ = os.MkdirAll(path, 0o700)
 	}
 	return &File{path: path}
 }
@@ -70,7 +71,7 @@ func (c *File) Set(key string, val interface{}, ttl time.Duration) {
 	target := c.cacheFilePath(key)
 	tmp, err := os.CreateTemp(c.path, ".tmp-cache-*")
 	if err != nil {
-		_ = os.WriteFile(target, data, 0o644)
+		_ = os.WriteFile(target, data, 0o600)
 		return
 	}
 	tmpName := tmp.Name()
@@ -97,8 +98,19 @@ func (c *File) Delete(key string) {
 }
 
 func (c *File) Clear() {
-	_ = os.RemoveAll(c.path)
-	_ = os.MkdirAll(c.path, 0o755)
+	entries, err := os.ReadDir(c.path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			_ = os.MkdirAll(c.path, 0o700)
+		}
+		return
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !isManagedCacheFile(entry.Name()) {
+			continue
+		}
+		_ = os.Remove(filepath.Join(c.path, entry.Name()))
+	}
 }
 
 func (c *File) Inc(key string, step int64) int64 {
@@ -132,7 +144,7 @@ func (c *File) AcquireLock(key string, owner string, ttl time.Duration) bool {
 	now := time.Now()
 
 	for {
-		handle, err := os.OpenFile(lockFile, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+		handle, err := os.OpenFile(lockFile, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 		if err == nil {
 			payload, _ := json.Marshal(fileLockPayload{
 				Owner:  owner,
@@ -152,6 +164,13 @@ func (c *File) AcquireLock(key string, owner string, ttl time.Duration) bool {
 		}
 		_ = os.Remove(lockFile)
 	}
+}
+
+// isManagedCacheFile 只允许 Clear 删除本驱动生成的缓存、锁和未完成临时文件。
+func isManagedCacheFile(name string) bool {
+	return strings.HasSuffix(name, ".cache") ||
+		strings.HasSuffix(name, ".lock") ||
+		strings.HasPrefix(name, ".tmp-cache-")
 }
 
 // ReleaseLock 仅允许锁拥有者释放锁。
