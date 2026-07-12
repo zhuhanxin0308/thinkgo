@@ -21,14 +21,16 @@ func TestBusinessExceptionCarriesSafeDataAndHiddenCause(t *testing.T) {
 	req.Header.Set("Accept", "application/json")
 	recorder := httptest.NewRecorder()
 
-	handler.Render(
+	if err := handler.Render(
 		recorder,
 		req,
 		NewBusinessException(1002, "库存不足").
 			WithStatus(http.StatusConflict).
 			WithData(map[string]interface{}{"field": "stock"}).
 			WithCause(errors.New("sql: no rows in result set")),
-	)
+	); err != nil {
+		t.Fatalf("渲染结构化业务异常失败: %v", err)
+	}
 
 	body := recorder.Body.String()
 	if recorder.Code != http.StatusConflict {

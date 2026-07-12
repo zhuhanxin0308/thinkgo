@@ -1,96 +1,180 @@
 package console
 
 import (
+	"errors"
 	"fmt"
-	"os"
+	"reflect"
+	"sort"
 	"strings"
+	"sync"
+
 	"thinkgo/framework"
 )
 
-// Console manages commands
+// Console 管理命令注册、严格输入解析、执行和确定性帮助输出。
 type Console struct {
-	App      *framework.App
+	App *framework.App
+
+	mu       sync.RWMutex
 	commands map[string]ICommand
+	output   *Output
 }
 
-// NewConsole creates a new Console
+// NewConsole 创建命令行应用。
 func NewConsole(app *framework.App) *Console {
 	return &Console{
 		App:      app,
 		commands: make(map[string]ICommand),
+		output:   NewOutput(),
 	}
 }
 
-// Register registers a command
-func (c *Console) Register(cmd ICommand) {
-	cmd.Configure()
-	// Inject App if possible
-	if baseCmd, ok := cmd.(interface{ SetApp(*framework.App) }); ok {
-		baseCmd.SetApp(c.App)
+// SetOutput 设置命令标准流，主要用于嵌入和测试。
+func (c *Console) SetOutput(output *Output) error {
+	if c == nil || output == nil {
+		return ErrInvalidOutput
 	}
-	// Also check if it's a pointer to a struct embedding Command
-	// Go interfaces are tricky with embedded structs.
-	// For now, we assume commands implement ICommand.
-	
-	// Parse signature to get command name
-	// Signature might be "make:controller {name}"
-	sig := cmd.GetSignature()
-	parts := strings.Split(sig, " ")
-	name := parts[0]
-	
-	c.commands[name] = cmd
+	if err := output.Err(); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidOutput, err)
+	}
+	c.mu.Lock()
+	c.output = output
+	c.mu.Unlock()
+	return nil
 }
 
-// Run executes the console application
-func (c *Console) Run() {
-	args := os.Args[1:]
+// Register 注册命令；非法或重复命令返回错误，不再静默覆盖。
+func (c *Console) Register(command ICommand) error {
+	if c == nil || isNilCommand(command) {
+		return fmt.Errorf("%w: 命令不能为空", ErrInvalidCommand)
+	}
+	command.Configure()
+	signature := command.GetSignature()
+	description := command.GetDescription()
+	if !validCommandName(signature) {
+		return fmt.Errorf("%w: 签名 %q 非法", ErrInvalidCommand, signature)
+	}
+	if strings.TrimSpace(description) == "" || escapeTerminalControls(description) != description {
+		return fmt.Errorf("%w: 命令 %q 的描述为空或包含控制字符", ErrInvalidCommand, signature)
+	}
+	if _, _, _, err := validateInputDefinitions(command.GetArgumentDefinitions(), command.GetOptionDefinitions()); err != nil {
+		return fmt.Errorf("%w: 命令 %q 的参数声明错误: %v", ErrInvalidCommand, signature, err)
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.commands == nil {
+		c.commands = make(map[string]ICommand)
+	}
+	if _, duplicated := c.commands[signature]; duplicated {
+		return fmt.Errorf("%w: %q", ErrDuplicateCommand, signature)
+	}
+	if appAware, ok := command.(interface{ SetApp(*framework.App) }); ok {
+		appAware.SetApp(c.App)
+	}
+	c.commands[signature] = command
+	return nil
+}
+
+// Run 执行给定参数；空参数展示帮助。所有解析、命令和输出错误都会返回调用方。
+func (c *Console) Run(args ...string) error {
+	if c == nil {
+		return fmt.Errorf("%w: Console 不能为空", ErrInvalidCommand)
+	}
 	if len(args) == 0 {
-		c.ShowHelp()
-		return
+		return c.ShowHelp()
 	}
-
 	name := args[0]
-	
-	if name == "list" {
-		c.ShowHelp()
-		return
+	c.mu.RLock()
+	command, exists := c.commands[name]
+	output := c.output
+	c.mu.RUnlock()
+	if !exists {
+		return fmt.Errorf("%w: %q", ErrCommandNotFound, name)
+	}
+	if output == nil {
+		return ErrInvalidOutput
 	}
 
-	if cmd, ok := c.commands[name]; ok {
-		input := NewInput()
-		// Pass args excluding command name
-		input.Args = args[1:]
-		// 依据命令声明的参数/选项定义解析输入，填充 Options/Arguments。
-		input.Parse(cmd.GetArgumentDefinitions(), cmd.GetOptionDefinitions())
-
-		output := NewOutput()
-		cmd.Execute(input, output)
-	} else {
-		fmt.Printf("Command \"%s\" not found.\n", name)
+	input := NewInput(args[1:]...)
+	if err := input.Parse(command.GetArgumentDefinitions(), command.GetOptionDefinitions()); err != nil {
+		return fmt.Errorf("命令 %q: %w", name, err)
 	}
+	executionErr := command.Execute(input, output)
+	return errors.Join(executionErr, output.Err())
 }
 
-// ShowHelp shows available commands
-func (c *Console) ShowHelp() {
-	fmt.Println("ThinkGo Console Tool")
-	fmt.Println("Usage:")
-	fmt.Println("  command [arguments]")
-	fmt.Println("\nAvailable commands:")
-	for _, cmd := range c.commands {
-		// Extract name from signature
-		sig := cmd.GetSignature()
-		parts := strings.Split(sig, " ")
-		name := parts[0]
+// ShowHelp 按命令名排序展示帮助，保证输出可复现。
+func (c *Console) ShowHelp() error {
+	if c == nil {
+		return fmt.Errorf("%w: Console 不能为空", ErrInvalidCommand)
+	}
+	c.mu.RLock()
+	output := c.output
+	names := make([]string, 0, len(c.commands))
+	commands := make(map[string]ICommand, len(c.commands))
+	for name, command := range c.commands {
+		names = append(names, name)
+		commands[name] = command
+	}
+	c.mu.RUnlock()
+	if output == nil {
+		return ErrInvalidOutput
+	}
+	sort.Strings(names)
 
-		fmt.Printf("  %-20s %s\n", name, cmd.GetDescription())
-
-		// 展示命令声明的选项（如 run 的 --port），让帮助不再隐藏可用参数。
-		for _, opt := range cmd.GetOptionDefinitions() {
-			flag := "--" + opt.Name
-			if opt.Short != "" {
-				flag = "-" + opt.Short + ", " + flag
+	output.Writeln("ThinkGo Console Tool")
+	output.Writeln("Usage:")
+	output.Writeln("  think <command> [arguments] [options]")
+	output.Writeln("")
+	output.Writeln("Available commands:")
+	for _, name := range names {
+		command := commands[name]
+		output.Writeln(fmt.Sprintf("  %-20s %s", name, command.GetDescription()))
+		for _, argument := range command.GetArgumentDefinitions() {
+			required := "optional"
+			if argument.Required {
+				required = "required"
 			}
-			fmt.Printf("    %-18s %s\n", flag, opt.Description)
+			output.Writeln(fmt.Sprintf("    %-18s %s (%s)", "<"+argument.Name+">", escapeTerminalControls(argument.Description), required))
+		}
+		for _, option := range command.GetOptionDefinitions() {
+			flag := "--" + option.Name
+			if option.Short != "" {
+				flag = "-" + option.Short + ", " + flag
+			}
+			description := escapeTerminalControls(option.Description)
+			if option.Default != "" {
+				description += " (default: " + escapeTerminalControls(option.Default) + ")"
+			}
+			output.Writeln(fmt.Sprintf("    %-18s %s", flag, description))
 		}
 	}
+	return output.Err()
+}
+
+func isNilCommand(command ICommand) bool {
+	if command == nil {
+		return true
+	}
+	value := reflect.ValueOf(command)
+	return value.Kind() == reflect.Ptr && value.IsNil()
+}
+
+func validCommandName(name string) bool {
+	if name == "" || strings.TrimSpace(name) != name {
+		return false
+	}
+	for _, segment := range strings.Split(name, ":") {
+		if segment == "" {
+			return false
+		}
+		for index, current := range segment {
+			if current >= 'a' && current <= 'z' || index > 0 && (current >= '0' && current <= '9' || current == '-') {
+				continue
+			}
+			return false
+		}
+	}
+	return true
 }

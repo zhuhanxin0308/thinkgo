@@ -2,6 +2,7 @@ package db
 
 import (
 	"fmt"
+	"math"
 	"regexp"
 	"sort"
 	"strings"
@@ -92,6 +93,10 @@ func (g *ConditionGroup) WhereExp(field string, op string, expression string, ar
 		g.err = err
 		return g
 	}
+	if err := validatePlaceholderCount(expression, len(args)); err != nil {
+		g.err = err
+		return g
+	}
 	g.clauses = appendConditionClause(g.clauses, "AND", clause)
 	g.args = append(g.args, args...)
 	return g
@@ -128,6 +133,19 @@ func (g *ConditionGroup) compile() (string, []interface{}, error) {
 func compileWhereExpression(condition interface{}, args []interface{}) (string, []interface{}, error) {
 	switch typed := condition.(type) {
 	case string:
+		// 兼容 Where("field", "op", value) 三元组写法；操作符仍使用统一白名单，
+		// 只把实际值加入绑定参数，不能借操作符位置注入 SQL。
+		if len(args) == 2 && validateIdentifier(typed) == nil {
+			operator, ok := args[0].(string)
+			if !ok {
+				return "", nil, fmt.Errorf("where triplet operator must be string")
+			}
+			normalizedOperator, err := normalizeOperator(operator)
+			if err != nil {
+				return "", nil, fmt.Errorf("unsafe where triplet operator %q: %w", operator, err)
+			}
+			return fmt.Sprintf("%s %s ?", typed, normalizedOperator), []interface{}{args[1]}, nil
+		}
 		normalized, err := normalizePredicateClause(typed, len(args), "where")
 		if err != nil {
 			return "", nil, err
@@ -191,10 +209,11 @@ func compileTupleConditions(conditions [][]interface{}) (string, []interface{}, 
 		if err := validateIdentifier(field); err != nil {
 			return "", nil, fmt.Errorf("unsafe where tuple field %q: %w", field, err)
 		}
-		if err := validateOperator(operator); err != nil {
+		normalizedOperator, err := normalizeOperator(operator)
+		if err != nil {
 			return "", nil, fmt.Errorf("unsafe where tuple operator %q: %w", operator, err)
 		}
-		clauses = append(clauses, fmt.Sprintf("%s %s ?", field, operator))
+		clauses = append(clauses, fmt.Sprintf("%s %s ?", field, normalizedOperator))
 		args = append(args, condition[2])
 	}
 	return strings.Join(clauses, " AND "), args, nil
@@ -226,23 +245,25 @@ func compileColumnClause(left string, op string, right string) (string, error) {
 	if err := validateIdentifier(right); err != nil {
 		return "", fmt.Errorf("unsafe whereColumn right field: %w", err)
 	}
-	if err := validateOperator(op); err != nil {
+	normalizedOperator, err := normalizeOperator(op)
+	if err != nil {
 		return "", fmt.Errorf("unsafe whereColumn operator: %w", err)
 	}
-	return fmt.Sprintf("%s %s %s", left, op, right), nil
+	return fmt.Sprintf("%s %s %s", left, normalizedOperator, right), nil
 }
 
 func compileExpressionClause(field string, op string, expression string) (string, error) {
 	if err := validateIdentifier(field); err != nil {
 		return "", fmt.Errorf("unsafe whereExp field: %w", err)
 	}
-	if err := validateOperator(op); err != nil {
+	normalizedOperator, err := normalizeOperator(op)
+	if err != nil {
 		return "", fmt.Errorf("unsafe whereExp operator: %w", err)
 	}
 	if err := validateExpressionClause(expression); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("%s %s %s", field, op, strings.TrimSpace(expression)), nil
+	return fmt.Sprintf("%s %s %s", field, normalizedOperator, strings.TrimSpace(expression)), nil
 }
 
 // validateExpressionClause 以“字符白名单 + 逐 token 解析”的方式校验表达式，
@@ -299,7 +320,7 @@ func buildTimeRange(kind string, now time.Time) (time.Time, time.Time, error) {
 	switch strings.ToLower(strings.TrimSpace(kind)) {
 	case "today":
 		start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-		end := start.Add(24*time.Hour - time.Second)
+		end := start.AddDate(0, 0, 1).Add(-time.Second)
 		return start, end, nil
 	case "yesterday":
 		end := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).Add(-time.Second)
@@ -326,12 +347,31 @@ func buildTimeRange(kind string, now time.Time) (time.Time, time.Time, error) {
 	}
 }
 
-func normalizeTimeValue(value interface{}) interface{} {
+func normalizeTimeValue(value interface{}) (interface{}, error) {
 	switch typed := value.(type) {
 	case time.Time:
-		return typed.Format(DefaultTimeFormat)
+		if typed.IsZero() {
+			return nil, fmt.Errorf("时间条件不能使用零值 time.Time")
+		}
+		return typed.Format(DefaultTimeFormat), nil
+	case string, []byte,
+		int, int8, int16, int32, int64,
+		uint, uint8, uint16, uint32, uint64:
+		return value, nil
+	case float32:
+		numeric := float64(typed)
+		if math.IsNaN(numeric) || math.IsInf(numeric, 0) {
+			return nil, fmt.Errorf("时间条件不能使用非有限浮点数")
+		}
+		return value, nil
+	case float64:
+		if math.IsNaN(typed) || math.IsInf(typed, 0) {
+			return nil, fmt.Errorf("时间条件不能使用非有限浮点数")
+		}
+		return value, nil
+	case nil:
+		return nil, fmt.Errorf("时间条件值不能为空")
 	default:
-		return fmt.Sprint(value)
+		return nil, fmt.Errorf("不支持的时间条件类型 %T", value)
 	}
 }
-

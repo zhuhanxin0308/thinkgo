@@ -6,20 +6,20 @@ import (
 
 // TestQueryValueReturnsFirstField 验证 Value() 返回第一行的指定字段值。
 func TestQueryValueReturnsFirstField(t *testing.T) {
-	db := NewDB(&mockConnection{})
+	db := NewDB(&queryHardeningConnection{selectRows: []map[string]interface{}{{"name": "张三"}}})
 
 	val, err := db.Name("users").Where("id = ?", 1).Value("name")
 	if err != nil {
 		t.Fatalf("Value 不应返回错误，实际为 %v", err)
 	}
-	// mockConnection 返回 map 中只有 table 和 where_count，name 字段不存在
-	// 但不会报错，返回 nil
-	_ = val
+	if val != "张三" {
+		t.Fatalf("Value 返回值错误: %#v", val)
+	}
 }
 
 // TestQueryColumnReturnsList 验证 Column() 返回字段值列表。
 func TestQueryColumnReturnsList(t *testing.T) {
-	db := NewDB(&mockConnection{})
+	db := NewDB(&queryHardeningConnection{selectRows: []map[string]interface{}{{"name": "张三"}}})
 
 	result, err := db.Name("users").Column("name")
 	if err != nil {
@@ -62,7 +62,7 @@ func TestQueryIncDec(t *testing.T) {
 	db := NewDB(&mockConnection{})
 
 	q := db.Name("users").Inc("score", 5)
-	if len(q.setExprs) != 1 || q.setExprs[0] != "score = score + 5" {
+	if len(q.setExprs) != 1 || q.setExprs[0] != (setExpression{field: "score", operator: "+", amount: 5}) {
 		t.Fatalf("Inc 生成的 SET 表达式不正确: %v", q.setExprs)
 	}
 	// Inc 不应污染 where 条件
@@ -71,7 +71,7 @@ func TestQueryIncDec(t *testing.T) {
 	}
 
 	q2 := db.Name("users").Dec("score", 3)
-	if len(q2.setExprs) != 1 || q2.setExprs[0] != "score = score - 3" {
+	if len(q2.setExprs) != 1 || q2.setExprs[0] != (setExpression{field: "score", operator: "-", amount: 3}) {
 		t.Fatalf("Dec 生成的 SET 表达式不正确: %v", q2.setExprs)
 	}
 	if len(q2.where) != 0 {
@@ -84,7 +84,7 @@ func TestQueryIncDefaultStep(t *testing.T) {
 	db := NewDB(&mockConnection{})
 
 	q := db.Name("users").Inc("views")
-	if len(q.setExprs) != 1 || q.setExprs[0] != "views = views + 1" {
+	if len(q.setExprs) != 1 || q.setExprs[0] != (setExpression{field: "views", operator: "+", amount: 1}) {
 		t.Fatalf("Inc 默认步长应为 1，实际 SET 表达式: %v", q.setExprs)
 	}
 }
@@ -105,11 +105,11 @@ func TestQueryIncDecChain(t *testing.T) {
 	if len(q.setExprs) != 2 {
 		t.Fatalf("应有 2 个 SET 表达式，实际 %d: %v", len(q.setExprs), q.setExprs)
 	}
-	if q.setExprs[0] != "score = score + 10" {
-		t.Fatalf("第一个 SET 表达式不正确: %s", q.setExprs[0])
+	if q.setExprs[0] != (setExpression{field: "score", operator: "+", amount: 10}) {
+		t.Fatalf("第一个 SET 表达式不正确: %#v", q.setExprs[0])
 	}
-	if q.setExprs[1] != "fail_count = fail_count - 1" {
-		t.Fatalf("第二个 SET 表达式不正确: %s", q.setExprs[1])
+	if q.setExprs[1] != (setExpression{field: "fail_count", operator: "-", amount: 1}) {
+		t.Fatalf("第二个 SET 表达式不正确: %#v", q.setExprs[1])
 	}
 }
 

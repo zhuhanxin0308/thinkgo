@@ -2,179 +2,453 @@ package driver
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"html/template"
 	"io"
 	"os"
 	"path"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"sync"
 )
 
-// GoTemplate 基于 html/template 的视图驱动
+const (
+	defaultViewSuffix   = "html"
+	maxTemplateNameSize = 2048
+	maxTemplateSegments = 64
+	maxTemplateFileSize = 4 << 20
+	maxCachedTemplates  = 1024
+)
+
+var (
+	// ErrInvalidViewConfig 表示模板根目录、后缀或配置键非法。
+	ErrInvalidViewConfig = errors.New("视图配置非法")
+	// ErrUnsafeTemplatePath 表示模板名或真实文件路径逃逸了视图根目录。
+	ErrUnsafeTemplatePath = errors.New("模板路径非法")
+	// ErrTemplateNotFound 表示模板文件不存在。
+	ErrTemplateNotFound = errors.New("模板文件不存在")
+	// ErrTemplateNotRegular 表示模板目标不是普通文件。
+	ErrTemplateNotRegular = errors.New("模板目标不是普通文件")
+	// ErrTemplateTooLarge 表示单个模板超过内存解析上限。
+	ErrTemplateTooLarge = errors.New("模板文件超过大小上限")
+	// ErrInvalidTemplateFunction 表示函数名、函数值或函数签名不符合 html/template 约束。
+	ErrInvalidTemplateFunction = errors.New("模板函数非法")
+	// ErrInvalidTemplateWriter 表示模板输出目标是空接口或类型化空指针。
+	ErrInvalidTemplateWriter = errors.New("模板写入器无效")
+)
+
+// GoTemplate 基于 html/template 提供并发安全、路径隔离和有界缓存的视图驱动。
 type GoTemplate struct {
-	config map[string]interface{}
-	cache  map[string]*template.Template
-	mutex  sync.RWMutex
+	rootPath    string
+	suffix      string
+	cacheEnable bool
+	funcMap     template.FuncMap
+	cache       map[string]*template.Template
+	loads       map[string]*templateLoad
+	generation  uint64
+	mutex       sync.RWMutex
 }
 
-// NewGoTemplate 创建 GoTemplate 驱动
+type templateSnapshot struct {
+	rootPath    string
+	suffix      string
+	cacheEnable bool
+	funcMap     template.FuncMap
+	generation  uint64
+}
+
+type templateLoad struct {
+	done        chan struct{}
+	template    *template.Template
+	err         error
+	generation  uint64
+	invalidated bool
+}
+
+// NewGoTemplate 创建尚未配置根目录的 GoTemplate 驱动。
 func NewGoTemplate() *GoTemplate {
 	return &GoTemplate{
-		config: make(map[string]interface{}),
-		cache:  make(map[string]*template.Template),
+		suffix:      defaultViewSuffix,
+		cacheEnable: true,
+		funcMap:     make(template.FuncMap),
+		cache:       make(map[string]*template.Template),
+		loads:       make(map[string]*templateLoad),
 	}
 }
 
-// Config 配置驱动参数
-func (d *GoTemplate) Config(config map[string]interface{}) {
-	if config == nil {
-		config = make(map[string]interface{})
+// Config 严格解析视图配置并原子失效旧模板缓存。
+func (d *GoTemplate) Config(config map[string]interface{}) error {
+	if d == nil {
+		return ErrInvalidViewConfig
 	}
-	d.config = config
-	if _, ok := d.config["view_path"]; !ok {
-		d.config["view_path"] = ""
+	allowed := map[string]bool{"view_path": true, "view_suffix": true, "cache": true}
+	unknown := make([]string, 0)
+	for key := range config {
+		if !allowed[key] {
+			unknown = append(unknown, key)
+		}
 	}
-	if _, ok := d.config["view_suffix"]; !ok {
-		d.config["view_suffix"] = "html"
+	if len(unknown) > 0 {
+		sort.Strings(unknown)
+		return fmt.Errorf("%w: 未知键 %s", ErrInvalidViewConfig, strings.Join(unknown, ", "))
 	}
-	if _, ok := d.config["view_depr"]; !ok {
-		d.config["view_depr"] = "/"
-	}
-}
 
-// Fetch 渲染模板并返回内容
-func (d *GoTemplate) Fetch(tmplName string, data map[string]interface{}) (string, error) {
-	var buf bytes.Buffer
-	err := d.Display(&buf, tmplName, data)
+	viewPath, ok := config["view_path"].(string)
+	viewPath = strings.TrimSpace(viewPath)
+	if !ok || viewPath == "" || strings.ContainsAny(viewPath, "\x00\r\n") {
+		return fmt.Errorf("%w: view_path 必须是非空路径", ErrInvalidViewConfig)
+	}
+	rootPath, err := filepath.Abs(viewPath)
 	if err != nil {
+		return fmt.Errorf("%w: view_path: %v", ErrInvalidViewConfig, err)
+	}
+
+	suffix := defaultViewSuffix
+	if rawSuffix, exists := config["view_suffix"]; exists {
+		text, valid := rawSuffix.(string)
+		if !valid {
+			return fmt.Errorf("%w: view_suffix 必须是字符串", ErrInvalidViewConfig)
+		}
+		suffix = strings.ToLower(strings.TrimPrefix(strings.TrimSpace(text), "."))
+	}
+	if !isValidTemplateSuffix(suffix) {
+		return fmt.Errorf("%w: view_suffix %q 非法", ErrInvalidViewConfig, suffix)
+	}
+
+	cacheEnable := true
+	if rawCache, exists := config["cache"]; exists {
+		value, valid := rawCache.(bool)
+		if !valid {
+			return fmt.Errorf("%w: cache 必须是布尔值", ErrInvalidViewConfig)
+		}
+		cacheEnable = value
+	}
+
+	d.mutex.Lock()
+	d.rootPath = filepath.Clean(rootPath)
+	d.suffix = suffix
+	d.cacheEnable = cacheEnable
+	d.cache = make(map[string]*template.Template)
+	if d.loads == nil {
+		d.loads = make(map[string]*templateLoad)
+	}
+	d.generation++
+	d.mutex.Unlock()
+	return nil
+}
+
+// Fetch 渲染模板并返回字符串。
+func (d *GoTemplate) Fetch(templateName string, data map[string]interface{}) (string, error) {
+	var buffer bytes.Buffer
+	if err := d.Display(&buffer, templateName, data); err != nil {
 		return "", err
 	}
-	return buf.String(), nil
+	return buffer.String(), nil
 }
 
-// Display 渲染模板并写入 writer
-func (d *GoTemplate) Display(w io.Writer, tmplName string, data map[string]interface{}) error {
-	tmpl, err := d.getTemplate(tmplName)
+// Display 渲染模板并写入指定 writer。
+func (d *GoTemplate) Display(writer io.Writer, templateName string, data map[string]interface{}) error {
+	if isNilTemplateWriter(writer) {
+		return ErrInvalidTemplateWriter
+	}
+	tmpl, err := d.getTemplate(templateName)
 	if err != nil {
 		return err
 	}
-	return tmpl.Execute(w, data)
+	return tmpl.Execute(writer, data)
 }
 
-// Exists 检查模板文件是否存在
-func (d *GoTemplate) Exists(tmplName string) bool {
-	path, ok := d.safeTemplatePath(tmplName)
-	if !ok {
-		return false
+// Exists 检查模板是否为根目录内可读取的普通文件，并保留真实文件系统错误。
+func (d *GoTemplate) Exists(templateName string) (bool, error) {
+	snapshot := d.snapshot()
+	candidate, err := safeTemplatePath(snapshot.rootPath, snapshot.suffix, templateName)
+	if err != nil {
+		return false, err
 	}
-	_, err := os.Stat(path)
-	return err == nil
+	file, _, err := openTemplateFile(snapshot.rootPath, candidate)
+	if err != nil {
+		if errors.Is(err, ErrInvalidViewConfig) {
+			return false, err
+		}
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, ErrTemplateNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, file.Close()
 }
 
-// SetFuncMap 设置模板函数映射
-func (d *GoTemplate) SetFuncMap(funcMap map[string]interface{}) {
-	d.config["func_map"] = template.FuncMap(funcMap)
+// SetFuncMap 验证并复制模板函数，成功后原子失效已按旧函数集解析的缓存。
+func (d *GoTemplate) SetFuncMap(funcMap map[string]interface{}) error {
+	if d == nil {
+		return ErrInvalidTemplateFunction
+	}
+	validated, err := validateTemplateFuncMap(funcMap)
+	if err != nil {
+		return err
+	}
+	d.mutex.Lock()
+	d.funcMap = validated
+	d.cache = make(map[string]*template.Template)
+	d.generation++
+	d.mutex.Unlock()
+	return nil
 }
 
-// getTemplate 从缓存获取或解析模板
-func (d *GoTemplate) getTemplate(tmplName string) (*template.Template, error) {
-	path, ok := d.safeTemplatePath(tmplName)
-	if !ok {
-		return nil, fmt.Errorf("非法模板名: %s", tmplName)
+func (d *GoTemplate) getTemplate(templateName string) (*template.Template, error) {
+	if d == nil {
+		return nil, ErrInvalidViewConfig
 	}
+	for {
+		snapshot := d.snapshot()
+		candidate, err := safeTemplatePath(snapshot.rootPath, snapshot.suffix, templateName)
+		if err != nil {
+			return nil, err
+		}
+		if !snapshot.cacheEnable {
+			return parseTemplate(snapshot, candidate)
+		}
 
-	// 检查缓存
-	d.mutex.RLock()
-	if tmpl, ok := d.cache[path]; ok {
-		d.mutex.RUnlock()
-		return tmpl, nil
+		d.mutex.Lock()
+		if d.generation != snapshot.generation {
+			d.mutex.Unlock()
+			continue
+		}
+		if cached := d.cache[candidate]; cached != nil {
+			d.mutex.Unlock()
+			return cached, nil
+		}
+		if currentLoad := d.loads[candidate]; currentLoad != nil && currentLoad.generation == snapshot.generation {
+			done := currentLoad.done
+			d.mutex.Unlock()
+			<-done
+			if currentLoad.invalidated {
+				continue
+			}
+			return currentLoad.template, currentLoad.err
+		}
+		load := &templateLoad{done: make(chan struct{}), generation: snapshot.generation}
+		d.loads[candidate] = load
+		d.mutex.Unlock()
+
+		tmpl, parseErr := parseTemplate(snapshot, candidate)
+		d.mutex.Lock()
+		if d.loads[candidate] == load {
+			delete(d.loads, candidate)
+		}
+		if d.generation != snapshot.generation {
+			load.invalidated = true
+		} else {
+			if parseErr == nil {
+				if cached := d.cache[candidate]; cached != nil {
+					tmpl = cached
+				} else if len(d.cache) < maxCachedTemplates {
+					d.cache[candidate] = tmpl
+				}
+			}
+			load.template = tmpl
+			load.err = parseErr
+		}
+		close(load.done)
+		d.mutex.Unlock()
+		if load.invalidated {
+			continue
+		}
+		return load.template, load.err
 	}
-	d.mutex.RUnlock()
+}
 
-	// 解析模板
-	if _, err := os.Stat(path); err != nil {
-		return nil, fmt.Errorf("模板文件不存在: %s", path)
-	}
-
-	// 创建模板实例并注入自定义函数
-	tmpl := template.New(filepath.Base(path))
-
-	if funcMap, ok := d.config["func_map"].(template.FuncMap); ok {
-		tmpl.Funcs(funcMap)
-	}
-
-	tmpl, err := tmpl.ParseFiles(path)
+func parseTemplate(snapshot templateSnapshot, candidate string) (*template.Template, error) {
+	content, err := readTemplateFile(snapshot.rootPath, candidate)
 	if err != nil {
 		return nil, err
 	}
-
-	// 写入缓存
-	d.mutex.Lock()
-	d.cache[path] = tmpl
-	d.mutex.Unlock()
-
-	return tmpl, nil
+	tmpl := template.New(filepath.Base(candidate))
+	if len(snapshot.funcMap) > 0 {
+		tmpl = tmpl.Funcs(snapshot.funcMap)
+	}
+	return tmpl.Parse(string(content))
 }
 
-// safeTemplatePath 解析模板完整路径，并阻断 ".." 越权与绝对路径逃逸，
-// 防止把用户可控的模板名变成任意文件读取（LFI）。
-// 返回 (绝对路径, 是否合法)。
-func (d *GoTemplate) safeTemplatePath(tmplName string) (string, bool) {
-	viewPath, _ := d.config["view_path"].(string)
-	viewSuffix, _ := d.config["view_suffix"].(string)
-	if viewSuffix == "" {
-		viewSuffix = "html"
+func (d *GoTemplate) snapshot() templateSnapshot {
+	if d == nil {
+		return templateSnapshot{}
 	}
-
-	if hasUnsafeTemplateName(tmplName) {
-		return "", false
+	d.mutex.RLock()
+	defer d.mutex.RUnlock()
+	funcMap := make(template.FuncMap, len(d.funcMap))
+	for name, function := range d.funcMap {
+		funcMap[name] = function
 	}
-
-	// 统一分隔符并清理路径。
-	tmplName = strings.ReplaceAll(tmplName, "\\", "/")
-	if !strings.HasSuffix(tmplName, "."+viewSuffix) {
-		tmplName += "." + viewSuffix
+	return templateSnapshot{
+		rootPath:    d.rootPath,
+		suffix:      d.suffix,
+		cacheEnable: d.cacheEnable,
+		funcMap:     funcMap,
+		generation:  d.generation,
 	}
-	cleanRel := strings.TrimPrefix(path.Clean("/"+tmplName), "/")
-
-	target := filepath.Join(viewPath, filepath.FromSlash(cleanRel))
-
-	// 未配置 view_path 时无基准目录可校验，按清理后的相对路径返回。
-	if strings.TrimSpace(viewPath) == "" {
-		return target, true
-	}
-
-	baseAbs, err := filepath.Abs(viewPath)
-	if err != nil {
-		return "", false
-	}
-	targetAbs, err := filepath.Abs(target)
-	if err != nil {
-		return "", false
-	}
-	// 解析后的路径必须仍位于视图目录内。
-	if targetAbs != baseAbs && !strings.HasPrefix(targetAbs, baseAbs+string(os.PathSeparator)) {
-		return "", false
-	}
-	return targetAbs, true
 }
 
-// hasUnsafeTemplateName 检查模板名中的危险片段，发现后直接拒绝而不是清理后继续使用。
-func hasUnsafeTemplateName(tmplName string) bool {
-	if strings.Contains(tmplName, "\x00") || filepath.IsAbs(tmplName) {
-		return true
+func safeTemplatePath(rootPath, suffix, templateName string) (string, error) {
+	if rootPath == "" {
+		return "", ErrInvalidViewConfig
 	}
+	if hasUnsafeTemplateName(templateName) {
+		return "", fmt.Errorf("%w: %q", ErrUnsafeTemplatePath, templateName)
+	}
+	normalized := strings.ReplaceAll(templateName, "\\", "/")
+	if !strings.HasSuffix(strings.ToLower(normalized), "."+suffix) {
+		normalized += "." + suffix
+	}
+	cleaned := strings.TrimPrefix(path.Clean("/"+normalized), "/")
+	if cleaned == "" || len(cleaned) > maxTemplateNameSize || len(strings.Split(cleaned, "/")) > maxTemplateSegments {
+		return "", fmt.Errorf("%w: %q", ErrUnsafeTemplatePath, templateName)
+	}
+	target, err := filepath.Abs(filepath.Join(rootPath, filepath.FromSlash(cleaned)))
+	if err != nil || !pathWithinTemplateRoot(rootPath, target) {
+		return "", fmt.Errorf("%w: %q", ErrUnsafeTemplatePath, templateName)
+	}
+	return filepath.Clean(target), nil
+}
 
-	normalized := strings.ReplaceAll(tmplName, "\\", "/")
-	if path.IsAbs(normalized) || strings.Contains(normalized, ":") {
+func hasUnsafeTemplateName(templateName string) bool {
+	if templateName == "" || len(templateName) > maxTemplateNameSize || strings.ContainsAny(templateName, "\x00\r\n") || filepath.IsAbs(templateName) {
 		return true
 	}
-	for _, segment := range strings.Split(normalized, "/") {
-		if segment == ".." {
+	normalized := strings.ReplaceAll(templateName, "\\", "/")
+	if path.IsAbs(normalized) || strings.Contains(normalized, ":") || strings.Contains(normalized, "//") {
+		return true
+	}
+	segments := strings.Split(normalized, "/")
+	if len(segments) > maxTemplateSegments {
+		return true
+	}
+	for _, segment := range segments {
+		if segment == "" || segment == "." || segment == ".." {
 			return true
 		}
 	}
 	return false
+}
+
+func openTemplateFile(rootPath, candidate string) (*os.File, os.FileInfo, error) {
+	rootReal, err := filepath.EvalSymlinks(rootPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%w: view_path %q: %w", ErrInvalidViewConfig, rootPath, err)
+	}
+	targetReal, err := filepath.EvalSymlinks(candidate)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil, fmt.Errorf("%w: %w", ErrTemplateNotFound, err)
+		}
+		return nil, nil, err
+	}
+	if !pathWithinTemplateRoot(rootReal, targetReal) {
+		return nil, nil, ErrUnsafeTemplatePath
+	}
+	file, err := os.Open(targetReal)
+	if err != nil {
+		return nil, nil, err
+	}
+	info, statErr := file.Stat()
+	if statErr != nil {
+		_ = file.Close()
+		return nil, nil, statErr
+	}
+	verifiedReal, verifyErr := filepath.EvalSymlinks(candidate)
+	if verifyErr != nil {
+		_ = file.Close()
+		return nil, nil, verifyErr
+	}
+	if !pathWithinTemplateRoot(rootReal, verifiedReal) {
+		_ = file.Close()
+		return nil, nil, ErrUnsafeTemplatePath
+	}
+	verifiedInfo, verifiedStatErr := os.Stat(verifiedReal)
+	if verifiedStatErr != nil {
+		_ = file.Close()
+		return nil, nil, verifiedStatErr
+	}
+	if !os.SameFile(info, verifiedInfo) || !info.Mode().IsRegular() {
+		_ = file.Close()
+		return nil, nil, ErrTemplateNotRegular
+	}
+	if info.Size() < 0 || info.Size() > maxTemplateFileSize {
+		_ = file.Close()
+		return nil, nil, fmt.Errorf("%w: %d", ErrTemplateTooLarge, info.Size())
+	}
+	return file, info, nil
+}
+
+func readTemplateFile(rootPath, candidate string) (content []byte, err error) {
+	file, _, err := openTemplateFile(rootPath, candidate)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		err = errors.Join(err, file.Close())
+	}()
+	content, err = io.ReadAll(io.LimitReader(file, maxTemplateFileSize+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(content) > maxTemplateFileSize {
+		return nil, ErrTemplateTooLarge
+	}
+	return content, nil
+}
+
+func pathWithinTemplateRoot(root, target string) bool {
+	relative, err := filepath.Rel(root, target)
+	if err != nil || relative == ".." || filepath.IsAbs(relative) {
+		return false
+	}
+	return !strings.HasPrefix(relative, ".."+string(os.PathSeparator))
+}
+
+func isValidTemplateSuffix(suffix string) bool {
+	if suffix == "" || len(suffix) > 16 {
+		return false
+	}
+	for _, char := range suffix {
+		if !(char >= 'a' && char <= 'z') && !(char >= '0' && char <= '9') {
+			return false
+		}
+	}
+	return true
+}
+
+func validateTemplateFuncMap(source map[string]interface{}) (result template.FuncMap, err error) {
+	result = make(template.FuncMap, len(source))
+	for name, function := range source {
+		value := reflect.ValueOf(function)
+		if function == nil || value.Kind() != reflect.Func || value.IsNil() {
+			return nil, fmt.Errorf("%w: %s", ErrInvalidTemplateFunction, name)
+		}
+		result[name] = function
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			result = nil
+			err = fmt.Errorf("%w: %v", ErrInvalidTemplateFunction, recovered)
+		}
+	}()
+	template.New("function-validation").Funcs(result)
+	return result, nil
+}
+
+func isNilTemplateWriter(writer io.Writer) bool {
+	if writer == nil {
+		return true
+	}
+	value := reflect.ValueOf(writer)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
 }

@@ -1,20 +1,24 @@
 package framework
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
+	"math"
+	"net/url"
 	"os"
-	"reflect"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"thinkgo/framework/config"
 	"thinkgo/framework/db"
-	_ "thinkgo/framework/db/connector" // Register all drivers
+	_ "thinkgo/framework/db/connector" // 注册全部 SQL 驱动
 	"time"
-	// _ "thinkgo/framework/db/connector/mongo" // Register MongoDB driver
-	// _ "thinkgo/framework/db/connector/neo4j" // Register Neo4j driver
+	// _ "thinkgo/framework/db/connector/mongo" // 按需注册 MongoDB 驱动
+	// _ "thinkgo/framework/db/connector/neo4j" // 按需注册 Neo4j 驱动
 	"thinkgo/framework/cache"
-	cacheDriver "thinkgo/framework/cache/driver"
 	"thinkgo/framework/cookie"
 	"thinkgo/framework/debug"
 	"thinkgo/framework/env"
@@ -25,73 +29,46 @@ import (
 	"thinkgo/framework/middleware"
 	"thinkgo/framework/route"
 	"thinkgo/framework/session"
-	sessionDriver "thinkgo/framework/session/driver"
 	"thinkgo/framework/view"
 	"thinkgo/framework/view/driver"
 )
-
-// ControllerRegistry 控制器类型注册表（存储 reflect.Type，每次请求创建新实例）
-var ControllerRegistry = make(map[string]reflect.Type)
-
-// RegisterController 注册控制器（提取类型信息，而非存储实例）
-// 每次请求时通过 reflect.New() 创建新实例，避免并发时状态覆盖
-func RegisterController(name string, controller interface{}) {
-	t := reflect.TypeOf(controller)
-	if t.Kind() == reflect.Ptr {
-		t = t.Elem()
-	}
-	ControllerRegistry[name] = t
-}
-
-// RouteRegistry stores registered route loaders
-var RouteRegistry = []func(app *App){}
-
-// RegisterRouteLoader registers a route loader
-func RegisterRouteLoader(loader func(app *App)) {
-	RouteRegistry = append(RouteRegistry, loader)
-}
-
-// MiddlewareRegistry stores registered global middleware
-var MiddlewareRegistry = []middleware.Handler{}
-
-// RegisterGlobalMiddleware registers a global middleware
-func RegisterGlobalMiddleware(handler middleware.Handler) {
-	MiddlewareRegistry = append(MiddlewareRegistry, handler)
-}
 
 // App 应用实例
 // 对应 ThinkPHP 8 的 think\App
 type App struct {
 	*Container
-	BasePath        string
-	DebugMode       bool
-	Route           *route.Router
-	Middleware      *middleware.Pipeline
-	DB              *db.DB
-	DBManager       *db.Manager
-	Config          *config.Config
-	Env             *env.Env
-	Log             *log.Log
-	View            *view.View
-	Cache           *cache.Cache
-	Event           *event.Dispatcher
-	Lang            *lang.Lang
-	Cookie          *cookie.Cookie
-	Session         *session.Session
-	Debug           *debug.Debug
-	Kernel          Kernel
-	startupErr      error
-	providers       []ServiceProvider // 服务提供者列表
-	providerLock    sync.Mutex        // 保护 Provider 生命周期状态
-	providersBooted bool              // 标记 Provider 是否已启动
-	sessionGCStop   func()            // 停止后台会话回收协程
+	BasePath            string
+	DebugMode           bool
+	Route               *route.Router
+	Middleware          *middleware.Pipeline
+	DB                  *db.DB
+	DBManager           *db.Manager
+	Config              *config.Config
+	Env                 *env.Env
+	Log                 *log.Log
+	View                *view.View
+	Cache               *cache.Cache
+	Event               *event.Dispatcher
+	Lang                *lang.Lang
+	Cookie              *cookie.Cookie
+	Session             *session.Session
+	Debug               *debug.Debug
+	Kernel              Kernel
+	startupMu           sync.RWMutex
+	startupErr          error
+	startupErrorCount   int
+	startupErrorOmitted int
+	initializeOnce      sync.Once
+	providers           providerLifecycle
+	lifecycle           appLifecycle
+	sessionGCStop       func() // 停止后台会话回收协程
 	// skipDatabaseInit 为 true 时，Initialize 跳过数据库连接。
 	// 供不需要数据库的控制台命令（version/list/make:* 等）使用，
 	// 避免每次执行命令都尝试连库并打印连接失败日志。
 	skipDatabaseInit bool
 }
 
-// NewApp creates a new App instance
+// NewApp 创建完整初始化的应用实例。
 func NewApp(basePath ...string) *App {
 	return newApp(false, basePath...)
 }
@@ -105,10 +82,34 @@ func NewConsoleApp(basePath ...string) *App {
 // newApp 构建并初始化应用实例，skipDatabase 控制是否跳过数据库连接。
 func newApp(skipDatabase bool, basePath ...string) *App {
 	var path string
+	constructionErrors := make([]error, 0, 2)
+	if len(basePath) > 1 {
+		constructionErrors = append(constructionErrors, fmt.Errorf("应用根目录最多只能指定一次"))
+	}
 	if len(basePath) > 0 {
-		path = basePath[0]
+		path = strings.TrimSpace(basePath[0])
+		if path == "" {
+			constructionErrors = append(constructionErrors, fmt.Errorf("应用根目录不能为空"))
+			path = "."
+		}
 	} else {
-		path, _ = os.Getwd()
+		var err error
+		path, err = os.Getwd()
+		if err != nil {
+			constructionErrors = append(constructionErrors, fmt.Errorf("读取当前工作目录失败: %w", err))
+			path = "."
+		}
+	}
+	absolutePath, err := filepath.Abs(path)
+	if err != nil {
+		constructionErrors = append(constructionErrors, fmt.Errorf("解析应用根目录失败: %w", err))
+	} else {
+		path = filepath.Clean(absolutePath)
+	}
+	if info, statErr := os.Stat(path); statErr != nil {
+		constructionErrors = append(constructionErrors, fmt.Errorf("访问应用根目录失败: %w", statErr))
+	} else if !info.IsDir() {
+		constructionErrors = append(constructionErrors, fmt.Errorf("应用根目录不是目录: %s", path))
 	}
 
 	app := &App{
@@ -124,7 +125,10 @@ func newApp(skipDatabase bool, basePath ...string) *App {
 		Debug:            debug.NewDebug(),
 		skipDatabaseInit: skipDatabase,
 	}
-	app.Initialize()
+	for _, constructionErr := range constructionErrors {
+		app.recordStartupError(constructionErr)
+	}
+	_ = app.Initialize()
 
 	return app
 }
@@ -132,128 +136,72 @@ func newApp(skipDatabase bool, basePath ...string) *App {
 // StartupError 返回初始化阶段记录的启动错误（无错误时为 nil）。
 // 供绕过 App.Run 直接驱动内核的调用方（如控制台 run 命令）在启动前自检。
 func (app *App) StartupError() error {
+	if app == nil {
+		return ErrNilApplication
+	}
+	app.startupMu.RLock()
+	defer app.startupMu.RUnlock()
+	if app.startupErrorOmitted > 0 {
+		return fmt.Errorf("%w\n另有省略 %d 条启动错误", app.startupErr, app.startupErrorOmitted)
+	}
 	return app.startupErr
 }
 
-// Run 启动应用
-// 通过 Kernel 接口解耦 HTTP 服务与框架核心，避免循环依赖
-func (app *App) Run() {
-	defer func() {
-		if app.sessionGCStop != nil {
-			app.sessionGCStop()
-		}
-		if app.DBManager != nil {
-			_ = app.DBManager.Close()
-		} else if app.DB != nil {
-			_ = app.DB.Close()
-		}
-		if app.Log != nil {
-			app.Log.Shutdown()
-		}
-	}()
-
-	if app.startupErr != nil {
-		if app.Log != nil {
-			app.Log.Error("Application startup failed: " + app.startupErr.Error())
-		}
-		panic(app.startupErr)
-	}
-	// 启动所有服务提供者
-	app.BootProviders()
-
-	if app.Kernel != nil {
-		if err := app.Kernel.Run(); err != nil {
-			if app.Log != nil {
-				app.Log.Error("Server error: " + err.Error())
-			}
-			fmt.Printf("Server error: %v\n", err)
-		}
-	} else {
-		if app.Log != nil {
-			app.Log.Error("Http Kernel not initialized.")
-		}
-		fmt.Println("Http Kernel not initialized.")
-	}
-}
-
-// RegisterProvider 注册服务提供者
-// 对应 ThinkPHP 8 的 $app->register()
-func (app *App) RegisterProvider(provider ServiceProvider) {
-	if provider == nil {
-		return
-	}
-	// 先完成 Register，再进入可启动列表，避免并发 BootProviders 看到半注册 Provider。
-	provider.Register(app)
-
-	app.providerLock.Lock()
-	app.providers = append(app.providers, provider)
-	bootImmediately := app.providersBooted
-	app.providerLock.Unlock()
-
-	if bootImmediately {
-		provider.Boot(app)
-	}
-}
-
-// BootProviders 启动所有已注册的服务提供者
-// 在所有 Provider 的 Register 完成后调用各自的 Boot
-func (app *App) BootProviders() {
-	app.providerLock.Lock()
-	if app.providersBooted {
-		app.providerLock.Unlock()
-		return
-	}
-	providers := append([]ServiceProvider(nil), app.providers...)
-	app.providersBooted = true
-	app.providerLock.Unlock()
-
-	for _, provider := range providers {
-		provider.Boot(app)
-	}
-}
-
-// Kernel interface
+// Kernel 定义应用运行内核。
 type Kernel interface {
 	Run() error
 }
 
-// IsDebug returns true if debug mode is on
+// IsDebug 返回是否启用调试模式。
 func (app *App) IsDebug() bool {
 	return app.DebugMode
 }
 
-// Environment returns the current environment
+// Environment 返回当前运行环境，默认 production。
 func (app *App) Environment() string {
-	env := os.Getenv("APP_ENV")
-	if env == "" {
+	if app == nil || app.Env == nil {
 		return "production"
 	}
-	return env
+	environmentName := strings.TrimSpace(app.Env.Get("APP_ENV"))
+	if environmentName == "" {
+		return "production"
+	}
+	return environmentName
 }
 
 // ==================== URL生成方法 ====================
 
 // Domain 获取服务器域名
 func (app *App) Domain() string {
-	return app.Env.Get("SERVER_DOMAIN", "https://localhost")
+	if app == nil || app.Env == nil {
+		return "https://localhost"
+	}
+	domain := strings.TrimSpace(app.Env.Get("SERVER_DOMAIN", "https://localhost"))
+	if domain == "" || strings.ContainsAny(domain, "\r\n\t") {
+		return "https://localhost"
+	}
+	return domain
 }
 
 // URL 生成完整的URL
 // 如果path已经是完整URL（以http://或https://开头），则直接返回
 // 否则拼接服务器域名和路径
 func (app *App) URL(path string) string {
-	if path == "" {
+	path = strings.TrimSpace(path)
+	if path == "" || strings.ContainsAny(path, "\r\n\t") {
 		return ""
 	}
-	// 如果已经是完整URL，直接返回
-	if strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://") {
+	// 完整 URL 只允许带 host 的 HTTP(S)，避免畸形地址和协议绕过。
+	lowerPath := strings.ToLower(path)
+	if strings.HasPrefix(lowerPath, "http://") || strings.HasPrefix(lowerPath, "https://") {
+		parsed, err := url.ParseRequestURI(path)
+		if err != nil || parsed.Host == "" {
+			return ""
+		}
 		return path
 	}
-	// 确保path以/开头
-	if !strings.HasPrefix(path, "/") {
-		path = "/" + path
-	}
-	return app.Domain() + path
+	domain := strings.TrimRight(app.Domain(), "/")
+	return domain + "/" + strings.TrimLeft(path, "/")
 }
 
 // AssetURL 生成静态资源URL
@@ -261,28 +209,26 @@ func (app *App) AssetURL(path string) string {
 	return app.URL(path)
 }
 
-// Initialize initializes the application
-func (app *App) Initialize() {
+// initialize 执行一次应用组件装配，由 Initialize 的 sync.Once 保护。
+func (app *App) initialize() {
 	// 1. Load .env
-	app.Env.Load(app.BasePath + "/.env")
+	if err := app.Env.Load(app.BasePath + "/.env"); err != nil {
+		app.recordStartupError(fmt.Errorf("load environment failed: %w", err))
+	}
 
 	// 2. Load config files
-	if err := app.Config.LoadAll(app.BasePath + "/config"); err != nil && app.startupErr == nil {
-		app.startupErr = fmt.Errorf("load config failed: %w", err)
+	if err := app.Config.LoadAll(app.BasePath + "/config"); err != nil {
+		app.recordStartupError(fmt.Errorf("load config failed: %w", err))
 	}
 
 	// 3. Override with Env
-	// App Config
-	if val := app.Env.Get("APP_DEBUG"); val != "" {
-		app.Config.Set("app.app_debug", val == "true")
-	}
-	if val := app.Env.Get("APP_TRACE"); val != "" {
-		app.Config.Set("app.app_trace", val == "true")
-	}
+	// 应用配置覆盖。
+	app.applyBooleanEnvironmentOverride("APP_DEBUG", "app.app_debug")
+	app.applyBooleanEnvironmentOverride("APP_TRACE", "app.app_trace")
 	app.DebugMode = app.Config.GetBool("app.app_debug", false)
 	app.Debug.Enabled = app.Config.GetBool("app.app_trace", false)
 
-	// Server Config
+	// 服务器配置覆盖。
 	// 通过点路径 Set 覆盖，所有写入经由持锁的 Set 完成，
 	// 不再依赖修改 Get 返回的内部 map 引用（Set 会自动创建缺失的 tls 子树）。
 	if val := app.Env.Get("SERVER_HOST"); val != "" {
@@ -292,14 +238,10 @@ func (app *App) Initialize() {
 		// 环境变量覆盖端口配置（字符串类型，由 Http.parseConfig 处理类型转换）
 		app.Config.Set("app.server.port", val)
 	}
-	if val := app.Env.Get("SERVER_HTTP3"); val != "" {
-		app.Config.Set("app.server.http3", val == "true")
-	}
+	app.applyBooleanEnvironmentOverride("SERVER_HTTP3", "app.server.http3")
 
-	// TLS Config
-	if val := app.Env.Get("SERVER_TLS_ENABLE"); val != "" {
-		app.Config.Set("app.server.tls.enable", val == "true")
-	}
+	// TLS 配置覆盖。
+	app.applyBooleanEnvironmentOverride("SERVER_TLS_ENABLE", "app.server.tls.enable")
 	if val := app.Env.Get("SERVER_TLS_CERT"); val != "" {
 		app.Config.Set("app.server.tls.cert_file", val)
 	}
@@ -310,66 +252,57 @@ func (app *App) Initialize() {
 	// 3.5 Init Log
 	logConfig := app.Config.GetMap("log")
 	defaultChannel := "file"
-	if v, ok := logConfig["default"].(string); ok {
-		defaultChannel = v
-	}
-
-	if channels, ok := logConfig["channels"].(map[string]interface{}); ok {
-		if channelConfig, ok := channels[defaultChannel].(map[string]interface{}); ok {
-			// 驱动类型
-			driverType := "file"
-			if t, ok := channelConfig["type"].(string); ok {
-				driverType = t
-			}
-
-			var lDriver log.Driver
-			switch driverType {
-			case "file":
-				path := app.BasePath + RuntimeLogDir
-				if p, ok := channelConfig["path"].(string); ok {
-					path = p
-				}
-				// 文件大小轮转限制（字节）
-				var maxFileSize int64
-				if v, ok := channelConfig["max_file_size"].(float64); ok {
-					maxFileSize = int64(v)
-				}
-				lDriver = logDriver.NewFile(path, maxFileSize)
-			default:
-				lDriver = logDriver.NewFile(app.BasePath + RuntimeLogDir)
-			}
-
-			app.Log = log.NewLog(lDriver)
-
-			// 调试模式下启用控制台彩色输出和调用位置记录
-			if app.DebugMode {
-				app.Log.AddDriver(logDriver.NewConsole())
-				app.Log.SetCallerEnabled(true)
-			}
-
-			// 日志级别过滤
-			if levels, ok := channelConfig["level"].([]interface{}); ok {
-				lvlStrs := make([]string, 0)
-				for _, l := range levels {
-					if s, ok := l.(string); ok {
-						lvlStrs = append(lvlStrs, s)
-					}
-				}
-				app.Log.SetLevels(lvlStrs)
-			}
-			app.Instance("log", app.Log)
+	if rawDefault, exists := logConfig["default"]; exists {
+		if value, ok := rawDefault.(string); ok && strings.TrimSpace(value) != "" {
+			defaultChannel = strings.TrimSpace(value)
+		} else {
+			app.recordStartupError(fmt.Errorf("日志配置 default 必须是非空字符串"))
 		}
 	}
-	if channels, ok := logConfig["channels"].(map[string]interface{}); ok && app.Log != nil {
+
+	channels, channelsValid := logConfig["channels"].(map[string]interface{})
+	if !channelsValid {
+		app.recordStartupError(fmt.Errorf("日志配置 channels 必须是对象"))
+	} else {
+		rawDefaultChannel, exists := channels[defaultChannel]
+		channelConfig, configValid := rawDefaultChannel.(map[string]interface{})
+		if !exists || !configValid {
+			app.recordStartupError(fmt.Errorf("默认日志通道 %q 不存在或配置无效", defaultChannel))
+		} else {
+			configuredLog, err := createAppLogChannel(app, channelConfig, app.DebugMode)
+			if err != nil {
+				app.recordStartupError(fmt.Errorf("初始化默认日志通道 %q 失败: %w", defaultChannel, err))
+			} else {
+				previousLog := app.Log
+				app.Log = configuredLog
+				if previousLog != nil && previousLog != configuredLog {
+					if err := previousLog.Close(); err != nil {
+						app.recordStartupError(fmt.Errorf("关闭初始日志通道失败: %w", err))
+					}
+				}
+				app.Instance("log", app.Log)
+			}
+		}
+	}
+	if channelsValid && app.Log != nil {
 		for name, rawChannelConfig := range channels {
 			if name == defaultChannel {
 				continue
 			}
 			channelConfig, ok := rawChannelConfig.(map[string]interface{})
 			if !ok {
+				app.recordStartupError(fmt.Errorf("日志通道 %q 的配置必须是对象", name))
 				continue
 			}
-			app.Log.RegisterChannel(name, createAppLogChannel(app, channelConfig, false))
+			channel, err := createAppLogChannel(app, channelConfig, false)
+			if err != nil {
+				app.recordStartupError(fmt.Errorf("初始化日志通道 %q 失败: %w", name, err))
+				continue
+			}
+			if err := app.Log.RegisterChannel(name, channel); err != nil {
+				_ = channel.Close()
+				app.recordStartupError(fmt.Errorf("注册日志通道 %q 失败: %w", name, err))
+			}
 		}
 	}
 
@@ -379,110 +312,76 @@ func (app *App) Initialize() {
 	if _, ok := langConfig["default_lang"]; !ok {
 		langConfig["default_lang"] = app.Config.Get("app.default_lang", "zh-cn")
 	}
-	app.Lang.Init(langConfig)
-	if err := app.Lang.LoadAll(app.BasePath + "/app/lang"); err != nil && app.startupErr == nil {
-		app.startupErr = fmt.Errorf("load language files failed: %w", err)
+	if err := app.Lang.Init(langConfig); err != nil {
+		app.recordStartupError(fmt.Errorf("初始化多语言配置失败: %w", err))
+	} else if err := app.Lang.LoadAll(app.BasePath + "/app/lang"); err != nil {
+		app.recordStartupError(fmt.Errorf("加载语言文件失败: %w", err))
 	}
 	// 5. Init Cache
 	cacheConfig := app.Config.GetMap("cache")
-	defaultStore := "file"
-	if v, ok := cacheConfig["default"].(string); ok {
-		defaultStore = v
+	configuredCache, err := createAppCache(app, cacheConfig)
+	if err != nil {
+		app.recordStartupError(fmt.Errorf("初始化缓存失败: %w", err))
+		// 保留非空服务实例，但不安装隐式驱动；任何缓存调用都会返回明确错误。
+		configuredCache = cache.NewCache(app.Debug, nil)
 	}
-
-	var cDriver cache.Driver
-	if stores, ok := cacheConfig["stores"].(map[string]interface{}); ok {
-		if storeConfig, ok := stores[defaultStore].(map[string]interface{}); ok {
-			// 缺省或类型非法时回退到 file，避免启动期类型断言 panic。
-			driverType, _ := storeConfig["type"].(string)
-			switch driverType {
-			case "redis":
-				cDriver = cacheDriver.NewRedis(storeConfig)
-			case "file":
-				path := app.BasePath + RuntimeCacheDir
-				if p, ok := storeConfig["path"].(string); ok {
-					path = p
-				}
-				cDriver = cacheDriver.NewFile(path)
-			default:
-				cDriver = cacheDriver.NewFile(app.BasePath + RuntimeCacheDir)
-			}
-		}
-	}
-	if cDriver == nil {
-		cDriver = cacheDriver.NewFile(app.BasePath + RuntimeCacheDir)
-	}
-	app.Cache = cache.NewCache(app.Debug, cDriver)
-	if stores, ok := cacheConfig["stores"].(map[string]interface{}); ok {
-		for name, rawStoreConfig := range stores {
-			if name == defaultStore {
-				continue
-			}
-			storeConfig, ok := rawStoreConfig.(map[string]interface{})
-			if !ok {
-				continue
-			}
-			app.Cache.RegisterStore(name, createAppCacheDriver(app, storeConfig))
-		}
-	}
+	app.Cache = configuredCache
 	app.Instance("cache", app.Cache)
 
 	// 6. Init View
 	viewConfig := app.Config.GetMap("view")
 	normalizeViewPath(app.BasePath, viewConfig)
 	app.View = view.NewView(app.Debug, viewConfig)
-	app.View.SetDriver(driver.NewGoTemplate())
-
-	// Register global view functions
-	app.View.SetFuncMap(map[string]interface{}{
-		"lang": func(key string) string {
-			return app.Lang.Get(key, nil, "")
-		},
-	})
+	if err := app.View.SetDriver(driver.NewGoTemplate()); err != nil {
+		app.recordStartupError(fmt.Errorf("初始化视图驱动失败: %w", err))
+	} else {
+		// 仅在驱动成功安装后注册函数，避免同一根因产生重复启动错误。
+		if err := app.View.SetFuncMap(map[string]interface{}{
+			"lang": func(key string) string {
+				return app.Lang.Get(key, nil, "")
+			},
+		}); err != nil {
+			app.recordStartupError(fmt.Errorf("注册视图函数失败: %w", err))
+		}
+	}
 
 	app.Instance("view", app.View)
 
 	// 7. Init Cookie
 	cookieConfig := app.Config.GetMap("cookie")
-	app.Cookie = cookie.NewCookie(cookieConfig)
+	app.Cookie, err = createAppCookie(cookieConfig)
+	if err != nil {
+		app.recordStartupError(fmt.Errorf("初始化 Cookie 失败: %w", err))
+		app.Cookie = fallbackAppCookie()
+	}
+	app.Instance("cookie", app.Cookie)
 
 	// 8. Init Session
 	sessionConfig := app.Config.GetMap("session")
-	sessDriverType := "file"
-	if t, ok := sessionConfig["type"].(string); ok {
-		sessDriverType = t
+	app.Session, err = createAppSession(app, sessionConfig, app.Cookie)
+	if err != nil {
+		app.recordStartupError(fmt.Errorf("初始化 Session 失败: %w", err))
+		app.Session = fallbackAppSession(app.Cookie)
 	}
-	var sessDriver session.Driver
-	switch sessDriverType {
-	case "file":
-		path := app.BasePath + RuntimeSessionDir
-		if p, ok := sessionConfig["path"].(string); ok {
-			path = p
-		}
-		sessDriver = sessionDriver.NewFile(path)
-	case "memory":
-		sessDriver = sessionDriver.NewMemory()
-	default:
-		sessDriver = sessionDriver.NewFile(app.BasePath + RuntimeSessionDir)
-	}
-	app.Session = session.NewSession(sessionConfig, sessDriver, app.Cookie)
 	app.Session.SetLogger(app.Log)
+	app.Instance("session", app.Session)
 
 	// 9. Init Database
 	dbConfigData := app.Config.GetMap("database")
-	defaultConn := "mysql"
-	if v, ok := dbConfigData["default"].(string); ok {
-		defaultConn = v
+	defaultConn, databaseRootErr := readDefaultDatabaseConnection(dbConfigData)
+	if databaseRootErr != nil {
+		app.recordStartupError(databaseRootErr)
+		defaultConn = "default"
 	}
 	app.DBManager = db.NewManager(defaultConn)
 
 	// 控制台命令可跳过数据库连接（version/list/make:* 等不依赖数据库）。
-	if !app.skipDatabaseInit {
+	if !app.skipDatabaseInit && databaseRootErr == nil {
 		app.initDatabaseConnections(dbConfigData, defaultConn)
 	}
 
 	// 10. 注册控制器类型到容器（使用工厂模式，避免并发请求复用同一实例）
-	for name, controllerType := range ControllerRegistry {
+	for name, controllerType := range snapshotControllerRegistry() {
 		app.BindFactory(name, controllerType)
 	}
 
@@ -494,7 +393,7 @@ func (app *App) Initialize() {
 	}
 	app.Middleware.Pipe(recovery.Handle)
 
-	// Session
+	// 按配置注册 Session 中间件和回收任务。
 	if app.Config.GetBool("app.session_enable", false) {
 		sessionMiddleware := &middleware.Session{Manager: app.Session}
 		app.Middleware.Pipe(sessionMiddleware.Handle)
@@ -502,23 +401,28 @@ func (app *App) Initialize() {
 		app.sessionGCStop = app.Session.StartGarbageCollector(time.Hour)
 	}
 
-	// Trace
+	// 按配置注册 Trace 中间件。
 	if app.Config.GetBool("app.app_trace", false) {
 		trace := &middleware.Trace{Debug: app.Debug}
 		app.Middleware.Pipe(trace.Handle)
 	}
 
 	// CSRF：注册别名供路由/控制器按需启用；当 app.csrf_enable=true 时对全局生效。
-	app.Middleware.Alias("csrf", middleware.Csrf())
+	csrfHandler, csrfErr := createAppCSRF(app.Config.GetMap("csrf"), app.Cookie)
+	if csrfErr != nil {
+		app.recordStartupError(fmt.Errorf("初始化 CSRF 失败: %w", csrfErr))
+		csrfHandler = unavailableCSRFHandler
+	}
+	app.Middleware.Alias("csrf", csrfHandler)
 	if app.Config.GetBool("app.csrf_enable", false) {
 		app.Middleware.PipeByName("csrf")
 	}
 
-	// Lang
+	// 注册请求语言解析中间件。
 	app.Middleware.Pipe(app.LoadLangPack())
 
-	// User Middleware
-	for _, handler := range MiddlewareRegistry {
+	// 追加应用层全局中间件快照。
+	for _, handler := range snapshotMiddlewareRegistry() {
 		app.Middleware.Pipe(handler)
 	}
 
@@ -527,68 +431,95 @@ func (app *App) Initialize() {
 	app.applyRouteConfig()
 
 	// 12. Load Routes
-	for _, loader := range RouteRegistry {
-		loader(app)
+	for _, loader := range snapshotRouteRegistry() {
+		if err := safeLoadRoutes(loader, app); err != nil {
+			app.recordStartupError(fmt.Errorf("加载应用路由失败: %w", err))
+		}
 	}
-
-	// 触发路由加载完成事件（对应 ThinkPHP 的 RouteLoaded）
-	app.Event.Dispatch(event.NewRouteLoadedEvent())
-
-	// 触发应用初始化完成事件（对应 ThinkPHP 的 AppInit）
-	app.Event.Dispatch(event.NewAppInitEvent())
 }
 
 // initDatabaseConnections 按配置建立数据库连接，并把默认连接绑定到 app.DB。
 func (app *App) initDatabaseConnections(dbConfigData map[string]interface{}, defaultConn string) {
-	if conns, ok := dbConfigData["connections"].(map[string]interface{}); ok && len(conns) > 0 {
-		for name, rawConnConfig := range conns {
-			connConfig, ok := rawConnConfig.(map[string]interface{})
-			if !ok {
-				continue
-			}
-
-			dbConfig := readDatabaseConfig(connConfig)
-			if name == defaultConn {
-				applyDatabaseEnvOverrides(app, &dbConfig)
-			}
-			applyDatabaseFallbacks(&dbConfig)
-
-			database, err := db.Connect(dbConfig)
-			if err != nil {
-				app.Log.Error("Database connection failed: " + err.Error())
-				if app.startupErr == nil {
-					app.startupErr = fmt.Errorf("database connection failed: %w", err)
-				}
-				fmt.Printf("Database connection failed: %v\n", err)
-				continue
-			}
-
-			database.SetLogger(app.Log)
-			app.DBManager.Add(name, database)
-			if name == defaultConn || app.DB == nil {
-				app.DB = database
-			}
-		}
+	rawConnections, exists := dbConfigData["connections"]
+	connections, ok := rawConnections.(map[string]interface{})
+	if !exists || !ok || len(connections) == 0 {
+		app.recordStartupError(fmt.Errorf("%w: database.connections 必须是非空对象", db.ErrInvalidDatabaseConfig))
+		return
+	}
+	if _, exists := connections[defaultConn]; !exists {
+		app.recordStartupError(fmt.Errorf("%w: 默认连接 %q 未在 database.connections 中声明", db.ErrInvalidDatabaseConfig, defaultConn))
 	}
 
-	if app.DB == nil {
-		dbConfig := db.Config{}
-		applyDatabaseEnvOverrides(app, &dbConfig)
-		applyDatabaseFallbacks(&dbConfig)
+	names := make([]string, 0, len(connections))
+	for name := range connections {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if err := db.ValidateConnectionName(name); err != nil {
+			app.recordStartupError(fmt.Errorf("database connection %q invalid: %w", name, err))
+			continue
+		}
+		connConfig, ok := connections[name].(map[string]interface{})
+		if !ok {
+			app.recordStartupError(fmt.Errorf("%w: 数据库连接 %q 配置必须是对象", db.ErrInvalidDatabaseConfig, name))
+			continue
+		}
 
-		database, err := db.Connect(dbConfig)
+		databaseConfig, err := readDatabaseConfig(connConfig)
 		if err != nil {
-			app.Log.Error("Database connection failed: " + err.Error())
-			if app.startupErr == nil {
-				app.startupErr = fmt.Errorf("database connection failed: %w", err)
+			app.recordStartupError(fmt.Errorf("database connection %q invalid: %w", name, err))
+			continue
+		}
+		if name == defaultConn {
+			if err := applyDatabaseEnvOverrides(app, &databaseConfig); err != nil {
+				app.recordStartupError(fmt.Errorf("database connection %q environment invalid: %w", name, err))
+				continue
 			}
-			fmt.Printf("Database connection failed: %v\n", err)
-		} else {
-			database.SetLogger(app.Log)
+		}
+		applyDatabaseFallbacks(&databaseConfig)
+
+		database, err := db.Connect(databaseConfig)
+		if err != nil {
+			// 数据库连接失败不阻塞应用启动——仅记录警告，访问时按需报错。
+			app.Log.Warning(fmt.Sprintf("数据库连接 %q 失败（应用仍可启动，但使用数据库的功能不可用）: %v", name, err))
+			continue
+		}
+		database.SetLogger(app.Log)
+		if err := app.DBManager.Add(name, database); err != nil {
+			closeErr := database.Close()
+			app.recordStartupError(errors.Join(fmt.Errorf("database connection %q registration failed: %w", name, err), closeErr))
+			continue
+		}
+		if name == defaultConn {
 			app.DB = database
-			app.DBManager.Add(defaultConn, database)
 		}
 	}
+}
+
+func readDefaultDatabaseConnection(config map[string]interface{}) (string, error) {
+	if len(config) == 0 {
+		return "", fmt.Errorf("%w: database 配置不能为空", db.ErrInvalidDatabaseConfig)
+	}
+	keys := make([]string, 0, len(config))
+	for key := range config {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if key != "default" && key != "connections" {
+			return "", fmt.Errorf("%w: database 包含未知字段 %q", db.ErrInvalidDatabaseConfig, key)
+		}
+	}
+	value, exists := config["default"]
+	defaultConnection, ok := value.(string)
+	if !exists || !ok || strings.TrimSpace(defaultConnection) != defaultConnection || defaultConnection == "" {
+		return "", fmt.Errorf("%w: database.default 必须是非空字符串", db.ErrInvalidDatabaseConfig)
+	}
+	if err := db.ValidateConnectionName(defaultConnection); err != nil {
+		return "", err
+	}
+	return defaultConnection, nil
 }
 
 // applyRouteConfig 把 config/route.json 配置接入路由器。
@@ -600,10 +531,14 @@ func (app *App) applyRouteConfig() {
 	}
 
 	if controller, ok := routeConfig["default_controller"].(string); ok && controller != "" {
-		app.Route.SetDefaultController(controller)
+		if err := app.Route.SetDefaultController(controller); err != nil {
+			app.recordStartupError(fmt.Errorf("设置默认路由控制器失败: %w", err))
+		}
 	}
 	if action, ok := routeConfig["default_action"].(string); ok && action != "" {
-		app.Route.SetDefaultAction(action)
+		if err := app.Route.SetDefaultAction(action); err != nil {
+			app.recordStartupError(fmt.Errorf("设置默认路由动作失败: %w", err))
+		}
 	}
 
 	// 安全基线：默认仅允许显式注册的路由（mustRoute=true）。
@@ -616,7 +551,9 @@ func (app *App) applyRouteConfig() {
 	case string:
 		mustRoute = !(v == "false" || v == "0")
 	}
-	app.Route.EnableAutoRoute(!mustRoute)
+	if err := app.Route.EnableAutoRoute(!mustRoute); err != nil {
+		app.recordStartupError(fmt.Errorf("设置自动路由开关失败: %w", err))
+	}
 }
 
 // normalizeViewPath 规范化视图目录配置，避免空字符串触发越界，并统一相对路径基准。
@@ -637,196 +574,249 @@ func normalizeViewPath(basePath string, viewConfig map[string]interface{}) {
 	}
 }
 
-// applyDatabaseEnvOverrides 用环境变量覆盖数据库配置，避免部署环境必须改配置文件。
-func applyDatabaseEnvOverrides(app *App, dbConfig *db.Config) {
-	if app == nil || dbConfig == nil {
+// applyBooleanEnvironmentOverride 严格解析布尔环境变量，存在但非法时记录启动错误。
+func (app *App) applyBooleanEnvironmentOverride(environmentKey string, configPath string) {
+	if _, exists := app.Env.Lookup(environmentKey); !exists {
 		return
 	}
+	value, err := app.Env.GetBool(environmentKey)
+	if err != nil {
+		app.recordStartupError(err)
+		return
+	}
+	app.Config.Set(configPath, value)
+}
+
+// applyDatabaseEnvOverrides 用环境变量覆盖数据库配置，避免部署环境必须改配置文件。
+func applyDatabaseEnvOverrides(app *App, dbConfig *db.Config) error {
+	if app == nil || dbConfig == nil {
+		return fmt.Errorf("%w: 应用或数据库配置为空", db.ErrInvalidDatabaseConfig)
+	}
+	working := *dbConfig
 
 	if val := app.Env.Get("DB_TYPE"); val != "" {
-		dbConfig.Type = val
+		working.Type = val
 	}
 	if val := app.Env.Get("DB_HOST"); val != "" {
-		dbConfig.Hostname = val
+		working.Hostname = val
 	}
 	if val := app.Env.Get("DB_PORT"); val != "" {
-		dbConfig.Hostport = val
+		working.Hostport = val
 	}
 	if val := app.Env.Get("DB_USER"); val != "" {
-		dbConfig.Username = val
+		working.Username = val
 	}
 	if val, ok := app.Env.Lookup("DB_PASS"); ok {
-		dbConfig.Password = val
+		working.Password = val
 	}
 	if val := app.Env.Get("DB_NAME"); val != "" {
-		dbConfig.Database = val
+		working.Database = val
 	}
-	if val := app.Env.Get("DB_MAX_OPEN_CONNS"); val != "" {
-		dbConfig.MaxOpenConns = readEnvPositiveInt(val, dbConfig.MaxOpenConns)
+	integerOverrides := []struct {
+		name   string
+		target *int
+	}{
+		{name: "DB_MAX_OPEN_CONNS", target: &working.MaxOpenConns},
+		{name: "DB_MAX_IDLE_CONNS", target: &working.MaxIdleConns},
+		{name: "DB_CONN_MAX_LIFETIME_SECONDS", target: &working.ConnMaxLifetimeSeconds},
+		{name: "DB_CONN_MAX_IDLE_TIME_SECONDS", target: &working.ConnMaxIdleTimeSeconds},
 	}
-	if val := app.Env.Get("DB_MAX_IDLE_CONNS"); val != "" {
-		dbConfig.MaxIdleConns = readEnvPositiveInt(val, dbConfig.MaxIdleConns)
-	}
-	if val := app.Env.Get("DB_CONN_MAX_LIFETIME_SECONDS"); val != "" {
-		dbConfig.ConnMaxLifetimeSeconds = readEnvPositiveInt(val, dbConfig.ConnMaxLifetimeSeconds)
-	}
-	if val := app.Env.Get("DB_CONN_MAX_IDLE_TIME_SECONDS"); val != "" {
-		dbConfig.ConnMaxIdleTimeSeconds = readEnvPositiveInt(val, dbConfig.ConnMaxIdleTimeSeconds)
+	for _, override := range integerOverrides {
+		if raw := app.Env.Get(override.name); raw != "" {
+			value, err := readEnvNonnegativeInt(override.name, raw)
+			if err != nil {
+				return err
+			}
+			*override.target = value
+		}
 	}
 	if val := app.Env.Get("DB_TIMESTAMP_VALUE_TYPE"); val != "" {
-		dbConfig.TimestampValueType = val
+		working.TimestampValueType = val
 	}
+	*dbConfig = working
+	return nil
 }
 
-func readDatabaseConfig(connConfig map[string]interface{}) db.Config {
+func readDatabaseConfig(connConfig map[string]interface{}) (db.Config, error) {
+	allowedFields := map[string]bool{
+		"type": true, "hostname": true, "hostport": true, "database": true,
+		"username": true, "password": true, "charset": true, "prefix": true,
+		"debug": true, "auto_timestamp": true, "create_time_field": true,
+		"update_time_field": true, "timestamp_value_type": true,
+		"max_open_conns": true, "max_idle_conns": true,
+		"conn_max_lifetime_seconds": true, "conn_max_idle_time_seconds": true,
+		"params": true,
+	}
+	keys := make([]string, 0, len(connConfig))
+	for key := range connConfig {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if !allowedFields[key] {
+			return db.Config{}, fmt.Errorf("%w: 未知数据库配置字段 %q", db.ErrInvalidDatabaseConfig, key)
+		}
+	}
+
 	config := db.Config{}
-	config.Type, _ = connConfig["type"].(string)
-	config.Hostname, _ = connConfig["hostname"].(string)
-	config.Hostport, _ = connConfig["hostport"].(string)
-	config.Database, _ = connConfig["database"].(string)
-	config.Username, _ = connConfig["username"].(string)
-	config.Password, _ = connConfig["password"].(string)
-	config.Charset, _ = connConfig["charset"].(string)
-	config.Prefix, _ = connConfig["prefix"].(string)
-	if debug, ok := connConfig["debug"].(bool); ok {
-		config.Debug = debug
+	stringFields := []struct {
+		name   string
+		target *string
+	}{
+		{name: "type", target: &config.Type},
+		{name: "hostname", target: &config.Hostname},
+		{name: "hostport", target: &config.Hostport},
+		{name: "database", target: &config.Database},
+		{name: "username", target: &config.Username},
+		{name: "password", target: &config.Password},
+		{name: "charset", target: &config.Charset},
+		{name: "prefix", target: &config.Prefix},
+		{name: "create_time_field", target: &config.CreateTimeField},
+		{name: "update_time_field", target: &config.UpdateTimeField},
+		{name: "timestamp_value_type", target: &config.TimestampValueType},
 	}
-	if auto, ok := connConfig["auto_timestamp"].(bool); ok {
-		config.AutoTimestamp = auto
+	for _, field := range stringFields {
+		value, exists := connConfig[field.name]
+		if !exists {
+			continue
+		}
+		text, ok := value.(string)
+		if !ok {
+			return db.Config{}, fmt.Errorf("%w: %s 必须是字符串", db.ErrInvalidDatabaseConfig, field.name)
+		}
+		*field.target = text
 	}
-	if field, ok := connConfig["create_time_field"].(string); ok {
-		config.CreateTimeField = field
+	booleanFields := []struct {
+		name   string
+		target *bool
+	}{
+		{name: "debug", target: &config.Debug},
+		{name: "auto_timestamp", target: &config.AutoTimestamp},
 	}
-	if field, ok := connConfig["update_time_field"].(string); ok {
-		config.UpdateTimeField = field
+	for _, field := range booleanFields {
+		value, exists := connConfig[field.name]
+		if !exists {
+			continue
+		}
+		boolean, ok := value.(bool)
+		if !ok {
+			return db.Config{}, fmt.Errorf("%w: %s 必须是布尔值", db.ErrInvalidDatabaseConfig, field.name)
+		}
+		*field.target = boolean
 	}
-	if valueType, ok := connConfig["timestamp_value_type"].(string); ok {
-		config.TimestampValueType = valueType
+	integerFields := []struct {
+		name   string
+		target *int
+	}{
+		{name: "max_open_conns", target: &config.MaxOpenConns},
+		{name: "max_idle_conns", target: &config.MaxIdleConns},
+		{name: "conn_max_lifetime_seconds", target: &config.ConnMaxLifetimeSeconds},
+		{name: "conn_max_idle_time_seconds", target: &config.ConnMaxIdleTimeSeconds},
 	}
-	config.MaxOpenConns = readConfigIntValue(connConfig["max_open_conns"])
-	config.MaxIdleConns = readConfigIntValue(connConfig["max_idle_conns"])
-	config.ConnMaxLifetimeSeconds = readConfigIntValue(connConfig["conn_max_lifetime_seconds"])
-	config.ConnMaxIdleTimeSeconds = readConfigIntValue(connConfig["conn_max_idle_time_seconds"])
-	config.Params = readDatabaseParams(connConfig["params"])
-	return config
+	for _, field := range integerFields {
+		value, exists := connConfig[field.name]
+		if !exists {
+			continue
+		}
+		parsed, err := readConfigIntValue(value)
+		if err != nil {
+			return db.Config{}, fmt.Errorf("%w: %s: %w", db.ErrInvalidDatabaseConfig, field.name, err)
+		}
+		*field.target = parsed
+	}
+	params, err := readDatabaseParams(connConfig["params"])
+	if err != nil {
+		return db.Config{}, err
+	}
+	config.Params = params
+	applyDatabaseFallbacks(&config)
+	if err := config.Validate(); err != nil {
+		return db.Config{}, err
+	}
+	return config, nil
 }
 
-// readDatabaseParams 把 JSON 配置中的连接参数统一转为字符串，供各数据库驱动安全构造 DSN。
-func readDatabaseParams(raw interface{}) map[string]string {
+// readDatabaseParams 要求 JSON 连接参数显式使用字符串，避免布尔值或浮点数被隐式改写。
+func readDatabaseParams(raw interface{}) (map[string]string, error) {
+	if raw == nil {
+		return nil, nil
+	}
 	rawParams, ok := raw.(map[string]interface{})
-	if !ok || len(rawParams) == 0 {
-		return nil
+	if !ok {
+		return nil, fmt.Errorf("%w: params 必须是对象", db.ErrInvalidDatabaseConfig)
+	}
+	if len(rawParams) == 0 {
+		return nil, nil
 	}
 
 	params := make(map[string]string, len(rawParams))
-	for key, value := range rawParams {
-		if strings.TrimSpace(key) == "" || value == nil {
-			continue
+	keys := make([]string, 0, len(rawParams))
+	for key := range rawParams {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if strings.TrimSpace(key) == "" {
+			return nil, fmt.Errorf("%w: params 包含空键", db.ErrInvalidDatabaseConfig)
 		}
-		params[key] = fmt.Sprint(value)
+		value, ok := rawParams[key].(string)
+		if !ok {
+			return nil, fmt.Errorf("%w: params.%s 必须是字符串", db.ErrInvalidDatabaseConfig, key)
+		}
+		params[key] = value
 	}
-	if len(params) == 0 {
-		return nil
-	}
-	return params
+	return params, nil
 }
 
 func applyDatabaseFallbacks(dbConfig *db.Config) {
-	if dbConfig.Type == "" {
-		dbConfig.Type = "mysql"
-	}
-	if dbConfig.Hostname == "" {
-		dbConfig.Hostname = "127.0.0.1"
-	}
-	if dbConfig.Hostport == "" {
-		dbConfig.Hostport = "3306"
-	}
-	if dbConfig.Username == "" {
-		dbConfig.Username = "root"
-	}
 	if dbConfig.TimestampValueType == "" {
 		dbConfig.TimestampValueType = db.TimestampValueTypeUnix
 	}
 }
 
-func createAppLogChannel(app *App, channelConfig map[string]interface{}, addConsole bool) *log.Log {
-	driverType := "file"
-	if value, ok := channelConfig["type"].(string); ok {
-		driverType = value
-	}
-
-	var driverInstance log.Driver
-	switch driverType {
-	case "file":
-		path := app.BasePath + RuntimeLogDir
-		if value, ok := channelConfig["path"].(string); ok {
-			path = value
-		}
-		var maxFileSize int64
-		if value, ok := channelConfig["max_file_size"].(float64); ok {
-			maxFileSize = int64(value)
-		} else if value, ok := channelConfig["max_file_size"].(int); ok {
-			maxFileSize = int64(value)
-		}
-		driverInstance = logDriver.NewFile(path, maxFileSize)
-	default:
-		driverInstance = logDriver.NewFile(app.BasePath + RuntimeLogDir)
-	}
-
-	logger := log.NewLog(driverInstance)
-	if addConsole {
-		logger.AddDriver(logDriver.NewConsole())
-		logger.SetCallerEnabled(true)
-	}
-	if levels, ok := channelConfig["level"].([]interface{}); ok {
-		levelNames := make([]string, 0, len(levels))
-		for _, level := range levels {
-			if name, ok := level.(string); ok {
-				levelNames = append(levelNames, name)
-			}
-		}
-		logger.SetLevels(levelNames)
-	}
-	return logger
-}
-
-func createAppCacheDriver(app *App, storeConfig map[string]interface{}) cache.Driver {
-	driverType, _ := storeConfig["type"].(string)
-	switch driverType {
-	case "redis":
-		return cacheDriver.NewRedis(storeConfig)
-	case "file":
-		path := app.BasePath + RuntimeCacheDir
-		if value, ok := storeConfig["path"].(string); ok {
-			path = value
-		}
-		return cacheDriver.NewFile(path)
-	default:
-		return cacheDriver.NewFile(app.BasePath + RuntimeCacheDir)
-	}
-}
-
-// readConfigIntValue 读取 JSON 配置中的整数值，非法类型返回 0。
-func readConfigIntValue(raw interface{}) int {
+// readConfigIntValue 读取 JSON 非负整数；浮点表示超出精确范围时拒绝。
+func readConfigIntValue(raw interface{}) (int, error) {
+	maximum := uint64(maxIntValue())
+	var value uint64
 	switch typed := raw.(type) {
 	case int:
-		return typed
+		if typed < 0 {
+			return 0, fmt.Errorf("不能为负数")
+		}
+		value = uint64(typed)
 	case int64:
-		return int(typed)
+		if typed < 0 {
+			return 0, fmt.Errorf("不能为负数")
+		}
+		value = uint64(typed)
+	case uint:
+		value = uint64(typed)
+	case uint64:
+		value = typed
 	case float64:
-		return int(typed)
-	case string:
-		return readEnvPositiveInt(typed, 0)
+		if math.IsNaN(typed) || math.IsInf(typed, 0) || typed < 0 || math.Trunc(typed) != typed || typed > 1<<53 {
+			return 0, fmt.Errorf("必须是可精确表示的非负整数")
+		}
+		value = uint64(typed)
+	case json.Number:
+		parsed, err := strconv.ParseUint(string(typed), 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("必须是非负整数: %w", err)
+		}
+		value = parsed
 	default:
-		return 0
+		return 0, fmt.Errorf("类型 %T 非法", raw)
 	}
+	if value > maximum {
+		return 0, fmt.Errorf("超出当前平台 int 范围")
+	}
+	return int(value), nil
 }
 
-// readEnvPositiveInt 读取正整数环境变量，非法值回退到默认值。
-func readEnvPositiveInt(raw string, fallback int) int {
+func readEnvNonnegativeInt(name, raw string) (int, error) {
 	value, err := strconv.Atoi(strings.TrimSpace(raw))
-	if err != nil || value <= 0 {
-		return fallback
+	if err != nil || value < 0 {
+		return 0, fmt.Errorf("%w: %s 必须是非负整数", db.ErrInvalidDatabaseConfig, name)
 	}
-	return value
+	return value, nil
 }

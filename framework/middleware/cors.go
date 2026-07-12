@@ -20,9 +20,9 @@ type CorsConfig struct {
 // DefaultCorsConfig 返回默认的 CORS 配置
 func DefaultCorsConfig() CorsConfig {
 	return CorsConfig{
-		AllowOrigins: []string{"*"},
-		AllowMethods: []string{"GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"},
-		AllowHeaders: []string{"Content-Type", "Authorization", "X-Requested-With", "Accept", "Origin", "token"},
+		AllowOrigins:     []string{"*"},
+		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"},
+		AllowHeaders:     []string{"Content-Type", "Authorization", "X-Requested-With", "Accept", "Origin", "token"},
 		ExposeHeaders:    []string{},
 		AllowCredentials: false,
 		MaxAge:           86400, // 24小时

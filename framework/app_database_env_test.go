@@ -23,7 +23,9 @@ func TestApplyDatabaseEnvOverridesReadsPoolSettings(t *testing.T) {
 
 	app := &App{Env: env.NewEnv()}
 	config := db.Config{}
-	applyDatabaseEnvOverrides(app, &config)
+	if err := applyDatabaseEnvOverrides(app, &config); err != nil {
+		t.Fatalf("应用数据库环境变量失败: %v", err)
+	}
 
 	if config.Type != "mysql" || config.Hostname != "10.0.0.8" || config.Hostport != "3307" {
 		t.Fatalf("数据库基础连接参数覆盖错误，实际为 %#v", config)
@@ -42,7 +44,9 @@ func TestApplyDatabaseEnvOverridesAllowsEmptyPassword(t *testing.T) {
 
 	app := &App{Env: env.NewEnv()}
 	config := db.Config{Password: "from-config"}
-	applyDatabaseEnvOverrides(app, &config)
+	if err := applyDatabaseEnvOverrides(app, &config); err != nil {
+		t.Fatalf("应用空密码环境变量失败: %v", err)
+	}
 
 	if config.Password != "" {
 		t.Fatalf("显式空 DB_PASS 应覆盖配置文件密码，实际为 %q", config.Password)
@@ -51,11 +55,14 @@ func TestApplyDatabaseEnvOverridesAllowsEmptyPassword(t *testing.T) {
 
 // TestReadDatabaseConfigReadsTimestampValueType 验证数据库配置文件中的时间戳值类型能正确读入。
 func TestReadDatabaseConfigReadsTimestampValueType(t *testing.T) {
-	config := readDatabaseConfig(map[string]interface{}{
+	config, err := readDatabaseConfig(map[string]interface{}{
 		"type":                 "mysql",
 		"auto_timestamp":       true,
 		"timestamp_value_type": "unix",
 	})
+	if err != nil {
+		t.Fatalf("读取数据库配置失败: %v", err)
+	}
 
 	if config.TimestampValueType != db.TimestampValueTypeUnix {
 		t.Fatalf("时间戳值类型读取错误，实际为 %q", config.TimestampValueType)
@@ -64,14 +71,17 @@ func TestReadDatabaseConfigReadsTimestampValueType(t *testing.T) {
 
 // TestReadDatabaseConfigReadsConnectionParams 验证数据库连接参数会从配置文件进入连接器。
 func TestReadDatabaseConfigReadsConnectionParams(t *testing.T) {
-	config := readDatabaseConfig(map[string]interface{}{
+	config, err := readDatabaseConfig(map[string]interface{}{
 		"type": "pgsql",
 		"params": map[string]interface{}{
 			"sslmode":         "verify-full",
-			"connect_timeout": float64(10),
-			"encrypt":         true,
+			"connect_timeout": "10",
+			"encrypt":         "true",
 		},
 	})
+	if err != nil {
+		t.Fatalf("读取数据库参数失败: %v", err)
+	}
 
 	if config.Params["sslmode"] != "verify-full" {
 		t.Fatalf("数据库连接参数 sslmode 读取错误，实际为 %q", config.Params["sslmode"])

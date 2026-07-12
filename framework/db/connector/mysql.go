@@ -1,12 +1,11 @@
 package connector
 
 import (
-	"context"
-	"database/sql"
+	"fmt"
 	"net"
 	"net/url"
 	"sort"
-	"time"
+	"strings"
 
 	"thinkgo/framework/db"
 	"thinkgo/framework/db/builder"
@@ -14,72 +13,36 @@ import (
 	mysqlDriver "github.com/go-sql-driver/mysql"
 )
 
-// 连接池默认参数。
-const (
-	defaultMaxOpenConns    = 25              // 最大打开连接数
-	defaultMaxIdleConns    = 10              // 最大空闲连接数
-	defaultConnMaxLifetime = 5 * time.Minute // 连接最大生命周期
-	defaultConnMaxIdleTime = 2 * time.Minute // 连接最大空闲时长
-)
-
 // Mysql MySQL 连接器。
 type Mysql struct{}
 
-// mysqlConnectionPoolConfig 描述最终生效的连接池参数。
-type mysqlConnectionPoolConfig struct {
-	MaxOpenConns    int
-	MaxIdleConns    int
-	ConnMaxLifetime time.Duration
-	ConnMaxIdleTime time.Duration
-}
+type mysqlConnectionPoolConfig = sqlConnectionPoolConfig
 
 // Connect 连接到 MySQL 数据库。
 func (m *Mysql) Connect(config db.Config) (db.Connection, error) {
-	dsn := buildMysqlDSN(config)
-	conn, err := sql.Open("mysql", dsn)
+	validated, err := validateConnectorConfig(config, "mysql", true, true)
 	if err != nil {
 		return nil, err
 	}
-
-	// 连接池参数允许按环境调优，避免不同机器与流量档位共用硬编码值。
-	poolConfig := resolveMysqlConnectionPoolConfig(config)
-	conn.SetMaxOpenConns(poolConfig.MaxOpenConns)
-	conn.SetMaxIdleConns(poolConfig.MaxIdleConns)
-	conn.SetConnMaxLifetime(poolConfig.ConnMaxLifetime)
-	conn.SetConnMaxIdleTime(poolConfig.ConnMaxIdleTime)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := conn.PingContext(ctx); err != nil {
-		_ = conn.Close()
+	if err := validateMysqlParameters(validated.Params); err != nil {
 		return nil, err
 	}
-
-	return &db.SQLConnection{DB: conn, Builder: &builder.Mysql{}}, nil
+	return openSQLConnection("mysql", buildMysqlDSN(validated), &builder.Mysql{}, validated)
 }
 
 // resolveMysqlConnectionPoolConfig 计算最终生效的连接池配置，非法值回退到默认参数。
 func resolveMysqlConnectionPoolConfig(config db.Config) mysqlConnectionPoolConfig {
-	settings := mysqlConnectionPoolConfig{
-		MaxOpenConns:    defaultMaxOpenConns,
-		MaxIdleConns:    defaultMaxIdleConns,
-		ConnMaxLifetime: defaultConnMaxLifetime,
-		ConnMaxIdleTime: defaultConnMaxIdleTime,
-	}
-
-	if config.MaxOpenConns > 0 {
-		settings.MaxOpenConns = config.MaxOpenConns
-	}
-	if config.MaxIdleConns > 0 {
-		settings.MaxIdleConns = config.MaxIdleConns
-	}
-	if config.ConnMaxLifetimeSeconds > 0 {
-		settings.ConnMaxLifetime = time.Duration(config.ConnMaxLifetimeSeconds) * time.Second
-	}
-	if config.ConnMaxIdleTimeSeconds > 0 {
-		settings.ConnMaxIdleTime = time.Duration(config.ConnMaxIdleTimeSeconds) * time.Second
-	}
+	settings, _ := resolveSQLConnectionPoolConfig(config)
 	return settings
+}
+
+func validateMysqlParameters(params map[string]string) error {
+	for _, key := range []string{"multiStatements", "allowAllFiles", "allowCleartextPasswords", "allowFallbackToPlaintext"} {
+		if value, exists := params[key]; exists && strings.EqualFold(strings.TrimSpace(value), "true") {
+			return fmt.Errorf("%w: MySQL 参数 %s=true 被禁止", db.ErrInvalidDatabaseConfig, key)
+		}
+	}
+	return nil
 }
 
 // buildMysqlDSN 统一构建 MySQL DSN，并注入连接存活检查相关参数。
@@ -94,6 +57,7 @@ func buildMysqlDSN(config db.Config) string {
 		"checkConnLiveness": "true",
 		"loc":               "Local",
 		"parseTime":         "True",
+		"tls":               "true",
 	}
 	for key, value := range config.Params {
 		params[key] = value
@@ -136,5 +100,5 @@ func joinHostPort(host string, port string) string {
 }
 
 func init() {
-	db.RegisterConnector("mysql", &Mysql{})
+	mustRegisterConnector("mysql", &Mysql{})
 }

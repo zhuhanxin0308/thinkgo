@@ -11,6 +11,9 @@ runtime/
 *.swo
 
 # 编译输出
+/bin/
+/dist/
+/thinkgo
 *.exe
 *.exe~
 *.dll

@@ -2,8 +2,8 @@ package command
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
+
 	"thinkgo/framework/console"
 	modeldb "thinkgo/framework/db"
 )
@@ -16,35 +16,17 @@ type MakeModel struct {
 func (c *MakeModel) Configure() {
 	c.Signature = "make:model"
 	c.Description = "Create a new model class with snake_case table naming"
+	c.AddArgument("name", "Model type name", true)
 }
 
-func (c *MakeModel) Execute(input *console.Input, output *console.Output) {
-	structName, err := normalizeGeneratorName(input.GetArgument(0), "")
+func (c *MakeModel) Execute(input *console.Input, output *console.Output) error {
+	structName, err := normalizedGeneratorInput(c.App, input, output, "")
 	if err != nil {
-		output.Error("Invalid model name: " + err.Error())
-		return
+		return fmt.Errorf("invalid model name: %w", err)
 	}
 
 	// 统一把命令参数转换成结构体名和默认文件名，避免新模型继续沿用旧复数化命名习惯。
 	fileBaseName := modeldb.ToSnakeCase(structName)
-
-	// File path
-	filename := filepath.Join(c.App.BasePath, "app", "model", fileBaseName+".go")
-
-	// Check if exists
-	if _, err := os.Stat(filename); !os.IsNotExist(err) {
-		output.Error(fmt.Sprintf("Model %s already exists.", structName))
-		return
-	}
-
-	// Ensure directory exists
-	dir := filepath.Join(c.App.BasePath, "app", "model")
-	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			output.Error(fmt.Sprintf("Failed to create model directory: %v", err))
-			return
-		}
-	}
 
 	// Content
 	content := fmt.Sprintf(`package model
@@ -60,18 +42,21 @@ type %s struct {
 }
 
 // New%s 创建模型实例
-func New%s(database *db.DB) *%s {
+func New%s(database *db.DB) (*%s, error) {
 	m := &%s{}
-	m.Model = db.NewModelAuto(database, m)
-	return m
+	model, err := db.NewModelAuto(database, m)
+	if err != nil {
+		return nil, err
+	}
+	m.Model = model
+	return m, nil
 }
 `, structName, structName, structName, structName, structName, structName)
 
-	// Write file
-	if err := os.WriteFile(filename, []byte(content), 0644); err != nil {
-		output.Error(fmt.Sprintf("Failed to create model: %v", err))
-		return
+	if err := writeGeneratedAppSource(c.App, filepath.Join("app", "model"), fileBaseName+".go", []byte(content)); err != nil {
+		return fmt.Errorf("create model %s: %w", structName, err)
 	}
 
 	output.Success(fmt.Sprintf("Model %s created successfully.", structName))
+	return nil
 }

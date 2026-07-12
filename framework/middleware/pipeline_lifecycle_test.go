@@ -29,7 +29,7 @@ func TestPipelineTerminateLifecycle(t *testing.T) {
 		},
 	)
 
-	req := fwcontext.NewRequest(nil)
+	req := fwcontext.MustNewRequest(nil)
 	resp, terminators := pipeline.ThenWithTerminators(req, func(req *fwcontext.Request) *fwcontext.Response {
 		order = append(order, "destination")
 		return fwcontext.NewResponse().Content("ok")
@@ -87,7 +87,7 @@ func TestPipelineTerminatorsOnlyForExecutedMiddleware(t *testing.T) {
 		},
 	)
 
-	req := fwcontext.NewRequest(nil)
+	req := fwcontext.MustNewRequest(nil)
 	resp, terminators := pipeline.ThenWithTerminators(req, func(req *fwcontext.Request) *fwcontext.Response {
 		order = append(order, "destination")
 		return fwcontext.NewResponse().Content("ok")

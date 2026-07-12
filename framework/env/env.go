@@ -2,64 +2,109 @@ package env
 
 import (
 	"bufio"
+	"errors"
+	"fmt"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
+	"sync"
 )
 
-// Env 环境变量管理器
-// 负责加载 .env 文件并提供环境变量读取接口
+var envKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// Env 管理进程环境变量和可选的 .env 文件配置。
 type Env struct {
+	mu   sync.RWMutex
 	data map[string]string
 }
 
-// NewEnv 创建环境变量管理器实例
+// NewEnv 创建空的环境变量管理器。
 func NewEnv() *Env {
-	return &Env{
-		data: make(map[string]string),
-	}
+	return &Env{data: make(map[string]string)}
 }
 
-// Load 从文件加载环境变量
-// 支持标准 KEY=VALUE 格式，# 开头为注释，空行自动跳过。
-// 安全策略：仅写入 Env 内部存储，不调用 os.Setenv，避免把 .env 中的敏感值
-// （如 DB_PASS）泄露到整个进程环境并被子进程继承。
-func (e *Env) Load(file string) error {
-	f, err := os.Open(file)
-	if err != nil {
-		return err
+// Load 原子加载 KEY=VALUE 格式的环境文件。
+// 文件不存在表示未提供可选配置；其他 IO 或语法错误会返回，且不会提交部分数据。
+func (e *Env) Load(file string) (err error) {
+	f, openErr := os.Open(file)
+	if openErr != nil {
+		if errors.Is(openErr, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("打开环境配置文件 %s 失败: %w", file, openErr)
 	}
-	defer f.Close()
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("关闭环境配置文件 %s 失败: %w", file, closeErr)
+		}
+	}()
 
+	loaded := make(map[string]string)
 	scanner := bufio.NewScanner(f)
+	lineNumber := 0
 	for scanner.Scan() {
+		lineNumber++
 		line := strings.TrimSpace(scanner.Text())
-		// 跳过空行和注释
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
 
-		parts := strings.SplitN(line, "=", 2)
-		if len(parts) == 2 {
-			key := strings.TrimSpace(parts[0])
-			val := strings.TrimSpace(parts[1])
-			// 移除引号包裹
-			val = strings.Trim(val, `"'`)
-			e.data[key] = val
+		key, value, parseErr := parseLine(line)
+		if parseErr != nil {
+			return fmt.Errorf("解析环境配置文件 %s 第 %d 行失败: %w", file, lineNumber, parseErr)
 		}
+		loaded[key] = value
 	}
-	return scanner.Err()
+	if scanErr := scanner.Err(); scanErr != nil {
+		return fmt.Errorf("读取环境配置文件 %s 失败: %w", file, scanErr)
+	}
+
+	e.mu.Lock()
+	if e.data == nil {
+		// 保证 Env 的零值与 NewEnv 创建的实例具有相同可用性。
+		e.data = make(map[string]string, len(loaded))
+	}
+	for key, value := range loaded {
+		e.data[key] = value
+	}
+	e.mu.Unlock()
+	return nil
 }
 
-// Get 获取环境变量值
-//
-// 优先级（遵循 12-factor 约定）：真实进程环境变量 > .env 文件 > 默认值。
-// 真实环境变量优先，使得部署期（容器/k8s/CI）或命令行（如 `run -p` 通过 os.Setenv
-// 注入 SERVER_PORT）注入的值能够覆盖仓库里 .env 的默认值；.env 仅作为本地兜底。
-// 注意：Load 仍然只写入内部存储、绝不调用 os.Setenv，避免把 .env 中的敏感值
-// （如 DB_PASS）泄露到整个进程环境并被子进程继承。
+// parseLine 解析并校验单行环境配置，值中允许包含等号。
+func parseLine(line string) (string, string, error) {
+	separator := strings.IndexByte(line, '=')
+	if separator < 1 {
+		return "", "", fmt.Errorf("必须使用 KEY=VALUE 格式")
+	}
+
+	key := strings.TrimSpace(line[:separator])
+	if !envKeyPattern.MatchString(key) {
+		return "", "", fmt.Errorf("环境变量名 %q 非法", key)
+	}
+
+	value := strings.TrimSpace(line[separator+1:])
+	if value == "" {
+		return key, "", nil
+	}
+	if value[0] == '\'' || value[0] == '"' {
+		quote := value[0]
+		if len(value) < 2 || value[len(value)-1] != quote {
+			return "", "", fmt.Errorf("环境变量 %s 的引号未闭合", key)
+		}
+		value = value[1 : len(value)-1]
+	} else if value[len(value)-1] == '\'' || value[len(value)-1] == '"' {
+		return "", "", fmt.Errorf("环境变量 %s 的引号不匹配", key)
+	}
+
+	return key, value, nil
+}
+
+// Get 按“进程环境变量 > .env > 默认值”的优先级读取字符串。
 func (e *Env) Get(key string, def ...string) string {
-	if val, ok := e.Lookup(key); ok {
-		return val
+	if value, ok := e.Lookup(key); ok {
+		return value
 	}
 	if len(def) > 0 {
 		return def[0]
@@ -67,14 +112,32 @@ func (e *Env) Get(key string, def ...string) string {
 	return ""
 }
 
-// Lookup 按优先级查找环境变量，并返回变量是否存在。
-// 与 Get 不同，它能区分“未设置”和“显式设置为空”，供配置覆盖逻辑使用。
+// GetBool 使用 strconv.ParseBool 的标准集合解析布尔值。
+// 已存在但非法的值必须返回错误，不能回退到默认值掩盖配置问题。
+func (e *Env) GetBool(key string, def ...bool) (bool, error) {
+	value, ok := e.Lookup(key)
+	if !ok {
+		if len(def) > 0 {
+			return def[0], nil
+		}
+		return false, nil
+	}
+
+	parsed, err := strconv.ParseBool(strings.TrimSpace(value))
+	if err != nil {
+		return false, fmt.Errorf("环境变量 %s 的布尔值 %q 非法: %w", key, value, err)
+	}
+	return parsed, nil
+}
+
+// Lookup 查找环境变量并区分“未设置”和“显式设置为空”。
 func (e *Env) Lookup(key string) (string, bool) {
-	if val, ok := os.LookupEnv(key); ok {
-		return val, true
+	if value, ok := os.LookupEnv(key); ok {
+		return value, true
 	}
-	if val, ok := e.data[key]; ok {
-		return val, true
-	}
-	return "", false
+
+	e.mu.RLock()
+	value, ok := e.data[key]
+	e.mu.RUnlock()
+	return value, ok
 }

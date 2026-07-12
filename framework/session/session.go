@@ -1,392 +1,944 @@
 package session
 
 import (
+	"bytes"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"reflect"
+	"strconv"
 	"sync"
 	"time"
-
-	"github.com/google/uuid"
+	"unicode/utf8"
 
 	"thinkgo/framework/cookie"
 )
 
-// Logger 抽象 Session 需要的最小日志能力，避免直接依赖具体日志实现。
+const (
+	// DefaultSessionName 是默认 Session Cookie 名称。
+	DefaultSessionName         = "THINKGO_SESSID"
+	sessionEnvelopeVersion     = 1
+	maxSaveStabilizationPasses = 16
+)
+
+var (
+	errSessionRecordMissing = errors.New("Session 记录已消失")
+	// ErrSessionBusy 表示同一请求在 Save 期间持续修改，无法得到稳定快照。
+	ErrSessionBusy = errors.New("Session 持续并发修改")
+)
+
+// Logger 抽象 Session 所需的最小错误日志能力。
 type Logger interface {
 	ErrorCtx(msg string, ctx map[string]interface{})
 }
 
-// Session 会话管理器。
-// 通过 sync.RWMutex 保护内部状态，防止同一用户的并发请求触发 map 并发写 panic。
+// Session 同时承载不可变管理器配置与隔离的请求级状态。
 type Session struct {
-	mu        sync.RWMutex
-	config    map[string]interface{}
-	driver    Driver
-	logger    Logger
-	id        string
-	data      map[string]interface{}
-	cookie    *cookie.Cookie
-	dirty     bool
-	destroyed bool
+	mu     sync.RWMutex
+	saveMu sync.Mutex
+
+	config Config
+	driver Driver
+	logger Logger
+	cookie *cookie.Cookie
+	now    func() time.Time
+
+	requestState  bool
+	id            string
+	data          map[string]json.RawMessage
+	dataJSONBytes int
+	mutations     map[string]sessionMutation
+	cleared       bool
+	clearVersion  uint64
+	version       uint64
+	dirty         bool
+	cookieDirty   bool
+	invalidCookie bool
+	destroying    bool
+	destroyed     bool
+	persisted     bool
 }
 
-// sessionEnvelope 保存服务端过期时间与真实业务数据，避免仅依赖客户端 Cookie 失效。
+type sessionMutation struct {
+	Value   json.RawMessage
+	Delete  bool
+	Version uint64
+}
+
+// sessionEnvelope 是唯一受支持的持久化格式；撤销墓碑不携带业务数据。
 type sessionEnvelope struct {
-	ExpireAt int64                  `json:"__expire_at,omitempty"`
-	Data     map[string]interface{} `json:"__data,omitempty"`
+	Version  int                        `json:"version"`
+	ExpireAt int64                      `json:"expire_at,omitempty"`
+	Revoked  bool                       `json:"revoked,omitempty"`
+	Data     map[string]json.RawMessage `json:"data"`
 }
 
-// DefaultSessionName 默认会话 Cookie 名称。
-const DefaultSessionName = "THINKGO_SESSID"
+type saveSnapshot struct {
+	ID            string
+	Persisted     bool
+	Version       uint64
+	Cleared       bool
+	Mutations     map[string]sessionMutation
+	CookieDirty   bool
+	InvalidCookie bool
+	Destroyed     bool
+}
 
-// NewSession 创建会话管理器，只保存全局配置与驱动。
-func NewSession(config map[string]interface{}, driver Driver, cookie *cookie.Cookie) *Session {
+// NewSession 严格解析配置并创建 Session 管理器。
+func NewSession(rawConfig map[string]interface{}, driver Driver, cookieFactory *cookie.Cookie) (*Session, error) {
+	config, err := ParseConfig(rawConfig)
+	if err != nil {
+		return nil, err
+	}
+	return NewSessionWithConfig(config, driver, cookieFactory)
+}
+
+// NewSessionWithConfig 使用已解析配置创建 Session 管理器。
+func NewSessionWithConfig(config Config, driver Driver, cookieFactory *cookie.Cookie) (*Session, error) {
+	if err := validateSessionConfig(config); err != nil {
+		return nil, err
+	}
+	if isNilSessionDependency(driver) || cookieFactory == nil {
+		return nil, ErrInvalidSessionDependency
+	}
 	return &Session{
 		config: config,
 		driver: driver,
-		cookie: cookie,
-		data:   make(map[string]interface{}),
+		cookie: cookieFactory,
+		now:    time.Now,
+	}, nil
+}
+
+// GetConfig 返回请求无法修改的配置值副本。
+func (s *Session) GetConfig() Config {
+	if s == nil {
+		return Config{}
 	}
+	return s.config
 }
 
-// NewRequestSession 为每个请求创建独立的 Session 实例，避免共享状态。
-func (s *Session) NewRequestSession(req *http.Request, w http.ResponseWriter) *Session {
-	var cookieConfig cookie.CookieConfig
-	if s.cookie != nil {
-		cookieConfig = s.cookie.GetConfig()
-	}
-	reqCookie := cookie.NewCookieForRequest(cookieConfig, req, w)
-	reqSession := &Session{
-		config: s.config,
-		driver: s.driver,
-		logger: s.logger,
-		cookie: reqCookie,
-		data:   make(map[string]interface{}),
-	}
-
-	name := reqSession.getConfig("name", DefaultSessionName).(string)
-	content := reqSession.bootstrap(reqCookie.Get(name))
-	reqSession.loadContent(content)
-
-	return reqSession
-}
-
-// InitCookie 初始化 Cookie 管理器，保留旧接口兼容。
-func (s *Session) InitCookie(req *http.Request, w http.ResponseWriter) {
-	s.cookie.Init(req, w)
-}
-
-// Init 从请求中初始化会话，保留旧接口兼容。
-func (s *Session) Init(req *http.Request) {
-	name := s.getConfig("name", DefaultSessionName).(string)
-	content := s.bootstrap(s.cookie.Get(name))
-	s.loadContent(content)
-}
-
-// SetResponseWriter 绑定响应写入器。
-func (s *Session) SetResponseWriter(w http.ResponseWriter) {
-	s.cookie.SetWriter(w)
-}
-
-// SetLogger 设置 Session 错误日志记录器，便于在持久化失败时留下排障证据。
+// SetLogger 设置错误日志记录器；新请求会复制设置时的记录器引用。
 func (s *Session) SetLogger(logger Logger) {
+	if s == nil {
+		return
+	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.logger = logger
+	s.mu.Unlock()
 }
 
-// Set 设置会话数据。
-func (s *Session) Set(name string, value interface{}) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.data[name] = value
-	s.dirty = true
-}
-
-// Get 获取会话数据。
-func (s *Session) Get(name string) interface{} {
+// NewRequestSession 创建请求级 Session，并显式传播 Cookie、存储和解码错误。
+func (s *Session) NewRequestSession(req *http.Request, writer http.ResponseWriter) (*Session, error) {
+	if s == nil || req == nil || isNilSessionDependency(s.driver) || s.cookie == nil {
+		return nil, ErrInvalidSessionDependency
+	}
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.data[name]
-}
-
-// Has 判断会话数据是否存在。
-func (s *Session) Has(name string) bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	_, ok := s.data[name]
-	return ok
-}
-
-// Delete 删除单个会话字段。
-func (s *Session) Delete(name string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, ok := s.data[name]; ok {
-		delete(s.data, name)
-		s.dirty = true
+	logger := s.logger
+	now := s.now
+	s.mu.RUnlock()
+	if now == nil {
+		now = time.Now
 	}
-}
-
-// Clear 清空会话数据。
-func (s *Session) Clear() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if len(s.data) > 0 {
-		s.data = make(map[string]interface{})
-		s.dirty = true
-	}
-}
-
-// Save 在必要时才落盘并写入 Cookie，避免未使用 Session 产生额外 I/O。
-func (s *Session) Save() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.destroyed {
-		name := s.getConfig("name", DefaultSessionName).(string)
-		s.cookie.Delete(name)
-		return nil
-	}
-
-	if !s.dirty {
-		return nil
-	}
-
-	expire := s.getExpireSeconds()
-	envelope := sessionEnvelope{
-		Data: s.data,
-	}
-	if expire > 0 {
-		envelope.ExpireAt = time.Now().Add(time.Duration(expire) * time.Second).Unix()
-	}
-
-	content, err := json.Marshal(envelope)
+	requestCookie, err := s.cookie.ForRequest(req, writer)
 	if err != nil {
-		return s.reportError("session 序列化失败", err, map[string]interface{}{
-			"session_id": s.id,
-		})
+		return nil, errors.Join(ErrSessionCookie, err)
 	}
-	if err := s.driver.Write(s.id, string(content)); err != nil {
-		return s.reportError("session 持久化失败", err, map[string]interface{}{
-			"session_id": s.id,
-		})
+	requestSession := &Session{
+		config:        s.config,
+		driver:        s.driver,
+		logger:        logger,
+		cookie:        requestCookie,
+		now:           now,
+		requestState:  true,
+		data:          make(map[string]json.RawMessage),
+		dataJSONBytes: 2,
+		mutations:     make(map[string]sessionMutation),
 	}
+	if err = requestSession.bootstrap(); err != nil {
+		return nil, err
+	}
+	return requestSession, nil
+}
 
-	name := s.getConfig("name", DefaultSessionName).(string)
-	s.cookie.Set(name, s.id, s.buildCookieOptions(expire))
-	s.dirty = false
+// SetResponseWriter 为请求级 Session 绑定响应 writer。
+func (s *Session) SetResponseWriter(writer http.ResponseWriter) error {
+	if !s.isRequestSession() {
+		return ErrInvalidSessionDependency
+	}
+	if err := s.cookie.SetWriter(writer); err != nil {
+		return errors.Join(ErrSessionCookie, err)
+	}
 	return nil
 }
 
-// Regenerate 轮换会话 ID，把当前数据迁移到新 ID 下并删除旧记录。
-// 登录提权等敏感操作后应调用，以防会话固定攻击。
-func (s *Session) Regenerate() error {
+// Set 校验、编码并隔离存储值；失败时不修改请求状态。
+func (s *Session) Set(name string, value interface{}) error {
+	if err := validateSessionKey(name); err != nil {
+		return err
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidSessionValue, err)
+	}
+	if len(encoded) > s.config.MaxDataBytes {
+		return fmt.Errorf("%w: %d", ErrSessionDataTooLarge, len(encoded))
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	if s.destroyed {
-		return nil
+	if !s.requestState {
+		return ErrInvalidSessionDependency
 	}
-
-	oldID := s.id
-	s.id = uuid.New().String()
+	if s.destroyed {
+		return ErrSessionDestroyed
+	}
+	if s.destroying {
+		return ErrSessionBusy
+	}
+	previous, existed := s.data[name]
+	nextDataBytes := s.dataJSONBytes
+	newEntryBytes := sessionJSONKeyBytes(name) + 1 + len(encoded)
+	if existed {
+		oldEntryBytes := sessionJSONKeyBytes(name) + 1 + len(previous)
+		nextDataBytes += newEntryBytes - oldEntryBytes
+	} else if len(s.data) == 0 {
+		nextDataBytes += newEntryBytes
+	} else {
+		nextDataBytes += 1 + newEntryBytes
+	}
+	if envelopeBytes := activeSessionEnvelopeBytes(nextDataBytes, s.config, s.nowLocked()); envelopeBytes > s.config.MaxDataBytes {
+		return fmt.Errorf("%w: %d", ErrSessionDataTooLarge, envelopeBytes)
+	}
+	s.data[name] = append(json.RawMessage(nil), encoded...)
+	s.dataJSONBytes = nextDataBytes
+	s.version++
+	s.mutations[name] = sessionMutation{
+		Value: append(json.RawMessage(nil), encoded...), Version: s.version,
+	}
 	s.dirty = true
+	return nil
+}
 
-	if oldID != "" && oldID != s.id {
-		if err := s.driver.Delete(oldID); err != nil {
-			return s.reportError("session 旧记录删除失败", err, map[string]interface{}{
-				"old_session_id": oldID,
-			})
+// Get 解码一份隔离的 JSON 值，并区分缺失与显式 null。
+func (s *Session) Get(name string) (interface{}, bool) {
+	if s == nil {
+		return nil, false
+	}
+	s.mu.RLock()
+	raw, found := s.data[name]
+	copyRaw := append(json.RawMessage(nil), raw...)
+	s.mu.RUnlock()
+	if !found {
+		return nil, false
+	}
+	value, err := decodeSessionValue(copyRaw)
+	if err != nil {
+		return nil, false
+	}
+	return value, true
+}
+
+// Has 判断 Session 键是否存在；显式 null 仍视为存在。
+func (s *Session) Has(name string) bool {
+	if s == nil {
+		return false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	_, found := s.data[name]
+	return found
+}
+
+// Delete 删除单个键，并记录可原子合并的删除增量。
+func (s *Session) Delete(name string) error {
+	if err := validateSessionKey(name); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.requestState {
+		return ErrInvalidSessionDependency
+	}
+	if s.destroyed {
+		return ErrSessionDestroyed
+	}
+	if s.destroying {
+		return ErrSessionBusy
+	}
+	s.version++
+	if previous, found := s.data[name]; found {
+		entryBytes := sessionJSONKeyBytes(name) + 1 + len(previous)
+		if len(s.data) == 1 {
+			s.dataJSONBytes = 2
+		} else {
+			s.dataJSONBytes -= entryBytes + 1
+		}
+		delete(s.data, name)
+	}
+	s.mutations[name] = sessionMutation{Delete: true, Version: s.version}
+	s.dirty = true
+	return nil
+}
+
+// Clear 原子清除保存时后端的最新状态，并允许随后 Set 新值。
+func (s *Session) Clear() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.requestState {
+		return ErrInvalidSessionDependency
+	}
+	if s.destroyed {
+		return ErrSessionDestroyed
+	}
+	if s.destroying {
+		return ErrSessionBusy
+	}
+	s.version++
+	s.data = make(map[string]json.RawMessage)
+	s.dataJSONBytes = 2
+	s.mutations = make(map[string]sessionMutation)
+	s.cleared = true
+	s.clearVersion = s.version
+	s.dirty = true
+	return nil
+}
+
+// Save 使用驱动原子 Update 合并增量，先持久化成功后再写客户端 Cookie。
+func (s *Session) Save() error {
+	if !s.isRequestSession() {
+		return ErrInvalidSessionDependency
+	}
+	s.saveMu.Lock()
+	defer s.saveMu.Unlock()
+
+	for pass := 0; pass < maxSaveStabilizationPasses; pass++ {
+		snapshot := s.snapshotForSave()
+		if snapshot.Destroyed {
+			return s.flushCookie(snapshot.ID, true)
+		}
+		if !s.dirtySnapshot(snapshot) {
+			if snapshot.CookieDirty {
+				return s.flushCookie(snapshot.ID, false)
+			}
+			if snapshot.InvalidCookie {
+				return s.flushCookie(snapshot.ID, true)
+			}
+			return nil
+		}
+
+		merged, err := s.persistSnapshot(snapshot)
+		if errors.Is(err, ErrSessionIDCollision) || errors.Is(err, errSessionRecordMissing) {
+			if rotateErr := s.rotateMissingID(snapshot.ID); rotateErr != nil {
+				return rotateErr
+			}
+			continue
+		}
+		if err != nil {
+			return s.reportError("Session 原子持久化失败", err, map[string]interface{}{"session_id": snapshot.ID})
+		}
+		s.reconcilePersistedSnapshot(snapshot, merged)
+		if err = s.flushCookie(snapshot.ID, false); err != nil {
+			return err
+		}
+		if !s.hasDirtyState() {
+			return nil
 		}
 	}
+	return ErrSessionBusy
+}
+
+// Regenerate 原子撤销旧 ID，并把后端最新数据与本请求增量迁移到新随机 ID。
+func (s *Session) Regenerate() error {
+	if !s.isRequestSession() {
+		return ErrInvalidSessionDependency
+	}
+	s.saveMu.Lock()
+	defer s.saveMu.Unlock()
+	newID, err := newSessionID()
+	if err != nil {
+		return s.reportError("生成 Session ID 失败", err, nil)
+	}
+	snapshot := s.snapshotForSave()
+	if snapshot.Destroyed {
+		return ErrSessionDestroyed
+	}
+	merged := s.snapshotData()
+	if snapshot.Persisted {
+		err = s.driver.Update(snapshot.ID, func(current string, found bool) (string, bool, error) {
+			base := make(map[string]json.RawMessage)
+			if found {
+				envelope, decodeErr := decodeSessionEnvelope(current, s.config.MaxDataBytes)
+				if decodeErr != nil {
+					return "", false, decodeErr
+				}
+				if envelope.Revoked || sessionEnvelopeExpired(envelope, s.nowTime()) {
+					return "", false, ErrSessionRevoked
+				}
+				base = cloneSessionData(envelope.Data)
+			}
+			base = applySessionSnapshot(base, snapshot)
+			merged = base
+			return encodeRevokedEnvelope(s.config, s.nowTime())
+		})
+		if err != nil {
+			return s.reportError("撤销旧 Session ID 失败", err, map[string]interface{}{"session_id": snapshot.ID})
+		}
+	}
+	s.mu.Lock()
+	merged = s.applyMutationsAfterVersionLocked(merged, snapshot.Version)
+	s.id = newID
+	s.persisted = false
+	s.invalidCookie = false
+	s.destroyed = false
+	s.data = cloneSessionData(merged)
+	s.dataJSONBytes = sessionDataJSONSize(merged)
+	s.version++
+	s.cleared = true
+	s.clearVersion = s.version
+	s.mutations = make(map[string]sessionMutation, len(merged))
+	for key, value := range merged {
+		s.mutations[key] = sessionMutation{Value: append(json.RawMessage(nil), value...), Version: s.version}
+	}
+	s.dirty = true
+	s.cookieDirty = true
+	s.mu.Unlock()
 	return nil
 }
 
-// GC 触发驱动层回收过期会话；驱动不支持回收时直接返回 0。
-func (s *Session) GC() (int, error) {
-	collector, ok := s.driver.(GarbageCollector)
-	if !ok {
-		return 0, nil
+// Destroy 原子写入撤销墓碑；只有成功后才改变本地状态，Cookie 删除由 Save 完成。
+func (s *Session) Destroy() error {
+	if !s.isRequestSession() {
+		return ErrInvalidSessionDependency
 	}
-	maxLifetime := time.Duration(s.getExpireSeconds()) * time.Second
-	if maxLifetime <= 0 {
-		// expire=0（会话级）时按默认 24 小时回收磁盘上的陈旧文件。
-		maxLifetime = 24 * time.Hour
+	s.saveMu.Lock()
+	defer s.saveMu.Unlock()
+	s.mu.Lock()
+	if s.destroyed {
+		s.mu.Unlock()
+		return nil
 	}
-	return collector.GC(maxLifetime)
+	s.destroying = true
+	s.mu.Unlock()
+	snapshot := s.snapshotForSave()
+	if snapshot.Persisted {
+		err := s.driver.Update(snapshot.ID, func(current string, found bool) (string, bool, error) {
+			if found {
+				envelope, decodeErr := decodeSessionEnvelope(current, s.config.MaxDataBytes)
+				if decodeErr != nil {
+					return "", false, decodeErr
+				}
+				if envelope.Revoked {
+					return current, false, nil
+				}
+			}
+			return encodeRevokedEnvelope(s.config, s.nowTime())
+		})
+		if err != nil {
+			s.mu.Lock()
+			s.destroying = false
+			s.mu.Unlock()
+			return s.reportError("撤销 Session 失败", err, map[string]interface{}{"session_id": snapshot.ID})
+		}
+	}
+	s.mu.Lock()
+	s.data = make(map[string]json.RawMessage)
+	s.dataJSONBytes = 2
+	s.mutations = make(map[string]sessionMutation)
+	s.cleared = false
+	s.dirty = false
+	s.invalidCookie = false
+	s.destroying = false
+	s.destroyed = true
+	s.cookieDirty = true
+	s.version++
+	s.mu.Unlock()
+	return nil
 }
 
-// StartGarbageCollector 启动后台定时回收协程，进程退出前持续运行。
-// 驱动不支持回收时为空操作。返回的 stop 函数可显式停止回收循环。
+// GC 触发驱动回收，expire=0 时按 24 小时清理陈旧文件。
+func (s *Session) GC() (int, error) {
+	if s == nil || isNilSessionDependency(s.driver) {
+		return 0, ErrInvalidSessionDependency
+	}
+	collector, supported := s.driver.(GarbageCollector)
+	if !supported {
+		return 0, nil
+	}
+	lifetime := time.Duration(s.config.Expire) * time.Second
+	if lifetime <= 0 {
+		lifetime = 24 * time.Hour
+	}
+	return collector.GC(lifetime)
+}
+
+// StartGarbageCollector 启动可等待退出的回收循环；stop 返回时协程已完全结束。
 func (s *Session) StartGarbageCollector(interval time.Duration) (stop func()) {
-	if _, ok := s.driver.(GarbageCollector); !ok {
+	if s == nil {
+		return func() {}
+	}
+	if _, supported := s.driver.(GarbageCollector); !supported {
 		return func() {}
 	}
 	if interval <= 0 {
 		interval = time.Hour
 	}
-
 	done := make(chan struct{})
+	finished := make(chan struct{})
 	go func() {
+		defer close(finished)
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-ticker.C:
 				if _, err := s.GC(); err != nil {
-					s.reportError("session 定时回收失败", err, nil)
+					s.reportError("Session 定时回收失败", err, nil)
 				}
 			case <-done:
 				return
 			}
 		}
 	}()
-
 	var once sync.Once
 	return func() {
 		once.Do(func() { close(done) })
+		<-finished
 	}
 }
 
-// Destroy 销毁会话，实际删除 Cookie 延迟到 Save 阶段统一执行。
-func (s *Session) Destroy() {
+func (s *Session) bootstrap() error {
+	id, found, err := s.cookie.Get(s.config.Name)
+	if err != nil {
+		if errors.Is(err, cookie.ErrInvalidCookieSignature) || errors.Is(err, cookie.ErrExpiredCookieSignature) {
+			s.invalidCookie = true
+			return s.assignFreshID()
+		}
+		return s.reportError("读取 Session Cookie 失败", errors.Join(ErrSessionCookie, err), nil)
+	}
+	if !found {
+		return s.assignFreshID()
+	}
+	if !isSafeSessionID(id) {
+		s.invalidCookie = true
+		return s.assignFreshID()
+	}
+	content, stored, err := s.driver.Read(id)
+	if err != nil {
+		return s.reportError("读取 Session 存储失败", err, map[string]interface{}{"session_id": id})
+	}
+	if !stored {
+		s.invalidCookie = true
+		return s.assignFreshID()
+	}
+	envelope, err := decodeSessionEnvelope(content, s.config.MaxDataBytes)
+	if err != nil {
+		return s.reportError("解析 Session 存储失败", err, map[string]interface{}{"session_id": id})
+	}
+	if envelope.Revoked || sessionEnvelopeExpired(envelope, s.nowTime()) {
+		s.invalidCookie = true
+		return s.assignFreshID()
+	}
+	s.id = id
+	s.data = cloneSessionData(envelope.Data)
+	s.dataJSONBytes = sessionDataJSONSize(envelope.Data)
+	s.persisted = true
+	return nil
+}
+
+func (s *Session) assignFreshID() error {
+	id, err := newSessionID()
+	if err != nil {
+		return s.reportError("生成 Session ID 失败", err, nil)
+	}
+	s.id = id
+	s.persisted = false
+	return nil
+}
+
+func (s *Session) snapshotForSave() saveSnapshot {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return saveSnapshot{
+		ID: s.id, Persisted: s.persisted, Version: s.version, Cleared: s.cleared,
+		Mutations: cloneSessionMutations(s.mutations), CookieDirty: s.cookieDirty,
+		InvalidCookie: s.invalidCookie, Destroyed: s.destroyed,
+	}
+}
+
+func (s *Session) dirtySnapshot(snapshot saveSnapshot) bool {
+	return snapshot.Cleared || len(snapshot.Mutations) > 0
+}
+
+func (s *Session) persistSnapshot(snapshot saveSnapshot) (map[string]json.RawMessage, error) {
+	var merged map[string]json.RawMessage
+	err := s.driver.Update(snapshot.ID, func(current string, found bool) (string, bool, error) {
+		if !snapshot.Persisted && found {
+			return "", false, ErrSessionIDCollision
+		}
+		if snapshot.Persisted && !found {
+			return "", false, errSessionRecordMissing
+		}
+		base := make(map[string]json.RawMessage)
+		if found {
+			envelope, err := decodeSessionEnvelope(current, s.config.MaxDataBytes)
+			if err != nil {
+				return "", false, err
+			}
+			if envelope.Revoked || sessionEnvelopeExpired(envelope, s.nowTime()) {
+				return "", false, ErrSessionRevoked
+			}
+			base = cloneSessionData(envelope.Data)
+		}
+		base = applySessionSnapshot(base, snapshot)
+		merged = cloneSessionData(base)
+		envelope := sessionEnvelope{Version: sessionEnvelopeVersion, Data: base}
+		if s.config.Expire > 0 {
+			envelope.ExpireAt = s.nowTime().Add(time.Duration(s.config.Expire) * time.Second).Unix()
+		}
+		return encodeSessionEnvelope(envelope, s.config.MaxDataBytes)
+	})
+	return merged, err
+}
+
+func (s *Session) reconcilePersistedSnapshot(snapshot saveSnapshot, merged map[string]json.RawMessage) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := s.driver.Delete(s.id); err != nil {
-		s.reportError("session 删除失败", err, map[string]interface{}{
-			"session_id": s.id,
-		})
+	if s.id != snapshot.ID || s.destroyed {
+		return
 	}
-	s.data = make(map[string]interface{})
-	s.dirty = false
-	s.destroyed = true
+	merged = s.applyMutationsAfterVersionLocked(merged, snapshot.Version)
+	s.data = cloneSessionData(merged)
+	s.dataJSONBytes = sessionDataJSONSize(merged)
+	for key, mutation := range s.mutations {
+		if mutation.Version <= snapshot.Version {
+			delete(s.mutations, key)
+		}
+	}
+	if s.cleared && s.clearVersion <= snapshot.Version {
+		s.cleared = false
+		s.clearVersion = 0
+	}
+	s.persisted = true
+	s.invalidCookie = false
+	s.dirty = s.cleared || len(s.mutations) > 0
+	s.cookieDirty = true
 }
 
-// reportError 统一补充 Session 上下文并记录错误，避免关键故障被静默吞掉。
-func (s *Session) reportError(message string, err error, ctx map[string]interface{}) error {
+func (s *Session) applyMutationsAfterVersionLocked(base map[string]json.RawMessage, version uint64) map[string]json.RawMessage {
+	result := cloneSessionData(base)
+	if s.cleared && s.clearVersion > version {
+		result = make(map[string]json.RawMessage)
+	}
+	for key, mutation := range s.mutations {
+		if mutation.Version <= version {
+			continue
+		}
+		if mutation.Delete {
+			delete(result, key)
+		} else {
+			result[key] = append(json.RawMessage(nil), mutation.Value...)
+		}
+	}
+	return result
+}
+
+func (s *Session) rotateMissingID(expected string) error {
+	newID, err := newSessionID()
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.id != expected {
+		return nil
+	}
+	s.id = newID
+	s.persisted = false
+	s.cookieDirty = true
+	return nil
+}
+
+func (s *Session) flushCookie(id string, remove bool) error {
+	if id == "" {
+		return ErrSessionCookie
+	}
+	options := cookie.CookieOptions{
+		Path: s.config.CookiePath, Domain: s.config.Domain, Secure: s.config.Secure,
+		HttpOnly: true, SameSite: s.config.SameSite, Expire: s.config.Expire,
+	}
+	if remove {
+		options.Expire = -1
+	}
+	value := id
+	if remove {
+		value = ""
+	}
+	if err := s.cookie.Set(s.config.Name, value, options); err != nil {
+		return s.reportError("写入 Session Cookie 失败", errors.Join(ErrSessionCookie, err), nil)
+	}
+	s.mu.Lock()
+	if s.id == id {
+		s.cookieDirty = false
+		s.invalidCookie = false
+	}
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *Session) hasDirtyState() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.dirty
+}
+
+func (s *Session) snapshotData() map[string]json.RawMessage {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return cloneSessionData(s.data)
+}
+
+func (s *Session) isRequestSession() bool {
+	return s != nil && s.requestState && s.cookie != nil && !isNilSessionDependency(s.driver)
+}
+
+func (s *Session) nowTime() time.Time {
+	s.mu.RLock()
+	now := s.now
+	s.mu.RUnlock()
+	if now == nil {
+		return time.Now()
+	}
+	return now()
+}
+
+func (s *Session) nowLocked() time.Time {
+	if s.now == nil {
+		return time.Now()
+	}
+	return s.now()
+}
+
+func (s *Session) reportError(message string, err error, context map[string]interface{}) error {
 	if err == nil {
 		return nil
 	}
-
-	if s.logger != nil {
-		logCtx := map[string]interface{}{
-			"component": "session",
+	s.mu.RLock()
+	logger := s.logger
+	s.mu.RUnlock()
+	if logger != nil {
+		logContext := map[string]interface{}{"component": "session"}
+		for key, value := range context {
+			logContext[key] = value
 		}
-		for key, value := range ctx {
-			logCtx[key] = value
-		}
-		s.logger.ErrorCtx(fmt.Sprintf("%s: %v", message, err), logCtx)
+		logger.ErrorCtx(fmt.Sprintf("%s: %v", message, err), logContext)
 	}
-
 	return err
 }
 
-func (s *Session) getConfig(key string, defaultVal interface{}) interface{} {
-	if val, ok := s.config[key]; ok {
-		return val
+func validateSessionKey(name string) error {
+	if name == "" || len(name) > maxSessionKeyBytes || !utf8.ValidString(name) || hasSessionControl(name) {
+		return fmt.Errorf("%w: %q", ErrInvalidSessionKey, name)
 	}
-	return defaultVal
+	return nil
 }
 
-// getExpireSeconds 统一解析配置中的过期秒数。
-func (s *Session) getExpireSeconds() int {
-	expireVal := s.getConfig("expire", 0)
-	if v, ok := expireVal.(int); ok {
-		return v
+func activeSessionEnvelopeBytes(dataBytes int, config Config, now time.Time) int {
+	if config.Expire <= 0 {
+		return len(`{"version":1,"data":`) + dataBytes + 1
 	}
-	if v, ok := expireVal.(float64); ok {
-		return int(v)
-	}
-	return 0
+	expireAt := now.Add(time.Duration(config.Expire) * time.Second).Unix()
+	return len(`{"version":1,"expire_at":`) + len(strconv.FormatInt(expireAt, 10)) +
+		len(`,"data":`) + dataBytes + 1
 }
 
-// bootstrap 初始化安全的 Session ID，拒绝直接使用危险外部输入。
-func (s *Session) bootstrap(id string) string {
-	s.data = make(map[string]interface{})
-	s.dirty = false
-	s.destroyed = false
-
-	if !isSafeSessionID(id) {
-		id = ""
+func sessionDataJSONSize(data map[string]json.RawMessage) int {
+	size := 2
+	first := true
+	for key, value := range data {
+		if !first {
+			size++
+		}
+		first = false
+		size += sessionJSONKeyBytes(key) + 1 + len(value)
 	}
+	return size
+}
 
-	if id != "" {
-		content, err := s.driver.Read(id)
-		if err == nil && content != "" {
-			s.id = id
-			return content
+// sessionJSONKeyBytes 精确复现 encoding/json 的字符串转义长度，避免为每次 Set 编码整张 map。
+func sessionJSONKeyBytes(value string) int {
+	size := 2
+	for _, character := range value {
+		switch character {
+		case '\\', '"', '\b', '\f', '\n', '\r', '\t':
+			size += 2
+		case '<', '>', '&':
+			size += 6
+		default:
+			if character < 0x20 || character == '\u2028' || character == '\u2029' {
+				size += 6
+			} else {
+				size += utf8.RuneLen(character)
+			}
 		}
 	}
-
-	// 只有后端已知的会话标识才允许复用，未知 ID 必须重新生成，避免会话固定攻击。
-	s.id = uuid.New().String()
-	return ""
+	return size
 }
 
-// loadContent 负责把已有会话内容恢复到内存状态，并在发现服务端过期时立即失效。
-func (s *Session) loadContent(content string) {
-	if content == "" {
-		return
+func encodeSessionEnvelope(envelope sessionEnvelope, maxBytes int) (string, bool, error) {
+	data, err := json.Marshal(envelope)
+	if err != nil {
+		return "", false, fmt.Errorf("%w: %v", ErrInvalidSessionValue, err)
 	}
+	if len(data) > maxBytes {
+		return "", false, fmt.Errorf("%w: %d", ErrSessionDataTooLarge, len(data))
+	}
+	return string(data), false, nil
+}
 
+func encodeRevokedEnvelope(config Config, now time.Time) (string, bool, error) {
+	lifetime := time.Duration(config.Expire) * time.Second
+	if lifetime <= 0 {
+		lifetime = 24 * time.Hour
+	}
+	envelope := sessionEnvelope{
+		Version: sessionEnvelopeVersion, ExpireAt: now.Add(lifetime).Unix(), Revoked: true,
+		Data: nil,
+	}
+	return encodeSessionEnvelope(envelope, config.MaxDataBytes)
+}
+
+func decodeSessionEnvelope(content string, maxBytes int) (sessionEnvelope, error) {
+	if content == "" || len(content) > maxBytes {
+		if len(content) > maxBytes {
+			return sessionEnvelope{}, fmt.Errorf("%w: %w", ErrCorruptSession, ErrSessionDataTooLarge)
+		}
+		return sessionEnvelope{}, ErrCorruptSession
+	}
+	decoder := json.NewDecoder(bytes.NewReader([]byte(content)))
+	decoder.DisallowUnknownFields()
 	var envelope sessionEnvelope
-	if err := json.Unmarshal([]byte(content), &envelope); err == nil && envelope.Data != nil {
-		if envelope.ExpireAt > 0 && time.Now().Unix() >= envelope.ExpireAt {
-			_ = s.driver.Delete(s.id)
-			s.data = make(map[string]interface{})
-			return
+	if err := decoder.Decode(&envelope); err != nil {
+		return sessionEnvelope{}, fmt.Errorf("%w: %v", ErrCorruptSession, err)
+	}
+	if err := ensureSessionJSONEOF(decoder); err != nil {
+		return sessionEnvelope{}, fmt.Errorf("%w: %v", ErrCorruptSession, err)
+	}
+	if envelope.Version != sessionEnvelopeVersion || envelope.ExpireAt < 0 {
+		return sessionEnvelope{}, ErrCorruptSession
+	}
+	if envelope.Revoked {
+		if len(envelope.Data) != 0 || envelope.ExpireAt == 0 {
+			return sessionEnvelope{}, ErrCorruptSession
 		}
-		s.data = envelope.Data
-		return
+		return envelope, nil
 	}
-
-	// 兼容历史版本直接存储 map 的旧格式。
-	_ = json.Unmarshal([]byte(content), &s.data)
+	if envelope.Data == nil {
+		return sessionEnvelope{}, ErrCorruptSession
+	}
+	for key, value := range envelope.Data {
+		if validateSessionKey(key) != nil || len(value) == 0 || !json.Valid(value) {
+			return sessionEnvelope{}, ErrCorruptSession
+		}
+	}
+	return envelope, nil
 }
 
-// buildCookieOptions 把 Session 自身配置映射到最终 Cookie 写入参数。
-func (s *Session) buildCookieOptions(expire int) map[string]interface{} {
-	options := map[string]interface{}{
-		"expire":   expire,
-		"httponly": true,
+func ensureSessionJSONEOF(decoder *json.Decoder) error {
+	var extra interface{}
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return errors.New("包含多余 JSON 值")
+		}
+		return err
 	}
-
-	if value, ok := s.config["path"].(string); ok && value != "" {
-		options["path"] = value
-	}
-	if value, ok := s.config["domain"].(string); ok {
-		options["domain"] = value
-	}
-	if value, ok := s.config["secure"].(bool); ok {
-		options["secure"] = value
-	}
-	if value, ok := s.config["httponly"].(bool); ok {
-		options["httponly"] = value
-	}
-	if value, ok := s.config["samesite"].(string); ok && value != "" {
-		options["samesite"] = value
-	}
-
-	return options
+	return nil
 }
 
-// isSafeSessionID 仅允许有限字符集，阻断路径穿越和存储键注入。
+func decodeSessionValue(raw json.RawMessage) (interface{}, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value interface{}
+	if err := decoder.Decode(&value); err != nil {
+		return nil, err
+	}
+	if err := ensureSessionJSONEOF(decoder); err != nil {
+		return nil, err
+	}
+	return value, nil
+}
+
+func applySessionSnapshot(base map[string]json.RawMessage, snapshot saveSnapshot) map[string]json.RawMessage {
+	result := cloneSessionData(base)
+	if snapshot.Cleared {
+		result = make(map[string]json.RawMessage)
+	}
+	for key, mutation := range snapshot.Mutations {
+		if mutation.Delete {
+			delete(result, key)
+		} else {
+			result[key] = append(json.RawMessage(nil), mutation.Value...)
+		}
+	}
+	return result
+}
+
+func cloneSessionData(data map[string]json.RawMessage) map[string]json.RawMessage {
+	cloned := make(map[string]json.RawMessage, len(data))
+	for key, value := range data {
+		cloned[key] = append(json.RawMessage(nil), value...)
+	}
+	return cloned
+}
+
+func cloneSessionMutations(mutations map[string]sessionMutation) map[string]sessionMutation {
+	cloned := make(map[string]sessionMutation, len(mutations))
+	for key, mutation := range mutations {
+		mutation.Value = append(json.RawMessage(nil), mutation.Value...)
+		cloned[key] = mutation
+	}
+	return cloned
+}
+
+func sessionEnvelopeExpired(envelope sessionEnvelope, now time.Time) bool {
+	return envelope.ExpireAt > 0 && now.Unix() >= envelope.ExpireAt
+}
+
+func newSessionID() (string, error) {
+	random := make([]byte, 32)
+	if _, err := io.ReadFull(rand.Reader, random); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(random), nil
+}
+
 func isSafeSessionID(id string) bool {
 	if id == "" || len(id) > 128 {
 		return false
 	}
-
-	for _, char := range id {
-		isDigit := char >= '0' && char <= '9'
-		isLower := char >= 'a' && char <= 'z'
-		isUpper := char >= 'A' && char <= 'Z'
-		if isDigit || isLower || isUpper || char == '-' || char == '_' {
+	for _, character := range id {
+		isDigit := character >= '0' && character <= '9'
+		isLower := character >= 'a' && character <= 'z'
+		isUpper := character >= 'A' && character <= 'Z'
+		if isDigit || isLower || isUpper || character == '-' || character == '_' {
 			continue
 		}
 		return false
 	}
-
 	return true
+}
+
+func isNilSessionDependency(value interface{}) bool {
+	if value == nil {
+		return true
+	}
+	reflected := reflect.ValueOf(value)
+	switch reflected.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return reflected.IsNil()
+	default:
+		return false
+	}
 }

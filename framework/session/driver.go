@@ -2,23 +2,18 @@ package session
 
 import "time"
 
-// Driver 会话存储驱动接口
+// Driver 定义可区分缺失值并支持原子读改写的 Session 存储协议。
+// Update 的回调在同一 Session ID 的排他区间内执行；remove=true 表示删除记录。
+// 回调必须只计算新值，不得阻塞或重入同一驱动，否则会延长跨进程锁持有时间或造成死锁。
 type Driver interface {
-	// Read 读取会话数据
-	Read(id string) (string, error)
-
-	// Write 写入会话数据
+	Read(id string) (data string, found bool, err error)
 	Write(id string, data string) error
-
-	// Delete 删除会话数据
 	Delete(id string) error
-
-	// Clear 清空所有会话数据
 	Clear() error
+	Update(id string, update func(data string, found bool) (next string, remove bool, err error)) error
 }
 
-// GarbageCollector 由支持过期回收的驱动可选实现，用于清理过期会话。
+// GarbageCollector 由支持过期回收的驱动实现。
 type GarbageCollector interface {
-	// GC 回收超过 maxLifetime 未更新的会话，返回删除数量。
 	GC(maxLifetime time.Duration) (int, error)
 }

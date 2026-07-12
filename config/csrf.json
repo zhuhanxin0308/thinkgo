@@ -1,0 +1,12 @@
+{
+    "cookie_name": "csrf_token",
+    "header_name": "X-CSRF-Token",
+    "field_name": "_csrf",
+    "cookie_path": "/",
+    "cookie_domain": "",
+    "secure": false,
+    "samesite": "Lax",
+    "max_age": 604800,
+    "secret": "",
+    "safe_methods": ["GET", "HEAD", "OPTIONS"]
+}

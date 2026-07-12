@@ -8,20 +8,34 @@ import (
 )
 
 var (
-	safeIdentifierPattern       = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
-	safeCompareClausePattern    = regexp.MustCompile(`(?i)^([A-Za-z_][A-Za-z0-9_\.]*)\s*(=|!=|<>|>=|<=|>|<|LIKE|NOT LIKE|IS|IS NOT)\s*\?$`)
-	safeNullClausePattern       = regexp.MustCompile(`(?i)^([A-Za-z_][A-Za-z0-9_\.]*)\s+IS\s+(NOT\s+)?NULL$`)
-	safeBetweenClausePattern    = regexp.MustCompile(`(?i)^([A-Za-z_][A-Za-z0-9_\.]*)\s+BETWEEN\s+\?\s+AND\s+\?$`)
+	safeIdentifierPattern    = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	safeCompareClausePattern = regexp.MustCompile(`(?i)^([A-Za-z_][A-Za-z0-9_\.]*)\s*(=|!=|<>|>=|<=|>|<|LIKE|NOT LIKE|IS|IS NOT)\s*\?$`)
+	safeNullClausePattern    = regexp.MustCompile(`(?i)^([A-Za-z_][A-Za-z0-9_\.]*)\s+IS\s+(NOT\s+)?NULL$`)
+	safeBetweenClausePattern = regexp.MustCompile(`(?i)^([A-Za-z_][A-Za-z0-9_\.]*)\s+BETWEEN\s+\?\s+AND\s+\?$`)
+)
+
+const (
+	maxIdentifierPartLength = 128
+	maxIdentifierLength     = 512
 )
 
 // validateIdentifier 校验单个标识符，仅允许字母、数字、下划线和点分层级。
 func validateIdentifier(value string) error {
-	value = strings.TrimSpace(value)
+	trimmed := strings.TrimSpace(value)
+	if trimmed != value {
+		return fmt.Errorf("identifier contains leading or trailing whitespace")
+	}
 	if value == "" {
 		return errors.New("identifier is empty")
 	}
+	if len(value) > maxIdentifierLength {
+		return fmt.Errorf("identifier exceeds %d bytes", maxIdentifierLength)
+	}
 
 	for _, part := range strings.Split(value, ".") {
+		if len(part) > maxIdentifierPartLength {
+			return fmt.Errorf("identifier part exceeds %d bytes", maxIdentifierPartLength)
+		}
 		if !safeIdentifierPattern.MatchString(part) {
 			return fmt.Errorf("unsafe identifier %q", value)
 		}
@@ -112,23 +126,20 @@ func validateDataKeys(data map[string]interface{}) error {
 var allowedOperators = map[string]bool{
 	"=": true, "!=": true, "<>": true,
 	">": true, ">=": true, "<": true, "<=": true,
-	"LIKE": true, "like": true, "Like": true,
-	"NOT LIKE": true, "not like": true, "Not Like": true,
-	"IS": true, "is": true,
-	"IS NOT": true, "is not": true,
+	"LIKE": true, "NOT LIKE": true,
+	"IS": true, "IS NOT": true,
 }
 
-// validateOperator 校验 SQL 操作符，仅允许白名单内的安全操作符，防止通过操作符位置注入 SQL。
-func validateOperator(op string) error {
-	if op == "" {
-		return errors.New("operator is empty")
+func normalizeOperator(op string) (string, error) {
+	normalized := strings.ToUpper(strings.Join(strings.Fields(op), " "))
+	if normalized == "" {
+		return "", errors.New("operator is empty")
 	}
-	if !allowedOperators[op] {
-		return fmt.Errorf("不安全的 SQL 操作符 %q，允许的操作符: =, !=, <>, >, >=, <, <=, LIKE, NOT LIKE, IS, IS NOT", op)
+	if !allowedOperators[normalized] {
+		return "", fmt.Errorf("不安全的 SQL 操作符 %q，允许的操作符: =, !=, <>, >, >=, <, <=, LIKE, NOT LIKE, IS, IS NOT", op)
 	}
-	return nil
+	return normalized, nil
 }
-
 
 // joinConditionOperators JOIN 条件中允许的比较操作符（通常只需要等值和基本比较）。
 var joinConditionOperators = map[string]bool{
@@ -246,13 +257,14 @@ func normalizePredicateClause(condition string, argsCount int, clauseName string
 		if err := validateIdentifier(matches[1]); err != nil {
 			return "", fmt.Errorf("unsafe %s field: %w", clauseName, err)
 		}
-		if err := validateOperator(matches[2]); err != nil {
+		normalizedOperator, err := normalizeOperator(matches[2])
+		if err != nil {
 			return "", fmt.Errorf("unsafe %s operator: %w", clauseName, err)
 		}
 		if argsCount != 1 {
 			return "", fmt.Errorf("%s clause %q requires exactly 1 argument", clauseName, condition)
 		}
-		return condition, nil
+		return fmt.Sprintf("%s %s ?", matches[1], normalizedOperator), nil
 	}
 
 	if matches := safeNullClausePattern.FindStringSubmatch(condition); matches != nil {

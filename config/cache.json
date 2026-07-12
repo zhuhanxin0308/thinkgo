@@ -3,8 +3,7 @@
     "stores": {
         "file": {
             "type": "file",
-            "path": "./runtime/cache",
-            "expire": 0
+            "path": "./runtime/cache"
         },
         "redis": {
             "type": "redis",
@@ -14,7 +13,7 @@
             "select": 0,
             "timeout_ms": 0,
             "prefix": "thinkgo:",
-            "expire": 0
+            "allow_flush_db": false
         }
     }
 }

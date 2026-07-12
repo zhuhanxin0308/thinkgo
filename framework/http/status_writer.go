@@ -44,8 +44,16 @@ func (w *statusTrackingResponseWriter) Status() int {
 	return w.status
 }
 
+// Written 返回响应头是否已经提交到底层写入器。
+func (w *statusTrackingResponseWriter) Written() bool {
+	return w.wroteHeader
+}
+
 // Flush 透传流式刷新能力。
 func (w *statusTrackingResponseWriter) Flush() {
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
+	}
 	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
 		flusher.Flush()
 	}
@@ -67,4 +75,19 @@ func (w *statusTrackingResponseWriter) Push(target string, opts *http.PushOption
 		return http.ErrNotSupported
 	}
 	return pusher.Push(target, opts)
+}
+
+// headResponseWriter 保留状态码和响应头，但丢弃 HEAD 动态响应的实体字节。
+type headResponseWriter struct {
+	http.ResponseWriter
+}
+
+func (w *headResponseWriter) Write(body []byte) (int, error) {
+	return len(body), nil
+}
+
+func (w *headResponseWriter) Flush() {
+	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
 }

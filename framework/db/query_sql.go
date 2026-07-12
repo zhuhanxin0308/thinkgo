@@ -5,9 +5,18 @@ import (
 	"strings"
 )
 
+var safeClauseKeywords = map[string]bool{
+	"and": true, "or": true, "between": true, "is": true, "not": true,
+	"null": true, "like": true, "in": true, "true": true, "false": true,
+	"current_timestamp": true, "current_date": true, "current_time": true,
+}
+
 // resolveTable 结合配置的前缀解析出最终的表名。
 func (q *Query) resolveTable() string {
 	if q.rawTableName {
+		return q.table
+	}
+	if q.db == nil {
 		return q.table
 	}
 	return q.db.prefix + q.table
@@ -33,19 +42,85 @@ func (q *Query) rebind(sqlStr string) string {
 
 // builder 返回底层 SQL 连接的方言构建器；非 SQL 连接（如 Mock/内存）返回 nil。
 func (q *Query) builder() Builder {
+	if q == nil || q.db == nil {
+		return nil
+	}
+	if q.txOwner != nil && q.txOwner.connection != nil {
+		return q.txOwner.connection.Builder
+	}
 	if sqlConn, ok := q.db.connection.(*SQLConnection); ok {
+		if sqlConn == nil {
+			return nil
+		}
 		return sqlConn.Builder
 	}
 	return nil
 }
 
+func (q *Query) transactionConnection() (*SQLConnection, error) {
+	if q == nil || q.txOwner == nil || q.txOwner.connection == nil {
+		return nil, fmt.Errorf("%w: 查询未绑定有效事务连接", ErrInvalidTransaction)
+	}
+	if err := q.txOwner.active(); err != nil {
+		return nil, err
+	}
+	return q.txOwner.connection, nil
+}
+
+// quoteSafeClause 引用已通过 Query 安全入口校验的字段 token；Raw 入口不会调用本函数。
+func (q *Query) quoteSafeClause(clause string) string {
+	builder := q.builder()
+	if builder == nil || clause == "" {
+		return clause
+	}
+	locations := expressionWordPattern.FindAllStringIndex(clause, -1)
+	if len(locations) == 0 {
+		return clause
+	}
+	var result strings.Builder
+	last := 0
+	for _, location := range locations {
+		result.WriteString(clause[last:location[0]])
+		token := clause[location[0]:location[1]]
+		lower := strings.ToLower(token)
+		isFunction := false
+		for index := location[1]; index < len(clause); index++ {
+			if clause[index] == ' ' || clause[index] == '\t' || clause[index] == '\n' || clause[index] == '\r' {
+				continue
+			}
+			isFunction = clause[index] == '('
+			break
+		}
+		if safeClauseKeywords[lower] || isFunction && allowedExpressionFunctions[lower] {
+			result.WriteString(token)
+		} else {
+			result.WriteString(builder.QuoteIdentifier(token))
+		}
+		last = location[1]
+	}
+	result.WriteString(clause[last:])
+	return result.String()
+}
+
 // ensureValid 检查查询构建器状态是否合法。
 func (q *Query) ensureValid() error {
+	if q == nil {
+		return fmt.Errorf("%w: 查询器不能为空", ErrInvalidQuery)
+	}
 	if q.err != nil {
 		return q.err
 	}
 	if q.table == "" {
-		return fmt.Errorf("table name cannot be empty")
+		return fmt.Errorf("%w: 表名不能为空", ErrInvalidQuery)
+	}
+	if q.db == nil {
+		return ErrDatabaseUnavailable
+	}
+	if q.txOwner != nil {
+		return q.txOwner.active()
+	}
+	if _, err := q.db.connectionSnapshot(); err != nil {
+		return err
 	}
 	return nil
 }
@@ -70,6 +145,12 @@ func (q *Query) logContext() map[string]interface{} {
 
 // reportError 上报查询错误。
 func (q *Query) reportError(operation string, err error, extra map[string]interface{}) error {
+	if err == nil {
+		return nil
+	}
+	if q == nil || q.db == nil {
+		return err
+	}
 	ctx := q.logContext()
 	for key, value := range extra {
 		ctx[key] = value
@@ -85,6 +166,21 @@ func (q *Query) BuildSelectSQL() (string, []interface{}, error) {
 	}
 
 	tableName := q.resolveTable()
+	fields := q.fields
+	group := q.group
+	// JOIN 默认只返回主表列，避免不同表的同名列在 map 结果中静默覆盖。
+	// 关联表字段必须通过 Field 显式选择并使用唯一别名。
+	if fields == "*" && len(q.joins) > 0 {
+		fields = tableName + ".*"
+	}
+	builder := q.builder()
+	if builder != nil {
+		tableName = builder.QuoteIdentifier(tableName)
+		fields = builder.QuoteFields(fields)
+		if group != "" {
+			group = builder.QuoteFields(group)
+		}
+	}
 	var sqlBuilder strings.Builder
 	allArgs := make([]interface{}, 0, len(q.args)+len(q.havingArgs))
 
@@ -92,13 +188,17 @@ func (q *Query) BuildSelectSQL() (string, []interface{}, error) {
 	if q.distinct {
 		sqlBuilder.WriteString("DISTINCT ")
 	}
-	sqlBuilder.WriteString(q.fields)
+	sqlBuilder.WriteString(fields)
 
 	sqlBuilder.WriteString(" FROM ")
 	sqlBuilder.WriteString(tableName)
 
 	for _, join := range q.joins {
-		sqlBuilder.WriteString(fmt.Sprintf(" %s %s ON %s", join.joinType, q.resolveJoinTable(join), join.condition))
+		joinTable := q.resolveJoinTable(join)
+		if builder != nil {
+			joinTable = builder.QuoteIdentifier(joinTable)
+		}
+		sqlBuilder.WriteString(fmt.Sprintf(" %s %s ON %s", join.joinType, joinTable, join.condition))
 	}
 
 	if len(q.where) > 0 {
@@ -107,9 +207,9 @@ func (q *Query) BuildSelectSQL() (string, []interface{}, error) {
 		allArgs = append(allArgs, q.args...)
 	}
 
-	if q.group != "" {
+	if group != "" {
 		sqlBuilder.WriteString(" GROUP BY ")
-		sqlBuilder.WriteString(q.group)
+		sqlBuilder.WriteString(group)
 	}
 
 	if q.having != "" {
@@ -120,12 +220,12 @@ func (q *Query) BuildSelectSQL() (string, []interface{}, error) {
 
 	// 排序 + 分页：交由方言构建器生成，避免硬编码 MySQL 的 LIMIT/OFFSET
 	// 在 SQL Server/Oracle 上产生非法 SQL。无方言构建器（Mock 连接）时回退 MySQL 风格。
-	if b := q.builder(); b != nil {
-		orderClause, limitClause := b.Pagination(q.order, q.limit, q.offset)
+	if builder != nil {
+		orderClause, limitClause := builder.Pagination(q.order, q.limit, q.offset)
 		sqlBuilder.WriteString(orderClause)
 		sqlBuilder.WriteString(limitClause)
 		if q.lockMode != "" {
-			sqlBuilder.WriteString(b.LockClause(q.lockMode))
+			sqlBuilder.WriteString(builder.LockClause(q.lockMode))
 		}
 	} else {
 		if q.order != "" {
@@ -160,6 +260,6 @@ func (q *Query) clone() *Query {
 	cloned.args = append([]interface{}(nil), q.args...)
 	cloned.joins = append([]joinClause(nil), q.joins...)
 	cloned.havingArgs = append([]interface{}(nil), q.havingArgs...)
-	cloned.setExprs = append([]string(nil), q.setExprs...)
+	cloned.setExprs = append([]setExpression(nil), q.setExprs...)
 	return &cloned
 }

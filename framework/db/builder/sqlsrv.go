@@ -27,6 +27,8 @@ func (s *Sqlsrv) QuoteIdentifier(name string) string {
 	return sqlsrvQuote(name)
 }
 
+func (s *Sqlsrv) QuoteFields(fields string) string { return sqlsrvQuoteFields(fields) }
+
 // Select builds a SELECT query
 func (s *Sqlsrv) Select(table string, fields string, where []string, order string, limit int, offset int) string {
 	query := fmt.Sprintf("SELECT %s FROM %s", sqlsrvQuoteFields(fields), sqlsrvQuote(table))
@@ -42,7 +44,7 @@ func (s *Sqlsrv) Pagination(order string, limit int, offset int) (string, string
 	paging := limit > 0 || offset > 0
 	orderClause := ""
 	if order != "" {
-		orderClause = " ORDER BY " + order
+		orderClause = " ORDER BY " + quoteOrderWith(order, "[", "]")
 	} else if paging {
 		// OFFSET..FETCH 要求 ORDER BY，无显式排序时补一个确定性的占位排序。
 		orderClause = " ORDER BY (SELECT NULL)"
@@ -64,6 +66,9 @@ func (s *Sqlsrv) LockClause(string) string { return "" }
 // SupportsLastInsertId SQL Server 驱动不可靠支持 LastInsertId，需走 OUTPUT INSERTED。
 func (s *Sqlsrv) SupportsLastInsertId() bool { return false }
 
+// MaxBindParams 返回 SQL Server 单语句参数上限。
+func (s *Sqlsrv) MaxBindParams() int { return 2100 }
+
 // InsertReturning 构建 INSERT ... OUTPUT INSERTED.<pk> 语句，让连接层可用 QueryRow 扫描主键。
 func (s *Sqlsrv) InsertReturning(table string, data map[string]interface{}, primaryKey string) (string, []interface{}, bool) {
 	if primaryKey == "" {
@@ -73,9 +78,9 @@ func (s *Sqlsrv) InsertReturning(table string, data map[string]interface{}, prim
 	values := make([]interface{}, 0, len(data))
 	placeholders := make([]string, 0, len(data))
 
-	for k, v := range data {
+	for _, k := range sortedMapKeys(data) {
 		keys = append(keys, sqlsrvQuote(k))
-		values = append(values, v)
+		values = append(values, data[k])
 		placeholders = append(placeholders, "?")
 	}
 
@@ -94,9 +99,9 @@ func (s *Sqlsrv) Insert(table string, data map[string]interface{}) (string, []in
 	values := make([]interface{}, 0, len(data))
 	placeholders := make([]string, 0, len(data))
 
-	for k, v := range data {
+	for _, k := range sortedMapKeys(data) {
 		keys = append(keys, sqlsrvQuote(k))
-		values = append(values, v)
+		values = append(values, data[k])
 		placeholders = append(placeholders, "?")
 	}
 
@@ -113,9 +118,9 @@ func (s *Sqlsrv) Update(table string, data map[string]interface{}, where []strin
 	sets := make([]string, 0, len(data))
 	values := make([]interface{}, 0, len(data))
 
-	for k, v := range data {
+	for _, k := range sortedMapKeys(data) {
 		sets = append(sets, fmt.Sprintf("%s = ?", sqlsrvQuote(k)))
-		values = append(values, v)
+		values = append(values, data[k])
 	}
 
 	query := fmt.Sprintf("UPDATE %s SET %s", sqlsrvQuote(table), strings.Join(sets, ", "))

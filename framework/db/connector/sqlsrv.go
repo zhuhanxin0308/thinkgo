@@ -1,10 +1,7 @@
 package connector
 
 import (
-	"context"
-	"database/sql"
 	"net/url"
-	"time"
 
 	"thinkgo/framework/db"
 	"thinkgo/framework/db/builder"
@@ -17,18 +14,11 @@ type Sqlsrv struct{}
 
 // Connect connects to SQLServer
 func (s *Sqlsrv) Connect(config db.Config) (db.Connection, error) {
-	dsn := buildSqlsrvDSN(config)
-	conn, err := sql.Open("sqlserver", dsn)
+	validated, err := validateConnectorConfig(config, "sqlsrv", true, true)
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := conn.PingContext(ctx); err != nil {
-		_ = conn.Close()
-		return nil, err
-	}
-	return &db.SQLConnection{DB: conn, Builder: &builder.Sqlsrv{}}, nil
+	return openSQLConnection("sqlserver", buildSqlsrvDSN(validated), &builder.Sqlsrv{}, validated)
 }
 
 // buildSqlsrvDSN 使用 URL DSN，避免分号拼接被密码等字段注入额外参数。
@@ -50,5 +40,5 @@ func buildSqlsrvDSN(config db.Config) string {
 }
 
 func init() {
-	db.RegisterConnector("sqlsrv", &Sqlsrv{})
+	mustRegisterConnector("sqlsrv", &Sqlsrv{})
 }

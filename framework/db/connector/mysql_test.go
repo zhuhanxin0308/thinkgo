@@ -64,6 +64,7 @@ func TestBuildMysqlDSNIncludesHealthCheckParameters(t *testing.T) {
 		"parseTime=True",
 		"loc=Local",
 		"charset=utf8mb4",
+		"tls=true",
 	}
 	for _, fragment := range expectedFragments {
 		if !strings.Contains(dsn, fragment) {

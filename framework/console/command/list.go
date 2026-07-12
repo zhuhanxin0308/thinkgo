@@ -1,6 +1,8 @@
 package command
 
 import (
+	"fmt"
+
 	"thinkgo/framework/console"
 )
 
@@ -15,8 +17,9 @@ func (c *List) Configure() {
 	c.Description = "List available commands"
 }
 
-func (c *List) Execute(input *console.Input, output *console.Output) {
-	if c.Console != nil {
-		c.Console.ShowHelp()
+func (c *List) Execute(_ *console.Input, _ *console.Output) error {
+	if c.Console == nil {
+		return fmt.Errorf("命令行实例不可用")
 	}
+	return c.Console.ShowHelp()
 }

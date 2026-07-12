@@ -12,6 +12,9 @@ type HttpException struct {
 
 // Error 实现 error 接口
 func (e *HttpException) Error() string {
+	if e == nil {
+		return "HTTP 异常为空"
+	}
 	return fmt.Sprintf("HTTP %d: %s", e.StatusCode, e.Message)
 }
 
@@ -26,6 +29,20 @@ func NewHttpException(code int, message string) *HttpException {
 
 // WithData 链式设置附加数据
 func (e *HttpException) WithData(data map[string]interface{}) *HttpException {
-	e.Data = data
+	if e == nil {
+		return nil
+	}
+	e.Data = cloneExceptionData(data)
 	return e
+}
+
+func cloneExceptionData(data map[string]interface{}) map[string]interface{} {
+	if data == nil {
+		return nil
+	}
+	cloned := make(map[string]interface{}, len(data))
+	for key, value := range data {
+		cloned[key] = value
+	}
+	return cloned
 }

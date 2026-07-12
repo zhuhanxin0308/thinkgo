@@ -4,24 +4,44 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
 	"io"
+	"math"
+	"mime"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"runtime"
 	"runtime/debug"
 	"strconv"
 	"strings"
 
-	"thinkgo/framework/context"
+	frameworkVersion "thinkgo/framework/version"
 )
 
-const redactedPlaceholder = "[REDACTED]"
+const (
+	redactedPlaceholder        = "[REDACTED]"
+	internalServerErrorText    = "Internal Server Error"
+	maxDebugRequestBodyBytes   = 4096
+	maxExceptionLogTextBytes   = 4096
+	maxAcceptHeaderBytes       = 8192
+	maxAcceptMediaRangeCount   = 64
+	omittedBinaryBodyText      = "[BINARY BODY OMITTED]"
+	truncatedRequestBodySuffix = "\n[TRUNCATED]"
+)
+
+var (
+	// ErrInvalidExceptionWriter 表示异常响应缺少可用的底层写入器。
+	ErrInvalidExceptionWriter = errors.New("异常响应写入器无效")
+	// ErrInvalidExceptionStatus 表示异常错误地使用了非 4xx/5xx 状态码。
+	ErrInvalidExceptionStatus = errors.New("异常 HTTP 状态码无效")
+)
 
 var sensitiveTextPattern = regexp.MustCompile(`(?i)((?:password|passwd|token|secret|authorization|cookie|session|api[_-]?key|refresh[_-]?token)\s*[:=]\s*)([^&\s,"']+)`)
 
@@ -93,82 +113,215 @@ type Handle struct {
 	TplDir string
 }
 
-// Render 根据请求类型和运行模式渲染异常响应。
-func (h *Handle) Render(w http.ResponseWriter, r *http.Request, err interface{}) {
-	switch typed := err.(type) {
-	case *HttpException:
-		h.reportHTTPException(typed)
-		h.renderHttpException(w, r, typed)
-		return
-	case *ValidateException:
-		h.reportValidateException(typed)
-		h.renderValidateException(w, r, typed)
-		return
-	case *BusinessException:
-		h.reportBusinessException(typed)
-		h.renderBusinessException(w, r, typed)
-		return
-	default:
-		h.Report(err)
+// Render 根据异常链、请求协商和运行模式渲染响应，并把底层写入错误返回给调用方。
+func (h *Handle) Render(w http.ResponseWriter, r *http.Request, recovered interface{}) error {
+	if isNilResponseWriter(w) {
+		return ErrInvalidExceptionWriter
 	}
 
-	isDebug := h.App != nil && h.App.IsDebug()
-	// 仅在调试模式且请求来自回环地址时才暴露堆栈细节，HTML 页与 JSON 响应使用一致门禁，
-	// 避免远程攻击者通过 Accept: application/json 绕过限制获取完整堆栈。
-	exposeDebug := isDebug && canExposeDebugPage(r)
+	exposeDetails := h != nil && h.App != nil && h.App.IsDebug() && canExposeDebugPage(r)
+	if business := asBusinessException(recovered); business != nil {
+		statusErr := validateKnownExceptionStatus(business.HTTPStatus)
+		if statusErr != nil {
+			h.Report(statusErr)
+			return errors.Join(statusErr, h.renderInternalServerError(w, r))
+		}
+		h.reportBusinessException(business)
+		return h.renderBusinessException(w, r, business, exposeDetails)
+	}
+	if validation := asValidateException(recovered); validation != nil {
+		h.reportValidateException(validation)
+		return h.renderValidateException(w, r, validation)
+	}
+	if httpException := asHTTPException(recovered); httpException != nil {
+		statusErr := validateKnownExceptionStatus(httpException.StatusCode)
+		if statusErr != nil {
+			h.Report(statusErr)
+			return errors.Join(statusErr, h.renderInternalServerError(w, r))
+		}
+		h.reportHTTPException(httpException)
+		return h.renderHttpException(w, r, httpException, exposeDetails)
+	}
+
+	h.Report(recovered)
 	if h.isJSONRequest(r) {
-		h.renderJSONError(w, http.StatusInternalServerError, err, exposeDebug)
-		return
+		return h.renderJSONError(w, http.StatusInternalServerError, recovered, exposeDetails)
 	}
-	if exposeDebug {
-		h.renderDebugPage(w, r, err)
-		return
+	if exposeDetails {
+		return h.renderDebugPage(w, r, recovered)
 	}
+	return writeTextResponse(w, http.StatusInternalServerError, internalServerErrorText)
+}
 
-	context.NewResponse().
-		Code(http.StatusInternalServerError).
-		Content("Internal Server Error").
-		Send(w)
+func asBusinessException(value interface{}) *BusinessException {
+	err, ok := value.(error)
+	if !ok || isNilValue(value) {
+		return nil
+	}
+	var target *BusinessException
+	if safeErrorsAs(err, &target) {
+		return target
+	}
+	return nil
+}
+
+func asValidateException(value interface{}) *ValidateException {
+	err, ok := value.(error)
+	if !ok || isNilValue(value) {
+		return nil
+	}
+	var target *ValidateException
+	if safeErrorsAs(err, &target) {
+		return target
+	}
+	return nil
+}
+
+func asHTTPException(value interface{}) *HttpException {
+	err, ok := value.(error)
+	if !ok || isNilValue(value) {
+		return nil
+	}
+	var target *HttpException
+	if safeErrorsAs(err, &target) {
+		return target
+	}
+	return nil
+}
+
+func safeErrorsAs(err error, target interface{}) (matched bool) {
+	defer func() {
+		if recover() != nil {
+			matched = false
+		}
+	}()
+	return errors.As(err, target) && !isNilValue(reflect.ValueOf(target).Elem().Interface())
+}
+
+func validateKnownExceptionStatus(status int) error {
+	if validExceptionStatus(status) {
+		return nil
+	}
+	return fmt.Errorf("%w: %d", ErrInvalidExceptionStatus, status)
+}
+
+func (h *Handle) renderInternalServerError(w http.ResponseWriter, r *http.Request) error {
+	if h.isJSONRequest(r) {
+		return writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
+			"code": http.StatusInternalServerError,
+			"msg":  internalServerErrorText,
+			"data": nil,
+		})
+	}
+	return writeTextResponse(w, http.StatusInternalServerError, internalServerErrorText)
+}
+
+func isNilResponseWriter(writer http.ResponseWriter) bool {
+	return writer == nil || isNilValue(writer)
+}
+
+func isNilValue(value interface{}) bool {
+	if value == nil {
+		return true
+	}
+	reflected := reflect.ValueOf(value)
+	switch reflected.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return reflected.IsNil()
+	default:
+		return false
+	}
+}
+
+func safeExceptionText(value interface{}) (text string) {
+	typeName := fmt.Sprintf("%T", value)
+	if value == nil || isNilValue(value) {
+		return typeName
+	}
+	text = typeName
+	defer func() {
+		if recover() != nil {
+			text = typeName
+		}
+		text = sanitizeExceptionText(text)
+	}()
+
+	switch typed := value.(type) {
+	case string:
+		text = typed
+	case []byte:
+		text = string(typed)
+	case error:
+		text = typed.Error()
+	default:
+		reflected := reflect.ValueOf(value)
+		switch reflected.Kind() {
+		case reflect.Bool:
+			text = strconv.FormatBool(reflected.Bool())
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			text = strconv.FormatInt(reflected.Int(), 10)
+		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+			text = strconv.FormatUint(reflected.Uint(), 10)
+		case reflect.Float32, reflect.Float64:
+			text = strconv.FormatFloat(reflected.Float(), 'g', -1, reflected.Type().Bits())
+		}
+	}
+	return text
+}
+
+func sanitizeExceptionText(text string) string {
+	if len(text) > maxExceptionLogTextBytes {
+		text = strings.ToValidUTF8(text[:maxExceptionLogTextBytes], "�") + "…"
+	} else {
+		text = strings.ToValidUTF8(text, "�")
+	}
+	text = strings.NewReplacer("\r", `\r`, "\n", `\n`, "\t", `\t`).Replace(text)
+	return strings.Map(func(character rune) rune {
+		if character < 0x20 || character == 0x7f {
+			return ' '
+		}
+		return character
+	}, text)
 }
 
 // Report 记录真正的系统级异常堆栈。
 func (h *Handle) Report(err interface{}) {
-	if h.Log == nil {
+	if h == nil || h.Log == nil {
 		return
 	}
 
-	h.Log.ErrorCtx(fmt.Sprintf("%v", err), map[string]interface{}{
+	h.Log.ErrorCtx(safeExceptionText(err), map[string]interface{}{
 		"stack": string(debug.Stack()),
 	})
 }
 
 func (h *Handle) reportHTTPException(err *HttpException) {
-	if h.Log == nil {
+	if h == nil || h.Log == nil || err == nil {
 		return
 	}
 
 	ctx := map[string]interface{}{"status": err.StatusCode}
 	if err.StatusCode >= http.StatusInternalServerError {
 		ctx["stack"] = string(debug.Stack())
-		h.Log.ErrorCtx(err.Message, ctx)
+		h.Log.ErrorCtx(sanitizeExceptionText(err.Message), ctx)
 		return
 	}
-	h.Log.WarningCtx(err.Message, ctx)
+	h.Log.WarningCtx(sanitizeExceptionText(err.Message), ctx)
 }
 
 func (h *Handle) reportValidateException(err *ValidateException) {
-	if h.Log == nil {
+	if h == nil || h.Log == nil || err == nil {
 		return
 	}
 
-	h.Log.WarningCtx(err.Message, map[string]interface{}{
+	h.Log.WarningCtx(sanitizeExceptionText(err.Message), map[string]interface{}{
 		"field":  err.Field,
 		"status": http.StatusUnprocessableEntity,
 	})
 }
 
 func (h *Handle) reportBusinessException(err *BusinessException) {
-	if h.Log == nil {
+	if h == nil || h.Log == nil || err == nil {
 		return
 	}
 
@@ -178,92 +331,89 @@ func (h *Handle) reportBusinessException(err *BusinessException) {
 		"status": status,
 	}
 	if err.Cause != nil {
-		ctx["cause"] = err.Cause.Error()
+		ctx["cause"] = safeExceptionText(err.Cause)
 	}
 	if err.Data != nil {
-		ctx["data"] = err.Data
+		ctx["data"] = cloneExceptionData(err.Data)
 	}
 	if status >= http.StatusInternalServerError {
 		ctx["stack"] = string(debug.Stack())
-		h.Log.ErrorCtx(err.Message, ctx)
+		h.Log.ErrorCtx(sanitizeExceptionText(err.Message), ctx)
 		return
 	}
-	h.Log.WarningCtx(err.Message, ctx)
+	h.Log.WarningCtx(sanitizeExceptionText(err.Message), ctx)
 }
 
-// renderHttpException 渲染 HTTP 异常。
-func (h *Handle) renderHttpException(w http.ResponseWriter, r *http.Request, err *HttpException) {
-	if h.isJSONRequest(r) {
-		h.renderJSON(w, err.StatusCode, err.Message, err.Data)
-		return
+// renderHttpException 渲染 HTTP 异常，并在非本地调试场景隐藏 5xx 详情。
+func (h *Handle) renderHttpException(w http.ResponseWriter, r *http.Request, err *HttpException, exposeDetails bool) error {
+	message := err.Message
+	data := cloneExceptionData(err.Data)
+	if err.StatusCode >= http.StatusInternalServerError && !exposeDetails {
+		message = internalServerErrorText
+		data = nil
 	}
-
-	context.NewResponse().
-		Code(err.StatusCode).
-		Content(err.Message).
-		Send(w)
+	if h.isJSONRequest(r) {
+		return h.renderJSON(w, err.StatusCode, message, data)
+	}
+	return writeTextResponse(w, err.StatusCode, message)
 }
 
 // renderValidateException 渲染参数校验异常。
-func (h *Handle) renderValidateException(w http.ResponseWriter, r *http.Request, err *ValidateException) {
+func (h *Handle) renderValidateException(w http.ResponseWriter, r *http.Request, err *ValidateException) error {
 	data := map[string]interface{}{
 		"field":   err.Field,
 		"message": err.Message,
 	}
 
 	if h.isJSONRequest(r) {
-		h.renderJSON(w, http.StatusUnprocessableEntity, err.Message, data)
-		return
+		return h.renderJSON(w, http.StatusUnprocessableEntity, err.Message, data)
 	}
-
-	context.NewResponse().
-		Code(http.StatusUnprocessableEntity).
-		Content(err.Message).
-		Send(w)
+	return writeTextResponse(w, http.StatusUnprocessableEntity, err.Message)
 }
 
-// renderBusinessException 渲染业务异常。
-func (h *Handle) renderBusinessException(w http.ResponseWriter, r *http.Request, err *BusinessException) {
+// renderBusinessException 渲染业务异常，服务端失败只返回统一错误信封。
+func (h *Handle) renderBusinessException(w http.ResponseWriter, r *http.Request, err *BusinessException, exposeDetails bool) error {
 	status := err.StatusCode()
+	message := err.Message
+	code := err.Code
+	data := cloneExceptionData(err.Data)
+	if status >= http.StatusInternalServerError && !exposeDetails {
+		message = internalServerErrorText
+		code = status
+		data = nil
+	}
 	if h.isJSONRequest(r) {
-		h.renderJSON(w, status, err.Message, businessPayload(err.Code, err.Data))
-		return
+		return writeJSON(w, status, map[string]interface{}{
+			"code": code,
+			"msg":  message,
+			"data": data,
+		})
 	}
-
-	context.NewResponse().
-		Code(status).
-		Content(err.Message).
-		Send(w)
+	return writeTextResponse(w, status, message)
 }
 
-// nilWithBusinessCode 保持业务异常 JSON 结构。
-func businessPayload(code int, data interface{}) map[string]interface{} {
-	return map[string]interface{}{
-		"code": code,
-		"msg":  "",
-		"data": data,
+// renderDebugPage 先在内存中完整渲染本机调试页，避免模板失败后拼接两份半截响应。
+func (h *Handle) renderDebugPage(w http.ResponseWriter, r *http.Request, err interface{}) error {
+	if r == nil {
+		return h.renderInternalServerError(w, nil)
 	}
-}
-
-// renderDebugPage 渲染调试模式的 HTML 异常页。
-func (h *Handle) renderDebugPage(w http.ResponseWriter, r *http.Request, err interface{}) {
 	frames := parseGoStack(string(debug.Stack()))
 	data := templateData{
 		ErrorType:  getErrorType(err),
-		Message:    fmt.Sprintf("%v", err),
+		Message:    safeExceptionText(err),
 		FrameCount: len(frames),
 		Frames:     frames,
 		Request: requestData{
 			Method:  r.Method,
-			URL:     r.URL.String(),
+			URL:     sanitizeRequestURL(r),
 			IP:      getClientIP(r),
 			Proto:   r.Proto,
-			Body:    sanitizeRequestBody(readRequestBody(r), r.Header.Get("Content-Type")),
+			Body:    debugRequestBody(r),
 			Headers: sanitizeHeaders(r.Header),
 		},
 		Env: envData{
 			GoVersion:        runtime.Version(),
-			FrameworkVersion: "ThinkGo 1.0.0",
+			FrameworkVersion: frameworkVersion.Framework,
 			Mode:             "debug",
 			OS:               runtime.GOOS,
 			Arch:             runtime.GOARCH,
@@ -279,22 +429,22 @@ func (h *Handle) renderDebugPage(w http.ResponseWriter, r *http.Request, err int
 		break
 	}
 
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(http.StatusInternalServerError)
-
+	var output bytes.Buffer
 	tplPath := h.getTemplatePath()
 	tpl, errLoad := template.ParseFiles(tplPath)
 	if errLoad != nil {
-		h.renderFallbackDebug(w, data)
-		return
+		h.Report(errLoad)
+		renderFallbackDebug(&output, data)
+	} else if errExec := tpl.Execute(&output, data); errExec != nil {
+		h.Report(errExec)
+		output.Reset()
+		renderFallbackDebug(&output, data)
 	}
-	if errExec := tpl.Execute(w, data); errExec != nil {
-		h.renderFallbackDebug(w, data)
-	}
+	return writeHTMLResponse(w, http.StatusInternalServerError, output.Bytes())
 }
 
 // renderFallbackDebug 在模板缺失或执行失败时输出降级错误页。
-func (h *Handle) renderFallbackDebug(w http.ResponseWriter, data templateData) {
+func renderFallbackDebug(w io.Writer, data templateData) {
 	errorType := template.HTMLEscapeString(data.ErrorType)
 	message := template.HTMLEscapeString(data.Message)
 
@@ -331,15 +481,15 @@ func (h *Handle) getTemplatePath() string {
 }
 
 // renderJSONError 渲染通用 JSON 异常响应。
-func (h *Handle) renderJSONError(w http.ResponseWriter, code int, err interface{}, isDebug bool) {
+func (h *Handle) renderJSONError(w http.ResponseWriter, code int, err interface{}, isDebug bool) error {
 	result := map[string]interface{}{
 		"code": code,
-		"msg":  "Internal Server Error",
+		"msg":  internalServerErrorText,
 		"data": nil,
 	}
 
 	if isDebug {
-		result["msg"] = fmt.Sprintf("%v", err)
+		result["msg"] = safeExceptionText(err)
 		frames := parseGoStack(string(debug.Stack()))
 		traceLines := make([]string, 0, len(frames))
 		for _, frame := range frames {
@@ -348,73 +498,212 @@ func (h *Handle) renderJSONError(w http.ResponseWriter, code int, err interface{
 		result["trace"] = traceLines
 	}
 
-	writeJSON(w, code, result)
+	return writeJSON(w, code, result)
 }
 
 // renderJSON 渲染标准 JSON 响应。
-func (h *Handle) renderJSON(w http.ResponseWriter, code int, msg string, data interface{}) {
-	if business, ok := data.(map[string]interface{}); ok {
-		if _, hasCode := business["code"]; hasCode {
-			if currentMsg, exists := business["msg"]; !exists || currentMsg == "" {
-				business["msg"] = msg
-			}
-			writeJSON(w, code, business)
-			return
-		}
-	}
-
-	writeJSON(w, code, map[string]interface{}{
+func (h *Handle) renderJSON(w http.ResponseWriter, code int, msg string, data interface{}) error {
+	return writeJSON(w, code, map[string]interface{}{
 		"code": code,
 		"msg":  msg,
 		"data": data,
 	})
 }
 
-// writeJSON 统一写出 JSON 响应。
-func writeJSON(w http.ResponseWriter, code int, payload map[string]interface{}) {
-	body, err := json.Marshal(payload)
-	if err != nil {
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-		return
+// writeJSON 在提交响应头前完成序列化，失败时安全降级为固定 500 信封。
+func writeJSON(w http.ResponseWriter, code int, payload map[string]interface{}) error {
+	if isNilResponseWriter(w) {
+		return ErrInvalidExceptionWriter
 	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-	_, _ = w.Write(body)
+	var resultErr error
+	if !validExceptionStatus(code) {
+		resultErr = fmt.Errorf("%w: %d", ErrInvalidExceptionStatus, code)
+		code = http.StatusInternalServerError
+		payload = nil
+	}
+	body, marshalErr := marshalExceptionJSON(payload)
+	if marshalErr != nil || payload == nil {
+		resultErr = errors.Join(resultErr, marshalErr)
+		code = http.StatusInternalServerError
+		body = []byte(`{"code":500,"msg":"Internal Server Error","data":null}`)
+	}
+	return errors.Join(resultErr, writeEncodedResponse(w, code, "application/json; charset=utf-8", body))
 }
 
-// isJSONRequest 判断当前请求是否更适合返回 JSON。
+func marshalExceptionJSON(payload interface{}) (body []byte, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			body = nil
+			err = fmt.Errorf("序列化异常 JSON 时发生 panic: %s", safeExceptionText(recovered))
+		}
+	}()
+	return json.Marshal(payload)
+}
+
+func writeTextResponse(w http.ResponseWriter, code int, message string) error {
+	return writeEncodedResponse(w, code, "text/plain; charset=utf-8", []byte(message))
+}
+
+func writeHTMLResponse(w http.ResponseWriter, code int, body []byte) error {
+	return writeEncodedResponse(w, code, "text/html; charset=utf-8", body)
+}
+
+func writeEncodedResponse(w http.ResponseWriter, code int, contentType string, body []byte) error {
+	if isNilResponseWriter(w) {
+		return ErrInvalidExceptionWriter
+	}
+	if !validExceptionStatus(code) {
+		return fmt.Errorf("%w: %d", ErrInvalidExceptionStatus, code)
+	}
+	header := w.Header()
+	header.Set("Content-Type", contentType)
+	header.Set("X-Content-Type-Options", "nosniff")
+	header.Set("Cache-Control", "no-store")
+	header.Del("Content-Length")
+	w.WriteHeader(code)
+	written, err := w.Write(body)
+	if err == nil && written != len(body) {
+		return io.ErrShortWrite
+	}
+	return err
+}
+
+type mediaPreference struct {
+	set         bool
+	quality     float64
+	specificity int
+	order       int
+}
+
+// isJSONRequest 按 Accept 权重优先协商，并兼容 API、XHR 和 JSON 请求体来源。
 func (h *Handle) isJSONRequest(r *http.Request) bool {
-	if r.Header.Get("X-Requested-With") == "XMLHttpRequest" {
+	if r == nil {
+		return false
+	}
+	accept := strings.TrimSpace(r.Header.Get("Accept"))
+	if accept != "" {
+		jsonPreference, htmlPreference, recognized := negotiateExceptionMedia(accept)
+		if recognized {
+			return preferJSON(jsonPreference, htmlPreference)
+		}
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Requested-With")), "XMLHttpRequest") {
 		return true
 	}
-	if strings.Contains(r.Header.Get("Accept"), "application/json") {
+	if r.URL != nil && (r.URL.Path == "/api" || strings.HasPrefix(r.URL.Path, "/api/")) {
 		return true
 	}
-	if strings.Contains(r.Header.Get("Content-Type"), "application/json") {
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	return err == nil && isJSONMediaType(mediaType)
+}
+
+func negotiateExceptionMedia(header string) (mediaPreference, mediaPreference, bool) {
+	var jsonPreference mediaPreference
+	var htmlPreference mediaPreference
+	if len(header) > maxAcceptHeaderBytes {
+		return jsonPreference, htmlPreference, false
+	}
+	parts := strings.Split(header, ",")
+	if len(parts) > maxAcceptMediaRangeCount {
+		return jsonPreference, htmlPreference, false
+	}
+	for order, part := range parts {
+		mediaType, parameters, err := mime.ParseMediaType(strings.TrimSpace(part))
+		if err != nil {
+			continue
+		}
+		quality := 1.0
+		if rawQuality, exists := parameters["q"]; exists {
+			quality, err = strconv.ParseFloat(strings.TrimSpace(rawQuality), 64)
+			if err != nil || math.IsNaN(quality) || math.IsInf(quality, 0) || quality < 0 || quality > 1 {
+				continue
+			}
+		}
+		mediaType = strings.ToLower(mediaType)
+		if specificity, matches := jsonMediaSpecificity(mediaType); matches {
+			updateMediaPreference(&jsonPreference, quality, specificity, order)
+		}
+		if specificity, matches := htmlMediaSpecificity(mediaType); matches {
+			updateMediaPreference(&htmlPreference, quality, specificity, order)
+		}
+	}
+	return jsonPreference, htmlPreference, jsonPreference.set || htmlPreference.set
+}
+
+func updateMediaPreference(preference *mediaPreference, quality float64, specificity, order int) {
+	if !preference.set || specificity > preference.specificity ||
+		(specificity == preference.specificity && quality > preference.quality) {
+		*preference = mediaPreference{set: true, quality: quality, specificity: specificity, order: order}
+	}
+}
+
+func preferJSON(jsonPreference, htmlPreference mediaPreference) bool {
+	if !jsonPreference.set || jsonPreference.quality <= 0 {
+		return false
+	}
+	if !htmlPreference.set || htmlPreference.quality <= 0 {
 		return true
 	}
-	return strings.HasPrefix(r.URL.Path, "/api/")
+	if jsonPreference.quality != htmlPreference.quality {
+		return jsonPreference.quality > htmlPreference.quality
+	}
+	if jsonPreference.specificity != htmlPreference.specificity {
+		return jsonPreference.specificity > htmlPreference.specificity
+	}
+	if jsonPreference.order != htmlPreference.order {
+		return jsonPreference.order < htmlPreference.order
+	}
+	return false
+}
+
+func jsonMediaSpecificity(mediaType string) (int, bool) {
+	if isJSONMediaType(mediaType) {
+		return 2, true
+	}
+	if mediaType == "application/*" {
+		return 1, true
+	}
+	return 0, mediaType == "*/*"
+}
+
+func htmlMediaSpecificity(mediaType string) (int, bool) {
+	if mediaType == "text/html" || mediaType == "application/xhtml+xml" {
+		return 2, true
+	}
+	if mediaType == "text/*" {
+		return 1, true
+	}
+	return 0, mediaType == "*/*"
+}
+
+func isJSONMediaType(mediaType string) bool {
+	mediaType = strings.ToLower(strings.TrimSpace(mediaType))
+	return mediaType == "application/json" || strings.HasSuffix(mediaType, "+json")
 }
 
 // getErrorType 返回异常类型名。
 func getErrorType(err interface{}) string {
-	switch err.(type) {
-	case *HttpException:
-		return "HttpException"
-	case *ValidateException:
-		return "ValidateException"
-	case *BusinessException:
+	if asBusinessException(err) != nil {
 		return "BusinessException"
-	case error:
-		return fmt.Sprintf("%T", err)
-	default:
-		return "PanicError"
 	}
+	if asValidateException(err) != nil {
+		return "ValidateException"
+	}
+	if asHTTPException(err) != nil {
+		return "HttpException"
+	}
+	if _, ok := err.(error); ok {
+		return fmt.Sprintf("%T", err)
+	}
+	return "PanicError"
 }
 
 // getClientIP 返回真实连接地址，默认不信任客户端自带代理头。
 func getClientIP(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
 	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
 		return host
 	}
@@ -502,21 +791,71 @@ func parseDebugProxyIP(value string) net.IP {
 
 // readRequestBody 读取调试展示用请求体，并恢复 Body 供后续逻辑继续读取。
 func readRequestBody(r *http.Request) string {
-	if r.Body == nil {
+	if r == nil || r.Body == nil {
 		return ""
 	}
 
-	rawBody, err := io.ReadAll(r.Body)
+	original := r.Body
+	prefix, err := io.ReadAll(io.LimitReader(original, maxDebugRequestBodyBytes+1))
+	r.Body = &replayedRequestBody{
+		Reader: io.MultiReader(bytes.NewReader(prefix), original),
+		Closer: original,
+	}
 	if err != nil {
-		r.Body = io.NopCloser(bytes.NewReader(nil))
 		return ""
 	}
-	r.Body = io.NopCloser(bytes.NewReader(rawBody))
-
-	if len(rawBody) > 4096 {
-		rawBody = rawBody[:4096]
+	if len(prefix) > maxDebugRequestBodyBytes {
+		return string(prefix[:maxDebugRequestBodyBytes]) + truncatedRequestBodySuffix
 	}
-	return string(rawBody)
+	return string(prefix)
+}
+
+type replayedRequestBody struct {
+	io.Reader
+	io.Closer
+}
+
+func debugRequestBody(r *http.Request) string {
+	if r == nil || r.Body == nil {
+		return ""
+	}
+	contentType := r.Header.Get("Content-Type")
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	if err != nil || !isDisplayableRequestBody(mediaType) {
+		return omittedBinaryBodyText
+	}
+	return sanitizeRequestBody(readRequestBody(r), mediaType)
+}
+
+func isDisplayableRequestBody(mediaType string) bool {
+	mediaType = strings.ToLower(strings.TrimSpace(mediaType))
+	return strings.HasPrefix(mediaType, "text/") ||
+		isJSONMediaType(mediaType) ||
+		mediaType == "application/x-www-form-urlencoded" ||
+		mediaType == "application/xml" ||
+		strings.HasSuffix(mediaType, "+xml")
+}
+
+func sanitizeRequestURL(r *http.Request) string {
+	if r == nil || r.URL == nil {
+		return ""
+	}
+	cloned := *r.URL
+	query := cloned.Query()
+	for key, values := range query {
+		if !isSensitiveKey(key) {
+			continue
+		}
+		for index := range values {
+			values[index] = redactedPlaceholder
+		}
+		query[key] = values
+	}
+	cloned.RawQuery = query.Encode()
+	if cloned.User != nil {
+		cloned.User = url.User(redactedPlaceholder)
+	}
+	return sanitizeExceptionText(cloned.String())
 }
 
 func sanitizeHeaders(headers http.Header) map[string][]string {
@@ -531,6 +870,10 @@ func sanitizeHeaders(headers http.Header) map[string][]string {
 			for index := range clonedValues {
 				clonedValues[index] = redactedPlaceholder
 			}
+		} else {
+			for index := range clonedValues {
+				clonedValues[index] = sanitizeExceptionText(clonedValues[index])
+			}
 		}
 		sanitized[key] = clonedValues
 	}
@@ -542,14 +885,15 @@ func sanitizeRequestBody(body string, contentType string) string {
 		return ""
 	}
 
-	lowerContentType := strings.ToLower(contentType)
-	if strings.Contains(lowerContentType, "application/json") {
+	mediaType, _, _ := mime.ParseMediaType(contentType)
+	if isJSONMediaType(mediaType) {
 		if sanitizedJSON, ok := sanitizeJSONBody(body); ok {
 			return sanitizedJSON
 		}
+		return "[INVALID JSON BODY OMITTED]"
 	}
 
-	if strings.Contains(lowerContentType, "application/x-www-form-urlencoded") {
+	if mediaType == "application/x-www-form-urlencoded" {
 		values, err := url.ParseQuery(body)
 		if err == nil {
 			for key, list := range values {
@@ -562,75 +906,10 @@ func sanitizeRequestBody(body string, contentType string) string {
 			}
 			return values.Encode()
 		}
+		return "[INVALID FORM BODY OMITTED]"
 	}
 
-	return sensitiveTextPattern.ReplaceAllString(body, "${1}"+redactedPlaceholder)
-}
-
-func sanitizeJSONBody(body string) (string, bool) {
-	var payload interface{}
-	if err := json.Unmarshal([]byte(body), &payload); err != nil {
-		return "", false
-	}
-
-	payload = sanitizeJSONValue("", payload)
-	sanitizedBody, err := json.Marshal(payload)
-	if err != nil {
-		return "", false
-	}
-	return string(sanitizedBody), true
-}
-
-func sanitizeJSONValue(key string, value interface{}) interface{} {
-	if isSensitiveKey(key) {
-		return redactedPlaceholder
-	}
-
-	switch typed := value.(type) {
-	case map[string]interface{}:
-		sanitized := make(map[string]interface{}, len(typed))
-		for innerKey, innerValue := range typed {
-			sanitized[innerKey] = sanitizeJSONValue(innerKey, innerValue)
-		}
-		return sanitized
-	case []interface{}:
-		sanitized := make([]interface{}, len(typed))
-		for index, item := range typed {
-			sanitized[index] = sanitizeJSONValue(key, item)
-		}
-		return sanitized
-	default:
-		return value
-	}
-}
-
-func isSensitiveKey(key string) bool {
-	lowerKey := strings.ToLower(strings.TrimSpace(key))
-	if lowerKey == "" {
-		return false
-	}
-
-	sensitiveKeys := []string{
-		"authorization",
-		"cookie",
-		"set-cookie",
-		"password",
-		"passwd",
-		"token",
-		"secret",
-		"session",
-		"api_key",
-		"apikey",
-		"access_key",
-		"refresh_token",
-	}
-
-	for _, sensitiveKey := range sensitiveKeys {
-		if lowerKey == sensitiveKey || strings.Contains(lowerKey, sensitiveKey) {
-			return true
-		}
-	}
-	return false
+	return strings.ToValidUTF8(sensitiveTextPattern.ReplaceAllString(body, "${1}"+redactedPlaceholder), "�")
 }
 
 // parseGoStack 把 Go 堆栈解析为结构化帧信息。

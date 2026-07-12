@@ -4,14 +4,8 @@ import (
 	"testing"
 )
 
-type fakeManagerConnector struct{}
-
 type fakeManagerConnection struct {
 	name string
-}
-
-func (c *fakeManagerConnector) Connect(config Config) (Connection, error) {
-	return &fakeManagerConnection{name: config.Database}, nil
 }
 
 func (c *fakeManagerConnection) Select(table string, fields string, where []string, args []interface{}, order string, limit int, offset int) ([]map[string]interface{}, error) {
@@ -43,10 +37,18 @@ func TestManagerReturnsNamedConnections(t *testing.T) {
 	primary := NewDB(&fakeManagerConnection{name: "primary"})
 	analytics := NewDB(&fakeManagerConnection{name: "analytics"})
 
-	manager.Add("primary", primary)
-	manager.Add("analytics", analytics)
+	if err := manager.Add("primary", primary); err != nil {
+		t.Fatalf("注册默认连接失败，错误为 %v", err)
+	}
+	if err := manager.Add("analytics", analytics); err != nil {
+		t.Fatalf("注册命名连接失败，错误为 %v", err)
+	}
 
-	if manager.Default() != primary {
+	defaultConnection, err := manager.Default()
+	if err != nil {
+		t.Fatalf("读取默认连接失败，错误为 %v", err)
+	}
+	if defaultConnection != primary {
 		t.Fatal("默认连接返回不正确")
 	}
 	conn, err := manager.Connection("analytics")

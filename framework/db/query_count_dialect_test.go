@@ -15,7 +15,7 @@ type recordingRawConn struct {
 func (c *recordingRawConn) Select(table, fields string, where []string, args []interface{}, order string, limit, offset int) ([]map[string]interface{}, error) {
 	return []map[string]interface{}{}, nil
 }
-func (c *recordingRawConn) Insert(string, map[string]interface{}) (int64, error)        { return 1, nil }
+func (c *recordingRawConn) Insert(string, map[string]interface{}) (int64, error) { return 1, nil }
 func (c *recordingRawConn) Update(string, map[string]interface{}, []string, []interface{}) (int64, error) {
 	return 1, nil
 }

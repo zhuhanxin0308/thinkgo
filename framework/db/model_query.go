@@ -15,13 +15,39 @@ type ModelQuery struct {
 	onlyTrashed bool // 从 Model 移到 ModelQuery
 }
 
+func (mq *ModelQuery) validationError() error {
+	if mq == nil || mq.model == nil || mq.query == nil {
+		return fmt.Errorf("%w: 模型查询不能为空", ErrInvalidModel)
+	}
+	return mq.model.validationError()
+}
+
 // newModelQuery 创建一个新的模型查询对象。
 func (m *Model) newModelQuery() *ModelQuery {
-	q := m.db.Name(m.table)
-	q.autoTimestamp = m.autoTimestamp
-	q.createTimeField = m.createTimeField
-	q.updateTimeField = m.updateTimeField
-	q.timestampValueType = m.timestampValueType
+	if m == nil {
+		return &ModelQuery{query: newQuery(nil, "").setError(ErrInvalidModel)}
+	}
+	m.mu.RLock()
+	database := m.db
+	table := m.table
+	autoTimestamp := m.autoTimestamp
+	createTimeField := m.createTimeField
+	updateTimeField := m.updateTimeField
+	timestampValueType := m.timestampValueType
+	primaryKey := m.primaryKey
+	configErr := m.configErr
+	m.mu.RUnlock()
+	q := newQuery(database, table)
+	if configErr != nil {
+		q.setError(configErr)
+	}
+	q.autoTimestamp = autoTimestamp
+	q.createTimeField = createTimeField
+	q.updateTimeField = updateTimeField
+	q.timestampValueType = timestampValueType
+	if primaryKey != "" {
+		q.insertPrimaryKey = primaryKey
+	}
 	return &ModelQuery{
 		model: m,
 		query: q,
@@ -43,12 +69,19 @@ func (mq *ModelQuery) clone() *ModelQuery {
 // 在克隆上追加软删除条件，避免污染共享的 mq.query —— 否则对同一个 ModelQuery
 // 先后调用 Count()/Select() 会重复追加 "delete_time IS NULL"，且使终端方法不可重复执行。
 func (mq *ModelQuery) prepareQuery() *Query {
+	if mq == nil || mq.query == nil || mq.model == nil {
+		return newQuery(nil, "").setError(ErrInvalidModel)
+	}
 	q := mq.query.clone()
-	if mq.model.softDelete && !mq.withTrashed {
+	mq.model.mu.RLock()
+	softDelete := mq.model.softDelete
+	deleteTimeField := mq.model.deleteTimeField
+	mq.model.mu.RUnlock()
+	if softDelete && !mq.withTrashed {
 		if mq.onlyTrashed {
-			q = q.Where(mq.model.deleteTimeField + " IS NOT NULL")
+			q = q.Where(deleteTimeField + " IS NOT NULL")
 		} else {
-			q = q.Where(mq.model.deleteTimeField + " IS NULL")
+			q = q.Where(deleteTimeField + " IS NULL")
 		}
 	}
 	return q
@@ -95,10 +128,8 @@ func (mq *ModelQuery) Select() ([]map[string]interface{}, error) {
 			return nil, err
 		}
 	}
-	if len(mq.model.getters) > 0 {
-		for _, row := range rows {
-			mq.model.applyGetters(row)
-		}
+	for _, row := range rows {
+		mq.model.applyGetters(row)
 	}
 	return rows, nil
 }
@@ -110,38 +141,57 @@ func (mq *ModelQuery) Count() (int64, error) {
 
 // Insert 使用 map 插入记录，应用修改器并触发插入事件。
 func (mq *ModelQuery) Insert(data map[string]interface{}) (int64, error) {
-	mq.model.applySetters(data)
-	if !mq.model.fireEvent(ModelBeforeInsert, data) {
+	if err := mq.validationError(); err != nil {
+		return 0, err
+	}
+	workingData := cloneDatabaseMap(data)
+	mq.model.applySetters(workingData)
+	if !mq.model.fireEvent(ModelBeforeInsert, workingData) {
 		return 0, fmt.Errorf("before_insert 事件回调阻止了插入操作")
 	}
 	q := mq.prepareQuery()
-	id, err := q.Insert(data)
+	id, err := q.Insert(workingData)
 	if err != nil {
 		return 0, err
 	}
 	// 回填自增主键时使用模型配置的主键字段名，而非硬编码 "id"。
-	data[mq.model.primaryKeyField()] = id
-	mq.model.fireEvent(ModelAfterInsert, data)
+	workingData[mq.model.primaryKeyField()] = id
+	mq.model.fireEvent(ModelAfterInsert, workingData)
 	return id, nil
 }
 
 // Update 使用 map 更新记录，应用修改器并触发更新事件。
 func (mq *ModelQuery) Update(data map[string]interface{}) (int64, error) {
-	mq.model.applySetters(data)
-	if !mq.model.fireEvent(ModelBeforeUpdate, data) {
+	if err := mq.validationError(); err != nil {
+		return 0, err
+	}
+	// 软删除模型会自动追加 delete_time 条件；该框架条件不能替代调用方业务条件，
+	// 否则一次无条件更新会覆盖全部未删除记录。
+	if len(mq.query.where) == 0 {
+		return 0, ErrUnsafeFullTableMutation
+	}
+	workingData := cloneDatabaseMap(data)
+	mq.model.applySetters(workingData)
+	if !mq.model.fireEvent(ModelBeforeUpdate, workingData) {
 		return 0, fmt.Errorf("before_update 事件回调阻止了更新操作")
 	}
 	q := mq.prepareQuery()
-	affected, err := q.Update(data)
+	affected, err := q.Update(workingData)
 	if err != nil {
 		return 0, err
 	}
-	mq.model.fireEvent(ModelAfterUpdate, data)
+	mq.model.fireEvent(ModelAfterUpdate, workingData)
 	return affected, nil
 }
 
 // Delete 删除记录，如果是软删除模型会自动改写为更新时间戳，触发删除事件。
 func (mq *ModelQuery) Delete() (int64, error) {
+	if err := mq.validationError(); err != nil {
+		return 0, err
+	}
+	if len(mq.query.where) == 0 {
+		return 0, ErrUnsafeFullTableMutation
+	}
 	emptyData := make(map[string]interface{})
 	if !mq.model.fireEvent(ModelBeforeDelete, emptyData) {
 		return 0, fmt.Errorf("before_delete 事件回调阻止了删除操作")
@@ -149,9 +199,15 @@ func (mq *ModelQuery) Delete() (int64, error) {
 	q := mq.prepareQuery()
 	var affected int64
 	var err error
-	if mq.model.softDelete {
+	mq.model.mu.RLock()
+	softDelete := mq.model.softDelete
+	deleteTimeField := mq.model.deleteTimeField
+	mq.model.mu.RUnlock()
+	if softDelete {
 		data := map[string]interface{}{}
-		mq.model.setTimestamp(data, mq.model.deleteTimeField, time.Now())
+		if err := mq.model.setTimestamp(data, deleteTimeField, time.Now()); err != nil {
+			return 0, err
+		}
 		affected, err = q.Update(data)
 	} else {
 		affected, err = q.Delete()
@@ -165,13 +221,19 @@ func (mq *ModelQuery) Delete() (int64, error) {
 
 // ForceDelete 强制物理删除记录，忽略软删除配置，但触发删除事件。
 func (mq *ModelQuery) ForceDelete() (int64, error) {
+	if err := mq.validationError(); err != nil {
+		return 0, err
+	}
+	if len(mq.query.where) == 0 {
+		return 0, ErrUnsafeFullTableMutation
+	}
 	emptyData := make(map[string]interface{})
 	if !mq.model.fireEvent(ModelBeforeDelete, emptyData) {
 		return 0, fmt.Errorf("before_delete 事件回调阻止了物理删除操作")
 	}
-	q := mq.query
+	q := mq.query.clone()
 	if len(q.where) == 0 {
-		return 0, fmt.Errorf("ForceDelete 禁止无 WHERE 条件执行，防止误删全表数据")
+		return 0, ErrUnsafeFullTableMutation
 	}
 	affected, err := q.Delete()
 	if err != nil {
@@ -183,15 +245,23 @@ func (mq *ModelQuery) ForceDelete() (int64, error) {
 
 // Restore 恢复软删除记录。
 func (mq *ModelQuery) Restore() (int64, error) {
-	if !mq.model.softDelete {
-		return 0, nil
+	if err := mq.validationError(); err != nil {
+		return 0, err
 	}
-	q := mq.query
-	if len(q.where) == 0 {
-		return 0, fmt.Errorf("Restore 禁止无 WHERE 条件执行，防止恢复全部已删除记录")
+	mq.model.mu.RLock()
+	softDelete := mq.model.softDelete
+	deleteTimeField := mq.model.deleteTimeField
+	mq.model.mu.RUnlock()
+	if !softDelete {
+		return 0, fmt.Errorf("%w: Restore 仅适用于软删除模型", ErrInvalidModel)
 	}
-	q.Where(mq.model.deleteTimeField + " IS NOT NULL")
-	affected, err := q.Update(map[string]interface{}{mq.model.deleteTimeField: nil})
+	// 恢复条件必须由业务方明确限定，自动追加的“已删除”条件不能放开全表恢复。
+	if len(mq.query.where) == 0 {
+		return 0, ErrUnsafeFullTableMutation
+	}
+	q := mq.query.clone()
+	q.Where(deleteTimeField + " IS NOT NULL")
+	affected, err := q.Update(map[string]interface{}{deleteTimeField: nil})
 	return affected, err
 }
 
@@ -214,13 +284,16 @@ func (mq *ModelQuery) Paginate(page, pageSize int) (*Paginator, error) {
 	if err != nil {
 		return nil, err
 	}
-	return buildPaginator(list, total, page, pageSize), nil
+	return buildPaginator(list, total, page, pageSize)
 }
 
 // Chunk 分块查询，每次查询 count 条记录并执行回调。
 func (mq *ModelQuery) Chunk(count int, callback func(rows []map[string]interface{}) bool) error {
 	if count <= 0 {
 		count = 100
+	}
+	if callback == nil {
+		return fmt.Errorf("%w: 模型 Chunk 回调不能为空", ErrInvalidQuery)
 	}
 	page := 1
 	for {
@@ -246,15 +319,15 @@ func (mq *ModelQuery) Chunk(count int, callback func(rows []map[string]interface
 
 // ChunkById 基于主键游标分批遍历（避免 OFFSET 深分页问题），自动应用软删除限制与获取器。
 func (mq *ModelQuery) ChunkById(count int, pkField string, callback func(rows []map[string]interface{}) bool) error {
+	if callback == nil {
+		return fmt.Errorf("%w: 模型 ChunkById 回调不能为空", ErrInvalidQuery)
+	}
 	if pkField == "" {
 		pkField = mq.model.primaryKeyField()
 	}
-	hasGetters := len(mq.model.getters) > 0
 	return mq.prepareQuery().ChunkById(count, pkField, func(rows []map[string]interface{}) bool {
-		if hasGetters {
-			for _, row := range rows {
-				mq.model.applyGetters(row)
-			}
+		for _, row := range rows {
+			mq.model.applyGetters(row)
 		}
 		return callback(rows)
 	})
@@ -290,7 +363,10 @@ func (mq *ModelQuery) Value(field string) (interface{}, error) {
 	if val == nil {
 		return nil, nil
 	}
-	if getter, ok := mq.model.getters[field]; ok {
+	mq.model.mu.RLock()
+	getter, ok := mq.model.getters[field]
+	mq.model.mu.RUnlock()
+	if ok {
 		return getter(val, map[string]interface{}{field: val}), nil
 	}
 	return val, nil
@@ -306,7 +382,9 @@ func (mq *ModelQuery) Column(field string, key ...string) (interface{}, error) {
 	if res == nil {
 		return nil, nil
 	}
+	mq.model.mu.RLock()
 	getter, hasGetter := mq.model.getters[field]
+	mq.model.mu.RUnlock()
 	if !hasGetter {
 		return res, nil
 	}
@@ -333,10 +411,14 @@ func (mq *ModelQuery) Column(field string, key ...string) (interface{}, error) {
 
 // InsertAll 批量插入多条记录。
 func (mq *ModelQuery) InsertAll(dataList []map[string]interface{}) (int64, error) {
-	for _, data := range dataList {
+	workingList := make([]map[string]interface{}, len(dataList))
+	for index, data := range dataList {
+		workingList[index] = cloneDatabaseMap(data)
+	}
+	for _, data := range workingList {
 		mq.model.applySetters(data)
 	}
-	return mq.prepareQuery().InsertAll(dataList)
+	return mq.prepareQuery().InsertAll(workingList)
 }
 
 // ==========================================
@@ -544,10 +626,21 @@ func (mq *ModelQuery) loadRelations(rows []map[string]interface{}) error {
 	if mq == nil || mq.model == nil || len(rows) == 0 || len(mq.relations) == 0 {
 		return nil
 	}
+	mq.model.mu.RLock()
+	definitions := make(map[string]RelationDefinition, len(mq.model.relations))
+	for name, definition := range mq.model.relations {
+		definitions[name] = definition
+	}
+	mq.model.mu.RUnlock()
+	loaded := make(map[string]bool, len(mq.relations))
 	for _, relationName := range mq.relations {
-		relation, ok := mq.model.relations[relationName]
+		if loaded[relationName] {
+			return fmt.Errorf("%w: 关联 %q 重复预加载", ErrInvalidRelation, relationName)
+		}
+		loaded[relationName] = true
+		relation, ok := definitions[relationName]
 		if !ok {
-			return fmt.Errorf("relation not defined: %s", relationName)
+			return fmt.Errorf("%w: 关联 %q 未定义", ErrInvalidRelation, relationName)
 		}
 		if err := mq.loadRelation(rows, relation); err != nil {
 			return err
@@ -560,47 +653,91 @@ func (mq *ModelQuery) loadRelations(rows []map[string]interface{}) error {
 func (mq *ModelQuery) loadRelation(rows []map[string]interface{}, relation RelationDefinition) error {
 	switch relation.Type {
 	case relationHasOne, relationHasMany:
-		keys := collectRelationKeys(rows, relation.LocalKey)
-		if len(keys) == 0 {
-			return nil
-		}
-		relatedRows, err := relation.Related.query().WhereIn(relation.ForeignKey, keys).Select()
+		keys, err := collectRelationKeys(rows, relation.LocalKey)
 		if err != nil {
 			return err
 		}
-		grouped := groupRelationRows(relatedRows, relation.ForeignKey)
-		for _, row := range rows {
-			key := fmt.Sprint(row[relation.LocalKey])
+		if len(keys) == 0 {
+			return nil
+		}
+		relatedRows, err := relation.Related.newModelQuery().WhereIn(relation.ForeignKey, keys).Select()
+		if err != nil {
+			return err
+		}
+		grouped, err := groupRelationRows(relatedRows, relation.ForeignKey)
+		if err != nil {
+			return err
+		}
+		for index, row := range rows {
+			value, exists := row[relation.LocalKey]
+			if !exists {
+				return fmt.Errorf("%w: 第 %d 行缺少本地键 %q", ErrInvalidRelation, index, relation.LocalKey)
+			}
+			key, usable, err := relationValueKey(value)
+			if err != nil {
+				return err
+			}
 			if relation.Type == relationHasOne {
 				records := grouped[key]
-				if len(records) > 0 {
+				if len(records) > 1 {
+					return fmt.Errorf("%w: 一对一关联 %q 返回多条记录", ErrInvalidRelation, relation.Name)
+				}
+				if usable && len(records) == 1 {
 					row[relation.Name] = records[0]
 				} else {
 					row[relation.Name] = map[string]interface{}(nil)
 				}
 				continue
 			}
-			row[relation.Name] = grouped[key]
+			if !usable {
+				row[relation.Name] = []map[string]interface{}{}
+			} else {
+				row[relation.Name] = grouped[key]
+			}
 		}
 	case relationBelongsTo:
-		keys := collectRelationKeys(rows, relation.ForeignKey)
-		if len(keys) == 0 {
-			return nil
-		}
-		relatedRows, err := relation.Related.query().WhereIn(relation.OwnerKey, keys).Select()
+		keys, err := collectRelationKeys(rows, relation.ForeignKey)
 		if err != nil {
 			return err
 		}
-		indexed := indexRelationRows(relatedRows, relation.OwnerKey)
-		for _, row := range rows {
-			row[relation.Name] = indexed[fmt.Sprint(row[relation.ForeignKey])]
-		}
-	case relationBelongsToMany:
-		keys := collectRelationKeys(rows, relation.LocalKey)
 		if len(keys) == 0 {
 			return nil
 		}
-		pivotRows, err := mq.model.db.Name(relation.PivotTable).WhereIn(relation.ForeignKey, keys).Select()
+		relatedRows, err := relation.Related.newModelQuery().WhereIn(relation.OwnerKey, keys).Select()
+		if err != nil {
+			return err
+		}
+		indexed, err := indexRelationRows(relatedRows, relation.OwnerKey)
+		if err != nil {
+			return err
+		}
+		for index, row := range rows {
+			value, exists := row[relation.ForeignKey]
+			if !exists {
+				return fmt.Errorf("%w: 第 %d 行缺少外键 %q", ErrInvalidRelation, index, relation.ForeignKey)
+			}
+			key, usable, err := relationValueKey(value)
+			if err != nil {
+				return err
+			}
+			if usable {
+				row[relation.Name] = indexed[key]
+			} else {
+				row[relation.Name] = map[string]interface{}(nil)
+			}
+		}
+	case relationBelongsToMany:
+		keys, err := collectRelationKeys(rows, relation.LocalKey)
+		if err != nil {
+			return err
+		}
+		if len(keys) == 0 {
+			return nil
+		}
+		mq.model.mu.RLock()
+		database := mq.model.db
+		mq.model.mu.RUnlock()
+		pivotRows, err := database.Name(relation.PivotTable).WhereIn(relation.ForeignKey, keys).Select()
 		if err != nil {
 			return fmt.Errorf("预加载多对多关联 %s 中间表查询失败: %w", relation.Name, err)
 		}
@@ -613,33 +750,68 @@ func (mq *ModelQuery) loadRelation(rows []map[string]interface{}, relation Relat
 		pivotMap := make(map[string][]interface{})
 		relatedKeySet := make(map[string]bool)
 		allRelatedKeys := make([]interface{}, 0)
-		for _, pRow := range pivotRows {
-			lk := fmt.Sprint(pRow[relation.ForeignKey])
-			rk := pRow[relation.RelatedForeignKey]
+		for index, pivotRow := range pivotRows {
+			localValue, localExists := pivotRow[relation.ForeignKey]
+			relatedValue, relatedExists := pivotRow[relation.RelatedForeignKey]
+			if !localExists || !relatedExists {
+				return fmt.Errorf("%w: 中间表第 %d 行缺少关联键", ErrInvalidRelation, index)
+			}
+			localKey, localUsable, err := relationValueKey(localValue)
+			if err != nil {
+				return err
+			}
+			relatedKey, relatedUsable, err := relationValueKey(relatedValue)
+			if err != nil {
+				return err
+			}
+			if !localUsable || !relatedUsable {
+				continue
+			}
+			rk := relatedValue
+			lk := localKey
 			pivotMap[lk] = append(pivotMap[lk], rk)
-			rkStr := fmt.Sprint(rk)
-			if !relatedKeySet[rkStr] {
-				relatedKeySet[rkStr] = true
+			if !relatedKeySet[relatedKey] {
+				relatedKeySet[relatedKey] = true
 				allRelatedKeys = append(allRelatedKeys, rk)
 			}
 		}
 		relatedPK := relation.Related.primaryKeyField()
-		relatedRows, err := relation.Related.query().WhereIn(relatedPK, allRelatedKeys).Select()
+		relatedRows, err := relation.Related.newModelQuery().WhereIn(relatedPK, allRelatedKeys).Select()
 		if err != nil {
 			return err
 		}
-		relatedIndex := indexRelationRows(relatedRows, relatedPK)
-		for _, row := range rows {
-			lk := fmt.Sprint(row[relation.LocalKey])
-			relatedIds := pivotMap[lk]
+		relatedIndex, err := indexRelationRows(relatedRows, relatedPK)
+		if err != nil {
+			return err
+		}
+		for index, row := range rows {
+			localValue, exists := row[relation.LocalKey]
+			if !exists {
+				return fmt.Errorf("%w: 第 %d 行缺少本地键 %q", ErrInvalidRelation, index, relation.LocalKey)
+			}
+			localKey, usable, err := relationValueKey(localValue)
+			if err != nil {
+				return err
+			}
+			if !usable {
+				row[relation.Name] = []map[string]interface{}{}
+				continue
+			}
+			relatedIds := pivotMap[localKey]
 			related := make([]map[string]interface{}, 0, len(relatedIds))
 			for _, rid := range relatedIds {
-				if r, ok := relatedIndex[fmt.Sprint(rid)]; ok {
+				relatedKey, _, err := relationValueKey(rid)
+				if err != nil {
+					return err
+				}
+				if r, ok := relatedIndex[relatedKey]; ok {
 					related = append(related, r)
 				}
 			}
 			row[relation.Name] = related
 		}
+	default:
+		return fmt.Errorf("%w: 未知关联类型 %q", ErrInvalidRelation, relation.Type)
 	}
 	return nil
 }

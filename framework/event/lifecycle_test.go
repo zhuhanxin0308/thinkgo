@@ -14,7 +14,6 @@ func TestLifecycleEventNames(t *testing.T) {
 		{NewHttpRunEvent(), EventHttpRun},
 		{NewHttpEndEvent(200), EventHttpEnd},
 		{NewRouteLoadedEvent(), EventRouteLoaded},
-		{NewLogWriteEvent("file"), EventLogWrite},
 	}
 	for _, tc := range cases {
 		if tc.event.Name() != tc.expected {
@@ -31,14 +30,6 @@ func TestHttpEndEventCarriesStatusCode(t *testing.T) {
 	}
 }
 
-// TestLogWriteEventCarriesChannel 验证 LogWrite 事件携带频道名。
-func TestLogWriteEventCarriesChannel(t *testing.T) {
-	evt := NewLogWriteEvent("file")
-	if evt.Channel != "file" {
-		t.Fatalf("LogWriteEvent 频道不正确，期望 file，实际 %s", evt.Channel)
-	}
-}
-
 // TestLifecycleEventsDispatch 验证生命周期事件可以正常通过 Dispatcher 分发和监听。
 func TestLifecycleEventsDispatch(t *testing.T) {
 	dispatcher := NewDispatcher()
@@ -47,23 +38,38 @@ func TestLifecycleEventsDispatch(t *testing.T) {
 	var httpRunFired bool
 	var httpEndStatus int
 
-	dispatcher.Listen(EventAppInit, &SimpleListener{Handler: func(e Event) {
+	if err := dispatcher.Listen(EventAppInit, &SimpleListener{Handler: func(e Event) error {
 		appInitFired = true
-	}})
+		return nil
+	}}); err != nil {
+		t.Fatalf("注册 AppInit 监听器失败: %v", err)
+	}
 
-	dispatcher.Listen(EventHttpRun, &SimpleListener{Handler: func(e Event) {
+	if err := dispatcher.Listen(EventHttpRun, &SimpleListener{Handler: func(e Event) error {
 		httpRunFired = true
-	}})
+		return nil
+	}}); err != nil {
+		t.Fatalf("注册 HttpRun 监听器失败: %v", err)
+	}
 
-	dispatcher.Listen(EventHttpEnd, &SimpleListener{Handler: func(e Event) {
+	if err := dispatcher.Listen(EventHttpEnd, &SimpleListener{Handler: func(e Event) error {
 		if endEvent, ok := e.(*HttpEndEvent); ok {
 			httpEndStatus = endEvent.StatusCode
 		}
-	}})
+		return nil
+	}}); err != nil {
+		t.Fatalf("注册 HttpEnd 监听器失败: %v", err)
+	}
 
-	dispatcher.Dispatch(NewAppInitEvent())
-	dispatcher.Dispatch(NewHttpRunEvent())
-	dispatcher.Dispatch(NewHttpEndEvent(200))
+	if err := dispatcher.Dispatch(NewAppInitEvent()); err != nil {
+		t.Fatalf("分发 AppInit 事件失败: %v", err)
+	}
+	if err := dispatcher.Dispatch(NewHttpRunEvent()); err != nil {
+		t.Fatalf("分发 HttpRun 事件失败: %v", err)
+	}
+	if err := dispatcher.Dispatch(NewHttpEndEvent(200)); err != nil {
+		t.Fatalf("分发 HttpEnd 事件失败: %v", err)
+	}
 
 	if !appInitFired {
 		t.Fatal("AppInit 事件未触发")

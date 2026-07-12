@@ -1,6 +1,7 @@
 package command
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,9 +21,11 @@ func TestMakeModelUsesCurrentORMConvention(t *testing.T) {
 	input := &console.Input{
 		Args: []string{"UserProfile"},
 	}
-	output := &console.Output{}
+	output := console.NewOutputWithWriters(io.Discard, io.Discard, false)
 
-	cmd.Execute(input, output)
+	if err := cmd.Execute(input, output); err != nil {
+		t.Fatalf("执行模型生成命令失败: %v", err)
+	}
 
 	filename := filepath.Join(basePath, "app", "model", "user_profile.go")
 	content, err := os.ReadFile(filename)
@@ -37,7 +40,12 @@ func TestMakeModelUsesCurrentORMConvention(t *testing.T) {
 	if !strings.Contains(text, "*db.Model") {
 		t.Fatalf("模型模板应嵌入 *db.Model，实际为:\n%s", text)
 	}
-	if !strings.Contains(text, `m.Model = db.NewModelAuto(database, m)`) {
-		t.Fatalf("模型模板应默认使用 NewModelAuto，实际为:\n%s", text)
+	if !strings.Contains(text, `func NewUserProfile(database *db.DB) (*UserProfile, error)`) {
+		t.Fatalf("模型构造器必须暴露 NewModelAuto 的错误，实际为:\n%s", text)
+	}
+	if !strings.Contains(text, `model, err := db.NewModelAuto(database, m)`) ||
+		!strings.Contains(text, `if err != nil`) ||
+		!strings.Contains(text, `m.Model = model`) {
+		t.Fatalf("模型模板必须完整处理 NewModelAuto 错误，实际为:\n%s", text)
 	}
 }

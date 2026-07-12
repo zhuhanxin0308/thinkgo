@@ -2,51 +2,26 @@ package cache
 
 import "time"
 
-// Driver interface for cache drivers
+// Driver 定义缓存后端必须实现的显式错误与命中语义。
 type Driver interface {
-	// Get gets a value from cache
-	Get(key string) interface{}
+	// Get 返回值、命中标志和后端错误；命中标志允许正确缓存 nil。
+	Get(key string) (value interface{}, found bool, err error)
 
-	// Set sets a value in cache
-	Set(key string, val interface{}, ttl time.Duration)
+	// Set 写入缓存；ttl 为 0 表示永不过期。
+	Set(key string, value interface{}, ttl time.Duration) error
 
-	// Has checks if key exists
-	Has(key string) bool
+	// Has 判断未过期键是否存在。
+	Has(key string) (bool, error)
 
-	// Delete deletes a key
-	Delete(key string)
+	// Delete 删除指定键，不存在视为成功。
+	Delete(key string) error
 
-	// Clear clears the cache
-	Clear()
+	// Clear 清空当前驱动管理的数据；除显式授权的整库操作外不得释放缓存锁。
+	Clear() error
 
-	// Inc increments a key
-	Inc(key string, step int64) int64
+	// Inc 原子或在驱动能力范围内安全递增整数值。
+	Inc(key string, step int64) (int64, error)
 
-	// Dec decrements a key
-	Dec(key string, step int64) int64
-}
-
-// noopDriver 在缓存驱动缺失时兜底，避免运行时因 nil 驱动 panic。
-type noopDriver struct{}
-
-func (noopDriver) Get(key string) interface{} {
-	return nil
-}
-
-func (noopDriver) Set(key string, val interface{}, ttl time.Duration) {}
-
-func (noopDriver) Has(key string) bool {
-	return false
-}
-
-func (noopDriver) Delete(key string) {}
-
-func (noopDriver) Clear() {}
-
-func (noopDriver) Inc(key string, step int64) int64 {
-	return 0
-}
-
-func (noopDriver) Dec(key string, step int64) int64 {
-	return 0
+	// Dec 原子或在驱动能力范围内安全递减整数值。
+	Dec(key string, step int64) (int64, error)
 }

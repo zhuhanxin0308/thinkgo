@@ -1,6 +1,7 @@
 package connector
 
 import (
+	"errors"
 	"testing"
 
 	"thinkgo/framework/db"
@@ -41,5 +42,18 @@ func TestBuildNeo4jURIAllowsExplicitSchemeOverride(t *testing.T) {
 func TestBuildNeo4jURIRejectsUnsupportedScheme(t *testing.T) {
 	if _, err := buildNeo4jURI(db.Config{Params: map[string]string{"scheme": "http"}}); err == nil {
 		t.Fatal("Neo4j URI 应拒绝不受支持的协议")
+	}
+}
+
+// TestBuildNeo4jURIRejectsIgnoredParameters 验证连接器不会接受随后被静默丢弃的参数。
+func TestBuildNeo4jURIRejectsIgnoredParameters(t *testing.T) {
+	for _, params := range []map[string]string{
+		{"scheme": "neo4j+s", "ignored": "value"},
+		{" scheme ": "bolt"},
+	} {
+		_, err := buildNeo4jURI(db.Config{Params: params})
+		if !errors.Is(err, db.ErrInvalidDatabaseConfig) {
+			t.Fatalf("未知或空白 Neo4j 参数应返回 ErrInvalidDatabaseConfig: params=%v err=%v", params, err)
+		}
 	}
 }

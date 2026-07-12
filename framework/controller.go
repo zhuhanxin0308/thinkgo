@@ -108,13 +108,9 @@ func (c *Controller) Redirect(url string, code ...int) *context.Response {
 	return context.NewResponse().Redirect(url, code...)
 }
 
-// Validate 验证请求数据
-func (c *Controller) Validate(data map[string]interface{}, rules map[string]string) (bool, string) {
-	v := validate.Make(data, rules)
-	if !v.Check() {
-		return false, v.Error()
-	}
-	return true, ""
+// Validate 验证请求数据，数据违规与规则配置错误分别通过 Result 和 error 返回。
+func (c *Controller) Validate(data map[string]interface{}, rules map[string]string) (validate.Result, error) {
+	return validate.NewValidator().SetRules(rules).Validate(data)
 }
 
 // Lang 获取多语言翻译（便捷方法）

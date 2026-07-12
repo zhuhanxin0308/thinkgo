@@ -9,7 +9,7 @@ type User struct {
 
 func init() {
 	// 注册控制器类型，HTTP 内核会在每次请求时创建新实例，避免并发状态串扰。
-	framework.RegisterController("User", &User{})
+	framework.MustRegisterController("User", &User{})
 }
 
 // Index 返回用户列表入口的示例响应。

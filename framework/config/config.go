@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 )
@@ -72,33 +73,34 @@ func (c *Config) Load(file string, name string) error {
 	return nil
 }
 
-// Get gets a config value with dot notation.
-//
-// 注意：返回的若是 map/slice，为内部配置的引用（出于性能不做拷贝）。
-// 调用方必须将其视为只读，禁止直接修改；如需可变副本请使用 GetMapCopy。
-// 所有写入必须经由 Set（持写锁并失效缓存）。
+// Get 使用点路径读取配置；map 和 slice 始终在锁内生成递归快照。
+// 调用方可以安全修改返回值，所有共享配置写入仍必须通过 Set 完成。
 func (c *Config) Get(name string, def ...interface{}) interface{} {
 	name = strings.ToLower(strings.TrimSpace(name))
 
 	c.lock.RLock()
 	if name == "" {
-		defer c.lock.RUnlock()
-		return c.config
+		value := deepCopyValue(c.config)
+		c.lock.RUnlock()
+		return value
 	}
 
 	if !strings.Contains(name, ".") {
-		defer c.lock.RUnlock()
 		if v, ok := c.config[name]; ok {
-			return v
+			value := deepCopyValue(v)
+			c.lock.RUnlock()
+			return value
 		}
+		c.lock.RUnlock()
 		if len(def) > 0 {
 			return def[0]
 		}
 		return nil
 	}
 	if cached, ok := c.lookupCache[name]; ok {
+		value := resolveLookupValue(cached, def...)
 		c.lock.RUnlock()
-		return resolveLookupValue(cached, def...)
+		return value
 	}
 	c.lock.RUnlock()
 
@@ -166,8 +168,7 @@ func (c *Config) GetInt(name string, def ...int) int {
 	}
 }
 
-// GetMap 安全读取 map 配置，类型不符或不存在时返回空 map（非 nil），避免调用方断言 panic。
-// 返回的是内部配置引用，调用方必须只读；需要修改请用 GetMapCopy。
+// GetMap 安全读取 map 配置并返回独立快照；类型不符时返回非 nil 空 map。
 func (c *Config) GetMap(name string) map[string]interface{} {
 	if v, ok := c.Get(name).(map[string]interface{}); ok {
 		return v
@@ -175,10 +176,9 @@ func (c *Config) GetMap(name string) map[string]interface{} {
 	return make(map[string]interface{})
 }
 
-// GetMapCopy 返回 map 配置的深拷贝，供需要在本地修改而不污染共享配置的调用方使用。
-// 仅在确需可变副本时调用，普通读取请用 GetMap 以避免不必要的拷贝开销。
+// GetMapCopy 保留兼容名称；GetMap 已经具备相同的递归快照语义。
 func (c *Config) GetMapCopy(name string) map[string]interface{} {
-	return deepCopyMap(c.GetMap(name))
+	return c.GetMap(name)
 }
 
 // deepCopyMap 递归深拷贝配置 map，隔离嵌套 map/slice，避免修改副本影响内部配置。
@@ -217,6 +217,55 @@ func deepCopyValue(value interface{}) interface{} {
 		return append([]float64(nil), typed...)
 	case []bool:
 		return append([]bool(nil), typed...)
+	default:
+		cloned := deepCopyCollection(reflect.ValueOf(value))
+		if !cloned.IsValid() {
+			return nil
+		}
+		return cloned.Interface()
+	}
+}
+
+// deepCopyCollection 保留强类型集合的原始类型并递归复制其 map、slice 和 array 成员。
+func deepCopyCollection(value reflect.Value) reflect.Value {
+	if !value.IsValid() {
+		return value
+	}
+
+	switch value.Kind() {
+	case reflect.Interface:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		cloned := deepCopyCollection(value.Elem())
+		result := reflect.New(value.Type()).Elem()
+		result.Set(cloned)
+		return result
+	case reflect.Map:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		result := reflect.MakeMapWithSize(value.Type(), value.Len())
+		iterator := value.MapRange()
+		for iterator.Next() {
+			result.SetMapIndex(iterator.Key(), deepCopyCollection(iterator.Value()))
+		}
+		return result
+	case reflect.Slice:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		result := reflect.MakeSlice(value.Type(), value.Len(), value.Cap())
+		for index := 0; index < value.Len(); index++ {
+			result.Index(index).Set(deepCopyCollection(value.Index(index)))
+		}
+		return result
+	case reflect.Array:
+		result := reflect.New(value.Type()).Elem()
+		for index := 0; index < value.Len(); index++ {
+			result.Index(index).Set(deepCopyCollection(value.Index(index)))
+		}
+		return result
 	default:
 		return value
 	}
@@ -319,7 +368,7 @@ func (c *Config) invalidateLookupCacheLocked() {
 // resolveLookupValue 根据缓存命中结果返回配置值或默认值。
 func resolveLookupValue(entry configLookupCacheEntry, def ...interface{}) interface{} {
 	if entry.found {
-		return entry.value
+		return deepCopyValue(entry.value)
 	}
 	if len(def) > 0 {
 		return def[0]

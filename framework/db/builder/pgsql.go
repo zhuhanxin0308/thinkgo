@@ -19,13 +19,15 @@ func pgQuoteFields(fields string) string {
 
 // Rebind 将 ? 占位符转换为 PostgreSQL 的 $1、$2... 风格。
 func (p *Pgsql) Rebind(query string) string {
-	return rebindNumbered(query, "$")
+	return rebindNumbered(query, "$", true)
 }
 
 // QuoteIdentifier 用双引号引用标识符。
 func (p *Pgsql) QuoteIdentifier(name string) string {
 	return pgQuote(name)
 }
+
+func (p *Pgsql) QuoteFields(fields string) string { return pgQuoteFields(fields) }
 
 // Select builds a SELECT query
 func (p *Pgsql) Select(table string, fields string, where []string, order string, limit int, offset int) string {
@@ -41,7 +43,7 @@ func (p *Pgsql) Select(table string, fields string, where []string, order string
 func (p *Pgsql) Pagination(order string, limit int, offset int) (string, string) {
 	orderClause := ""
 	if order != "" {
-		orderClause = " ORDER BY " + order
+		orderClause = " ORDER BY " + quoteOrderWith(order, `"`, `"`)
 	}
 	limitClause := ""
 	if limit > 0 {
@@ -63,12 +65,15 @@ func (p *Pgsql) LockClause(mode string) string {
 	case "":
 		return ""
 	default:
-		return " " + mode
+		return ""
 	}
 }
 
 // SupportsLastInsertId PostgreSQL（lib/pq）不支持 LastInsertId，需走 RETURNING。
 func (p *Pgsql) SupportsLastInsertId() bool { return false }
+
+// MaxBindParams 返回 PostgreSQL 协议的保守绑定参数上限。
+func (p *Pgsql) MaxBindParams() int { return 65535 }
 
 // InsertReturning 构建 INSERT ... RETURNING 主键 的语句。
 func (p *Pgsql) InsertReturning(table string, data map[string]interface{}, primaryKey string) (string, []interface{}, bool) {
@@ -78,9 +83,9 @@ func (p *Pgsql) InsertReturning(table string, data map[string]interface{}, prima
 	keys := make([]string, 0, len(data))
 	values := make([]interface{}, 0, len(data))
 	placeholders := make([]string, 0, len(data))
-	for k, v := range data {
+	for _, k := range sortedMapKeys(data) {
 		keys = append(keys, pgQuote(k))
-		values = append(values, v)
+		values = append(values, data[k])
 		placeholders = append(placeholders, "?")
 	}
 	query := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s) RETURNING %s",
@@ -97,9 +102,9 @@ func (p *Pgsql) Insert(table string, data map[string]interface{}) (string, []int
 	values := make([]interface{}, 0, len(data))
 	placeholders := make([]string, 0, len(data))
 
-	for k, v := range data {
+	for _, k := range sortedMapKeys(data) {
 		keys = append(keys, pgQuote(k))
-		values = append(values, v)
+		values = append(values, data[k])
 		placeholders = append(placeholders, "?")
 	}
 
@@ -116,9 +121,9 @@ func (p *Pgsql) Update(table string, data map[string]interface{}, where []string
 	sets := make([]string, 0, len(data))
 	values := make([]interface{}, 0, len(data))
 
-	for k, v := range data {
+	for _, k := range sortedMapKeys(data) {
 		sets = append(sets, fmt.Sprintf("%s = ?", pgQuote(k)))
-		values = append(values, v)
+		values = append(values, data[k])
 	}
 
 	query := fmt.Sprintf("UPDATE %s SET %s", pgQuote(table), strings.Join(sets, ", "))

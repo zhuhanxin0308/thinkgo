@@ -29,6 +29,8 @@ func (m *Mysql) QuoteIdentifier(name string) string {
 	return quoteIdentifier(name)
 }
 
+func (m *Mysql) QuoteFields(fields string) string { return quoteFields(fields) }
+
 // Select 构建 SELECT 查询
 func (m *Mysql) Select(table string, fields string, where []string, order string, limit int, offset int) string {
 	query := fmt.Sprintf("SELECT %s FROM %s", quoteFields(fields), quoteIdentifier(table))
@@ -43,11 +45,13 @@ func (m *Mysql) Select(table string, fields string, where []string, order string
 func (m *Mysql) Pagination(order string, limit int, offset int) (string, string) {
 	orderClause := ""
 	if order != "" {
-		orderClause = " ORDER BY " + order
+		orderClause = " ORDER BY " + quoteOrderWith(order, "`", "`")
 	}
 	limitClause := ""
 	if limit > 0 {
 		limitClause += fmt.Sprintf(" LIMIT %d", limit)
+	} else if offset > 0 {
+		limitClause = " LIMIT 18446744073709551615"
 	}
 	if offset > 0 {
 		limitClause += fmt.Sprintf(" OFFSET %d", offset)
@@ -66,6 +70,9 @@ func (m *Mysql) LockClause(mode string) string {
 // SupportsLastInsertId MySQL 支持 LastInsertId。
 func (m *Mysql) SupportsLastInsertId() bool { return true }
 
+// MaxBindParams 返回 MySQL 单语句占位符上限。
+func (m *Mysql) MaxBindParams() int { return 65535 }
+
 // InsertReturning MySQL 无需 RETURNING 写法。
 func (m *Mysql) InsertReturning(string, map[string]interface{}, string) (string, []interface{}, bool) {
 	return "", nil, false
@@ -77,9 +84,9 @@ func (m *Mysql) Insert(table string, data map[string]interface{}) (string, []int
 	values := make([]interface{}, 0, len(data))
 	placeholders := make([]string, 0, len(data))
 
-	for k, v := range data {
+	for _, k := range sortedMapKeys(data) {
 		keys = append(keys, quoteIdentifier(k))
-		values = append(values, v)
+		values = append(values, data[k])
 		placeholders = append(placeholders, "?")
 	}
 
@@ -96,9 +103,9 @@ func (m *Mysql) Update(table string, data map[string]interface{}, where []string
 	sets := make([]string, 0, len(data))
 	values := make([]interface{}, 0, len(data))
 
-	for k, v := range data {
+	for _, k := range sortedMapKeys(data) {
 		sets = append(sets, fmt.Sprintf("%s = ?", quoteIdentifier(k)))
-		values = append(values, v)
+		values = append(values, data[k])
 	}
 
 	query := fmt.Sprintf("UPDATE %s SET %s", quoteIdentifier(table), strings.Join(sets, ", "))

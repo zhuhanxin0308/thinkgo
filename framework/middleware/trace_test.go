@@ -9,13 +9,14 @@ import (
 
 	fwcontext "thinkgo/framework/context"
 	"thinkgo/framework/debug"
+	frameworkVersion "thinkgo/framework/version"
 )
 
 // newLocalTraceRequest 构造一个来自本机回环地址的请求，使其满足 Trace 调试条的暴露门禁。
 func newLocalTraceRequest(method, target string) *fwcontext.Request {
 	raw := httptest.NewRequest(method, target, nil)
 	raw.RemoteAddr = "127.0.0.1:54321"
-	return fwcontext.NewRequest(raw)
+	return fwcontext.MustNewRequest(raw)
 }
 
 // TestTraceEscapesDebugPanelContent 验证调试面板会把危险内容转义后再输出到 HTML。
@@ -86,6 +87,9 @@ func TestTraceInjectsExternalAssetsInsteadOfInlineBundle(t *testing.T) {
 	if strings.Contains(body, "var TgDebug = {") {
 		t.Fatalf("调试面板不应继续把完整脚本内联到每个响应中，响应内容为 %s", body)
 	}
+	if !strings.Contains(body, frameworkVersion.Framework) {
+		t.Fatalf("调试面板应使用中心版本标签 %q，响应内容为 %s", frameworkVersion.Framework, body)
+	}
 }
 
 // TestTraceNotExposedToRemoteRequests 验证即便开启 Trace，非本机回环请求也不会被注入调试条，
@@ -93,7 +97,7 @@ func TestTraceInjectsExternalAssetsInsteadOfInlineBundle(t *testing.T) {
 func TestTraceNotExposedToRemoteRequests(t *testing.T) {
 	trace := &Trace{Debug: &debug.Debug{Enabled: true}}
 	// httptest 默认 RemoteAddr 为 192.0.2.1（非回环）。
-	req := fwcontext.NewRequest(httptest.NewRequest(http.MethodGet, "http://example.com/page", nil))
+	req := fwcontext.MustNewRequest(httptest.NewRequest(http.MethodGet, "http://example.com/page", nil))
 
 	resp := trace.Handle(req, func(req *fwcontext.Request) *fwcontext.Response {
 		return fwcontext.NewResponse().Content("<html><body>ok</body></html>")
@@ -111,7 +115,7 @@ func TestTraceNotExposedThroughLoopbackProxy(t *testing.T) {
 	raw := httptest.NewRequest(http.MethodGet, "http://example.com/page", nil)
 	raw.RemoteAddr = "127.0.0.1:54321"
 	raw.Header.Set("X-Forwarded-For", "198.51.100.10")
-	req := fwcontext.NewRequest(raw)
+	req := fwcontext.MustNewRequest(raw)
 
 	resp := trace.Handle(req, func(req *fwcontext.Request) *fwcontext.Response {
 		return fwcontext.NewResponse().Content("<html><body>ok</body></html>")
@@ -126,7 +130,7 @@ func TestTraceNotExposedThroughLoopbackProxy(t *testing.T) {
 // TestTraceAssetsNotServedToRemoteRequests 验证调试静态资源端点对远程请求不可用。
 func TestTraceAssetsNotServedToRemoteRequests(t *testing.T) {
 	trace := &Trace{Debug: &debug.Debug{Enabled: true}}
-	req := fwcontext.NewRequest(httptest.NewRequest(http.MethodGet, "http://example.com/__thinkgo_debug__/trace.css", nil))
+	req := fwcontext.MustNewRequest(httptest.NewRequest(http.MethodGet, "http://example.com/__thinkgo_debug__/trace.css", nil))
 
 	nextCalled := false
 	trace.Handle(req, func(req *fwcontext.Request) *fwcontext.Response {

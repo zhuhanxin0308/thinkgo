@@ -1,6 +1,9 @@
 package db
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 type paginateMockConnection struct {
 	rows  []map[string]interface{}
@@ -60,10 +63,33 @@ func TestQueryPaginate(t *testing.T) {
 	if len(paginator.List) != 2 {
 		t.Fatalf("分页列表长度不正确，实际为 %d", len(paginator.List))
 	}
-	if paginator.Offset() != 2 {
-		t.Fatalf("分页偏移量不正确，实际为 %d", paginator.Offset())
+	offset, err := paginator.Offset()
+	if err != nil || offset != 2 {
+		t.Fatalf("分页偏移量不正确，实际为 %d，错误为 %v", offset, err)
 	}
 	if paginator.ToMap()["total"] != int64(35) {
 		t.Fatalf("ToMap 应输出 total 字段，实际为 %#v", paginator.ToMap())
+	}
+}
+
+// TestPaginatorUsesExactIntegerArithmetic 验证超过 float64 精确范围的总数仍能正确计算页数。
+func TestPaginatorUsesExactIntegerArithmetic(t *testing.T) {
+	mock := &paginateMockConnection{count: 1<<53 + 1}
+	database := NewDB(mock)
+	paginator, err := database.Table("users").Paginate(1, 2)
+	if err != nil {
+		t.Fatalf("大总数分页失败: %v", err)
+	}
+	const expected = 4_503_599_627_370_497
+	if paginator.LastPage != expected {
+		t.Fatalf("总页数发生精度丢失，期望 %d，实际为 %d", expected, paginator.LastPage)
+	}
+}
+
+// TestPaginatorOffsetRejectsOverflow 验证偏移量溢出会显式失败。
+func TestPaginatorOffsetRejectsOverflow(t *testing.T) {
+	paginator := &Paginator{Page: int(^uint(0) >> 1), PageSize: 2}
+	if _, err := paginator.Offset(); !errors.Is(err, ErrInvalidPagination) {
+		t.Fatalf("溢出偏移量应返回 ErrInvalidPagination，实际为 %v", err)
 	}
 }

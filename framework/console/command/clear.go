@@ -1,8 +1,11 @@
 package command
 
 import (
-	"os"
+	"fmt"
 	"path/filepath"
+
+	"thinkgo/framework"
+	cacheDriver "thinkgo/framework/cache/driver"
 	"thinkgo/framework/console"
 )
 
@@ -16,27 +19,34 @@ func (c *Clear) Configure() {
 	c.Description = "Clear application cache"
 }
 
-func (c *Clear) Execute(input *console.Input, output *console.Output) {
-	if c.App == nil || c.App.BasePath == "" {
-		output.Error("Failed to clear cache: app base path is empty")
-		return
+func (c *Clear) Execute(_ *console.Input, output *console.Output) error {
+	if output == nil {
+		return console.ErrInvalidOutput
+	}
+	if c.App == nil {
+		return framework.ErrNilApplication
+	}
+	if c.App.BasePath == "" {
+		return fmt.Errorf("failed to clear cache: app base path is empty")
 	}
 
 	// 先走缓存管理器，保证 Redis、自定义 file store 等当前 store 都按驱动语义清理。
 	if c.App.Cache != nil {
-		c.App.Cache.Flush()
+		if err := c.App.Cache.Flush(); err != nil {
+			return fmt.Errorf("failed to clear cache backend: %w", err)
+		}
 	}
 
-	// clear 命令只清理默认文件缓存目录，不能删除 runtime 下的日志、会话、证书和离线库。
+	// runtime/cache 也使用文件驱动的受管清理，保留活动锁和目录内非缓存文件。
 	cachePath := filepath.Join(c.App.BasePath, "runtime", "cache")
-	if err := os.RemoveAll(cachePath); err != nil {
-		output.Error("Failed to clear cache: " + err.Error())
-		return
+	fileCache, err := cacheDriver.NewFile(cachePath)
+	if err != nil {
+		return fmt.Errorf("failed to open local cache directory: %w", err)
 	}
-	if err := os.MkdirAll(cachePath, 0o700); err != nil {
-		output.Error("Failed to recreate cache directory: " + err.Error())
-		return
+	if err = fileCache.Clear(); err != nil {
+		return fmt.Errorf("failed to clear local cache directory: %w", err)
 	}
 
 	output.Success("Cache cleared successfully.")
+	return nil
 }

@@ -3,7 +3,9 @@ package db
 import (
 	"fmt"
 	"reflect"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -25,8 +27,6 @@ type RelationDefinition struct {
 	PivotTable        string // 多对多中间表名（对应 ThinkPHP 的 pivot 表）
 	RelatedForeignKey string // 关联模型在中间表中的外键
 }
-
-
 
 // ModelEventType 模型事件类型。
 // 对应 ThinkPHP 的 before_insert/after_insert 等模型事件。
@@ -68,6 +68,8 @@ type ModelSearcherFunc func(query *Query, value interface{}, data map[string]int
 
 // Model 表示一个数据库模型，支持时间戳、软删除、关系定义、模型事件、获取器/修改器/搜索器。
 type Model struct {
+	mu                 sync.RWMutex
+	configErr          error
 	table              string
 	db                 *DB
 	autoTimestamp      bool
@@ -79,20 +81,19 @@ type Model struct {
 	primaryKey         string
 	relations          map[string]RelationDefinition
 	events             map[ModelEventType][]ModelEventCallback // 模型事件回调
-	getters            map[string]ModelGetterFunc             // 获取器映射
-	setters            map[string]ModelSetterFunc             // 修改器映射
-	searchers          map[string]ModelSearcherFunc           // 搜索器映射
+	getters            map[string]ModelGetterFunc              // 获取器映射
+	setters            map[string]ModelSetterFunc              // 修改器映射
+	searchers          map[string]ModelSearcherFunc            // 搜索器映射
 }
 
 // NewModel 创建模型实例。
 func NewModel(db *DB, table string) *Model {
-	return &Model{
+	model := &Model{
 		db:                 db,
 		table:              table,
-		autoTimestamp:      db.autoTimestamp,
-		createTimeField:    db.createTimeField,
-		updateTimeField:    db.updateTimeField,
-		timestampValueType: db.timestampValueType,
+		createTimeField:    "create_time",
+		updateTimeField:    "update_time",
+		timestampValueType: TimestampValueTypeUnix,
 		primaryKey:         "id",
 		relations:          make(map[string]RelationDefinition),
 		events:             make(map[ModelEventType][]ModelEventCallback),
@@ -100,48 +101,140 @@ func NewModel(db *DB, table string) *Model {
 		setters:            make(map[string]ModelSetterFunc),
 		searchers:          make(map[string]ModelSearcherFunc),
 	}
+	if db == nil {
+		model.configErr = fmt.Errorf("%w: 数据库不能为空", ErrInvalidModel)
+	} else {
+		db.mu.RLock()
+		model.autoTimestamp = db.autoTimestamp
+		model.createTimeField = db.createTimeField
+		model.updateTimeField = db.updateTimeField
+		model.timestampValueType = db.timestampValueType
+		db.mu.RUnlock()
+	}
+	if err := validateIdentifier(table); err != nil {
+		model.configErr = fmt.Errorf("%w: 非法模型表名: %w", ErrInvalidModel, err)
+	}
+	return model
+}
+
+func (m *Model) setConfigError(err error) {
+	if m == nil || err == nil {
+		return
+	}
+	m.mu.Lock()
+	if m.configErr == nil {
+		m.configErr = err
+	}
+	m.mu.Unlock()
+}
+
+func (m *Model) validationError() error {
+	if m == nil {
+		return fmt.Errorf("%w: 模型不能为空", ErrInvalidModel)
+	}
+	m.mu.RLock()
+	err := m.configErr
+	database := m.db
+	table := m.table
+	m.mu.RUnlock()
+	if err != nil {
+		return err
+	}
+	if database == nil {
+		return fmt.Errorf("%w: 数据库不能为空", ErrInvalidModel)
+	}
+	if err := validateIdentifier(table); err != nil {
+		return fmt.Errorf("%w: 非法模型表名: %w", ErrInvalidModel, err)
+	}
+	return nil
 }
 
 // Getter 注册字段获取器。
 // 查询结果返回时，自动对指定字段应用获取器转换。
 // 对应 ThinkPHP 的 getFieldNameAttr 方法。
-// 示例：model.Getter("status", func(v interface{}, data map[string]interface{}) interface{} {
-//     if v == 1 { return "启用" }
-//     return "禁用"
-// })
-func (m *Model) Getter(field string, fn ModelGetterFunc) *Model {
+//
+//	示例：model.Getter("status", func(v interface{}, data map[string]interface{}) interface{} {
+//	    if v == 1 { return "启用" }
+//	    return "禁用"
+//	})
+func (m *Model) Getter(field string, fn ModelGetterFunc) error {
+	if m == nil || fn == nil {
+		return fmt.Errorf("%w: 获取器不能为空", ErrInvalidModel)
+	}
+	if err := validateIdentifier(field); err != nil {
+		return fmt.Errorf("%w: 非法获取器字段: %w", ErrInvalidModel, err)
+	}
+	m.mu.Lock()
+	if _, duplicated := m.getters[field]; duplicated {
+		m.mu.Unlock()
+		return fmt.Errorf("%w: 字段 %q 的获取器已注册", ErrInvalidModel, field)
+	}
 	m.getters[field] = fn
-	return m
+	m.mu.Unlock()
+	return nil
 }
 
 // Setter 注册字段修改器。
 // 插入或更新数据时，自动对指定字段应用修改器转换。
 // 对应 ThinkPHP 的 setFieldNameAttr 方法。
-// 示例：model.Setter("password", func(v interface{}, data map[string]interface{}) interface{} {
-//     return md5(v.(string))
-// })
-func (m *Model) Setter(field string, fn ModelSetterFunc) *Model {
+//
+//	示例：model.Setter("password", func(v interface{}, data map[string]interface{}) interface{} {
+//	    return md5(v.(string))
+//	})
+func (m *Model) Setter(field string, fn ModelSetterFunc) error {
+	if m == nil || fn == nil {
+		return fmt.Errorf("%w: 修改器不能为空", ErrInvalidModel)
+	}
+	if err := validateIdentifier(field); err != nil {
+		return fmt.Errorf("%w: 非法修改器字段: %w", ErrInvalidModel, err)
+	}
+	m.mu.Lock()
+	if _, duplicated := m.setters[field]; duplicated {
+		m.mu.Unlock()
+		return fmt.Errorf("%w: 字段 %q 的修改器已注册", ErrInvalidModel, field)
+	}
 	m.setters[field] = fn
-	return m
+	m.mu.Unlock()
+	return nil
 }
 
 // Searcher 注册字段搜索器。
 // 使用 WithSearch 时，自动将搜索条件映射为查询条件。
 // 对应 ThinkPHP 的 searchFieldNameAttr 方法。
-// 示例：model.Searcher("name", func(q *Query, v interface{}, data map[string]interface{}) {
-//     q.Where("name LIKE ?", "%"+v.(string)+"%")
-// })
-func (m *Model) Searcher(field string, fn ModelSearcherFunc) *Model {
+//
+//	示例：model.Searcher("name", func(q *Query, v interface{}, data map[string]interface{}) {
+//	    q.Where("name LIKE ?", "%"+v.(string)+"%")
+//	})
+func (m *Model) Searcher(field string, fn ModelSearcherFunc) error {
+	if m == nil || fn == nil {
+		return fmt.Errorf("%w: 搜索器不能为空", ErrInvalidModel)
+	}
+	if err := validateIdentifier(field); err != nil {
+		return fmt.Errorf("%w: 非法搜索器字段: %w", ErrInvalidModel, err)
+	}
+	m.mu.Lock()
+	if _, duplicated := m.searchers[field]; duplicated {
+		m.mu.Unlock()
+		return fmt.Errorf("%w: 字段 %q 的搜索器已注册", ErrInvalidModel, field)
+	}
 	m.searchers[field] = fn
-	return m
+	m.mu.Unlock()
+	return nil
 }
 
 // applyGetters 对查询结果行应用获取器转换。
 func (m *Model) applyGetters(row map[string]interface{}) map[string]interface{} {
-	if len(m.getters) == 0 || row == nil {
+	if m == nil || row == nil {
 		return row
 	}
+	m.mu.RLock()
+	getters := make(map[string]ModelGetterFunc, len(m.getters))
 	for field, getter := range m.getters {
+		getters[field] = getter
+	}
+	m.mu.RUnlock()
+	for _, field := range sortedModelCallbackFields(getters) {
+		getter := getters[field]
 		if val, ok := row[field]; ok {
 			row[field] = getter(val, row)
 		}
@@ -151,10 +244,22 @@ func (m *Model) applyGetters(row map[string]interface{}) map[string]interface{} 
 
 // applySetters 对写入数据应用修改器转换。
 func (m *Model) applySetters(data map[string]interface{}) map[string]interface{} {
-	if len(m.setters) == 0 || data == nil {
+	if m == nil || data == nil {
 		return data
 	}
+	m.mu.RLock()
+	setters := make(map[string]ModelSetterFunc, len(m.setters))
 	for field, setter := range m.setters {
+		setters[field] = setter
+	}
+	m.mu.RUnlock()
+	fields := make([]string, 0, len(setters))
+	for field := range setters {
+		fields = append(fields, field)
+	}
+	sort.Strings(fields)
+	for _, field := range fields {
+		setter := setters[field]
 		if val, ok := data[field]; ok {
 			data[field] = setter(val, data)
 		}
@@ -168,31 +273,52 @@ func (m *Model) applySetters(data map[string]interface{}) map[string]interface{}
 // data: 搜索值映射（field → value）
 func (m *Model) WithSearch(fields []string, data map[string]interface{}) *ModelQuery {
 	mq := m.newModelQuery()
+	if m == nil {
+		return mq
+	}
+	m.mu.RLock()
+	searchers := make(map[string]ModelSearcherFunc, len(m.searchers))
+	for field, searcher := range m.searchers {
+		searchers[field] = searcher
+	}
+	m.mu.RUnlock()
+	searchData := cloneDatabaseMap(data)
 	for _, field := range fields {
-		searcher, ok := m.searchers[field]
+		searcher, ok := searchers[field]
 		if !ok {
 			continue
 		}
-		value, exists := data[field]
+		value, exists := searchData[field]
 		if !exists {
 			continue
 		}
-		searcher(mq.query, value, data)
+		searcher(mq.query, value, searchData)
 	}
 	return mq
 }
 
 // On 注册模型事件回调。
 // 对应 ThinkPHP 的 Model::event() 静态方法。
-func (m *Model) On(eventType ModelEventType, callback ModelEventCallback) *Model {
+func (m *Model) On(eventType ModelEventType, callback ModelEventCallback) error {
+	if m == nil || callback == nil || !validModelEventType(eventType) {
+		return fmt.Errorf("%w: 模型事件类型或回调非法", ErrInvalidModel)
+	}
+	m.mu.Lock()
 	m.events[eventType] = append(m.events[eventType], callback)
-	return m
+	m.mu.Unlock()
+	return nil
 }
 
 // fireEvent 触发模型事件。
 // before_* 事件中任一回调返回 false 将阻止操作。
 func (m *Model) fireEvent(eventType ModelEventType, data map[string]interface{}) bool {
+	if m == nil {
+		return false
+	}
+	m.mu.RLock()
 	callbacks, ok := m.events[eventType]
+	callbacks = append([]ModelEventCallback(nil), callbacks...)
+	m.mu.RUnlock()
 	if !ok {
 		return true
 	}
@@ -204,61 +330,143 @@ func (m *Model) fireEvent(eventType ModelEventType, data map[string]interface{})
 	return true
 }
 
+func sortedModelCallbackFields(callbacks map[string]ModelGetterFunc) []string {
+	fields := make([]string, 0, len(callbacks))
+	for field := range callbacks {
+		fields = append(fields, field)
+	}
+	sort.Strings(fields)
+	return fields
+}
+
+func validModelEventType(eventType ModelEventType) bool {
+	switch eventType {
+	case ModelBeforeInsert, ModelAfterInsert, ModelBeforeUpdate, ModelAfterUpdate, ModelBeforeDelete, ModelAfterDelete:
+		return true
+	default:
+		return false
+	}
+}
+
 // NewModelAuto 根据结构体名称自动推断表名。
 // 默认规则仅做驼峰转下划线和小写化，不再自动复数化。
-func NewModelAuto(db *DB, model interface{}) *Model {
-	return NewModel(db, GetTableName(model))
+func NewModelAuto(db *DB, model interface{}) (*Model, error) {
+	table, err := GetTableName(model)
+	if err != nil {
+		return nil, err
+	}
+	created := NewModel(db, table)
+	if err := created.validationError(); err != nil {
+		return nil, err
+	}
+	return created, nil
 }
 
 // GetTableName 从结构体类型推断表名。
 // 表前缀由 DB 配置统一追加，这里只负责生成不带前缀的小写表名。
-func GetTableName(model interface{}) string {
+func GetTableName(model interface{}) (string, error) {
 	t := reflect.TypeOf(model)
-	if t.Kind() == reflect.Ptr {
+	if t == nil {
+		return "", fmt.Errorf("%w: 无法从 nil 推断表名", ErrInvalidModel)
+	}
+	for t.Kind() == reflect.Ptr {
 		t = t.Elem()
 	}
-	return ToSnakeCase(t.Name())
+	if t.Kind() != reflect.Struct || t.Name() == "" {
+		return "", fmt.Errorf("%w: 表名推断要求具名结构体，实际为 %s", ErrInvalidModel, t.Kind())
+	}
+	return ToSnakeCase(t.Name()), nil
 }
 
 // SetDB 设置数据库连接。
-func (m *Model) SetDB(db *DB) {
+func (m *Model) SetDB(db *DB) error {
+	if m == nil || db == nil {
+		return fmt.Errorf("%w: 数据库不能为空", ErrInvalidModel)
+	}
+	m.mu.Lock()
 	m.db = db
+	m.mu.Unlock()
+	return nil
 }
 
 // Table 设置表名。
 func (m *Model) Table(name string) *Model {
+	if m == nil {
+		return m
+	}
+	if err := validateIdentifier(name); err != nil {
+		m.setConfigError(fmt.Errorf("%w: 非法模型表名: %w", ErrInvalidModel, err))
+		return m
+	}
+	m.mu.Lock()
 	m.table = name
+	m.mu.Unlock()
 	return m
 }
 
 // AutoTimestamp 设置是否自动维护时间戳。
 func (m *Model) AutoTimestamp(enable bool) *Model {
+	if m == nil {
+		return m
+	}
+	m.mu.Lock()
 	m.autoTimestamp = enable
+	m.mu.Unlock()
 	return m
 }
 
 // CreateTimeField 设置创建时间字段。
 func (m *Model) CreateTimeField(name string) *Model {
+	if m == nil {
+		return m
+	}
+	if err := validateIdentifier(name); err != nil {
+		m.setConfigError(fmt.Errorf("%w: 非法创建时间字段: %w", ErrInvalidModel, err))
+		return m
+	}
+	m.mu.Lock()
 	m.createTimeField = name
+	m.mu.Unlock()
 	return m
 }
 
 // UpdateTimeField 设置更新时间字段。
 func (m *Model) UpdateTimeField(name string) *Model {
+	if m == nil {
+		return m
+	}
+	if err := validateIdentifier(name); err != nil {
+		m.setConfigError(fmt.Errorf("%w: 非法更新时间字段: %w", ErrInvalidModel, err))
+		return m
+	}
+	m.mu.Lock()
 	m.updateTimeField = name
+	m.mu.Unlock()
 	return m
 }
 
 // PrimaryKey 设置主键字段名（默认 "id"）。
 func (m *Model) PrimaryKey(name string) *Model {
-	if name != "" {
-		m.primaryKey = name
+	if m == nil {
+		return m
 	}
+	if err := validateIdentifier(name); err != nil {
+		m.setConfigError(fmt.Errorf("%w: 非法主键字段: %w", ErrInvalidModel, err))
+		return m
+	}
+	m.mu.Lock()
+	m.primaryKey = name
+	m.mu.Unlock()
 	return m
 }
 
 // primaryKeyField 返回主键字段名，未配置时回退到 "id"。
 func (m *Model) primaryKeyField() string {
+	if m == nil {
+		return "id"
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	if m.primaryKey == "" {
 		return "id"
 	}
@@ -267,11 +475,25 @@ func (m *Model) primaryKeyField() string {
 
 // SoftDelete 开启软删除。
 func (m *Model) SoftDelete(deleteField ...string) *Model {
-	m.softDelete = true
-	m.deleteTimeField = "delete_time"
-	if len(deleteField) > 0 && deleteField[0] != "" {
-		m.deleteTimeField = deleteField[0]
+	if m == nil {
+		return m
 	}
+	field := "delete_time"
+	if len(deleteField) > 1 {
+		m.setConfigError(fmt.Errorf("%w: SoftDelete 最多接收一个字段", ErrInvalidModel))
+		return m
+	}
+	if len(deleteField) == 1 && deleteField[0] != "" {
+		field = deleteField[0]
+	}
+	if err := validateIdentifier(field); err != nil {
+		m.setConfigError(fmt.Errorf("%w: 非法软删除字段: %w", ErrInvalidModel, err))
+		return m
+	}
+	m.mu.Lock()
+	m.softDelete = true
+	m.deleteTimeField = field
+	m.mu.Unlock()
 	return m
 }
 
@@ -285,6 +507,16 @@ func (m *Model) WithTrashed() *ModelQuery {
 // OnlyTrashed 仅查询已软删除数据。
 func (m *Model) OnlyTrashed() *ModelQuery {
 	mq := m.newModelQuery()
+	if m == nil {
+		return mq
+	}
+	m.mu.RLock()
+	softDelete := m.softDelete
+	m.mu.RUnlock()
+	if !softDelete {
+		mq.query.setError(fmt.Errorf("%w: OnlyTrashed 仅适用于软删除模型", ErrInvalidModel))
+		return mq
+	}
 	mq.onlyTrashed = true
 	return mq
 }
@@ -297,42 +529,36 @@ func (m *Model) With(relations ...string) *ModelQuery {
 }
 
 // DefineHasOne 定义一对一关联。
-func (m *Model) DefineHasOne(name string, relatedModel *Model, foreignKey string, localKey string) *Model {
-	m.ensureRelations()
-	m.relations[name] = RelationDefinition{
+func (m *Model) DefineHasOne(name string, relatedModel *Model, foreignKey string, localKey string) error {
+	return m.registerRelation(RelationDefinition{
 		Name:       name,
 		Type:       relationHasOne,
 		Related:    relatedModel,
 		ForeignKey: foreignKey,
 		LocalKey:   localKey,
-	}
-	return m
+	})
 }
 
 // DefineHasMany 定义一对多关联。
-func (m *Model) DefineHasMany(name string, relatedModel *Model, foreignKey string, localKey string) *Model {
-	m.ensureRelations()
-	m.relations[name] = RelationDefinition{
+func (m *Model) DefineHasMany(name string, relatedModel *Model, foreignKey string, localKey string) error {
+	return m.registerRelation(RelationDefinition{
 		Name:       name,
 		Type:       relationHasMany,
 		Related:    relatedModel,
 		ForeignKey: foreignKey,
 		LocalKey:   localKey,
-	}
-	return m
+	})
 }
 
 // DefineBelongsTo 定义反向关联。
-func (m *Model) DefineBelongsTo(name string, relatedModel *Model, foreignKey string, ownerKey string) *Model {
-	m.ensureRelations()
-	m.relations[name] = RelationDefinition{
+func (m *Model) DefineBelongsTo(name string, relatedModel *Model, foreignKey string, ownerKey string) error {
+	return m.registerRelation(RelationDefinition{
 		Name:       name,
 		Type:       relationBelongsTo,
 		Related:    relatedModel,
 		ForeignKey: foreignKey,
 		OwnerKey:   ownerKey,
-	}
-	return m
+	})
 }
 
 // DefineBelongsToMany 定义多对多关联。
@@ -341,9 +567,8 @@ func (m *Model) DefineBelongsTo(name string, relatedModel *Model, foreignKey str
 // relatedForeignKey: 关联模型在中间表中的外键字段名
 // localKey: 当前模型的主键字段名
 // 对应 ThinkPHP 的 $this->belongsToMany(Role::class, 'user_role', 'role_id', 'user_id')
-func (m *Model) DefineBelongsToMany(name string, relatedModel *Model, pivotTable string, foreignKey string, relatedForeignKey string, localKey string) *Model {
-	m.ensureRelations()
-	m.relations[name] = RelationDefinition{
+func (m *Model) DefineBelongsToMany(name string, relatedModel *Model, pivotTable string, foreignKey string, relatedForeignKey string, localKey string) error {
+	return m.registerRelation(RelationDefinition{
 		Name:              name,
 		Type:              relationBelongsToMany,
 		Related:           relatedModel,
@@ -351,15 +576,55 @@ func (m *Model) DefineBelongsToMany(name string, relatedModel *Model, pivotTable
 		LocalKey:          localKey,
 		PivotTable:        pivotTable,
 		RelatedForeignKey: relatedForeignKey,
+	})
+}
+
+func (m *Model) registerRelation(definition RelationDefinition) error {
+	if m == nil || definition.Related == nil {
+		return fmt.Errorf("%w: 当前模型和关联模型不能为空", ErrInvalidRelation)
 	}
-	return m
+	if err := m.validationError(); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidRelation, err)
+	}
+	if err := definition.Related.validationError(); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidRelation, err)
+	}
+	identifiers := []string{definition.Name, definition.ForeignKey}
+	switch definition.Type {
+	case relationHasOne, relationHasMany:
+		identifiers = append(identifiers, definition.LocalKey)
+	case relationBelongsTo:
+		identifiers = append(identifiers, definition.OwnerKey)
+	case relationBelongsToMany:
+		identifiers = append(identifiers, definition.LocalKey, definition.PivotTable, definition.RelatedForeignKey)
+	default:
+		return fmt.Errorf("%w: 未知关联类型 %q", ErrInvalidRelation, definition.Type)
+	}
+	for _, identifier := range identifiers {
+		if err := validateIdentifier(identifier); err != nil {
+			return fmt.Errorf("%w: 非法关联标识符 %q: %w", ErrInvalidRelation, identifier, err)
+		}
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, duplicated := m.relations[definition.Name]; duplicated {
+		return fmt.Errorf("%w: 关联 %q 已定义", ErrInvalidRelation, definition.Name)
+	}
+	m.relations[definition.Name] = definition
+	return nil
 }
 
 // BelongsToMany 立即查询多对多关联。
 // 通过中间表进行两次查询：先查中间表取关联 ID，再查关联表取数据。
 func (m *Model) BelongsToMany(relatedModel *Model, pivotTable string, foreignKey string, relatedForeignKey string, localKeyValue interface{}) ([]map[string]interface{}, error) {
+	if err := validateImmediateRelation(m, relatedModel, pivotTable, foreignKey, relatedForeignKey); err != nil {
+		return nil, err
+	}
+	m.mu.RLock()
+	database := m.db
+	m.mu.RUnlock()
 	// 1. 查询中间表，获取关联模型的 ID 列表
-	pivotRows, err := m.db.Name(pivotTable).Where(foreignKey+" = ?", localKeyValue).Select()
+	pivotRows, err := database.Name(pivotTable).Where(foreignKey+" = ?", localKeyValue).Select()
 	if err != nil {
 		return nil, fmt.Errorf("查询中间表 %s 失败: %w", pivotTable, err)
 	}
@@ -368,18 +633,16 @@ func (m *Model) BelongsToMany(relatedModel *Model, pivotTable string, foreignKey
 	}
 
 	// 2. 提取关联模型 ID
-	relatedKeys := make([]interface{}, 0, len(pivotRows))
-	for _, row := range pivotRows {
-		if val, ok := row[relatedForeignKey]; ok {
-			relatedKeys = append(relatedKeys, val)
-		}
+	relatedKeys, err := collectRelationKeys(pivotRows, relatedForeignKey)
+	if err != nil {
+		return nil, err
 	}
 	if len(relatedKeys) == 0 {
 		return []map[string]interface{}{}, nil
 	}
 
 	// 3. 查询关联模型
-	return relatedModel.query().WhereIn(relatedModel.primaryKeyField(), relatedKeys).Select()
+	return relatedModel.newModelQuery().WhereIn(relatedModel.primaryKeyField(), relatedKeys).Select()
 }
 
 // query 返回当前模型对应的查询对象。
@@ -446,37 +709,38 @@ func (m *Model) Page(page int, pageSize int) *ModelQuery {
 	return m.newModelQuery().Page(page, pageSize)
 }
 
-
 // Create 从结构体创建记录。
 // 自动应用修改器并触发 before_insert/after_insert 事件。
 // 主键为零值时会被剔除，交由数据库自增生成，避免误插入 id=0。
 func (m *Model) Create(v interface{}) error {
-	data := m.structToMap(v)
-
-	pk := m.primaryKeyField()
-	if val, ok := data[pk]; ok && isZeroDBValue(val) {
-		delete(data, pk)
+	if err := m.validationError(); err != nil {
+		return err
+	}
+	value, err := writableModelStruct(v)
+	if err != nil {
+		return err
+	}
+	data, err := m.structToMap(v)
+	if err != nil {
+		return err
 	}
 
-	if m.autoTimestamp {
-		now := time.Now()
-		m.setTimestamp(data, m.createTimeField, now)
-		m.setTimestamp(data, m.updateTimeField, now)
+	pk := m.primaryKeyField()
+	primaryWasZero := true
+	if val, ok := data[pk]; ok {
+		primaryWasZero = isZeroDBValue(val)
+	}
+	if primaryWasZero {
+		delete(data, pk)
 	}
 
 	id, err := m.newModelQuery().Insert(data)
 	if err != nil {
 		return err
 	}
-
-	value := reflect.ValueOf(v)
-	if value.Kind() == reflect.Ptr {
-		value = value.Elem()
-	}
-	if value.Kind() == reflect.Struct {
-		idField := value.FieldByName("ID")
-		if idField.IsValid() && idField.CanSet() && idField.Kind() == reflect.Int64 {
-			idField.SetInt(id)
+	if primaryWasZero {
+		if err := setStructColumnInteger(value, pk, id); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -487,7 +751,16 @@ func (m *Model) Create(v interface{}) error {
 // 避免无 WHERE 的全表更新和对主键的误写。
 // 自动应用修改器并触发 before_update/after_update 事件。
 func (m *Model) Update(v interface{}) error {
-	data := m.structToMap(v)
+	if err := m.validationError(); err != nil {
+		return err
+	}
+	if _, err := writableModelStruct(v); err != nil {
+		return err
+	}
+	data, err := m.structToMap(v)
+	if err != nil {
+		return err
+	}
 
 	pk := m.primaryKeyField()
 	pkVal, ok := data[pk]
@@ -496,10 +769,7 @@ func (m *Model) Update(v interface{}) error {
 	}
 	delete(data, pk)
 
-	if m.autoTimestamp {
-		m.setTimestamp(data, m.updateTimeField, time.Now())
-	}
-	_, err := m.newModelQuery().Where(pk+" = ?", pkVal).Update(data)
+	_, err = m.newModelQuery().Where(pk+" = ?", pkVal).Update(data)
 	return err
 }
 
@@ -525,59 +795,26 @@ func (m *Model) Restore() error {
 
 // HasOne 立即查询一对一关联。
 func (m *Model) HasOne(relatedModel *Model, foreignKey string, localKey interface{}) (map[string]interface{}, error) {
+	if err := validateImmediateRelation(m, relatedModel, foreignKey); err != nil {
+		return nil, err
+	}
 	return relatedModel.Where(foreignKey+" = ?", localKey).Find()
 }
 
 // HasMany 立即查询一对多关联。
 func (m *Model) HasMany(relatedModel *Model, foreignKey string, localKey interface{}) ([]map[string]interface{}, error) {
+	if err := validateImmediateRelation(m, relatedModel, foreignKey); err != nil {
+		return nil, err
+	}
 	return relatedModel.Where(foreignKey+" = ?", localKey).Select()
 }
 
 // BelongsTo 立即查询反向关联。
 func (m *Model) BelongsTo(relatedModel *Model, foreignKey interface{}, ownerKey string) (map[string]interface{}, error) {
+	if err := validateImmediateRelation(m, relatedModel, ownerKey); err != nil {
+		return nil, err
+	}
 	return relatedModel.Where(ownerKey+" = ?", foreignKey).Find()
-}
-
-
-
-func collectRelationKeys(rows []map[string]interface{}, field string) []interface{} {
-	seen := make(map[string]bool)
-	keys := make([]interface{}, 0)
-	for _, row := range rows {
-		value, ok := row[field]
-		if !ok {
-			continue
-		}
-		text := fmt.Sprint(value)
-		if seen[text] {
-			continue
-		}
-		seen[text] = true
-		keys = append(keys, value)
-	}
-	return keys
-}
-
-func groupRelationRows(rows []map[string]interface{}, field string) map[string][]map[string]interface{} {
-	grouped := make(map[string][]map[string]interface{})
-	for _, row := range rows {
-		grouped[fmt.Sprint(row[field])] = append(grouped[fmt.Sprint(row[field])], row)
-	}
-	return grouped
-}
-
-func indexRelationRows(rows []map[string]interface{}, field string) map[string]map[string]interface{} {
-	indexed := make(map[string]map[string]interface{})
-	for _, row := range rows {
-		indexed[fmt.Sprint(row[field])] = row
-	}
-	return indexed
-}
-
-func (m *Model) ensureRelations() {
-	if m.relations == nil {
-		m.relations = make(map[string]RelationDefinition)
-	}
 }
 
 // structToMap 把结构体转换为列名→值的映射。
@@ -585,11 +822,17 @@ func (m *Model) ensureRelations() {
 //   - `thinkgo:"-"`          跳过该字段；
 //   - `thinkgo:"col"`        指定列名；
 //   - `thinkgo:"col,omitempty"` 当字段为零值时跳过，避免用零值覆盖已有数据。
-func (m *Model) structToMap(v interface{}) map[string]interface{} {
+func (m *Model) structToMap(v interface{}) (map[string]interface{}, error) {
 	data := make(map[string]interface{})
 	value := reflect.ValueOf(v)
-	if value.Kind() == reflect.Ptr {
+	if !value.IsValid() {
+		return nil, fmt.Errorf("%w: 结构体不能为空", ErrInvalidModel)
+	}
+	if value.Kind() == reflect.Ptr && !value.IsNil() {
 		value = value.Elem()
+	}
+	if value.Kind() != reflect.Struct {
+		return nil, fmt.Errorf("%w: 期望结构体，实际为 %s", ErrInvalidModel, value.Kind())
 	}
 
 	typ := value.Type()
@@ -607,14 +850,81 @@ func (m *Model) structToMap(v interface{}) map[string]interface{} {
 		if name == "" {
 			name = ToSnakeCase(field.Name)
 		}
+		if err := validateIdentifier(name); err != nil {
+			return nil, fmt.Errorf("%w: 字段 %s 的列名非法: %w", ErrInvalidModel, field.Name, err)
+		}
+		for option := range options {
+			if option != "omitempty" {
+				return nil, fmt.Errorf("%w: 字段 %s 使用未知标签选项 %q", ErrInvalidModel, field.Name, option)
+			}
+		}
 
 		fieldValue := value.Field(index)
 		if options["omitempty"] && fieldValue.IsZero() {
 			continue
 		}
+		if !fieldValue.CanInterface() {
+			continue
+		}
+		if _, duplicated := data[name]; duplicated {
+			return nil, fmt.Errorf("%w: 多个结构体字段映射到列 %q", ErrInvalidModel, name)
+		}
 		data[name] = fieldValue.Interface()
 	}
-	return data
+	return data, nil
+}
+
+func writableModelStruct(value interface{}) (reflect.Value, error) {
+	reflected := reflect.ValueOf(value)
+	if !reflected.IsValid() || reflected.Kind() != reflect.Ptr || reflected.IsNil() {
+		return reflect.Value{}, fmt.Errorf("%w: Create/Update 要求非 nil 结构体指针", ErrInvalidModel)
+	}
+	reflected = reflected.Elem()
+	if reflected.Kind() != reflect.Struct {
+		return reflect.Value{}, fmt.Errorf("%w: Create/Update 要求结构体指针", ErrInvalidModel)
+	}
+	return reflected, nil
+}
+
+func setStructColumnInteger(value reflect.Value, column string, id int64) error {
+	typ := value.Type()
+	for index := 0; index < value.NumField(); index++ {
+		fieldType := typ.Field(index)
+		if fieldType.PkgPath != "" {
+			continue
+		}
+		name, _ := parseStructTag(fieldType.Tag.Get("thinkgo"))
+		if name == "-" {
+			continue
+		}
+		if name == "" {
+			name = ToSnakeCase(fieldType.Name)
+		}
+		if name != column {
+			continue
+		}
+		field := value.Field(index)
+		if !field.CanSet() {
+			return fmt.Errorf("%w: 主键字段 %s 不可写", ErrInvalidModel, fieldType.Name)
+		}
+		switch field.Kind() {
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			if field.OverflowInt(id) {
+				return fmt.Errorf("%w: 主键 %d 超出字段 %s 范围", ErrInvalidModel, id, fieldType.Name)
+			}
+			field.SetInt(id)
+			return nil
+		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+			if id < 0 || field.OverflowUint(uint64(id)) {
+				return fmt.Errorf("%w: 主键 %d 超出字段 %s 范围", ErrInvalidModel, id, fieldType.Name)
+			}
+			field.SetUint(uint64(id))
+			return nil
+		default:
+			return fmt.Errorf("%w: 主键字段 %s 必须为整数类型", ErrInvalidModel, fieldType.Name)
+		}
+	}
+	return nil
 }
 
 // parseStructTag 解析 thinkgo 标签，返回列名和选项集合。
@@ -666,10 +976,15 @@ func ToSnakeCase(s string) string {
 	return string(result)
 }
 
-func (m *Model) setTimestamp(data map[string]interface{}, field string, now time.Time) {
+func (m *Model) setTimestamp(data map[string]interface{}, field string, now time.Time) error {
 	valueType := TimestampValueTypeUnix
-	if m != nil && m.timestampValueType != "" {
-		valueType = m.timestampValueType
+	if m != nil {
+		m.mu.RLock()
+		configured := m.timestampValueType
+		m.mu.RUnlock()
+		if configured != "" {
+			valueType = configured
+		}
 	}
-	setAutoTimestamp(data, field, now, valueType)
+	return setAutoTimestamp(data, field, now, valueType)
 }

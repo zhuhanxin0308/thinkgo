@@ -1,21 +1,13 @@
 package http
 
 import (
-	stdcontext "context"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
-	"os"
-	"os/signal"
-	"path"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/quic-go/quic-go/http3"
 
 	"thinkgo/framework"
 	"thinkgo/framework/context"
@@ -25,680 +17,346 @@ import (
 	"thinkgo/framework/route"
 )
 
-// serverConf 保存启动阶段预解析后的 HTTP 服务配置。
-type serverConf struct {
-	Host              string
-	Port              int
-	EnableTLS         bool
-	CertFile          string
-	KeyFile           string
-	EnableHTTP3       bool
-	AllowedHosts      []string
-	TrustedProxies    []string
-	ReadHeaderTimeout time.Duration
-	ReadTimeout       time.Duration
-	WriteTimeout      time.Duration
-	IdleTimeout       time.Duration
-	ShutdownTimeout   time.Duration
-	MaxHeaderBytes    int
-	MaxBodyBytes      int64
-	MultipartMemory   int64
-}
-
-// compressionConf 保存响应压缩配置，避免每次请求重复读取配置树。
-type compressionConf struct {
-	Enable  bool
-	MinSize int
-	Levels  map[string]int
-}
-
-// Http 是框架的 HTTP 内核。
+// Http 是框架 HTTP 内核，启动后配置和路由均保持只读。
 type Http struct {
-	app            *framework.App
-	srvConf        serverConf
-	compressConf   compressionConf
+	app          *framework.App
+	srvConf      serverConf
+	compressConf compressionConf
+
 	dispatchPlanMu sync.RWMutex
 	dispatchPlans  map[string]*controllerDispatchPlan
 	spaIndexMu     sync.RWMutex
 	spaIndexCache  []byte
-	spaIndexMod    time.Time
+	spaIndexCached bool
+	spaIndexAt     time.Time
+	staticMissMu   sync.RWMutex
+	staticMisses   map[string]time.Time
 }
 
-// controllerDispatchPlan 缓存控制器动作的反射计划，避免每次请求重复查找方法。
-type controllerDispatchPlan struct {
-	controllerType reflect.Type
-	actionMethod   reflect.Method
-	initMethod     *reflect.Method
+type requestServeState struct {
+	raw               *http.Request
+	req               *context.Request
+	response          *context.Response
+	statusWriter      *statusTrackingResponseWriter
+	writer            http.ResponseWriter
+	compressionWriter *CompressionResponseWriter
+	startedAt         time.Time
 }
 
-// NewHttp 创建 HTTP 内核，并在启动时完成一次配置解析。
-func NewHttp(app *framework.App) *Http {
-	h := &Http{
+// NewHttp 严格解析配置并创建 HTTP 内核，任何非法安全边界都会直接返回错误。
+func NewHttp(app *framework.App) (*Http, error) {
+	serverConfig, compressionConfig, err := parseHTTPConfig(app)
+	if err != nil {
+		return nil, err
+	}
+	return &Http{
 		app:           app,
+		srvConf:       serverConfig,
+		compressConf:  compressionConfig,
 		dispatchPlans: make(map[string]*controllerDispatchPlan),
-	}
-	h.parseConfig()
-	return h
+		staticMisses:  make(map[string]time.Time),
+	}, nil
 }
 
-// parseConfig 解析服务端与压缩配置，避免运行期重复做类型转换。
-func (h *Http) parseConfig() {
-	serverConfig, _ := h.app.Config.Get("app.server", make(map[string]interface{})).(map[string]interface{})
-	h.srvConf = serverConf{
-		Host:              "0.0.0.0",
-		Port:              8080,
-		CertFile:          "./runtime/cert.pem",
-		KeyFile:           "./runtime/key.pem",
-		TrustedProxies:    []string{},
-		ReadHeaderTimeout: 2 * time.Second,
-		ReadTimeout:       10 * time.Second,
-		WriteTimeout:      15 * time.Second,
-		IdleTimeout:       60 * time.Second,
-		ShutdownTimeout:   5 * time.Second,
-		MaxHeaderBytes:    1 << 20,
-		MaxBodyBytes:      10 << 20,
-		MultipartMemory:   32 << 20,
+// ServeHTTP 依次执行入口校验、结构化输入解析、静态资源、路由与中间件流水线。
+func (h *Http) ServeHTTP(originalWriter http.ResponseWriter, raw *http.Request) {
+	statusWriter := newStatusTrackingResponseWriter(originalWriter)
+	state := &requestServeState{
+		raw:          raw,
+		statusWriter: statusWriter,
+		writer:       statusWriter,
+		startedAt:    time.Now(),
 	}
-
-	if value, ok := serverConfig["host"].(string); ok {
-		h.srvConf.Host = value
-	}
-	h.srvConf.Port = parseInt(serverConfig["port"], h.srvConf.Port)
-	h.srvConf.AllowedHosts = parseConfigStringList(serverConfig["allowed_hosts"])
-
-	tlsConfig, _ := serverConfig["tls"].(map[string]interface{})
-	if value, ok := tlsConfig["enable"].(bool); ok {
-		h.srvConf.EnableTLS = value
-	}
-	if value, ok := tlsConfig["cert_file"].(string); ok {
-		h.srvConf.CertFile = value
-	}
-	if value, ok := tlsConfig["key_file"].(string); ok {
-		h.srvConf.KeyFile = value
-	}
-	if value, ok := serverConfig["http3"].(bool); ok {
-		h.srvConf.EnableHTTP3 = value
-	}
-
-	h.srvConf.ReadHeaderTimeout = parseMilliseconds(serverConfig["read_header_timeout_ms"], h.srvConf.ReadHeaderTimeout)
-	h.srvConf.ReadTimeout = parseMilliseconds(serverConfig["read_timeout_ms"], h.srvConf.ReadTimeout)
-	h.srvConf.WriteTimeout = parseMilliseconds(serverConfig["write_timeout_ms"], h.srvConf.WriteTimeout)
-	h.srvConf.IdleTimeout = parseMilliseconds(serverConfig["idle_timeout_ms"], h.srvConf.IdleTimeout)
-	h.srvConf.ShutdownTimeout = parseMilliseconds(serverConfig["shutdown_timeout_ms"], h.srvConf.ShutdownTimeout)
-	h.srvConf.MaxHeaderBytes = parseInt(serverConfig["max_header_bytes"], h.srvConf.MaxHeaderBytes)
-	h.srvConf.MaxBodyBytes = parseInt64(serverConfig["max_body_bytes"], h.srvConf.MaxBodyBytes)
-
-	multipartMemoryMB := parseInt64(serverConfig["multipart_max_memory_mb"], h.srvConf.MultipartMemory>>20)
-	if multipartMemoryMB > 0 {
-		h.srvConf.MultipartMemory = multipartMemoryMB << 20
-	}
-
-	if values, ok := serverConfig["trusted_proxies"].([]interface{}); ok {
-		for _, value := range values {
-			if proxy, ok := value.(string); ok && strings.TrimSpace(proxy) != "" {
-				h.srvConf.TrustedProxies = append(h.srvConf.TrustedProxies, strings.TrimSpace(proxy))
-			}
-		}
-	} else if values, ok := serverConfig["trusted_proxies"].([]string); ok {
-		for _, value := range values {
-			if strings.TrimSpace(value) != "" {
-				h.srvConf.TrustedProxies = append(h.srvConf.TrustedProxies, strings.TrimSpace(value))
-			}
-		}
-	} else if value, ok := serverConfig["trusted_proxies"].(string); ok && strings.TrimSpace(value) != "" {
-		for _, proxy := range strings.Split(value, ",") {
-			if strings.TrimSpace(proxy) != "" {
-				h.srvConf.TrustedProxies = append(h.srvConf.TrustedProxies, strings.TrimSpace(proxy))
-			}
-		}
-	}
-
-	if h.app.Env != nil {
-		if value := strings.TrimSpace(h.app.Env.Get("SERVER_ALLOWED_HOSTS", "")); value != "" {
-			h.srvConf.AllowedHosts = splitConfigStringList(value)
-		}
-		if value := strings.TrimSpace(h.app.Env.Get("SERVER_TRUSTED_PROXIES", "")); value != "" {
-			h.srvConf.TrustedProxies = h.srvConf.TrustedProxies[:0]
-			for _, proxy := range strings.Split(value, ",") {
-				if strings.TrimSpace(proxy) != "" {
-					h.srvConf.TrustedProxies = append(h.srvConf.TrustedProxies, strings.TrimSpace(proxy))
-				}
-			}
-		}
-	}
-
-	compressConfig, _ := h.app.Config.Get("app.compression", make(map[string]interface{})).(map[string]interface{})
-	h.compressConf = compressionConf{
-		MinSize: 1024,
-		Levels:  make(map[string]int),
-	}
-	if enable, ok := compressConfig["enable"].(bool); ok {
-		h.compressConf.Enable = enable
-	}
-	if value, ok := compressConfig["min_size"].(float64); ok {
-		h.compressConf.MinSize = int(value)
-	} else if value, ok := compressConfig["min_size"].(int); ok {
-		h.compressConf.MinSize = value
-	}
-
-	if levels, ok := compressConfig["levels"].(map[string]interface{}); ok {
-		for key, value := range levels {
-			if level, ok := value.(float64); ok {
-				h.compressConf.Levels[key] = int(level)
-			} else if level, ok := value.(int); ok {
-				h.compressConf.Levels[key] = level
-			}
-		}
-	} else if level, ok := compressConfig["level"].(float64); ok {
-		lvl := int(level)
-		h.compressConf.Levels["gzip"] = lvl
-		h.compressConf.Levels["deflate"] = lvl
-		h.compressConf.Levels["br"] = lvl
-		h.compressConf.Levels["zstd"] = 2
-	}
-}
-
-// Run 启动 HTTP 服务。
-func (h *Http) Run() error {
-	addr := fmt.Sprintf("%s:%d", h.srvConf.Host, h.srvConf.Port)
-	server := h.newServer()
-	stopShutdown := h.listenForShutdown(server)
-	defer stopShutdown()
-
-	fmt.Println("ThinkGo starting on " + addr)
-
-	if h.srvConf.EnableTLS {
-		if h.srvConf.EnableHTTP3 {
-			fmt.Println("HTTP/3 Enabled")
-			go func() {
-				http3Server := http3.Server{
-					Addr:    addr,
-					Handler: h,
-				}
-				_ = http3Server.ListenAndServeTLS(h.srvConf.CertFile, h.srvConf.KeyFile)
-			}()
-		}
-
-		err := server.ListenAndServeTLS(h.srvConf.CertFile, h.srvConf.KeyFile)
-		if errors.Is(err, http.ErrServerClosed) {
-			return nil
-		}
-		return err
-	}
-
-	err := server.ListenAndServe()
-	if errors.Is(err, http.ErrServerClosed) {
-		return nil
-	}
-	return err
-}
-
-// ServeHTTP 统一处理静态文件、动态路由、异常恢复和访问日志。
-func (h *Http) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if h.srvConf.EnableHTTP3 {
-		w.Header().Set("Alt-Svc", fmt.Sprintf(`h3=":%d"; ma=2592000`, h.srvConf.Port))
-	}
-
-	statusWriter := newStatusTrackingResponseWriter(w)
-	w = statusWriter
-
-	req := context.NewRequest(
-		r,
-		context.WithTrustedProxies(h.srvConf.TrustedProxies),
-		context.WithMultipartMemoryLimit(h.srvConf.MultipartMemory),
-	)
-	start := time.Now()
-	var compressionWriter *CompressionResponseWriter
-
 	defer func() {
-		if recovered := recover(); recovered != nil {
-			handler := &exception.Handle{
-				App:    h.app,
-				Log:    h.app.Log,
-				TplDir: filepath.Join(h.app.BasePath, "framework", "exception", "tpl"),
-			}
-			handler.Render(w, r, recovered)
-		}
-
-		if compressionWriter != nil {
-			_ = compressionWriter.Close()
-		}
-
-		duration := time.Since(start)
-		finalStatus := statusWriter.Status()
-		if h.app != nil && h.app.Log != nil {
-			h.app.Log.InfoCtx(
-				fmt.Sprintf("%s %s %d %.3fms", r.Method, r.URL.Path, finalStatus, float64(duration.Microseconds())/1000),
-				map[string]interface{}{
-					"method":      r.Method,
-					"path":        r.URL.Path,
-					"status":      finalStatus,
-					"duration_ms": float64(duration.Microseconds()) / 1000,
-					"ip":          req.Ip(),
-					"user_agent":  r.UserAgent(),
-				},
-			)
-		}
-
-		// 触发 HTTP 请求结束事件（对应 ThinkPHP 的 HttpEnd）
-		if h.app.Event != nil {
-			h.app.Event.Dispatch(event.NewHttpEndEvent(statusWriter.Status()))
-		}
-
-		req.Cleanup()
+		h.finishRequest(state, recover())
 	}()
 
-	// 触发 HTTP 请求开始事件（对应 ThinkPHP 的 HttpRun）
-	if h.app.Event != nil {
-		h.app.Event.Dispatch(event.NewHttpRunEvent())
+	if h == nil || h.app == nil {
+		http.Error(state.writer, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
 	}
-
-	if !h.isAllowedHost(r.Host) {
-		http.Error(w, http.StatusText(http.StatusMisdirectedRequest), http.StatusMisdirectedRequest)
+	if raw == nil || raw.URL == nil {
+		http.Error(state.writer, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		return
+	}
+	if !h.isAllowedHost(raw.Host) {
+		http.Error(state.writer, http.StatusText(http.StatusMisdirectedRequest), http.StatusMisdirectedRequest)
+		return
+	}
+	if err := h.app.Route.Freeze(); err != nil {
+		h.logHTTPError("冻结路由失败", err)
+		http.Error(state.writer, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
 
-	if h.compressConf.Enable {
-		compressionWriter = NewCompressionResponseWriter(w, r, h.compressConf.MinSize, h.compressConf.Levels)
-		w = compressionWriter
+	req, err := context.NewRequest(
+		raw,
+		context.WithTrustedProxies(h.srvConf.TrustedProxies),
+		context.WithMultipartMemoryLimit(h.srvConf.MultipartMemory),
+		context.WithMaxBodyBytes(h.srvConf.MaxBodyBytes),
+	)
+	if err != nil {
+		h.logHTTPError("创建请求上下文失败", err)
+		http.Error(state.writer, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	state.req = req
+	if err = req.Parse(); err != nil {
+		h.writeRequestParseError(state.writer, err)
+		return
 	}
 
-	if h.srvConf.MaxBodyBytes > 0 && r.Body != nil {
-		if r.ContentLength > h.srvConf.MaxBodyBytes {
-			http.Error(w, http.StatusText(http.StatusRequestEntityTooLarge), http.StatusRequestEntityTooLarge)
+	if h.app.Event != nil {
+		if err = h.app.Event.Dispatch(event.NewHttpRunEvent()); err != nil {
+			panic(err)
+		}
+	}
+	if h.srvConf.EnableTLS && h.srvConf.EnableHTTP3 {
+		state.writer.Header().Set("Alt-Svc", fmt.Sprintf(`h3=":%d"; ma=2592000`, h.srvConf.Port))
+	}
+	if h.compressConf.Enable && raw.Method != http.MethodHead {
+		state.compressionWriter = NewCompressionResponseWriter(
+			state.writer,
+			raw,
+			h.compressConf.MinSize,
+			h.compressConf.Levels,
+		)
+		state.writer = state.compressionWriter
+	}
+
+	if raw.Method == http.MethodGet || raw.Method == http.MethodHead {
+		staticPath := raw.URL.Path
+		if staticPath == "/" {
+			staticPath = "/index.html"
+		}
+		if h.servePublicFile(state.writer, raw, staticPath) {
 			return
 		}
-		r.Body = http.MaxBytesReader(w, r.Body, h.srvConf.MaxBodyBytes)
 	}
 
-	urlPath := r.URL.Path
-	publicDir := filepath.Join(h.app.BasePath, "public")
-
-	if urlPath == "/" {
-		indexFile := filepath.Join(publicDir, "index.html")
-		if _, err := os.Stat(indexFile); err == nil {
-			http.ServeFile(w, r, indexFile)
-			return
-		}
-	}
-
-	if staticFile, ok := h.resolveStaticFilePath(urlPath); ok {
-		if info, err := os.Stat(staticFile); err == nil && !info.IsDir() {
-			http.ServeFile(w, r, staticFile)
-			return
-		}
-	}
-
-	pipeline := h.app.Middleware
-	resp := pipeline.Then(req, func(req *context.Request) *context.Response {
-		matchedRoute, routeParams := h.app.Route.Match(req)
-		for key, value := range routeParams {
-			req.Set(key, value)
-		}
-
-		if matchedRoute == nil {
-			reqPath := req.Path()
-			if !strings.HasPrefix(reqPath, "/api/") {
-				if content, ok := h.spaIndexContent(); ok {
-					return context.NewResponse().
-						Header("Content-Type", "text/html; charset=utf-8").
-						Content(string(content))
-				}
-			}
-			return context.NewResponse().Code(http.StatusNotFound).Content("404 Not Found")
-		}
-
-		if len(matchedRoute.Middleware) > 0 {
-			routePipeline := middleware.NewPipeline()
-			for _, handler := range matchedRoute.Middleware {
-				routePipeline.Pipe(handler)
-			}
-			return routePipeline.Then(req, func(req *context.Request) *context.Response {
-				return h.dispatch(matchedRoute, req)
-			})
-		}
-
-		return h.dispatch(matchedRoute, req)
+	response := h.app.Middleware.Then(req, func(current *context.Request) *context.Response {
+		return h.routeRequest(current)
 	})
-
-	if resp == nil {
-		resp = context.NewResponse().
+	if response == nil {
+		response = context.NewResponse().
 			Code(http.StatusInternalServerError).
 			Content(http.StatusText(http.StatusInternalServerError))
 	}
-	if bodyErr := req.BodyReadError(); bodyErr != nil {
-		var maxBytesErr *http.MaxBytesError
-		if errors.As(bodyErr, &maxBytesErr) {
-			resp = context.NewResponse().
-				Code(http.StatusRequestEntityTooLarge).
-				Content(http.StatusText(http.StatusRequestEntityTooLarge))
-		} else {
-			resp = context.NewResponse().
-				Code(http.StatusBadRequest).
-				Content(http.StatusText(http.StatusBadRequest))
+	state.response = response
+
+	if parseErr := req.ParseError(); parseErr != nil {
+		state.response = responseForRequestParseError(parseErr)
+	}
+	if raw.Method == http.MethodHead {
+		state.writer = &headResponseWriter{ResponseWriter: state.writer}
+	}
+	if err = state.response.Send(state.writer); err != nil {
+		h.logHTTPError("发送 HTTP 响应失败", err)
+		if context.IsResponseTransmissionError(err) {
+			h.replaceUncommittedSendFailure(state)
 		}
 	}
-	resp.Send(w)
-	h.runTerminators(req, resp, middleware.RequestTerminators(req))
 }
 
-// isAllowedHost 在配置白名单时校验 Host，防止伪造 Host 影响路由域名匹配和绝对 URL 生成。
-func (h *Http) isAllowedHost(rawHost string) bool {
-	if len(h.srvConf.AllowedHosts) == 0 {
-		return true
+func (h *Http) replaceUncommittedSendFailure(state *requestServeState) {
+	if state == nil || state.statusWriter == nil || state.statusWriter.Written() {
+		return
 	}
-
-	host := normalizeHTTPHost(rawHost)
-	if host == "" {
-		return false
+	if state.compressionWriter != nil && !state.compressionWriter.ResetUncommitted() {
+		return
 	}
-	for _, allowed := range h.srvConf.AllowedHosts {
-		allowedHost := normalizeHTTPHost(allowed)
-		if allowedHost == "" {
-			continue
-		}
-		if allowedHost == "*" || strings.EqualFold(host, allowedHost) {
-			return true
-		}
-		if strings.HasPrefix(allowedHost, "*.") && strings.HasSuffix(host, strings.TrimPrefix(allowedHost, "*")) {
-			return true
-		}
+	fallback := context.NewResponse().
+		Header("Content-Type", "text/plain; charset=utf-8").
+		Header("X-Content-Type-Options", "nosniff").
+		Header("Cache-Control", "no-store").
+		Code(http.StatusInternalServerError).
+		Content(http.StatusText(http.StatusInternalServerError))
+	state.response = fallback
+	if err := fallback.Send(state.writer); err != nil {
+		h.logHTTPError("发送 HTTP 降级响应失败", err)
 	}
-	return false
 }
 
-// normalizeHTTPHost 去掉端口和大小写差异，保留主机名本身用于白名单比较。
-func normalizeHTTPHost(rawHost string) string {
-	host := strings.TrimSpace(rawHost)
-	if host == "" {
-		return ""
-	}
-	if parsedHost, _, err := net.SplitHostPort(host); err == nil {
-		host = parsedHost
-	}
-	host = strings.Trim(host, "[]")
-	return strings.TrimSuffix(strings.ToLower(host), ".")
-}
-
-// spaIndexContent 返回 SPA 入口 index.html 内容，按文件修改时间缓存，
-// 避免每个未命中路由都全量读取磁盘文件；文件更新后会自动失效重载。
-func (h *Http) spaIndexContent() ([]byte, bool) {
-	indexFile := filepath.Join(h.app.BasePath, "public", "index.html")
-	info, err := os.Stat(indexFile)
-	if err != nil || info.IsDir() {
-		return nil, false
-	}
-	modTime := info.ModTime()
-
-	h.spaIndexMu.RLock()
-	if h.spaIndexCache != nil && h.spaIndexMod.Equal(modTime) {
-		content := h.spaIndexCache
-		h.spaIndexMu.RUnlock()
-		return content, true
-	}
-	h.spaIndexMu.RUnlock()
-
-	content, err := os.ReadFile(indexFile)
+func (h *Http) routeRequest(req *context.Request) *context.Response {
+	matched, params, err := h.app.Route.Match(req)
 	if err != nil {
-		return nil, false
+		return h.responseForRouteError(err)
 	}
-
-	h.spaIndexMu.Lock()
-	h.spaIndexCache = content
-	h.spaIndexMod = modTime
-	h.spaIndexMu.Unlock()
-	return content, true
-}
-
-// newServer 基于解析后的配置构建显式 http.Server。
-func (h *Http) newServer() *http.Server {
-	return &http.Server{
-		Addr:              fmt.Sprintf("%s:%d", h.srvConf.Host, h.srvConf.Port),
-		Handler:           h,
-		ReadHeaderTimeout: h.srvConf.ReadHeaderTimeout,
-		ReadTimeout:       h.srvConf.ReadTimeout,
-		WriteTimeout:      h.srvConf.WriteTimeout,
-		IdleTimeout:       h.srvConf.IdleTimeout,
-		MaxHeaderBytes:    h.srvConf.MaxHeaderBytes,
+	for key, value := range params {
+		req.Set(key, value)
 	}
-}
-
-// listenForShutdown 在收到中断信号后优雅关闭 HTTP Server。
-func (h *Http) listenForShutdown(server *http.Server) func() {
-	signals := make(chan os.Signal, 1)
-	done := make(chan struct{})
-	signal.Notify(signals, os.Interrupt)
-
-	go func() {
-		select {
-		case <-signals:
-			timeout := h.srvConf.ShutdownTimeout
-			if timeout <= 0 {
-				timeout = 5 * time.Second
+	if matched == nil {
+		if (req.Method() == http.MethodGet || req.Method() == http.MethodHead) && !isAPIPath(req.Path()) {
+			if content, ok := h.spaIndexContent(); ok {
+				return context.NewResponse().
+					Header("Content-Type", "text/html; charset=utf-8").
+					Content(string(content))
 			}
-			shutdownCtx, cancel := stdcontext.WithTimeout(stdcontext.Background(), timeout)
-			defer cancel()
-			_ = server.Shutdown(shutdownCtx)
-		case <-done:
 		}
-	}()
-
-	return func() {
-		close(done)
-		signal.Stop(signals)
+		return context.NewResponse().Code(http.StatusNotFound).Content("404 Not Found")
 	}
+
+	handlers := matched.Middlewares()
+	if len(handlers) == 0 {
+		return h.dispatch(matched, req)
+	}
+	routePipeline := middleware.NewPipeline()
+	for _, handler := range handlers {
+		routePipeline.Pipe(handler)
+	}
+	return routePipeline.Then(req, func(current *context.Request) *context.Response {
+		return h.dispatch(matched, current)
+	})
 }
 
-// resolveStaticFilePath 将 URL 路径安全映射到 public 目录内的绝对路径。
-func (h *Http) resolveStaticFilePath(urlPath string) (string, bool) {
-	normalizedPath := strings.ReplaceAll(urlPath, "\\", "/")
-	cleanPath := path.Clean("/" + normalizedPath)
-	relativePath := strings.TrimPrefix(cleanPath, "/")
-
-	publicDir := filepath.Join(h.app.BasePath, "public")
-	targetPath := filepath.Join(publicDir, filepath.FromSlash(relativePath))
-
-	publicAbs, err := filepath.Abs(publicDir)
-	if err != nil {
-		return "", false
+func (h *Http) responseForRouteError(err error) *context.Response {
+	var methodErr *route.MethodNotAllowedError
+	if errors.As(err, &methodErr) {
+		return context.NewResponse().
+			Header("Allow", strings.Join(methodErr.Allowed, ", ")).
+			Code(http.StatusMethodNotAllowed).
+			Content(http.StatusText(http.StatusMethodNotAllowed))
 	}
-	targetAbs, err := filepath.Abs(targetPath)
-	if err != nil {
-		return "", false
+	if errors.Is(err, route.ErrInvalidRequestPath) || errors.Is(err, route.ErrNilRequest) {
+		return context.NewResponse().Code(http.StatusBadRequest).Content(http.StatusText(http.StatusBadRequest))
 	}
-
-	if targetAbs != publicAbs && !strings.HasPrefix(targetAbs, publicAbs+string(os.PathSeparator)) {
-		return "", false
-	}
-
-	return targetAbs, true
-}
-
-// dispatch 将路由处理器分发到函数或控制器方法。
-func (h *Http) dispatch(matchedRoute *route.Route, req *context.Request) *context.Response {
-	handler := matchedRoute.Handler
-
-	if fn, ok := handler.(func(*context.Request) *context.Response); ok {
-		return fn(req)
-	}
-
-	if handlerStr, ok := handler.(string); ok {
-		parts := strings.Split(handlerStr, "@")
-		if len(parts) != 2 {
-			return h.dispatchInternalError(handlerStr, fmt.Errorf("invalid route handler format"))
-		}
-
-		// 自动路由的动作名来自 URL，禁止其调用控制器基类的内置方法
-		// （如 View/Success/Init/SetMiddleware 等），避免把内部能力暴露成可路由端点。
-		if matchedRoute.Auto && isReservedControllerMethod(parts[1]) {
-			return context.NewResponse().Code(http.StatusNotFound).Content("404 Not Found")
-		}
-
-		controllerName := parts[0]
-		controllerInstance, err := h.app.Make(controllerName)
-		if err != nil {
-			return h.dispatchInternalError(handlerStr, err)
-		}
-
-		controllerValue := reflect.ValueOf(controllerInstance)
-		if controllerValue.Kind() == reflect.Ptr && controllerValue.IsNil() {
-			return h.dispatchInternalError(handlerStr, fmt.Errorf("controller instance is nil"))
-		}
-
-		plan, err := h.resolveDispatchPlan(handlerStr, controllerValue.Type())
-		if err != nil {
-			return h.dispatchInternalError(handlerStr, err)
-		}
-
-		if plan.initMethod != nil {
-			plan.initMethod.Func.Call([]reflect.Value{controllerValue, reflect.ValueOf(h.app), reflect.ValueOf(req)})
-		}
-
-		// 实际执行控制器动作的闭包。
-		invokeAction := func(req *context.Request) *context.Response {
-			args := []reflect.Value{controllerValue}
-			if plan.actionMethod.Type.NumIn() > 1 && plan.actionMethod.Type.In(1) == reflect.TypeOf(req) {
-				args = append(args, reflect.ValueOf(req))
-			}
-
-			results := plan.actionMethod.Func.Call(args)
-			if len(results) > 0 {
-				return h.toResponse(results[0].Interface())
-			}
-			return context.NewResponse()
-		}
-
-		// 应用控制器级中间件（对应 ThinkPHP 控制器 $middleware 声明）。
-		if handlers := h.resolveControllerMiddleware(controllerInstance, parts[1]); len(handlers) > 0 {
-			controllerPipeline := middleware.NewPipeline()
-			for _, handler := range handlers {
-				controllerPipeline.Pipe(handler)
-			}
-			return controllerPipeline.Then(req, invokeAction)
-		}
-
-		return invokeAction(req)
-	}
-
-	return h.dispatchInternalError("", fmt.Errorf("invalid route handler"))
-}
-
-// controllerMiddlewareProvider 抽象“能声明控制器级中间件”的控制器，
-// 通常由嵌入 framework.Controller 自动满足。
-type controllerMiddlewareProvider interface {
-	GetMiddleware() []framework.ControllerMiddleware
-}
-
-// resolveControllerMiddleware 解析控制器声明的中间件，按别名查找处理器，
-// 并依据 Only/Except 过滤出对当前动作生效的中间件列表。
-func (h *Http) resolveControllerMiddleware(controllerInstance interface{}, action string) []middleware.Handler {
-	provider, ok := controllerInstance.(controllerMiddlewareProvider)
-	if !ok {
-		return nil
-	}
-
-	declarations := provider.GetMiddleware()
-	if len(declarations) == 0 {
-		return nil
-	}
-
-	handlers := make([]middleware.Handler, 0, len(declarations))
-	for _, declaration := range declarations {
-		if !controllerMiddlewareApplies(declaration, action) {
-			continue
-		}
-		handler := h.app.Middleware.ResolveAlias(declaration.Name)
-		if handler == nil {
-			if h.app.Log != nil {
-				h.app.Log.WarningCtx("controller middleware alias not found", map[string]interface{}{
-					"alias":  declaration.Name,
-					"action": action,
-				})
-			}
-			continue
-		}
-		handlers = append(handlers, handler)
-	}
-	return handlers
-}
-
-// controllerMiddlewareApplies 判断某条控制器中间件声明是否对指定动作生效。
-// Only 非空时仅命中列表内动作；Except 非空时排除列表内动作；动作名大小写不敏感。
-func controllerMiddlewareApplies(declaration framework.ControllerMiddleware, action string) bool {
-	if len(declaration.Only) > 0 {
-		return containsFold(declaration.Only, action)
-	}
-	if len(declaration.Except) > 0 {
-		return !containsFold(declaration.Except, action)
-	}
-	return true
-}
-
-// containsFold 大小写不敏感地判断切片是否包含目标字符串。
-func containsFold(items []string, target string) bool {
-	for _, item := range items {
-		if strings.EqualFold(item, target) {
-			return true
-		}
-	}
-	return false
-}
-
-// reservedControllerMethods 收集嵌入式基类 framework.Controller 暴露的方法名集合。
-// 这些方法是框架内置能力（视图渲染、响应辅助、中间件声明等），不应通过自动路由
-// 被外部 URL 直接触发。在包初始化时通过反射一次性构建。
-var reservedControllerMethods = buildReservedControllerMethods()
-
-func buildReservedControllerMethods() map[string]bool {
-	set := make(map[string]bool)
-	for _, typ := range []reflect.Type{
-		reflect.TypeOf(framework.Controller{}),
-		reflect.TypeOf(&framework.Controller{}),
-	} {
-		for i := 0; i < typ.NumMethod(); i++ {
-			set[typ.Method(i).Name] = true
-		}
-	}
-	return set
-}
-
-// isReservedControllerMethod 判断方法名是否属于基类内置方法。
-func isReservedControllerMethod(name string) bool {
-	return reservedControllerMethods[name]
-}
-
-// dispatchInternalError 统一记录控制器分发错误，并在生产环境屏蔽内部细节。
-func (h *Http) dispatchInternalError(handler string, err error) *context.Response {
-	if h.app != nil && h.app.Log != nil && err != nil {
-		h.app.Log.ErrorCtx("http dispatch failed", map[string]interface{}{
-			"handler": handler,
-			"error":   err.Error(),
-		})
-	}
-
-	message := http.StatusText(http.StatusInternalServerError)
-	if h.app != nil && h.app.IsDebug() && err != nil {
-		message = err.Error()
-	}
-
+	h.logHTTPError("路由匹配失败", err)
 	return context.NewResponse().
 		Code(http.StatusInternalServerError).
-		Content(message)
+		Content(http.StatusText(http.StatusInternalServerError))
 }
 
-// runTerminators 在响应发出后执行 terminate 回调，回调异常只记录日志，避免破坏已经完成的响应。
+func (h *Http) writeRequestParseError(writer http.ResponseWriter, err error) {
+	response := responseForRequestParseError(err)
+	if sendErr := response.Send(writer); sendErr != nil {
+		h.logHTTPError("发送请求解析错误响应失败", sendErr)
+	}
+}
+
+func responseForRequestParseError(err error) *context.Response {
+	if errors.Is(err, context.ErrRequestBodyTooLarge) {
+		return context.NewResponse().
+			Code(http.StatusRequestEntityTooLarge).
+			Content(http.StatusText(http.StatusRequestEntityTooLarge))
+	}
+	return context.NewResponse().Code(http.StatusBadRequest).Content(http.StatusText(http.StatusBadRequest))
+}
+
+func (h *Http) finishRequest(state *requestServeState, recovered interface{}) {
+	if recovered != nil {
+		if !state.statusWriter.Written() {
+			if state.compressionWriter != nil {
+				state.compressionWriter.ResetUncommitted()
+			}
+			if err := h.renderRecoveredException(state.writer, state.raw, recovered); err != nil {
+				h.logHTTPError("异常渲染失败", err)
+				if state.compressionWriter != nil {
+					state.compressionWriter.ResetUncommitted()
+				}
+				if !state.statusWriter.Written() {
+					http.Error(state.writer, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+			}
+		} else {
+			h.logHTTPError("响应写出后发生异常", fmt.Errorf("%v", recovered))
+		}
+	}
+	if state.compressionWriter != nil {
+		if err := safeCloseCompressionWriter(state.compressionWriter); err != nil {
+			h.logHTTPError("关闭响应压缩器失败", err)
+		}
+	}
+
+	if state.req != nil {
+		terminatorResponse := state.response
+		if terminatorResponse == nil {
+			terminatorResponse = context.NewResponse().Code(state.statusWriter.Status())
+		}
+		h.runTerminators(state.req, terminatorResponse, middleware.RequestTerminators(state.req))
+		if err := state.req.Cleanup(); err != nil {
+			h.logHTTPError("清理请求临时资源失败", err)
+		}
+	}
+	h.writeAccessLog(state)
+	if h != nil && h.app != nil && h.app.Event != nil {
+		if err := h.app.Event.Dispatch(event.NewHttpEndEvent(state.statusWriter.Status())); err != nil {
+			h.logHTTPError("HTTP 结束事件分发失败", err)
+		}
+	}
+}
+
+func (h *Http) renderRecoveredException(writer http.ResponseWriter, raw *http.Request, recovered interface{}) (err error) {
+	defer func() {
+		if nested := recover(); nested != nil {
+			err = fmt.Errorf("异常渲染 panic: %v", nested)
+		}
+	}()
+	handler := &exception.Handle{
+		App:    h.app,
+		Log:    h.app.Log,
+		TplDir: filepath.Join(h.app.BasePath, "framework", "exception", "tpl"),
+	}
+	return handler.Render(writer, raw, recovered)
+}
+
+func safeCloseCompressionWriter(writer *CompressionResponseWriter) (err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("关闭压缩器 panic: %v", recovered)
+		}
+	}()
+	return writer.Close()
+}
+
+func (h *Http) writeAccessLog(state *requestServeState) {
+	if h == nil || h.app == nil || h.app.Log == nil || state.raw == nil {
+		return
+	}
+	path := ""
+	path = requestLogPath(state.raw)
+	ip := ""
+	if state.req != nil {
+		ip = state.req.Ip()
+	}
+	duration := time.Since(state.startedAt)
+	h.app.Log.InfoCtx(
+		fmt.Sprintf("%s %s %d %.3fms", state.raw.Method, path, state.statusWriter.Status(), float64(duration.Microseconds())/1000),
+		map[string]interface{}{
+			"method":      state.raw.Method,
+			"path":        path,
+			"status":      state.statusWriter.Status(),
+			"duration_ms": float64(duration.Microseconds()) / 1000,
+			"ip":          ip,
+			"user_agent":  state.raw.UserAgent(),
+		},
+	)
+}
+
+// requestLogPath 保留 URL 转义形式并兜底转义换行，防止访问日志被请求路径伪造分行。
+func requestLogPath(raw *http.Request) string {
+	if raw == nil || raw.URL == nil {
+		return ""
+	}
+	path := raw.URL.EscapedPath()
+	path = strings.ReplaceAll(path, "\r", "%0D")
+	return strings.ReplaceAll(path, "\n", "%0A")
+}
+
+func (h *Http) logHTTPError(message string, err error) {
+	if h != nil && h.app != nil && h.app.Log != nil && err != nil {
+		h.app.Log.ErrorCtx(message, map[string]interface{}{"error": err.Error()})
+	}
+}
+
 func (h *Http) runTerminators(req *context.Request, resp *context.Response, terminators []middleware.Terminator) {
 	for _, terminator := range terminators {
 		if terminator == nil {
 			continue
 		}
-
 		func(current middleware.Terminator) {
 			defer func() {
-				if recovered := recover(); recovered != nil && h.app != nil && h.app.Log != nil {
-					h.app.Log.ErrorCtx("http terminator panic", map[string]interface{}{
-						"error": fmt.Sprint(recovered),
-					})
+				if recovered := recover(); recovered != nil {
+					h.logHTTPError("HTTP terminate 回调异常", fmt.Errorf("%v", recovered))
 				}
 			}()
 			current(req, resp)
@@ -706,122 +364,6 @@ func (h *Http) runTerminators(req *context.Request, resp *context.Response, term
 	}
 }
 
-// resolveDispatchPlan 解析或复用控制器分发计划。
-func (h *Http) resolveDispatchPlan(handlerKey string, controllerType reflect.Type) (*controllerDispatchPlan, error) {
-	h.dispatchPlanMu.RLock()
-	if plan, ok := h.dispatchPlans[handlerKey]; ok && plan != nil && plan.controllerType == controllerType {
-		h.dispatchPlanMu.RUnlock()
-		return plan, nil
-	}
-	h.dispatchPlanMu.RUnlock()
-
-	parts := strings.Split(handlerKey, "@")
-	if len(parts) != 2 {
-		return nil, fmt.Errorf("Invalid route handler format")
-	}
-
-	methodName := parts[1]
-	actionMethod, ok := controllerType.MethodByName(methodName)
-	if !ok {
-		return nil, fmt.Errorf("Method not found: %s", methodName)
-	}
-
-	var initMethod *reflect.Method
-	if method, ok := controllerType.MethodByName("Init"); ok {
-		copiedMethod := method
-		initMethod = &copiedMethod
-	}
-
-	plan := &controllerDispatchPlan{
-		controllerType: controllerType,
-		actionMethod:   actionMethod,
-		initMethod:     initMethod,
-	}
-
-	h.dispatchPlanMu.Lock()
-	h.dispatchPlans[handlerKey] = plan
-	h.dispatchPlanMu.Unlock()
-	return plan, nil
-}
-
-// toResponse 将控制器返回值转换为框架 Response。
-func (h *Http) toResponse(result interface{}) *context.Response {
-	if resp, ok := result.(*context.Response); ok {
-		return resp
-	}
-	if str, ok := result.(string); ok {
-		return context.NewResponse().Content(str)
-	}
-	return context.NewResponse().Json(result)
-}
-
-// parseMilliseconds 把配置项解析为毫秒级 Duration。
-func parseMilliseconds(value interface{}, defaultValue time.Duration) time.Duration {
-	parsed := parseInt64(value, int64(defaultValue/time.Millisecond))
-	if parsed <= 0 {
-		return defaultValue
-	}
-	return time.Duration(parsed) * time.Millisecond
-}
-
-// parseInt 解析配置整数，兼容 int、float64 和字符串。
-func parseInt(value interface{}, defaultValue int) int {
-	return int(parseInt64(value, int64(defaultValue)))
-}
-
-// parseInt64 解析配置整数，兼容常见 JSON 反序列化类型。
-func parseInt64(value interface{}, defaultValue int64) int64 {
-	switch typed := value.(type) {
-	case int:
-		return int64(typed)
-	case int64:
-		return typed
-	case float64:
-		return int64(typed)
-	case string:
-		var parsed int64
-		if _, err := fmt.Sscanf(strings.TrimSpace(typed), "%d", &parsed); err == nil {
-			return parsed
-		}
-	}
-	return defaultValue
-}
-
-// parseConfigStringList 读取 JSON 配置中的字符串列表，兼容数组和逗号分隔字符串。
-func parseConfigStringList(value interface{}) []string {
-	switch typed := value.(type) {
-	case []interface{}:
-		result := make([]string, 0, len(typed))
-		for _, item := range typed {
-			if text, ok := item.(string); ok && strings.TrimSpace(text) != "" {
-				result = append(result, strings.TrimSpace(text))
-			}
-		}
-		return result
-	case []string:
-		result := make([]string, 0, len(typed))
-		for _, item := range typed {
-			if strings.TrimSpace(item) != "" {
-				result = append(result, strings.TrimSpace(item))
-			}
-		}
-		return result
-	case string:
-		return splitConfigStringList(typed)
-	default:
-		return nil
-	}
-}
-
-// splitConfigStringList 拆分逗号分隔配置，忽略空项。
-func splitConfigStringList(value string) []string {
-	parts := strings.Split(value, ",")
-	result := make([]string, 0, len(parts))
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part != "" {
-			result = append(result, part)
-		}
-	}
-	return result
+func isAPIPath(path string) bool {
+	return path == "/api" || strings.HasPrefix(path, "/api/")
 }

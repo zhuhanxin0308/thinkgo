@@ -52,7 +52,7 @@ func TestRecoveryConvertsHttpExceptionToResponse(t *testing.T) {
 		App: &recoveryTestApp{debug: false},
 		Log: logger,
 	}
-	req := fwcontext.NewRequest(httptest.NewRequest(http.MethodGet, "http://example.com/api/recovery", nil))
+	req := fwcontext.MustNewRequest(httptest.NewRequest(http.MethodGet, "http://example.com/api/recovery", nil))
 	req.Raw().Header.Set("Accept", "application/json")
 
 	var (
@@ -94,7 +94,7 @@ func TestRecoveryReportsUnexpectedPanicOnce(t *testing.T) {
 		App: &recoveryTestApp{debug: false},
 		Log: logger,
 	}
-	req := fwcontext.NewRequest(httptest.NewRequest(http.MethodGet, "http://example.com/api/recovery", nil))
+	req := fwcontext.MustNewRequest(httptest.NewRequest(http.MethodGet, "http://example.com/api/recovery", nil))
 	req.Raw().Header.Set("Accept", "application/json")
 
 	var (

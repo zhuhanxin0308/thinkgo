@@ -1,5 +1,12 @@
 package framework
 
+import frameworkVersion "thinkgo/framework/version"
+
+const (
+	// Version 是供应用代码读取的当前框架语义版本号。
+	Version = frameworkVersion.Number
+)
+
 // ==================== 运行时目录常量 ====================
 
 const (
@@ -7,8 +14,6 @@ const (
 	RuntimeLogDir = "/runtime/log"
 	// RuntimeCacheDir 缓存目录（相对于 BasePath）
 	RuntimeCacheDir = "/runtime/cache"
-	// RuntimeSessionDir 会话目录（相对于 BasePath）
-	RuntimeSessionDir = "/runtime/session"
 )
 
 // ==================== 服务器默认配置常量 ====================

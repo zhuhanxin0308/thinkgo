@@ -1,12 +1,13 @@
 package http
 
 import (
+	"errors"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"thinkgo/framework"
 	fwcontext "thinkgo/framework/context"
-	"thinkgo/framework/route"
 )
 
 // testDispatchController 用于验证控制器分发计划缓存。
@@ -20,6 +21,18 @@ func (c *testDispatchController) Show(req *fwcontext.Request) *fwcontext.Respons
 	return fwcontext.NewResponse().Content("ok")
 }
 
+type errorDispatchController struct{}
+
+func (c *errorDispatchController) Fail(req *fwcontext.Request) (*fwcontext.Response, error) {
+	return nil, errors.New("private action failure")
+}
+
+type invalidSignatureController struct{}
+
+func (c *invalidSignatureController) Bad(first, second string) string {
+	return first + second
+}
+
 // TestDispatchCachesControllerPlan 验证第一次分发后会缓存控制器方法计划，后续请求复用同一计划。
 func TestDispatchCachesControllerPlan(t *testing.T) {
 	app := newTestHTTPApp(t, t.TempDir(), map[string]interface{}{"enable": false})
@@ -28,9 +41,9 @@ func TestDispatchCachesControllerPlan(t *testing.T) {
 		return &testDispatchController{}
 	})
 
-	handler := NewHttp(app)
-	matchedRoute := &route.Route{Handler: "TestDispatchController@Show"}
-	req := fwcontext.NewRequest(httptest.NewRequest("GET", "http://example.com/test", nil))
+	handler := newTestHTTPHandler(t, app)
+	matchedRoute := routeForDispatchTest(t, "TestDispatchController@Show")
+	req := fwcontext.MustNewRequest(httptest.NewRequest("GET", "http://example.com/test", nil))
 
 	firstResp := handler.dispatch(matchedRoute, req)
 	if string(firstResp.GetBody()) != "ok" {
@@ -56,5 +69,30 @@ func TestDispatchCachesControllerPlan(t *testing.T) {
 	}
 	if firstPlan != secondPlan {
 		t.Fatal("相同控制器动作的分发计划应被复用，而不是重复解析反射方法")
+	}
+}
+
+// TestDispatchHandlesActionErrorsAndRejectsInvalidSignatures 验证反射动作错误被处理，非法签名不会在 Call 时 panic。
+func TestDispatchHandlesActionErrorsAndRejectsInvalidSignatures(t *testing.T) {
+	app := newTestHTTPApp(t, t.TempDir(), map[string]interface{}{"enable": false})
+	app.Container = framework.NewContainer()
+	app.BindFactory("ErrorController", func() interface{} { return &errorDispatchController{} })
+	app.BindFactory("InvalidController", func() interface{} { return &invalidSignatureController{} })
+	handler := newTestHTTPHandler(t, app)
+	req := fwcontext.MustNewRequest(httptest.NewRequest(http.MethodGet, "http://example.com/test", nil))
+
+	for name, routeHandler := range map[string]string{
+		"动作返回错误": "ErrorController@Fail",
+		"动作签名非法": "InvalidController@Bad",
+	} {
+		t.Run(name, func(t *testing.T) {
+			resp := handler.dispatch(routeForDispatchTest(t, routeHandler), req)
+			if resp.GetStatus() != http.StatusInternalServerError {
+				t.Fatalf("分发失败应返回 500，实际为 %d", resp.GetStatus())
+			}
+			if string(resp.GetBody()) != http.StatusText(http.StatusInternalServerError) {
+				t.Fatalf("生产响应不应泄露反射或动作错误，实际为 %q", string(resp.GetBody()))
+			}
+		})
 	}
 }

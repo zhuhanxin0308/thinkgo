@@ -1,39 +1,47 @@
 package console
 
 import (
-	"io"
-	"os"
-	"strings"
+	"bytes"
+	"errors"
 	"testing"
 )
 
-// TestBaseCommandExecuteReportsMissingImplementation 验证基础命令不会静默吞掉未实现的 Execute。
+// TestBaseCommandExecuteReportsMissingImplementation 验证基础命令通过可识别错误
+// 报告缺失实现，不向输出流伪装成普通业务消息。
 func TestBaseCommandExecuteReportsMissingImplementation(t *testing.T) {
-	cmd := &Command{Signature: "app:missing"}
-	output := &Output{}
-	readPipe, writePipe, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("创建 stdout 捕获管道失败: %v", err)
+	command := &Command{Signature: "app:missing"}
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	output := NewOutputWithWriters(stdout, stderr, false)
+
+	err := command.Execute(NewInput(), output)
+	if !errors.Is(err, ErrCommandNotImplemented) {
+		t.Fatalf("基础 Execute 应返回 ErrCommandNotImplemented，实际为 %v", err)
 	}
-	originalStdout := os.Stdout
-	os.Stdout = writePipe
-	defer func() {
-		os.Stdout = originalStdout
-	}()
+	if stdout.Len() != 0 || stderr.Len() != 0 || output.Err() != nil {
+		t.Fatalf("未实现错误不应被伪装成普通输出: stdout=%q stderr=%q err=%v", stdout, stderr, output.Err())
+	}
+}
 
-	defer func() {
-		_ = writePipe.Close()
-		if recovered := recover(); recovered != nil {
-			t.Fatalf("基础 Execute 应明确输出错误而不是 panic: %v", recovered)
-		}
-		content, err := io.ReadAll(readPipe)
-		if err != nil {
-			t.Fatalf("读取 stdout 捕获内容失败: %v", err)
-		}
-		if !strings.Contains(string(content), "missing implementation") {
-			t.Fatalf("基础 Execute 应输出未实现错误，实际为 %q", string(content))
-		}
-	}()
+// TestCommandDefinitionBuildersAreIdempotentAndDefensive 验证重复配置不会累加
+// 完全相同的声明，且调用方修改返回切片不会污染命令内部定义。
+func TestCommandDefinitionBuildersAreIdempotentAndDefensive(t *testing.T) {
+	command := &Command{}
+	command.AddOption("port", "p", "监听端口", "8080")
+	command.AddOption("port", "p", "监听端口", "8080")
+	command.AddBoolOption("force", "f", "强制执行")
+	command.AddBoolOption("force", "f", "强制执行")
+	command.AddArgument("name", "目标名称", true)
+	command.AddArgument("name", "目标名称", true)
 
-	cmd.Execute(NewInput(), output)
+	options := command.GetOptionDefinitions()
+	arguments := command.GetArgumentDefinitions()
+	if len(options) != 2 || len(arguments) != 1 {
+		t.Fatalf("重复配置不应累加声明: options=%v arguments=%v", options, arguments)
+	}
+	options[0].Name = "changed"
+	arguments[0].Name = "changed"
+	if command.GetOptionDefinitions()[0].Name != "port" || command.GetArgumentDefinitions()[0].Name != "name" {
+		t.Fatal("定义访问器泄漏了内部切片")
+	}
 }

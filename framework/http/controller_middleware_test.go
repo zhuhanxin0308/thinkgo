@@ -4,6 +4,7 @@ import (
 	stdhttp "net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 
 	"thinkgo/framework"
@@ -51,7 +52,7 @@ func newControllerTestApp(t *testing.T) *framework.App {
 		Middleware: middleware.NewPipeline(),
 		Log:        log.NewLog(),
 	}
-	t.Cleanup(app.Log.Shutdown)
+	t.Cleanup(func() { _ = app.Log.Close() })
 	return app
 }
 
@@ -72,7 +73,7 @@ func TestControllerMiddlewareApplied(t *testing.T) {
 	app.Route.Get("/guarded", "MwCtrl@Guarded")
 	app.Route.Get("/open", "MwCtrl@Open")
 
-	handler := NewHttp(app)
+	handler := newTestHTTPHandler(t, app)
 
 	// Only 命中：中间件应执行。
 	guardedRec := httptest.NewRecorder()
@@ -92,5 +93,55 @@ func TestControllerMiddlewareApplied(t *testing.T) {
 	}
 	if openRec.Header().Get("X-Controller-Mw") != "" {
 		t.Fatal("控制器级中间件不应对未命中 Only 的动作生效")
+	}
+}
+
+// TestControllerMiddlewareMissingAliasFailsClosed 验证控制器声明的保护中间件缺失时返回 500，而不是绕过保护继续执行动作。
+func TestControllerMiddlewareMissingAliasFailsClosed(t *testing.T) {
+	app := newControllerTestApp(t)
+	app.BindFactory("MwCtrl", reflect.TypeOf(mwTestController{}))
+	if _, err := app.Route.Get("/guarded", "MwCtrl@Guarded"); err != nil {
+		t.Fatalf("注册路由失败: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	newTestHTTPHandler(t, app).ServeHTTP(
+		recorder,
+		httptest.NewRequest(stdhttp.MethodGet, "http://example.com/guarded", nil),
+	)
+	if recorder.Code != stdhttp.StatusInternalServerError {
+		t.Fatalf("缺失控制器中间件别名必须失败关闭，实际状态码为 %d", recorder.Code)
+	}
+	if strings.Contains(recorder.Body.String(), "guarded-action") {
+		t.Fatalf("缺失保护中间件时不得执行控制器动作，响应为 %q", recorder.Body.String())
+	}
+}
+
+// TestControllerMiddlewareActionFilters 验证 Only、Except 和默认全量三种过滤语义。
+func TestControllerMiddlewareActionFilters(t *testing.T) {
+	tests := []struct {
+		name        string
+		declaration framework.ControllerMiddleware
+		action      string
+		expected    bool
+	}{
+		{name: "only matches", declaration: framework.ControllerMiddleware{Only: []string{"Show"}}, action: "show", expected: true},
+		{name: "only misses", declaration: framework.ControllerMiddleware{Only: []string{"Show"}}, action: "Edit", expected: false},
+		{name: "except blocks", declaration: framework.ControllerMiddleware{Except: []string{"Delete"}}, action: "delete", expected: false},
+		{name: "except allows", declaration: framework.ControllerMiddleware{Except: []string{"Delete"}}, action: "Show", expected: true},
+		{name: "default allows", declaration: framework.ControllerMiddleware{}, action: "Show", expected: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if actual := controllerMiddlewareApplies(test.declaration, test.action); actual != test.expected {
+				t.Fatalf("过滤结果错误，期望 %v，实际 %v", test.expected, actual)
+			}
+		})
+	}
+	if err := validateControllerActionFilter([]string{"Show", "show"}); err == nil {
+		t.Fatal("动作过滤列表不应接受大小写重复项")
+	}
+	if err := validateControllerActionFilter([]string{"bad-action"}); err == nil {
+		t.Fatal("动作过滤列表不应接受非法标识符")
 	}
 }

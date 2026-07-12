@@ -1,10 +1,7 @@
 package connector
 
 import (
-	"context"
-	"database/sql"
 	"net/url"
-	"time"
 
 	"thinkgo/framework/db"
 	"thinkgo/framework/db/builder"
@@ -17,18 +14,11 @@ type Pgsql struct{}
 
 // Connect connects to PostgreSQL
 func (p *Pgsql) Connect(config db.Config) (db.Connection, error) {
-	dsn := buildPgsqlDSN(config)
-	conn, err := sql.Open("postgres", dsn)
+	validated, err := validateConnectorConfig(config, "pgsql", true, true)
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := conn.PingContext(ctx); err != nil {
-		_ = conn.Close()
-		return nil, err
-	}
-	return &db.SQLConnection{DB: conn, Builder: &builder.Pgsql{}}, nil
+	return openSQLConnection("postgres", buildPgsqlDSN(validated), &builder.Pgsql{}, validated)
 }
 
 // buildPgsqlDSN 使用 URL 结构构造连接串，避免账号密码中的特殊字符篡改参数。
@@ -50,5 +40,5 @@ func buildPgsqlDSN(config db.Config) string {
 }
 
 func init() {
-	db.RegisterConnector("pgsql", &Pgsql{})
+	mustRegisterConnector("pgsql", &Pgsql{})
 }

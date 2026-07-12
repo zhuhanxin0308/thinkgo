@@ -1,7 +1,11 @@
 package db
 
 import (
+	"database/sql"
+	"encoding/json"
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -38,16 +42,25 @@ func (q *Query) Select() ([]map[string]interface{}, error) {
 	}
 
 	if q.needsRawSelect() {
-		return q.selectAdvanced()
+		rows, err := q.selectAdvanced()
+		if err != nil {
+			return nil, q.reportError("select", err, nil)
+		}
+		return rows, nil
 	}
 
+	connection, release, stateErr := q.db.acquireConnection()
+	if stateErr != nil {
+		return nil, q.reportError("select", stateErr, nil)
+	}
+	defer release()
 	var rows []map[string]interface{}
 	var err error
 	table := q.resolveTable()
-	if cc, ok := q.db.connection.(ContextualConnection); ok {
+	if cc, ok := connection.(ContextualConnection); ok {
 		rows, err = cc.SelectContext(q.context(), table, q.fields, q.where, q.args, q.order, q.limit, q.offset)
 	} else {
-		rows, err = q.db.connection.Select(table, q.fields, q.where, q.args, q.order, q.limit, q.offset)
+		rows, err = connection.Select(table, q.fields, q.where, q.args, q.order, q.limit, q.offset)
 	}
 	if err != nil {
 		return nil, q.reportError("select", err, map[string]interface{}{
@@ -69,10 +82,15 @@ func (q *Query) selectAdvanced() ([]map[string]interface{}, error) {
 
 // rawQuery 优先在支持 context 的连接上带上下文执行原生查询，否则回退到普通 RawQueryable。
 func (q *Query) rawQuery(sqlStr string, args ...interface{}) ([]map[string]interface{}, error) {
-	if cc, ok := q.db.connection.(ContextualRawQueryable); ok {
+	connection, release, err := q.db.acquireConnection()
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	if cc, ok := connection.(ContextualRawQueryable); ok {
 		return cc.QueryContext(q.context(), sqlStr, args...)
 	}
-	rawConn, ok := q.db.connection.(RawQueryable)
+	rawConn, ok := connection.(RawQueryable)
 	if !ok {
 		return nil, fmt.Errorf("当前数据库驱动不支持高级查询")
 	}
@@ -81,10 +99,15 @@ func (q *Query) rawQuery(sqlStr string, args ...interface{}) ([]map[string]inter
 
 // rawExecute 优先在支持 context 的连接上带上下文执行原生写操作，否则回退到普通 RawQueryable。
 func (q *Query) rawExecute(sqlStr string, args ...interface{}) (int64, error) {
-	if cc, ok := q.db.connection.(ContextualRawQueryable); ok {
+	connection, release, err := q.db.acquireConnection()
+	if err != nil {
+		return 0, err
+	}
+	defer release()
+	if cc, ok := connection.(ContextualRawQueryable); ok {
 		return cc.ExecuteContext(q.context(), sqlStr, args...)
 	}
-	rawConn, ok := q.db.connection.(RawQueryable)
+	rawConn, ok := connection.(RawQueryable)
 	if !ok {
 		return 0, fmt.Errorf("当前数据库驱动不支持原生执行")
 	}
@@ -103,46 +126,74 @@ func (q *Query) Insert(data map[string]interface{}) (int64, error) {
 		wrappedErr := fmt.Errorf("unsafe insert fields: %w", err)
 		return 0, q.reportError("insert", wrappedErr, redactDataKeys(data))
 	}
+	if len(q.setExprs) > 0 {
+		return 0, q.reportError("insert", fmt.Errorf("%w: Insert 不支持 Inc/Dec 表达式", ErrInvalidQuery), nil)
+	}
+	workingData := cloneDatabaseMap(data)
 
 	if q.autoTimestamp {
 		now := time.Now()
-		setAutoTimestamp(data, q.createTimeField, now, q.timestampValueType)
-		setAutoTimestamp(data, q.updateTimeField, now, q.timestampValueType)
+		if err := setAutoTimestamp(workingData, q.createTimeField, now, q.timestampValueType); err != nil {
+			return 0, q.reportError("insert", err, redactDataKeys(data))
+		}
+		if err := setAutoTimestamp(workingData, q.updateTimeField, now, q.timestampValueType); err != nil {
+			return 0, q.reportError("insert", err, redactDataKeys(data))
+		}
 	}
 
 	if q.txExecutor != nil {
-		sqlConn, ok := q.db.connection.(*SQLConnection)
-		if !ok {
-			return 0, q.reportError("insert", fmt.Errorf("当前数据库连接不支持事务操作"), nil)
+		sqlConn, connectionErr := q.transactionConnection()
+		if connectionErr != nil {
+			return 0, q.reportError("insert", connectionErr, nil)
 		}
 		builder := sqlConn.Builder
 		// 不支持 LastInsertId 的方言（如 PostgreSQL）在事务内同样改用 RETURNING 主键。
 		if !builder.SupportsLastInsertId() {
-			if query, values, ok := builder.InsertReturning(q.resolveTable(), data, "id"); ok {
+			if query, values, ok := builder.InsertReturning(q.resolveTable(), workingData, q.insertPrimaryKey); ok {
+				if len(values) > 0 {
+					if output, isOutput := values[len(values)-1].(sql.Out); isOutput {
+						if _, err := q.txExecutor.ExecContext(q.context(), builder.Rebind(query), values...); err != nil {
+							return 0, q.reportError("insert", err, redactDataKeys(workingData))
+						}
+						identifier, ok := output.Dest.(*int64)
+						if !ok || identifier == nil {
+							return 0, q.reportError("insert", fmt.Errorf("%w: RETURNING 输出目标必须是 *int64", ErrInvalidDatabaseRow), nil)
+						}
+						return *identifier, nil
+					}
+				}
 				var id int64
 				if err := q.txExecutor.QueryRowContext(q.context(), builder.Rebind(query), values...).Scan(&id); err != nil {
-					return 0, q.reportError("insert", err, redactDataKeys(data))
+					return 0, q.reportError("insert", err, redactDataKeys(workingData))
 				}
 				return id, nil
 			}
+			return 0, q.reportError("insert", fmt.Errorf("%w: 当前方言不支持返回插入主键", ErrInvalidQuery), nil)
 		}
-		query, values := builder.Insert(q.resolveTable(), data)
+		query, values := builder.Insert(q.resolveTable(), workingData)
 		result, err := q.txExecutor.ExecContext(q.context(), builder.Rebind(query), values...)
 		if err != nil {
-			return 0, q.reportError("insert", err, redactDataKeys(data))
+			return 0, q.reportError("insert", err, redactDataKeys(workingData))
 		}
 		return result.LastInsertId()
 	}
 
+	connection, release, stateErr := q.db.acquireConnection()
+	if stateErr != nil {
+		return 0, q.reportError("insert", stateErr, nil)
+	}
+	defer release()
 	var id int64
 	var err error
-	if cc, ok := q.db.connection.(ContextualConnection); ok {
-		id, err = cc.InsertContext(q.context(), q.resolveTable(), data)
+	if sqlConnection, ok := connection.(*SQLConnection); ok && sqlConnection != nil {
+		id, err = sqlConnection.InsertContextWithPrimaryKey(q.context(), q.resolveTable(), workingData, q.insertPrimaryKey)
+	} else if cc, ok := connection.(ContextualConnection); ok {
+		id, err = cc.InsertContext(q.context(), q.resolveTable(), workingData)
 	} else {
-		id, err = q.db.connection.Insert(q.resolveTable(), data)
+		id, err = connection.Insert(q.resolveTable(), workingData)
 	}
 	if err != nil {
-		return 0, q.reportError("insert", err, redactDataKeys(data))
+		return 0, q.reportError("insert", err, redactDataKeys(workingData))
 	}
 	return id, nil
 }
@@ -154,7 +205,7 @@ func (q *Query) Update(data map[string]interface{}) (int64, error) {
 		return 0, q.reportError("update", err, nil)
 	}
 	if len(q.where) == 0 {
-		return 0, fmt.Errorf("禁止无 WHERE 条件的 UPDATE 操作，防止误更新全表数据（表: %s）", q.table)
+		return 0, q.reportError("update", fmt.Errorf("%w: 表 %s 缺少 WHERE 条件", ErrUnsafeFullTableMutation, q.table), nil)
 	}
 	if len(data) == 0 && len(q.setExprs) == 0 {
 		return 0, q.reportError("update", fmt.Errorf("更新数据不能为空"), nil)
@@ -163,40 +214,56 @@ func (q *Query) Update(data map[string]interface{}) (int64, error) {
 		wrappedErr := fmt.Errorf("unsafe update fields: %w", err)
 		return 0, q.reportError("update", wrappedErr, redactDataKeys(data))
 	}
+	for _, expression := range q.setExprs {
+		if _, duplicated := data[expression.field]; duplicated {
+			return 0, q.reportError("update", fmt.Errorf("%w: 字段 %q 同时出现在 data 与 Inc/Dec 中", ErrInvalidQuery, expression.field), nil)
+		}
+	}
+	workingData := cloneDatabaseMap(data)
 
 	if q.autoTimestamp {
-		setAutoTimestamp(data, q.updateTimeField, time.Now(), q.timestampValueType)
+		if workingData == nil {
+			workingData = make(map[string]interface{})
+		}
+		if err := setAutoTimestamp(workingData, q.updateTimeField, time.Now(), q.timestampValueType); err != nil {
+			return 0, q.reportError("update", err, redactDataKeys(data))
+		}
 	}
 
 	// 当存在 Inc/Dec 产生的 SET 表达式时，需要构建完整 SQL 通过 RawQueryable 执行
 	if len(q.setExprs) > 0 {
-		return q.updateWithSetExprs(data)
+		return q.updateWithSetExprs(workingData)
 	}
 
 	if q.txExecutor != nil {
-		sqlConn, ok := q.db.connection.(*SQLConnection)
-		if !ok {
-			return 0, q.reportError("update", fmt.Errorf("当前数据库连接不支持事务操作"), nil)
+		sqlConn, connectionErr := q.transactionConnection()
+		if connectionErr != nil {
+			return 0, q.reportError("update", connectionErr, nil)
 		}
 		builder := sqlConn.Builder
-		query, values := builder.Update(q.resolveTable(), data, q.where)
+		query, values := builder.Update(q.resolveTable(), workingData, q.where)
 		values = append(values, q.args...)
 		result, err := q.txExecutor.ExecContext(q.context(), builder.Rebind(query), values...)
 		if err != nil {
-			return 0, q.reportError("update", err, redactDataKeys(data))
+			return 0, q.reportError("update", err, redactDataKeys(workingData))
 		}
 		return result.RowsAffected()
 	}
 
+	connection, release, stateErr := q.db.acquireConnection()
+	if stateErr != nil {
+		return 0, q.reportError("update", stateErr, nil)
+	}
+	defer release()
 	var affected int64
 	var err error
-	if cc, ok := q.db.connection.(ContextualConnection); ok {
-		affected, err = cc.UpdateContext(q.context(), q.resolveTable(), data, q.where, q.args)
+	if cc, ok := connection.(ContextualConnection); ok {
+		affected, err = cc.UpdateContext(q.context(), q.resolveTable(), workingData, q.where, q.args)
 	} else {
-		affected, err = q.db.connection.Update(q.resolveTable(), data, q.where, q.args)
+		affected, err = connection.Update(q.resolveTable(), workingData, q.where, q.args)
 	}
 	if err != nil {
-		return 0, q.reportError("update", err, redactDataKeys(data))
+		return 0, q.reportError("update", err, redactDataKeys(workingData))
 	}
 	return affected, nil
 }
@@ -222,12 +289,16 @@ func (q *Query) updateWithSetExprs(data map[string]interface{}) (int64, error) {
 
 	// 先写入 data 中的键值对（字段名经方言引用，规避保留字冲突）
 	setParts := make([]string, 0, len(data)+len(q.setExprs))
-	for field, value := range data {
+	for _, field := range sortedDatabaseKeys(data) {
 		setParts = append(setParts, fmt.Sprintf("%s = ?", quote(field)))
-		allArgs = append(allArgs, value)
+		allArgs = append(allArgs, data[field])
 	}
-	// 再追加 Inc/Dec 的 SET 表达式（不需要参数化，因为值是固定整数）
-	setParts = append(setParts, q.setExprs...)
+	// 自增自减字段和步长均由框架生成，字段按方言引用，步长继续使用绑定参数。
+	for _, expression := range q.setExprs {
+		quotedField := quote(expression.field)
+		setParts = append(setParts, fmt.Sprintf("%s = %s %s ?", quotedField, quotedField, expression.operator))
+		allArgs = append(allArgs, expression.amount)
+	}
 
 	sqlBuilder.WriteString(strings.Join(setParts, ", "))
 
@@ -263,13 +334,13 @@ func (q *Query) Delete() (int64, error) {
 		return 0, q.reportError("delete", err, nil)
 	}
 	if len(q.where) == 0 {
-		return 0, fmt.Errorf("禁止无 WHERE 条件的 DELETE 操作，防止误删全表数据（表: %s）", q.table)
+		return 0, q.reportError("delete", fmt.Errorf("%w: 表 %s 缺少 WHERE 条件", ErrUnsafeFullTableMutation, q.table), nil)
 	}
 
 	if q.txExecutor != nil {
-		sqlConn, ok := q.db.connection.(*SQLConnection)
-		if !ok {
-			return 0, q.reportError("delete", fmt.Errorf("当前数据库连接不支持事务操作"), nil)
+		sqlConn, connectionErr := q.transactionConnection()
+		if connectionErr != nil {
+			return 0, q.reportError("delete", connectionErr, nil)
 		}
 		builder := sqlConn.Builder
 		query := builder.Delete(q.resolveTable(), q.where)
@@ -280,12 +351,17 @@ func (q *Query) Delete() (int64, error) {
 		return result.RowsAffected()
 	}
 
+	connection, release, stateErr := q.db.acquireConnection()
+	if stateErr != nil {
+		return 0, q.reportError("delete", stateErr, nil)
+	}
+	defer release()
 	var affected int64
 	var err error
-	if cc, ok := q.db.connection.(ContextualConnection); ok {
+	if cc, ok := connection.(ContextualConnection); ok {
 		affected, err = cc.DeleteContext(q.context(), q.resolveTable(), q.where, q.args)
 	} else {
-		affected, err = q.db.connection.Delete(q.resolveTable(), q.where, q.args)
+		affected, err = connection.Delete(q.resolveTable(), q.where, q.args)
 	}
 	if err != nil {
 		return 0, q.reportError("delete", err, nil)
@@ -313,9 +389,9 @@ func (q *Query) Count() (int64, error) {
 	}
 
 	if q.txExecutor != nil {
-		sqlConn, ok := q.db.connection.(*SQLConnection)
-		if !ok {
-			return 0, q.reportError("count", fmt.Errorf("当前数据库连接不支持事务操作"), nil)
+		sqlConn, connectionErr := q.transactionConnection()
+		if connectionErr != nil {
+			return 0, q.reportError("count", connectionErr, nil)
 		}
 		builder := sqlConn.Builder
 		sqlStr := builder.Count(q.resolveTable(), q.where)
@@ -327,17 +403,22 @@ func (q *Query) Count() (int64, error) {
 			return 0, nil
 		}
 		for _, val := range rows[0] {
-			return parseCountValue(val), nil
+			return parseCountValue(val)
 		}
 		return 0, nil
 	}
 
+	connection, release, stateErr := q.db.acquireConnection()
+	if stateErr != nil {
+		return 0, q.reportError("count", stateErr, nil)
+	}
+	defer release()
 	var total int64
 	var err error
-	if cc, ok := q.db.connection.(ContextualConnection); ok {
+	if cc, ok := connection.(ContextualConnection); ok {
 		total, err = cc.CountContext(q.context(), q.resolveTable(), q.where, q.args)
 	} else {
-		total, err = q.db.connection.Count(q.resolveTable(), q.where, q.args)
+		total, err = connection.Count(q.resolveTable(), q.where, q.args)
 	}
 	if err != nil {
 		return 0, q.reportError("count", err, nil)
@@ -370,28 +451,31 @@ func (q *Query) countAdvanced() (int64, error) {
 		if err != nil {
 			return 0, err
 		}
-		return firstCountValue(rows), nil
+		return firstCountValue(rows)
 	}
 
 	rows, err := q.rawQuery(countSQL, subArgs...)
 	if err != nil {
 		return 0, err
 	}
-	return firstCountValue(rows), nil
+	return firstCountValue(rows)
 }
 
 // firstCountValue 从计数查询结果中提取计数值，兼容不同驱动的列名/类型。
-func firstCountValue(rows []map[string]interface{}) int64 {
+func firstCountValue(rows []map[string]interface{}) (int64, error) {
 	if len(rows) == 0 {
-		return 0
+		return 0, nil
 	}
 	if val, ok := rows[0]["tg_count"]; ok {
 		return parseCountValue(val)
 	}
+	if len(rows[0]) != 1 {
+		return 0, fmt.Errorf("%w: Count 结果缺少唯一计数列", ErrInvalidDatabaseRow)
+	}
 	for _, val := range rows[0] {
 		return parseCountValue(val)
 	}
-	return 0
+	return 0, fmt.Errorf("%w: Count 结果为空", ErrInvalidDatabaseRow)
 }
 
 // querySQLInTx 在事务内执行原生 SQL 查询，并转换为行数据映射切片。
@@ -400,42 +484,7 @@ func (q *Query) querySQLInTx(sqlStr string, args ...interface{}) ([]map[string]i
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	columns, err := rows.Columns()
-	if err != nil {
-		return nil, err
-	}
-
-	result := make([]map[string]interface{}, 0)
-	for rows.Next() {
-		values := make([]interface{}, len(columns))
-		valuePtrs := make([]interface{}, len(columns))
-		for i := range columns {
-			valuePtrs[i] = &values[i]
-		}
-
-		if err := rows.Scan(valuePtrs...); err != nil {
-			return nil, err
-		}
-
-		row := make(map[string]interface{})
-		for i, col := range columns {
-			var val interface{}
-			valBytes, ok := values[i].([]byte)
-			if ok {
-				val = string(valBytes)
-			} else {
-				val = values[i]
-			}
-			row[col] = val
-		}
-		result = append(result, row)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return result, nil
+	return scanRows(rows)
 }
 
 // executeSQLInTx 在事务内执行写操作，并返回受影响的行数。
@@ -447,27 +496,84 @@ func (q *Query) executeSQLInTx(query string, args ...interface{}) (int64, error)
 	return result.RowsAffected()
 }
 
-// parseCountValue 解析 Count 返回的多种可能类型为 int64。
-func parseCountValue(val interface{}) int64 {
+// parseCountValue 精确解析 Count 返回值，拒绝小数、负数、溢出和格式错误。
+func parseCountValue(val interface{}) (int64, error) {
+	invalid := func() (int64, error) {
+		return 0, fmt.Errorf("%w: 无法把 %T(%v) 解析为非负 int64", ErrInvalidAggregateValue, val, val)
+	}
 	switch v := val.(type) {
 	case int64:
-		return v
+		if v < 0 {
+			return invalid()
+		}
+		return v, nil
 	case int:
-		return int64(v)
+		if v < 0 {
+			return invalid()
+		}
+		return int64(v), nil
+	case int8:
+		if v < 0 {
+			return invalid()
+		}
+		return int64(v), nil
+	case int16:
+		if v < 0 {
+			return invalid()
+		}
+		return int64(v), nil
 	case int32:
-		return int64(v)
+		if v < 0 {
+			return invalid()
+		}
+		return int64(v), nil
+	case uint:
+		if uint64(v) > math.MaxInt64 {
+			return invalid()
+		}
+		return int64(v), nil
+	case uint8:
+		return int64(v), nil
+	case uint16:
+		return int64(v), nil
+	case uint32:
+		return int64(v), nil
+	case uint64:
+		if v > math.MaxInt64 {
+			return invalid()
+		}
+		return int64(v), nil
 	case float64:
-		return int64(v)
+		if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 || v >= math.Exp2(63) || math.Trunc(v) != v {
+			return invalid()
+		}
+		return int64(v), nil
+	case float32:
+		value := float64(v)
+		if math.IsNaN(value) || math.IsInf(value, 0) || value < 0 || value >= math.Exp2(63) || math.Trunc(value) != value {
+			return invalid()
+		}
+		return int64(value), nil
 	case []byte:
-		var i int64
-		fmt.Sscanf(string(v), "%d", &i)
-		return i
+		parsed, err := strconv.ParseInt(strings.TrimSpace(string(v)), 10, 64)
+		if err != nil || parsed < 0 {
+			return invalid()
+		}
+		return parsed, nil
 	case string:
-		var i int64
-		fmt.Sscanf(v, "%d", &i)
-		return i
+		parsed, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+		if err != nil || parsed < 0 {
+			return invalid()
+		}
+		return parsed, nil
+	case json.Number:
+		parsed, err := strconv.ParseInt(string(v), 10, 64)
+		if err != nil || parsed < 0 {
+			return invalid()
+		}
+		return parsed, nil
 	}
-	return 0
+	return invalid()
 }
 
 // Paginate 分页查询。
@@ -496,5 +602,5 @@ func (q *Query) Paginate(page, pageSize int) (*Paginator, error) {
 		return nil, err
 	}
 
-	return buildPaginator(list, total, page, pageSize), nil
+	return buildPaginator(list, total, page, pageSize)
 }

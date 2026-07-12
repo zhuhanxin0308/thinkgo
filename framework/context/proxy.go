@@ -1,62 +1,97 @@
 package context
 
 import (
+	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"strings"
 )
 
 // RequestOption 定义请求包装器的可选配置。
-type RequestOption func(*Request)
+type RequestOption func(*Request) error
+
+var (
+	// ErrInvalidRequestOption 表示调用方传入了空请求选项。
+	ErrInvalidRequestOption = errors.New("请求选项不能为空")
+	// ErrInvalidTrustedProxy 表示受信代理配置不是合法的 IP 或 CIDR。
+	ErrInvalidTrustedProxy = errors.New("受信代理配置非法")
+	// ErrInvalidMultipartMemoryLimit 表示 multipart 内存上限不是正整数。
+	ErrInvalidMultipartMemoryLimit = errors.New("multipart 内存上限必须在 1 字节到 1GiB 之间")
+	// ErrInvalidMaxBodyBytes 表示请求体上限不是正整数。
+	ErrInvalidMaxBodyBytes = errors.New("请求体上限必须在 1 字节到 1GiB 之间")
+)
+
+const maxRequestMemoryOrBodyBytes int64 = 1 << 30
 
 // WithTrustedProxies 配置受信代理网段。
 // 只有请求来源命中这些网段时，框架才会信任 X-Forwarded-For 和 X-Forwarded-Proto。
 func WithTrustedProxies(entries []string) RequestOption {
-	trusted := parseTrustedProxies(entries)
-	return func(r *Request) {
+	// 复制调用方切片，避免构造请求前配置被并发修改。
+	configured := append([]string(nil), entries...)
+	return func(r *Request) error {
+		trusted, err := parseTrustedProxies(configured)
+		if err != nil {
+			return err
+		}
 		r.trustedProxies = trusted
+		return nil
 	}
 }
 
 // WithMultipartMemoryLimit 配置 multipart 表单在内存中的最大缓存字节数。
 func WithMultipartMemoryLimit(limit int64) RequestOption {
-	return func(r *Request) {
-		if limit > 0 {
-			r.multipartMemoryLimit = limit
+	return func(r *Request) error {
+		if limit <= 0 || limit > maxRequestMemoryOrBodyBytes {
+			return fmt.Errorf("%w: %d", ErrInvalidMultipartMemoryLimit, limit)
 		}
+		r.multipartMemoryLimit = limit
+		return nil
 	}
 }
 
-// parseTrustedProxies 解析受信代理配置，非法项会被安全忽略。
-func parseTrustedProxies(entries []string) []*net.IPNet {
-	trusted := make([]*net.IPNet, 0, len(entries))
-	for _, entry := range entries {
-		network := parseTrustedProxyEntry(entry)
-		if network != nil {
-			trusted = append(trusted, network)
+// WithMaxBodyBytes 配置可缓存和解析的最大请求体字节数。
+func WithMaxBodyBytes(limit int64) RequestOption {
+	return func(r *Request) error {
+		if limit <= 0 || limit > maxRequestMemoryOrBodyBytes {
+			return fmt.Errorf("%w: %d", ErrInvalidMaxBodyBytes, limit)
 		}
+		r.maxBodyBytes = limit
+		return nil
 	}
-	return trusted
+}
+
+// parseTrustedProxies 严格解析受信代理配置，任一非法项都会使整组配置失败。
+func parseTrustedProxies(entries []string) ([]*net.IPNet, error) {
+	trusted := make([]*net.IPNet, 0, len(entries))
+	for index, entry := range entries {
+		network, err := parseTrustedProxyEntry(entry)
+		if err != nil {
+			return nil, fmt.Errorf("%w: 第 %d 项 %q: %v", ErrInvalidTrustedProxy, index+1, entry, err)
+		}
+		trusted = append(trusted, network)
+	}
+	return trusted, nil
 }
 
 // parseTrustedProxyEntry 支持单个 IP 和 CIDR 两种写法。
-func parseTrustedProxyEntry(entry string) *net.IPNet {
+func parseTrustedProxyEntry(entry string) (*net.IPNet, error) {
 	entry = strings.TrimSpace(entry)
 	if entry == "" {
-		return nil
+		return nil, errors.New("配置项为空")
 	}
 
 	if strings.Contains(entry, "/") {
 		_, network, err := net.ParseCIDR(entry)
 		if err != nil {
-			return nil
+			return nil, err
 		}
-		return network
+		return network, nil
 	}
 
 	ip := net.ParseIP(entry)
 	if ip == nil {
-		return nil
+		return nil, errors.New("不是合法 IP 地址")
 	}
 
 	maskBits := 128
@@ -68,12 +103,12 @@ func parseTrustedProxyEntry(entry string) *net.IPNet {
 	return &net.IPNet{
 		IP:   ip,
 		Mask: net.CIDRMask(maskBits, maskBits),
-	}
+	}, nil
 }
 
 // shouldTrustProxyHeaders 判断当前连接是否来自受信代理。
 func shouldTrustProxyHeaders(raw *http.Request, trusted []*net.IPNet) bool {
-	if len(trusted) == 0 {
+	if raw == nil || len(trusted) == 0 {
 		return false
 	}
 
@@ -97,9 +132,18 @@ func isTrustedProxyIP(ip net.IP, trusted []*net.IPNet) bool {
 
 // resolveClientIP 在可信代理链路下解析真实客户端 IP，否则回退到直接连接地址。
 func resolveClientIP(raw *http.Request, trusted []*net.IPNet) string {
+	if raw == nil {
+		return ""
+	}
 	if shouldTrustProxyHeaders(raw, trusted) {
-		if clientIP := resolveForwardedFor(raw.Header.Get("X-Forwarded-For"), trusted); clientIP != "" {
-			return clientIP
+		forwardedFor := strings.TrimSpace(raw.Header.Get("X-Forwarded-For"))
+		if forwardedFor != "" {
+			clientIP, valid := resolveForwardedFor(forwardedFor, trusted)
+			if valid {
+				return clientIP
+			}
+			// 代理链格式异常时回退直连地址，不能继续信任另一条可伪造请求头。
+			return directClientIP(raw)
 		}
 
 		if realIP := strings.TrimSpace(raw.Header.Get("X-Real-IP")); realIP != "" {
@@ -109,6 +153,14 @@ func resolveClientIP(raw *http.Request, trusted []*net.IPNet) string {
 		}
 	}
 
+	return directClientIP(raw)
+}
+
+// directClientIP 返回 TCP 直连端地址，代理头不可用时统一走此安全回退路径。
+func directClientIP(raw *http.Request) string {
+	if raw == nil {
+		return ""
+	}
 	remoteIP := parseRemoteIP(raw.RemoteAddr)
 	if remoteIP != nil {
 		return remoteIP.String()
@@ -118,37 +170,42 @@ func resolveClientIP(raw *http.Request, trusted []*net.IPNet) string {
 
 // resolveForwardedFor 从右向左剥离受信代理，返回离受信代理最近的非受信客户端 IP。
 // 这样即使客户端预先伪造 X-Forwarded-For 首段，也不会覆盖真实来源。
-func resolveForwardedFor(value string, trusted []*net.IPNet) string {
-	forwardedIPs := parseForwardedIPList(value)
-	if len(forwardedIPs) == 0 {
-		return ""
+func resolveForwardedFor(value string, trusted []*net.IPNet) (string, bool) {
+	forwardedIPs, valid := parseForwardedIPList(value)
+	if !valid || len(forwardedIPs) == 0 {
+		return "", false
 	}
 
 	for index := len(forwardedIPs) - 1; index >= 0; index-- {
 		ip := forwardedIPs[index]
 		if !isTrustedProxyIP(ip, trusted) {
-			return ip.String()
+			return ip.String(), true
 		}
 	}
 
-	return forwardedIPs[0].String()
+	return forwardedIPs[0].String(), true
 }
 
-// parseForwardedIPList 解析 X-Forwarded-For 中的 IP 列表，忽略空值和非法项。
-func parseForwardedIPList(value string) []net.IP {
+// parseForwardedIPList 严格解析 X-Forwarded-For，防止忽略异常节点后改变代理链含义。
+func parseForwardedIPList(value string) ([]net.IP, bool) {
 	parts := strings.Split(value, ",")
 	result := make([]net.IP, 0, len(parts))
 	for _, part := range parts {
 		ip := parseRemoteIP(strings.TrimSpace(part))
 		if ip != nil {
 			result = append(result, ip)
+			continue
 		}
+		return nil, false
 	}
-	return result
+	return result, len(result) > 0
 }
 
 // isHTTPS 在原生 TLS 或可信代理声明为 HTTPS 时返回 true。
 func isHTTPS(raw *http.Request, trusted []*net.IPNet) bool {
+	if raw == nil {
+		return false
+	}
 	if raw.TLS != nil {
 		return true
 	}
@@ -157,7 +214,8 @@ func isHTTPS(raw *http.Request, trusted []*net.IPNet) bool {
 		return false
 	}
 
-	proto := strings.TrimSpace(strings.Split(raw.Header.Get("X-Forwarded-Proto"), ",")[0])
+	values := strings.Split(raw.Header.Get("X-Forwarded-Proto"), ",")
+	proto := strings.TrimSpace(values[len(values)-1])
 	return strings.EqualFold(proto, "https")
 }
 

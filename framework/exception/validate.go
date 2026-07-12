@@ -12,6 +12,9 @@ type ValidateException struct {
 
 // Error 实现 error 接口
 func (e *ValidateException) Error() string {
+	if e == nil {
+		return "验证异常为空"
+	}
 	if e.Field != "" {
 		return fmt.Sprintf("验证失败 [%s]: %s", e.Field, e.Message)
 	}

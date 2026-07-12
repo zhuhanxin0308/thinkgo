@@ -1,10 +1,12 @@
 {
-    "name": "PHPSESSID",
+    "name": "THINKGO_SESSID",
     "type": "file",
-    "path": "./runtime/session",
+    "storage_path": "./runtime/session",
+    "cookie_path": "/",
     "expire": 1440,
     "domain": "",
     "secure": false,
     "httponly": true,
-    "samesite": "Lax"
+    "samesite": "Lax",
+    "max_data_bytes": 65536
 }

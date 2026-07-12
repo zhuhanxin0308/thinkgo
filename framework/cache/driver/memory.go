@@ -1,20 +1,26 @@
 package driver
 
 import (
+	"fmt"
 	"sync"
 	"time"
 )
 
-// Memory cache driver
+const memorySweepInterval = time.Minute
+
+// Memory 是支持 nil 命中、严格计数和独立锁空间的进程内缓存驱动。
 type Memory struct {
-	items map[string]item
-	locks map[string]memoryLock
-	lock  sync.RWMutex
+	items     map[string]item
+	locks     map[string]memoryLock
+	lock      sync.RWMutex
+	sequence  uint64
+	lastSweep time.Time
 }
 
 type item struct {
-	val    interface{}
-	expiry time.Time
+	value   interface{}
+	expiry  time.Time
+	version uint64
 }
 
 type memoryLock struct {
@@ -22,128 +28,213 @@ type memoryLock struct {
 	expiry time.Time
 }
 
-// NewMemory creates a new Memory driver
+// NewMemory 创建内存缓存驱动。
 func NewMemory() *Memory {
-	return &Memory{
-		items: make(map[string]item),
-		locks: make(map[string]memoryLock),
-	}
+	return &Memory{items: make(map[string]item), locks: make(map[string]memoryLock)}
 }
 
-func (c *Memory) Get(key string) interface{} {
-	c.lock.RLock()
-	it, ok := c.items[key]
-	c.lock.RUnlock()
-	if !ok {
-		return nil
+func (c *Memory) Get(key string) (interface{}, bool, error) {
+	if c == nil {
+		return nil, false, fmt.Errorf("内存缓存驱动为空")
 	}
-	if !it.expiry.IsZero() && time.Now().After(it.expiry) {
+	c.lock.RLock()
+	stored, found := c.items[key]
+	c.lock.RUnlock()
+	if !found {
+		return nil, false, nil
+	}
+	if !stored.expiry.IsZero() && !time.Now().Before(stored.expiry) {
 		c.lock.Lock()
-		// 二次确认后删除过期项，避免并发下误删新值。
 		current, exists := c.items[key]
-		if exists && current.expiry == it.expiry {
+		if exists && current.version == stored.version {
 			delete(c.items, key)
 		}
 		c.lock.Unlock()
-		return nil
+		return nil, false, nil
 	}
-	return it.val
+	return stored.value, true, nil
 }
 
-func (c *Memory) Set(key string, val interface{}, ttl time.Duration) {
-	c.lock.Lock()
-	defer c.lock.Unlock()
-
+func (c *Memory) Set(key string, value interface{}, ttl time.Duration) error {
+	if c == nil {
+		return fmt.Errorf("内存缓存驱动为空")
+	}
+	if err := validateDriverTTL(ttl); err != nil {
+		return err
+	}
+	now := time.Now()
 	expiry := time.Time{}
 	if ttl > 0 {
-		expiry = time.Now().Add(ttl)
+		expiry = now.Add(ttl)
 	}
-
-	c.items[key] = item{
-		val:    val,
-		expiry: expiry,
-	}
-}
-
-func (c *Memory) Has(key string) bool {
-	return c.Get(key) != nil
-}
-
-func (c *Memory) Delete(key string) {
 	c.lock.Lock()
-	defer c.lock.Unlock()
+	c.ensureMapsLocked()
+	c.sweepExpiredLocked(now)
+	c.sequence++
+	c.items[key] = item{value: value, expiry: expiry, version: c.sequence}
+	c.lock.Unlock()
+	return nil
+}
+
+func (c *Memory) Has(key string) (bool, error) {
+	_, found, err := c.Get(key)
+	return found, err
+}
+
+func (c *Memory) Delete(key string) error {
+	if c == nil {
+		return fmt.Errorf("内存缓存驱动为空")
+	}
+	c.lock.Lock()
 	delete(c.items, key)
+	c.lock.Unlock()
+	return nil
 }
 
-func (c *Memory) Clear() {
+func (c *Memory) Clear() error {
+	if c == nil {
+		return fmt.Errorf("内存缓存驱动为空")
+	}
 	c.lock.Lock()
-	defer c.lock.Unlock()
 	c.items = make(map[string]item)
-	c.locks = make(map[string]memoryLock)
+	c.lock.Unlock()
+	return nil
 }
 
-func (c *Memory) Inc(key string, step int64) int64 {
+func (c *Memory) Inc(key string, step int64) (int64, error) {
+	if c == nil {
+		return 0, fmt.Errorf("内存缓存驱动为空")
+	}
+	if err := validateCounterStep(step); err != nil {
+		return 0, err
+	}
+	now := time.Now()
 	c.lock.Lock()
 	defer c.lock.Unlock()
+	c.ensureMapsLocked()
+	c.sweepExpiredLocked(now)
 
-	it, ok := c.items[key]
-	if ok && !it.expiry.IsZero() && time.Now().After(it.expiry) {
-		// Inc/Dec 也必须遵守过期语义，避免基于旧值递增并继承已过期时间。
+	stored, found := c.items[key]
+	if found && !stored.expiry.IsZero() && !now.Before(stored.expiry) {
 		delete(c.items, key)
-		it = item{}
-		ok = false
+		stored = item{}
+		found = false
 	}
-
-	var val int64 = 0
-	if ok {
-		if v, ok := it.val.(int); ok {
-			val = int64(v)
-		} else if v, ok := it.val.(int64); ok {
-			val = v
-		} else if v, ok := it.val.(float64); ok {
-			val = int64(v)
+	current := int64(0)
+	if found {
+		var err error
+		current, err = strictCounterValue(stored.value)
+		if err != nil {
+			return 0, err
 		}
 	}
-
-	val += step
-	c.items[key] = item{
-		val:    val,
-		expiry: it.expiry,
+	updated, err := checkedCounterAdd(current, step)
+	if err != nil {
+		return 0, err
 	}
-	return val
+	c.sequence++
+	c.items[key] = item{value: updated, expiry: stored.expiry, version: c.sequence}
+	return updated, nil
 }
 
-func (c *Memory) Dec(key string, step int64) int64 {
-	return c.Inc(key, -step)
-}
-
-// AcquireLock 获取基于内存的进程内锁，并支持过期时间自动回收。
-func (c *Memory) AcquireLock(key string, owner string, ttl time.Duration) bool {
+func (c *Memory) Dec(key string, step int64) (int64, error) {
+	if c == nil {
+		return 0, fmt.Errorf("内存缓存驱动为空")
+	}
+	if err := validateCounterStep(step); err != nil {
+		return 0, err
+	}
+	now := time.Now()
 	c.lock.Lock()
 	defer c.lock.Unlock()
+	c.ensureMapsLocked()
+	c.sweepExpiredLocked(now)
 
-	if existing, ok := c.locks[key]; ok {
-		if existing.expiry.After(time.Now()) {
-			return false
+	stored, found := c.items[key]
+	if found && !stored.expiry.IsZero() && !now.Before(stored.expiry) {
+		delete(c.items, key)
+		stored = item{}
+		found = false
+	}
+	current := int64(0)
+	if found {
+		var err error
+		current, err = strictCounterValue(stored.value)
+		if err != nil {
+			return 0, err
 		}
 	}
-
-	c.locks[key] = memoryLock{
-		owner:  owner,
-		expiry: time.Now().Add(ttl),
+	updated, err := checkedCounterSubtract(current, step)
+	if err != nil {
+		return 0, err
 	}
-	return true
+	c.sequence++
+	c.items[key] = item{value: updated, expiry: stored.expiry, version: c.sequence}
+	return updated, nil
 }
 
-// ReleaseLock 仅允许锁拥有者释放锁，避免并发误删。
-func (c *Memory) ReleaseLock(key string, owner string) bool {
+// AcquireLock 获取进程内锁，过期锁会在同一临界区内被替换。
+func (c *Memory) AcquireLock(key string, owner string, ttl time.Duration) (bool, error) {
+	if c == nil || owner == "" || ttl <= 0 {
+		return false, ErrInvalidCacheLock
+	}
+	now := time.Now()
 	c.lock.Lock()
 	defer c.lock.Unlock()
+	c.ensureMapsLocked()
+	c.sweepExpiredLocked(now)
+	if existing, found := c.locks[key]; found && existing.expiry.After(now) {
+		return false, nil
+	}
+	c.locks[key] = memoryLock{owner: owner, expiry: now.Add(ttl)}
+	return true, nil
+}
 
-	existing, ok := c.locks[key]
-	if !ok || existing.owner != owner {
-		return false
+// ReleaseLock 仅允许未过期锁的 owner 释放锁。
+func (c *Memory) ReleaseLock(key string, owner string) (bool, error) {
+	if c == nil || owner == "" {
+		return false, ErrInvalidCacheLock
+	}
+	now := time.Now()
+	c.lock.Lock()
+	defer c.lock.Unlock()
+	existing, found := c.locks[key]
+	if !found {
+		return false, nil
+	}
+	if !existing.expiry.After(now) {
+		delete(c.locks, key)
+		return false, nil
+	}
+	if existing.owner != owner {
+		return false, nil
 	}
 	delete(c.locks, key)
-	return true
+	return true, nil
+}
+
+func (c *Memory) ensureMapsLocked() {
+	if c.items == nil {
+		c.items = make(map[string]item)
+	}
+	if c.locks == nil {
+		c.locks = make(map[string]memoryLock)
+	}
+}
+
+func (c *Memory) sweepExpiredLocked(now time.Time) {
+	if !c.lastSweep.IsZero() && now.Sub(c.lastSweep) < memorySweepInterval {
+		return
+	}
+	for key, stored := range c.items {
+		if !stored.expiry.IsZero() && !now.Before(stored.expiry) {
+			delete(c.items, key)
+		}
+	}
+	for key, lock := range c.locks {
+		if !lock.expiry.After(now) {
+			delete(c.locks, key)
+		}
+	}
+	c.lastSweep = now
 }

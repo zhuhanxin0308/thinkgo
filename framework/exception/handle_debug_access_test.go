@@ -19,7 +19,9 @@ func TestRenderDebugPageRejectsRemoteHTMLRequest(t *testing.T) {
 	req.RemoteAddr = "198.51.100.10:4567"
 	recorder := httptest.NewRecorder()
 
-	handler.Render(recorder, req, errors.New("debug boom"))
+	if err := handler.Render(recorder, req, errors.New("debug boom")); err != nil {
+		t.Fatalf("渲染远程异常响应失败: %v", err)
+	}
 
 	if recorder.Code != http.StatusInternalServerError {
 		t.Fatalf("远程 HTML 请求应返回 500，实际为 %d", recorder.Code)
@@ -45,7 +47,9 @@ func TestRenderDebugPageRejectsLoopbackProxyRemoteClient(t *testing.T) {
 	req.Header.Set("X-Forwarded-For", "198.51.100.10")
 	recorder := httptest.NewRecorder()
 
-	handler.Render(recorder, req, errors.New("debug boom"))
+	if err := handler.Render(recorder, req, errors.New("debug boom")); err != nil {
+		t.Fatalf("渲染代理异常响应失败: %v", err)
+	}
 
 	body := recorder.Body.String()
 	if strings.Contains(body, "debug boom") {

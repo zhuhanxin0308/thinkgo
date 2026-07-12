@@ -1,6 +1,7 @@
 package db
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -68,8 +69,8 @@ func TestDeleteWithoutWhereBlocked(t *testing.T) {
 	if err == nil {
 		t.Fatal("无 WHERE 条件的 DELETE 应被拦截")
 	}
-	if !strings.Contains(err.Error(), "禁止无 WHERE") {
-		t.Fatalf("错误消息不正确: %s", err.Error())
+	if !errors.Is(err, ErrUnsafeFullTableMutation) {
+		t.Fatalf("错误类型不正确: %v", err)
 	}
 }
 
@@ -91,8 +92,8 @@ func TestUpdateWithoutWhereBlocked(t *testing.T) {
 	if err == nil {
 		t.Fatal("无 WHERE 条件的 UPDATE 应被拦截")
 	}
-	if !strings.Contains(err.Error(), "禁止无 WHERE") {
-		t.Fatalf("错误消息不正确: %s", err.Error())
+	if !errors.Is(err, ErrUnsafeFullTableMutation) {
+		t.Fatalf("错误类型不正确: %v", err)
 	}
 }
 
@@ -127,8 +128,11 @@ func TestUpdateAllowsOnlySetExpression(t *testing.T) {
 	if err != nil {
 		t.Fatalf("仅包含 Inc/Dec 表达式的 UPDATE 应正常执行，实际错误: %v", err)
 	}
-	if len(conn.execSQL) != 1 || !strings.Contains(conn.execSQL[0], "score = score + 1") {
+	if len(conn.execSQL) != 1 || !strings.Contains(conn.execSQL[0], "score = score + ?") {
 		t.Fatalf("自增表达式未写入 UPDATE SQL，实际 SQL: %#v", conn.execSQL)
+	}
+	if len(conn.execArgs) != 1 || len(conn.execArgs[0]) != 2 || conn.execArgs[0][0] != 1 || conn.execArgs[0][1] != 1 {
+		t.Fatalf("自增步长和 WHERE 值应按顺序绑定，实际参数: %#v", conn.execArgs)
 	}
 }
 

@@ -1,16 +1,28 @@
 package http
 
 import (
+	"bufio"
 	"bytes"
 	"compress/flate"
 	"compress/gzip"
+	"errors"
 	"io"
+	"math"
+	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 
 	"github.com/andybalholm/brotli"
 	"github.com/klauspost/compress/zstd"
+)
+
+const maxIdleCompressionWritersPerPool = 64
+
+const (
+	maxAcceptEncodingBytes   = 8192
+	maxAcceptEncodingEntries = 64
 )
 
 // compressionPoolKey 标识同编码、同压缩级别的一组可复用压缩器。
@@ -54,7 +66,9 @@ func (p *compressionWriterPool) Put(writer *pooledCompressionWriter) {
 	}
 
 	p.lock.Lock()
-	p.writers = append(p.writers, writer)
+	if len(p.writers) < maxIdleCompressionWritersPerPool {
+		p.writers = append(p.writers, writer)
+	}
 	p.lock.Unlock()
 }
 
@@ -91,7 +105,7 @@ func (w *pooledCompressionWriter) Close() error {
 	if w.reset != nil {
 		w.reset(io.Discard)
 	}
-	if w.release != nil {
+	if err == nil && w.release != nil {
 		w.release(w)
 	}
 	return err
@@ -107,60 +121,87 @@ func (w *pooledCompressionWriter) bind(target io.Writer) {
 type CompressionResponseWriter struct {
 	io.Writer
 	http.ResponseWriter
-	encoding     string
-	minSize      int
-	levels       map[string]int
-	wroteHeader  bool
-	statusCode   int
-	buffer       bytes.Buffer
-	pooledWriter *pooledCompressionWriter
+	encoding       string
+	minSize        int
+	levels         map[string]int
+	headerSet      bool
+	wroteHeader    bool
+	closed         bool
+	statusCode     int
+	buffer         bytes.Buffer
+	pooledWriter   *pooledCompressionWriter
+	compressionErr error
 }
 
 // NewCompressionResponseWriter 创建新的压缩响应写入器。
 func NewCompressionResponseWriter(w http.ResponseWriter, r *http.Request, minSize int, levels map[string]int) *CompressionResponseWriter {
-	acceptEncoding := r.Header.Get("Accept-Encoding")
 	encoding := ""
-
-	if strings.Contains(acceptEncoding, "zstd") {
-		encoding = "zstd"
-	} else if strings.Contains(acceptEncoding, "br") {
-		encoding = "br"
-	} else if strings.Contains(acceptEncoding, "gzip") {
-		encoding = "gzip"
-	} else if strings.Contains(acceptEncoding, "deflate") {
-		encoding = "deflate"
+	if r != nil && r.Method != http.MethodHead {
+		encoding = negotiateContentEncoding(r.Header.Get("Accept-Encoding"))
 	}
 
-	return &CompressionResponseWriter{
+	if minSize < 0 {
+		minSize = 0
+	}
+	if minSize > 8<<20 {
+		minSize = 8 << 20
+	}
+	copiedLevels := make(map[string]int, len(levels))
+	duplicatedLevels := make(map[string]bool)
+	for algorithm, level := range levels {
+		normalized := strings.ToLower(strings.TrimSpace(algorithm))
+		if duplicatedLevels[normalized] {
+			continue
+		}
+		if _, exists := copiedLevels[normalized]; exists {
+			// 公共构造器无法返回配置错误，发生大小写冲突时回退算法默认等级以保持确定性。
+			delete(copiedLevels, normalized)
+			duplicatedLevels[normalized] = true
+			continue
+		}
+		copiedLevels[normalized] = level
+	}
+	writer := &CompressionResponseWriter{
 		ResponseWriter: w,
 		encoding:       encoding,
 		minSize:        minSize,
-		levels:         levels,
+		levels:         copiedLevels,
 		statusCode:     http.StatusOK,
 	}
+	addVaryHeader(writer.Header(), "Accept-Encoding")
+	return writer
 }
 
 // WriteHeader 先缓存状态码，等待拿到响应体大小后再决定是否压缩。
 func (w *CompressionResponseWriter) WriteHeader(code int) {
-	if w.wroteHeader {
+	if w.headerSet {
 		return
 	}
+	w.headerSet = true
 	w.statusCode = code
 }
 
 // Write 在满足阈值前先缓冲，小响应直接透传，避免压缩收益为负。
 func (w *CompressionResponseWriter) Write(b []byte) (int, error) {
+	if w.closed {
+		return 0, io.ErrClosedPipe
+	}
+	w.ensureContentType(b)
 	if w.wroteHeader {
 		return w.Writer.Write(b)
 	}
 
-	if w.shouldBypassCompression() {
-		w.startPlainWriter()
-		return w.Writer.Write(b)
-	}
-
+	// 阈值前统一暂存，即使内容类型无需压缩，也为尚未 Flush 的流式响应保留异常回滚能力。
 	if w.minSize > 0 && w.buffer.Len()+len(b) < w.minSize {
 		return w.buffer.Write(b)
+	}
+
+	if w.shouldBypassCompression() {
+		w.startPlainWriter()
+		if err := w.flushBufferedBody(); err != nil {
+			return 0, err
+		}
+		return w.Writer.Write(b)
 	}
 
 	if err := w.startCompressedWriter(); err != nil {
@@ -172,44 +213,100 @@ func (w *CompressionResponseWriter) Write(b []byte) (int, error) {
 	return w.Writer.Write(b)
 }
 
+func (w *CompressionResponseWriter) ensureContentType(current []byte) {
+	if len(current) == 0 || w.Header().Get("Content-Type") != "" {
+		return
+	}
+	sampleSize := w.buffer.Len() + len(current)
+	if sampleSize > 512 {
+		sampleSize = 512
+	}
+	sample := make([]byte, 0, sampleSize)
+	if w.buffer.Len() > 0 {
+		buffered := w.buffer.Bytes()
+		if len(buffered) > sampleSize {
+			buffered = buffered[:sampleSize]
+		}
+		sample = append(sample, buffered...)
+	}
+	remaining := sampleSize - len(sample)
+	if remaining > 0 {
+		sample = append(sample, current[:remaining]...)
+	}
+	w.Header().Set("Content-Type", http.DetectContentType(sample))
+}
+
 // Close 在请求结束时补写尚未刷出的缓冲区，并关闭压缩器。
 func (w *CompressionResponseWriter) Close() error {
+	if w.closed {
+		return w.compressionErr
+	}
+	w.closed = true
+	var closeErr error
 	if !w.wroteHeader {
 		if w.shouldBypassCompression() || w.buffer.Len() == 0 || (w.minSize > 0 && w.buffer.Len() < w.minSize) {
 			w.startPlainWriter()
 		} else {
 			if err := w.startCompressedWriter(); err != nil {
-				return err
+				closeErr = errors.Join(closeErr, err)
 			}
 		}
 		if err := w.flushBufferedBody(); err != nil {
-			return err
+			closeErr = errors.Join(closeErr, err)
 		}
 	}
 
-	if c, ok := w.Writer.(io.Closer); ok {
-		return c.Close()
+	if w.pooledWriter != nil {
+		closeErr = errors.Join(closeErr, w.pooledWriter.Close())
+		w.pooledWriter = nil
 	}
-	return nil
+	return errors.Join(w.compressionErr, closeErr)
+}
+
+// ResetUncommitted 丢弃尚未提交的业务缓冲和响应头，供统一异常处理安全重写响应。
+func (w *CompressionResponseWriter) ResetUncommitted() bool {
+	if w == nil || w.closed || w.wroteHeader {
+		return false
+	}
+	w.buffer.Reset()
+	w.headerSet = false
+	w.statusCode = http.StatusOK
+	w.Writer = nil
+	w.compressionErr = nil
+	for key := range w.Header() {
+		w.Header().Del(key)
+	}
+	addVaryHeader(w.Header(), "Accept-Encoding")
+	return true
 }
 
 // Flush 优先把已决策的数据刷出，兼容流式响应场景。
 func (w *CompressionResponseWriter) Flush() {
+	if w.closed {
+		return
+	}
 	if !w.wroteHeader {
 		if w.shouldBypassCompression() || w.buffer.Len() == 0 || (w.minSize > 0 && w.buffer.Len() < w.minSize) {
 			w.startPlainWriter()
+			if err := w.flushBufferedBody(); err != nil {
+				w.compressionErr = errors.Join(w.compressionErr, err)
+			}
 		} else if err := w.startCompressedWriter(); err == nil {
-			_ = w.flushBufferedBody()
+			if err = w.flushBufferedBody(); err != nil {
+				w.compressionErr = errors.Join(w.compressionErr, err)
+			}
+		} else {
+			w.compressionErr = errors.Join(w.compressionErr, err)
 		}
 	}
 
-	type flushableWriter interface {
-		Flush() error
+	if w.pooledWriter != nil {
+		if err := w.pooledWriter.Flush(); err != nil {
+			w.compressionErr = errors.Join(w.compressionErr, err)
+		}
 	}
-
-	if f, ok := w.Writer.(flushableWriter); ok {
-		_ = f.Flush()
-	} else if f, ok := w.ResponseWriter.(http.Flusher); ok {
+	// 压缩器只负责把数据推到 ResponseWriter，还必须继续刷新网络层缓冲。
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
 	}
 }
@@ -219,11 +316,21 @@ func (w *CompressionResponseWriter) shouldBypassCompression() bool {
 	if w.encoding == "" || w.Header().Get("Content-Encoding") != "" {
 		return true
 	}
+	if w.statusCode < http.StatusOK || w.statusCode == http.StatusNoContent || w.statusCode == http.StatusNotModified || w.statusCode == http.StatusPartialContent {
+		return true
+	}
+	if w.Header().Get("Content-Range") != "" || headerTokenContains(w.Header().Get("Cache-Control"), "no-transform") {
+		return true
+	}
 
-	contentType := w.Header().Get("Content-Type")
-	return strings.HasPrefix(contentType, "image/") ||
+	contentType := strings.ToLower(w.Header().Get("Content-Type"))
+	return (strings.HasPrefix(contentType, "image/") && !strings.HasPrefix(contentType, "image/svg+xml")) ||
 		strings.HasPrefix(contentType, "video/") ||
-		strings.HasPrefix(contentType, "audio/")
+		strings.HasPrefix(contentType, "audio/") ||
+		strings.HasPrefix(contentType, "application/octet-stream") ||
+		strings.HasPrefix(contentType, "application/zip") ||
+		strings.HasPrefix(contentType, "application/gzip") ||
+		strings.HasPrefix(contentType, "text/event-stream")
 }
 
 // startPlainWriter 切换到普通写出模式。
@@ -253,7 +360,7 @@ func (w *CompressionResponseWriter) startCompressedWriter() error {
 	case "zstd":
 		level = 2
 		zstdLevel := zstd.SpeedDefault
-		if l, ok := w.levels["zstd"]; ok {
+		if l, ok := w.levels["zstd"]; ok && l >= 1 && l <= 4 {
 			level = l
 			switch l {
 			case 1:
@@ -275,13 +382,13 @@ func (w *CompressionResponseWriter) startCompressedWriter() error {
 		compressor, err = getPooledCompressionWriter(w.encoding, level, w.ResponseWriter)
 	case "gzip":
 		level = gzip.DefaultCompression
-		if l, ok := w.levels["gzip"]; ok {
+		if l, ok := w.levels["gzip"]; ok && l >= gzip.HuffmanOnly && l <= gzip.BestCompression {
 			level = l
 		}
 		compressor, err = getPooledCompressionWriter(w.encoding, level, w.ResponseWriter)
 	case "deflate":
 		level = flate.DefaultCompression
-		if l, ok := w.levels["deflate"]; ok {
+		if l, ok := w.levels["deflate"]; ok && l >= flate.HuffmanOnly && l <= flate.BestCompression {
 			level = l
 		}
 		compressor, err = getPooledCompressionWriter(w.encoding, level, w.ResponseWriter)
@@ -291,13 +398,14 @@ func (w *CompressionResponseWriter) startCompressedWriter() error {
 	}
 
 	if err != nil {
+		w.compressionErr = errors.Join(w.compressionErr, err)
 		w.startPlainWriter()
 		return nil
 	}
 
 	w.Header().Del("Content-Length")
 	w.Header().Set("Content-Encoding", w.encoding)
-	w.Header().Set("Vary", "Accept-Encoding")
+	addVaryHeader(w.Header(), "Accept-Encoding")
 	w.ResponseWriter.WriteHeader(w.statusCode)
 	w.Writer = compressor
 	w.pooledWriter = compressor
@@ -391,8 +499,112 @@ func newPooledCompressionWriter(pool *compressionWriterPool, key compressionPool
 		compressor.reset = writer.Reset
 		compressor.flush = writer.Flush
 	default:
-		return nil, nil
+		return nil, errors.New("不支持的压缩算法")
 	}
 
 	return compressor, nil
+}
+
+// Unwrap 允许 http.ResponseController 访问底层写入器能力。
+func (w *CompressionResponseWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
+
+// Hijack 透传 WebSocket 等连接劫持能力。
+func (w *CompressionResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hijacker, ok := w.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, http.ErrNotSupported
+	}
+	return hijacker.Hijack()
+}
+
+// Push 透传 HTTP/2 Server Push 能力。
+func (w *CompressionResponseWriter) Push(target string, options *http.PushOptions) error {
+	pusher, ok := w.ResponseWriter.(http.Pusher)
+	if !ok {
+		return http.ErrNotSupported
+	}
+	return pusher.Push(target, options)
+}
+
+func negotiateContentEncoding(header string) string {
+	if len(header) > maxAcceptEncodingBytes {
+		return ""
+	}
+	items := strings.Split(header, ",")
+	if len(items) > maxAcceptEncodingEntries {
+		return ""
+	}
+	qualities := make(map[string]float64)
+	wildcardQuality := -1.0
+	for _, item := range items {
+		parts := strings.Split(item, ";")
+		name := strings.ToLower(strings.TrimSpace(parts[0]))
+		if name == "" {
+			continue
+		}
+		quality := 1.0
+		valid := true
+		qualityFound := false
+		for _, parameter := range parts[1:] {
+			keyValue := strings.SplitN(strings.TrimSpace(parameter), "=", 2)
+			if len(keyValue) != 2 || !strings.EqualFold(strings.TrimSpace(keyValue[0]), "q") {
+				continue
+			}
+			if qualityFound {
+				valid = false
+				break
+			}
+			qualityFound = true
+			parsed, err := strconv.ParseFloat(strings.TrimSpace(keyValue[1]), 64)
+			if err != nil || math.IsNaN(parsed) || math.IsInf(parsed, 0) || parsed < 0 || parsed > 1 {
+				valid = false
+				break
+			}
+			quality = parsed
+		}
+		if !valid {
+			quality = 0
+		}
+		if name == "*" {
+			wildcardQuality = quality
+			continue
+		}
+		if previous, exists := qualities[name]; !exists || quality > previous {
+			qualities[name] = quality
+		}
+	}
+
+	selected := ""
+	selectedQuality := 0.0
+	for _, encoding := range []string{"zstd", "br", "gzip", "deflate"} {
+		quality, exists := qualities[encoding]
+		if !exists {
+			quality = wildcardQuality
+		}
+		if quality > selectedQuality {
+			selected = encoding
+			selectedQuality = quality
+		}
+	}
+	return selected
+}
+
+func headerTokenContains(value, target string) bool {
+	for _, token := range strings.Split(value, ",") {
+		if strings.EqualFold(strings.TrimSpace(token), target) {
+			return true
+		}
+	}
+	return false
+}
+
+func addVaryHeader(header http.Header, value string) {
+	for _, existing := range header.Values("Vary") {
+		if headerTokenContains(existing, value) {
+			return
+		}
+	}
+	header.Add("Vary", value)
 }

@@ -1,6 +1,9 @@
 package main
 
 import (
+	"errors"
+	"fmt"
+	"io"
 	"os"
 
 	_ "thinkgo/app/controller" // 注册控制器
@@ -12,39 +15,66 @@ import (
 )
 
 func main() {
-	// 创建应用实例。
-	// 仅 run 命令需要数据库；其余命令（version/list/make:* 等）跳过连库，
-	// 避免每次执行都尝试连接数据库并打印连接失败日志。
-	app := newConsoleApp()
-
-	// 创建命令行应用
-	cli := console.NewConsole(app)
-
-	// 注册默认命令
-	cli.Register(&command.Version{})
-	cli.Register(&command.List{Console: cli})
-	cli.Register(&command.Clear{})
-	cli.Register(&command.Run{})
-	cli.Register(&command.MakeController{})
-	cli.Register(&command.MakeModel{})
-	cli.Register(&command.MakeCommand{})
-	cli.Register(&command.MakeValidate{})
-	cli.Register(&command.MakeMiddleware{})
-	cli.Register(&command.MakeEvent{})
-	cli.Register(&command.MakeListener{})
-	cli.Register(&command.MakeSubscribe{})
-	cli.Register(&command.MakeService{})
-	cli.Register(&command.RouteList{})
-	cli.Register(&command.ConfigDump{})
-
-	// 执行命令行调度
-	cli.Run()
+	if err := runConsole(os.Args[1:], os.Stdout, os.Stderr); err != nil {
+		// 使用 %q 转义底层错误中的控制字符，避免终端注入和伪造多行日志。
+		_, _ = fmt.Fprintf(os.Stderr, "ThinkGo command failed: %q\n", err.Error())
+		os.Exit(1)
+	}
 }
 
-// newConsoleApp 根据将要执行的命令选择应用初始化方式：
-// run 命令需要数据库，使用完整初始化；其余命令跳过数据库连接。
-func newConsoleApp() *framework.App {
-	if len(os.Args) > 1 && os.Args[1] == "run" {
+// runConsole 装配并执行命令行应用，始终合并返回应用关闭错误。
+func runConsole(args []string, stdout, stderr io.Writer) (returnErr error) {
+	app := newConsoleApp(args)
+	if app == nil {
+		return framework.ErrNilApplication
+	}
+	defer func() {
+		returnErr = errors.Join(returnErr, app.Close())
+	}()
+
+	cli := console.NewConsole(app)
+	if err := cli.SetOutput(console.NewOutputWithAutoColor(stdout, stderr)); err != nil {
+		return err
+	}
+	if err := registerDefaultCommands(cli); err != nil {
+		return err
+	}
+	return cli.Run(args...)
+}
+
+// registerDefaultCommands 注册全部内置命令，任何定义冲突都会阻止 CLI 启动。
+func registerDefaultCommands(cli *console.Console) error {
+	if cli == nil {
+		return fmt.Errorf("%w: Console 不能为空", console.ErrInvalidCommand)
+	}
+	commands := []console.ICommand{
+		&command.Version{},
+		&command.List{Console: cli},
+		&command.Clear{},
+		&command.Run{},
+		&command.MakeController{},
+		&command.MakeModel{},
+		&command.MakeCommand{},
+		&command.MakeValidate{},
+		&command.MakeMiddleware{},
+		&command.MakeEvent{},
+		&command.MakeListener{},
+		&command.MakeSubscribe{},
+		&command.MakeService{},
+		&command.RouteList{},
+		&command.ConfigDump{},
+	}
+	for _, current := range commands {
+		if err := cli.Register(current); err != nil {
+			return fmt.Errorf("注册内置命令失败: %w", err)
+		}
+	}
+	return nil
+}
+
+// newConsoleApp 根据显式命令参数选择初始化方式，不读取全局 os.Args。
+func newConsoleApp(args []string) *framework.App {
+	if len(args) > 0 && args[0] == "run" {
 		return framework.NewApp()
 	}
 	return framework.NewConsoleApp()

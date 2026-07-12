@@ -7,8 +7,8 @@ import (
 	"testing"
 )
 
-// TestDefaultRedisStoreConfigUsesPrefixAndTimeoutMs 验证默认 Redis 配置与驱动读取字段一致。
-func TestDefaultRedisStoreConfigUsesPrefixAndTimeoutMs(t *testing.T) {
+// TestDefaultCacheConfigMatchesStrictDriverSchema 验证默认缓存配置只使用严格驱动支持的字段。
+func TestDefaultCacheConfigMatchesStrictDriverSchema(t *testing.T) {
 	content, err := os.ReadFile(filepath.Join("..", "..", "config", "cache.json"))
 	if err != nil {
 		t.Fatalf("读取 cache.json 失败: %v", err)
@@ -34,5 +34,17 @@ func TestDefaultRedisStoreConfigUsesPrefixAndTimeoutMs(t *testing.T) {
 	}
 	if _, exists := redisStore["timeout"]; exists {
 		t.Fatalf("redis store 不应继续使用 timeout 字段，实际配置为 %#v", redisStore)
+	}
+	if allow, ok := redisStore["allow_flush_db"].(bool); !ok || allow {
+		t.Fatalf("redis store 必须显式保持空前缀清库授权关闭，实际为 %#v", redisStore["allow_flush_db"])
+	}
+	for name, rawStore := range stores {
+		store, valid := rawStore.(map[string]interface{})
+		if !valid {
+			t.Fatalf("store %q 配置必须是对象", name)
+		}
+		if _, exists := store["expire"]; exists {
+			t.Fatalf("store %q 不应保留未生效的 expire 字段", name)
+		}
 	}
 }

@@ -4,158 +4,628 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"math"
 	"net"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
-// CookieConfig Cookie 配置（启动时预解析，不可变）
+const (
+	defaultCookieSignMaxAge = 7 * 24 * 3600
+	maxCookieAgeSeconds     = 400 * 24 * 3600
+	maxCookieHeaderBytes    = 4096
+	maxCookieClockSkew      = 5 * time.Minute
+	minCookieSecretBytes    = 32
+	maxCookieSecretBytes    = 4096
+	maxCookieNameBytes      = 256
+)
+
+var (
+	// ErrInvalidCookieConfig 表示 Cookie 配置字段、类型或范围非法。
+	ErrInvalidCookieConfig = errors.New("Cookie 配置非法")
+	// ErrInvalidCookieName 表示最终 Cookie 名称不符合 RFC 语法或超过长度限制。
+	ErrInvalidCookieName = errors.New("Cookie 名称非法")
+	// ErrInvalidCookieValue 表示未签名 Cookie 值不符合 HTTP Cookie 语法。
+	ErrInvalidCookieValue = errors.New("Cookie 值非法")
+	// ErrInvalidCookieOptions 表示单次写入选项非法。
+	ErrInvalidCookieOptions = errors.New("Cookie 写入选项非法")
+	// ErrCookieTooLarge 表示单个 Set-Cookie 字段超过安全上限。
+	ErrCookieTooLarge = errors.New("Cookie 超过大小上限")
+	// ErrCookieRequestUnavailable 表示读取操作没有绑定请求。
+	ErrCookieRequestUnavailable = errors.New("Cookie 请求不可用")
+	// ErrCookieWriterUnavailable 表示写入操作没有绑定响应 writer。
+	ErrCookieWriterUnavailable = errors.New("Cookie 响应 writer 不可用")
+	// ErrDuplicateCookie 表示请求携带多个同名 Cookie，存在解析歧义。
+	ErrDuplicateCookie = errors.New("请求包含重复 Cookie")
+	// ErrInvalidCookieSignature 表示签名格式、名称绑定、时间或 HMAC 校验失败。
+	ErrInvalidCookieSignature = errors.New("Cookie 签名非法")
+	// ErrExpiredCookieSignature 表示签名 Cookie 超出允许重放窗口。
+	ErrExpiredCookieSignature = errors.New("Cookie 签名已过期")
+)
+
+// CookieConfig 是启动期严格解析后只读的 Cookie 全局配置。
 type CookieConfig struct {
-	Prefix   string // Cookie 名称前缀
-	Secret   string // 签名密钥（为空则不签名）
-	Path     string // 默认路径
-	Domain   string // 默认域名
-	Secure   bool   // 是否仅 HTTPS
-	HttpOnly bool   // 是否 HttpOnly
-	SameSite string // SameSite 策略
-	Expire   int    // 默认过期时间（秒）
+	Prefix     string
+	Secret     string
+	Path       string
+	Domain     string
+	Secure     bool
+	HttpOnly   bool
+	SameSite   string
+	Expire     int
+	SignMaxAge int
 }
 
-// ParseConfig 从 map 解析 Cookie 配置
-func ParseConfig(m map[string]interface{}) CookieConfig {
-	cfg := CookieConfig{
-		Path:     "/",
-		HttpOnly: true,
-		SameSite: "Lax",
-	}
-	if v, ok := m["prefix"].(string); ok {
-		cfg.Prefix = v
-	}
-	if v, ok := m["secret"].(string); ok {
-		cfg.Secret = v
-	}
-	if v, ok := m["path"].(string); ok {
-		cfg.Path = v
-	}
-	if v, ok := m["domain"].(string); ok {
-		cfg.Domain = v
-	}
-	if v, ok := m["secure"].(bool); ok {
-		cfg.Secure = v
-	}
-	if v, ok := m["httponly"].(bool); ok {
-		cfg.HttpOnly = v
-	}
-	if v, ok := m["samesite"].(string); ok && strings.TrimSpace(v) != "" {
-		cfg.SameSite = strings.TrimSpace(v)
-	}
-	if v, ok := m["expire"].(float64); ok {
-		cfg.Expire = int(v)
-	} else if v, ok := m["expire"].(int); ok {
-		cfg.Expire = v
-	}
-	return cfg
+// CookieOptions 是单次写入可覆盖的 Cookie 属性；零值字段沿用全局配置。
+type CookieOptions struct {
+	Path     string
+	Domain   string
+	Secure   bool
+	HttpOnly bool
+	SameSite string
+	Expire   int
 }
 
-// Cookie 管理器（每个请求创建独立实例，并发安全）
-// 对应 ThinkPHP 8 的 think\Cookie
+// Cookie 是不可共享请求状态的 Cookie 工厂或请求级实例。
 type Cookie struct {
-	config  CookieConfig        // 全局配置（只读，线程安全）
-	request *http.Request       // 当前请求
-	writer  http.ResponseWriter // 当前响应
+	config  CookieConfig
+	request *http.Request
+	writer  http.ResponseWriter
+	mu      sync.RWMutex
+	writeMu sync.Mutex
 }
 
-// NewCookie 创建 Cookie 管理器（旧 API 兼容）
-func NewCookie(config map[string]interface{}) *Cookie {
-	return &Cookie{
-		config: ParseConfig(config),
+// DefaultConfig 返回安全的 Cookie 默认配置。
+func DefaultConfig() CookieConfig {
+	return CookieConfig{
+		Path:       "/",
+		HttpOnly:   true,
+		SameSite:   "Lax",
+		SignMaxAge: defaultCookieSignMaxAge,
 	}
 }
 
-// NewCookieForRequest 为每个请求创建独立的 Cookie 实例（推荐）
-// 不同请求拥有独立的 request/writer，不会并发冲突
-func NewCookieForRequest(config CookieConfig, req *http.Request, w http.ResponseWriter) *Cookie {
-	return &Cookie{
-		config:  config,
-		request: req,
-		writer:  w,
+// ParseConfig 严格解析 Cookie 配置，拒绝未知字段、截断和无效安全属性。
+func ParseConfig(raw map[string]interface{}) (CookieConfig, error) {
+	allowed := map[string]bool{
+		"prefix": true, "secret": true, "path": true, "domain": true,
+		"secure": true, "httponly": true, "samesite": true,
+		"expire": true, "sign_max_age": true,
 	}
+	for key := range raw {
+		if !allowed[key] {
+			return CookieConfig{}, invalidCookieConfig(key, "未知配置项")
+		}
+	}
+	config := DefaultConfig()
+	var err error
+	if value, exists := raw["prefix"]; exists {
+		config.Prefix, err = cookieConfigString(value, "prefix")
+		if err != nil {
+			return CookieConfig{}, err
+		}
+	}
+	if value, exists := raw["secret"]; exists {
+		config.Secret, err = cookieConfigString(value, "secret")
+		if err != nil {
+			return CookieConfig{}, err
+		}
+	}
+	if value, exists := raw["path"]; exists {
+		config.Path, err = cookieConfigString(value, "path")
+		if err != nil {
+			return CookieConfig{}, err
+		}
+	}
+	if value, exists := raw["domain"]; exists {
+		config.Domain, err = cookieConfigString(value, "domain")
+		if err != nil {
+			return CookieConfig{}, err
+		}
+	}
+	if value, exists := raw["secure"]; exists {
+		config.Secure, err = cookieConfigBool(value, "secure")
+		if err != nil {
+			return CookieConfig{}, err
+		}
+	}
+	if value, exists := raw["httponly"]; exists {
+		config.HttpOnly, err = cookieConfigBool(value, "httponly")
+		if err != nil {
+			return CookieConfig{}, err
+		}
+	}
+	if value, exists := raw["samesite"]; exists {
+		rawSameSite, stringErr := cookieConfigString(value, "samesite")
+		if stringErr != nil {
+			return CookieConfig{}, stringErr
+		}
+		config.SameSite, err = normalizeSameSite(rawSameSite)
+		if err != nil {
+			return CookieConfig{}, invalidCookieConfig("samesite", err.Error())
+		}
+	}
+	if value, exists := raw["expire"]; exists {
+		config.Expire, err = cookieConfigInteger(value, "expire", 0, maxCookieAgeSeconds)
+		if err != nil {
+			return CookieConfig{}, err
+		}
+	}
+	if value, exists := raw["sign_max_age"]; exists {
+		config.SignMaxAge, err = cookieConfigInteger(value, "sign_max_age", 1, maxCookieAgeSeconds)
+		if err != nil {
+			return CookieConfig{}, err
+		}
+	}
+	if err = validateCookieConfig(config); err != nil {
+		return CookieConfig{}, err
+	}
+	return config, nil
 }
 
-// Init 初始化请求和响应（旧 API 兼容，不推荐在并发环境使用）
-func (c *Cookie) Init(req *http.Request, w http.ResponseWriter) {
-	c.request = req
-	c.writer = w
+// NewCookie 创建只保存不可变配置的 Cookie 工厂。
+func NewCookie(rawConfig map[string]interface{}) (*Cookie, error) {
+	config, err := ParseConfig(rawConfig)
+	if err != nil {
+		return nil, err
+	}
+	return &Cookie{config: config}, nil
 }
 
-// SetWriter 设置响应 writer
-func (c *Cookie) SetWriter(w http.ResponseWriter) {
-	c.writer = w
+// NewCookieWithConfig 使用已解析配置创建 Cookie 工厂。
+func NewCookieWithConfig(config CookieConfig) (*Cookie, error) {
+	if err := validateCookieConfig(config); err != nil {
+		return nil, err
+	}
+	return &Cookie{config: config}, nil
 }
 
-// GetConfig 获取 Cookie 全局配置（只读）
-// 供 Session 等模块创建请求级 Cookie 实例时复用配置
+// NewCookieForRequest 创建请求级 Cookie；writer 可稍后通过 SetWriter 绑定。
+func NewCookieForRequest(config CookieConfig, req *http.Request, writer http.ResponseWriter) (*Cookie, error) {
+	if req == nil {
+		return nil, ErrCookieRequestUnavailable
+	}
+	if err := validateCookieConfig(config); err != nil {
+		return nil, err
+	}
+	return &Cookie{config: config, request: req, writer: writer}, nil
+}
+
+// ForRequest 从工厂创建隔离的请求级 Cookie 实例。
+func (c *Cookie) ForRequest(req *http.Request, writer http.ResponseWriter) (*Cookie, error) {
+	if c == nil {
+		return nil, ErrInvalidCookieConfig
+	}
+	return NewCookieForRequest(c.config, req, writer)
+}
+
+// SetWriter 为请求级 Cookie 绑定响应 writer。
+func (c *Cookie) SetWriter(writer http.ResponseWriter) error {
+	if c == nil || writer == nil {
+		return ErrCookieWriterUnavailable
+	}
+	c.mu.Lock()
+	c.writer = writer
+	c.mu.Unlock()
+	return nil
+}
+
+// GetConfig 返回不可变配置的值拷贝。
 func (c *Cookie) GetConfig() CookieConfig {
+	if c == nil {
+		return CookieConfig{}
+	}
 	return c.config
 }
 
-// Set 设置 Cookie
-func (c *Cookie) Set(name string, value string, options ...map[string]interface{}) {
-	if c == nil || c.writer == nil {
-		// 旧 API 可能在 Init/SetWriter 前被调用；方法无错误返回值，只能安全降级为无操作。
-		return
+// Set 写入 Cookie，并显式返回配置、签名和响应错误。
+func (c *Cookie) Set(name, value string, options ...CookieOptions) error {
+	if c == nil {
+		return ErrCookieWriterUnavailable
+	}
+	header, err := c.BuildHeader(name, value, options...)
+	if err != nil {
+		return err
+	}
+	c.mu.RLock()
+	writer := c.writer
+	c.mu.RUnlock()
+	if writer == nil {
+		return ErrCookieWriterUnavailable
+	}
+	// http.Header 本身不保证并发安全，请求级 Cookie 的并发写入在此串行化。
+	c.writeMu.Lock()
+	writer.Header().Add("Set-Cookie", header)
+	c.writeMu.Unlock()
+	return nil
+}
+
+// BuildHeader 构建经过完整配置、签名和长度校验的 Set-Cookie 头值，不要求绑定 writer。
+func (c *Cookie) BuildHeader(name, value string, options ...CookieOptions) (string, error) {
+	if c == nil {
+		return "", ErrInvalidCookieConfig
+	}
+	if len(options) > 1 {
+		return "", ErrInvalidCookieOptions
+	}
+	finalName, err := c.finalName(name)
+	if err != nil {
+		return "", err
+	}
+	opts := c.defaultOptions()
+	if len(options) == 1 {
+		opts = mergeCookieOptions(opts, options[0])
+	}
+	if err = validateCookieOptions(opts); err != nil {
+		return "", err
 	}
 
-	opts := c.mergeOptions(options...)
-
-	// 签名（绑定 Cookie 名称，避免签名值在不同 Cookie 间被调换）
+	c.mu.RLock()
+	request := c.request
+	c.mu.RUnlock()
+	now := time.Now()
+	encodedValue := value
 	if c.config.Secret != "" {
-		value = c.sign(c.config.Prefix+name, value, c.config.Secret)
+		encodedValue, err = signCookieValue(finalName, value, c.config.Secret, now)
+		if err != nil {
+			return "", err
+		}
 	}
-
-	secure := opts.Secure
-	// 纵深防御：HTTPS 请求下强制 Secure（即便配置未开启），避免会话/凭证 Cookie 走明文回传；
-	// 本地 HTTP 开发仍可正常工作。
-	if isSecureCookieRequest(c.request) {
-		secure = true
-	}
-	// 浏览器要求 SameSite=None 必须配合 Secure，否则 Cookie 会被丢弃。
-	if strings.EqualFold(opts.SameSite, "none") {
-		secure = true
-	}
-
+	secure := opts.Secure || isSecureCookieRequest(request) || strings.EqualFold(opts.SameSite, "None")
 	cookie := &http.Cookie{
-		Name:     c.config.Prefix + name,
-		Value:    value,
+		Name:     finalName,
+		Value:    encodedValue,
 		Path:     opts.Path,
 		Domain:   opts.Domain,
 		Secure:   secure,
 		HttpOnly: opts.HttpOnly,
+		SameSite: sameSiteMode(opts.SameSite),
 	}
-
 	if opts.Expire > 0 {
-		cookie.Expires = time.Now().Add(time.Duration(opts.Expire) * time.Second)
+		cookie.MaxAge = opts.Expire
+		cookie.Expires = now.Add(time.Duration(opts.Expire) * time.Second)
 	} else if opts.Expire < 0 {
-		cookie.Expires = time.Unix(0, 0) // 删除 Cookie
 		cookie.MaxAge = -1
+		cookie.Expires = time.Unix(1, 0).UTC()
 	}
-
-	switch strings.ToLower(opts.SameSite) {
-	case "lax":
-		cookie.SameSite = http.SameSiteLaxMode
-	case "strict":
-		cookie.SameSite = http.SameSiteStrictMode
-	case "none":
-		cookie.SameSite = http.SameSiteNoneMode
+	if err = cookie.Valid(); err != nil {
+		if strings.Contains(err.Error(), "Cookie.Value") {
+			return "", fmt.Errorf("%w: %v", ErrInvalidCookieValue, err)
+		}
+		return "", fmt.Errorf("%w: %v", ErrInvalidCookieOptions, err)
 	}
-
-	http.SetCookie(c.writer, cookie)
+	header := cookie.String()
+	if header == "" {
+		return "", ErrInvalidCookieValue
+	}
+	if len(header) > maxCookieHeaderBytes {
+		return "", fmt.Errorf("%w: %d", ErrCookieTooLarge, len(header))
+	}
+	return header, nil
 }
 
-// isSecureCookieRequest 判断当前请求是否处于安全链路，兼容本机 HTTPS 反向代理。
+// Get 返回值、存在标志和验签错误，正确区分空值与缺失。
+func (c *Cookie) Get(name string) (string, bool, error) {
+	if c == nil {
+		return "", false, ErrCookieRequestUnavailable
+	}
+	finalName, err := c.finalName(name)
+	if err != nil {
+		return "", false, err
+	}
+	c.mu.RLock()
+	request := c.request
+	c.mu.RUnlock()
+	if request == nil {
+		return "", false, ErrCookieRequestUnavailable
+	}
+	var matched *http.Cookie
+	for _, item := range request.Cookies() {
+		if item.Name != finalName {
+			continue
+		}
+		if matched != nil {
+			return "", false, fmt.Errorf("%w: %s", ErrDuplicateCookie, finalName)
+		}
+		copyItem := *item
+		matched = &copyItem
+	}
+	if matched == nil {
+		return "", false, nil
+	}
+	if len(matched.Value) > maxCookieHeaderBytes {
+		return "", false, ErrCookieTooLarge
+	}
+	if c.config.Secret == "" {
+		return matched.Value, true, nil
+	}
+	value, err := unsignCookieValue(finalName, matched.Value, c.config.Secret, c.effectiveSignMaxAge(), time.Now())
+	if err != nil {
+		return "", false, err
+	}
+	return value, true, nil
+}
+
+// Has 判断 Cookie 是否存在且签名有效。
+func (c *Cookie) Has(name string) (bool, error) {
+	_, found, err := c.Get(name)
+	return found, err
+}
+
+// Delete 使用相同 Path、Domain 和安全属性删除 Cookie。
+func (c *Cookie) Delete(name string) error {
+	opts := c.defaultOptions()
+	opts.Expire = -1
+	return c.Set(name, "", opts)
+}
+
+func (c *Cookie) finalName(name string) (string, error) {
+	if c == nil || name == "" {
+		return "", ErrInvalidCookieName
+	}
+	finalName := c.config.Prefix + name
+	if len(finalName) > maxCookieNameBytes || hasCookieControl(finalName) {
+		return "", fmt.Errorf("%w: %q", ErrInvalidCookieName, finalName)
+	}
+	probe := &http.Cookie{Name: finalName, Value: "x", Path: "/"}
+	if err := probe.Valid(); err != nil {
+		return "", fmt.Errorf("%w: %v", ErrInvalidCookieName, err)
+	}
+	return finalName, nil
+}
+
+func (c *Cookie) defaultOptions() CookieOptions {
+	return CookieOptions{
+		Path: c.config.Path, Domain: c.config.Domain, Secure: c.config.Secure,
+		HttpOnly: c.config.HttpOnly, SameSite: c.config.SameSite, Expire: c.config.Expire,
+	}
+}
+
+func (c *Cookie) effectiveSignMaxAge() int {
+	maxAge := c.config.SignMaxAge
+	if c.config.Expire > 0 && c.config.Expire < maxAge {
+		maxAge = c.config.Expire
+	}
+	return maxAge
+}
+
+func mergeCookieOptions(base, override CookieOptions) CookieOptions {
+	if override.Path != "" {
+		base.Path = override.Path
+	}
+	if override.Domain != "" {
+		base.Domain = override.Domain
+	}
+	base.Secure = base.Secure || override.Secure
+	base.HttpOnly = base.HttpOnly || override.HttpOnly
+	if override.SameSite != "" {
+		base.SameSite = override.SameSite
+	}
+	if override.Expire != 0 {
+		base.Expire = override.Expire
+	}
+	return base
+}
+
+func validateCookieConfig(config CookieConfig) error {
+	if !utf8.ValidString(config.Prefix) || len(config.Prefix) > maxCookieNameBytes || hasCookieControl(config.Prefix) {
+		return invalidCookieConfig("prefix", "包含非法字符或过长")
+	}
+	if config.Prefix != "" {
+		probe := &http.Cookie{Name: config.Prefix + "x", Value: "x", Path: "/"}
+		if err := probe.Valid(); err != nil {
+			return invalidCookieConfig("prefix", err.Error())
+		}
+	}
+	if config.Secret != "" && (len(config.Secret) < minCookieSecretBytes || len(config.Secret) > maxCookieSecretBytes) {
+		return invalidCookieConfig("secret", "非空密钥必须为 32 至 4096 字节")
+	}
+	if config.SignMaxAge < 1 || config.SignMaxAge > maxCookieAgeSeconds {
+		return invalidCookieConfig("sign_max_age", "超出允许范围")
+	}
+	if config.Expire < 0 || config.Expire > maxCookieAgeSeconds {
+		return invalidCookieConfig("expire", "超出允许范围")
+	}
+	if _, err := normalizeSameSite(config.SameSite); err != nil {
+		return invalidCookieConfig("samesite", err.Error())
+	}
+	if err := validateCookiePolicy(config.Path, config.Domain); err != nil {
+		return invalidCookieConfig("path/domain", err.Error())
+	}
+	return nil
+}
+
+func validateCookieOptions(options CookieOptions) error {
+	if options.Expire < -1 || options.Expire > maxCookieAgeSeconds {
+		return fmt.Errorf("%w: expire", ErrInvalidCookieOptions)
+	}
+	if _, err := normalizeSameSite(options.SameSite); err != nil {
+		return fmt.Errorf("%w: samesite: %v", ErrInvalidCookieOptions, err)
+	}
+	if err := validateCookiePolicy(options.Path, options.Domain); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidCookieOptions, err)
+	}
+	return nil
+}
+
+func validateCookiePolicy(path, domain string) error {
+	if path == "" || !strings.HasPrefix(path, "/") || hasCookieControl(path) || strings.Contains(path, ";") {
+		return errors.New("Cookie Path 必须以 / 开头且不含控制字符或分号")
+	}
+	probe := &http.Cookie{Name: "probe", Value: "x", Path: path, Domain: domain}
+	if err := probe.Valid(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func normalizeSameSite(value string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "lax":
+		return "Lax", nil
+	case "strict":
+		return "Strict", nil
+	case "none":
+		return "None", nil
+	default:
+		return "", errors.New("SameSite 仅支持 Lax、Strict、None")
+	}
+}
+
+func sameSiteMode(value string) http.SameSite {
+	switch strings.ToLower(value) {
+	case "strict":
+		return http.SameSiteStrictMode
+	case "none":
+		return http.SameSiteNoneMode
+	default:
+		return http.SameSiteLaxMode
+	}
+}
+
+func signCookieValue(name, value, secret string, now time.Time) (string, error) {
+	if name == "" || len(secret) < minCookieSecretBytes || !utf8.ValidString(value) {
+		return "", ErrInvalidCookieSignature
+	}
+	payload := base64.RawURLEncoding.EncodeToString([]byte(value))
+	timestamp := strconv.FormatInt(now.Unix(), 10)
+	mac := hmac.New(sha256.New, []byte(secret))
+	_, _ = mac.Write([]byte(name + "\x00v1\x00" + payload + "\x00" + timestamp))
+	signature := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	return "v1." + payload + "." + timestamp + "." + signature, nil
+}
+
+func unsignCookieValue(name, signed, secret string, maxAge int, now time.Time) (string, error) {
+	parts := strings.Split(signed, ".")
+	if len(parts) != 4 || parts[0] != "v1" || name == "" || len(secret) < minCookieSecretBytes || maxAge <= 0 {
+		return "", ErrInvalidCookieSignature
+	}
+	timestamp, err := strconv.ParseInt(parts[2], 10, 64)
+	if err != nil {
+		return "", ErrInvalidCookieSignature
+	}
+	signedAt := time.Unix(timestamp, 0)
+	if signedAt.After(now.Add(maxCookieClockSkew)) {
+		return "", ErrInvalidCookieSignature
+	}
+	if now.Sub(signedAt) > time.Duration(maxAge)*time.Second {
+		return "", ErrExpiredCookieSignature
+	}
+	providedSignature, err := base64.RawURLEncoding.DecodeString(parts[3])
+	if err != nil || len(providedSignature) != sha256.Size {
+		return "", ErrInvalidCookieSignature
+	}
+	if base64.RawURLEncoding.EncodeToString(providedSignature) != parts[3] {
+		return "", ErrInvalidCookieSignature
+	}
+	mac := hmac.New(sha256.New, []byte(secret))
+	_, _ = mac.Write([]byte(name + "\x00v1\x00" + parts[1] + "\x00" + parts[2]))
+	if !hmac.Equal(providedSignature, mac.Sum(nil)) {
+		return "", ErrInvalidCookieSignature
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil || !utf8.Valid(payload) {
+		return "", ErrInvalidCookieSignature
+	}
+	if base64.RawURLEncoding.EncodeToString(payload) != parts[1] {
+		return "", ErrInvalidCookieSignature
+	}
+	return string(payload), nil
+}
+
+func cookieConfigString(value interface{}, field string) (string, error) {
+	text, ok := value.(string)
+	if !ok || !utf8.ValidString(text) || hasCookieControl(text) {
+		return "", invalidCookieConfig(field, "必须是不含控制字符的字符串")
+	}
+	return text, nil
+}
+
+func cookieConfigBool(value interface{}, field string) (bool, error) {
+	parsed, ok := value.(bool)
+	if !ok {
+		return false, invalidCookieConfig(field, "必须是布尔值")
+	}
+	return parsed, nil
+}
+
+func cookieConfigInteger(value interface{}, field string, minimum, maximum int) (int, error) {
+	parsed, ok := exactCookieInteger(value)
+	if !ok || parsed < int64(minimum) || parsed > int64(maximum) {
+		return 0, invalidCookieConfig(field, fmt.Sprintf("必须是 %d 至 %d 的整数", minimum, maximum))
+	}
+	return int(parsed), nil
+}
+
+func exactCookieInteger(value interface{}) (int64, bool) {
+	switch typed := value.(type) {
+	case int:
+		return int64(typed), true
+	case int8:
+		return int64(typed), true
+	case int16:
+		return int64(typed), true
+	case int32:
+		return int64(typed), true
+	case int64:
+		return typed, true
+	case uint:
+		if uint64(typed) > math.MaxInt64 {
+			return 0, false
+		}
+		return int64(typed), true
+	case uint8:
+		return int64(typed), true
+	case uint16:
+		return int64(typed), true
+	case uint32:
+		return int64(typed), true
+	case uint64:
+		if typed > math.MaxInt64 {
+			return 0, false
+		}
+		return int64(typed), true
+	case float32:
+		return exactCookieFloat(float64(typed))
+	case float64:
+		return exactCookieFloat(typed)
+	case json.Number:
+		parsed, err := strconv.ParseInt(typed.String(), 10, 64)
+		return parsed, err == nil
+	default:
+		return 0, false
+	}
+}
+
+func exactCookieFloat(value float64) (int64, bool) {
+	if math.IsNaN(value) || math.IsInf(value, 0) || math.Trunc(value) != value ||
+		value < float64(math.MinInt64) || value >= float64(math.MaxInt64) {
+		return 0, false
+	}
+	return int64(value), true
+}
+
+func invalidCookieConfig(field, reason string) error {
+	return fmt.Errorf("%w: %s %s", ErrInvalidCookieConfig, field, reason)
+}
+
+func hasCookieControl(value string) bool {
+	for _, character := range value {
+		if unicode.IsControl(character) {
+			return true
+		}
+	}
+	return false
+}
+
 func isSecureCookieRequest(req *http.Request) bool {
 	if req == nil {
 		return false
@@ -170,7 +640,6 @@ func isSecureCookieRequest(req *http.Request) bool {
 	return strings.EqualFold(proto, "https")
 }
 
-// isLoopbackRemoteAddr 只允许本机代理声明 HTTPS，避免远程客户端伪造代理头。
 func isLoopbackRemoteAddr(remoteAddr string) bool {
 	host, _, err := net.SplitHostPort(remoteAddr)
 	if err != nil {
@@ -178,149 +647,4 @@ func isLoopbackRemoteAddr(remoteAddr string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
-}
-
-// Get 获取 Cookie 值
-func (c *Cookie) Get(name string) string {
-	if c == nil || c.request == nil {
-		return ""
-	}
-
-	cookie, err := c.request.Cookie(c.config.Prefix + name)
-	if err != nil {
-		return ""
-	}
-
-	value := cookie.Value
-	if c.config.Secret != "" {
-		val, valid := c.unsign(c.config.Prefix+name, value, c.config.Secret)
-		if !valid {
-			return ""
-		}
-		return val
-	}
-
-	return value
-}
-
-// Has 检查 Cookie 是否存在
-func (c *Cookie) Has(name string) bool {
-	if c == nil || c.request == nil {
-		return false
-	}
-	cookie, err := c.request.Cookie(c.config.Prefix + name)
-	if err != nil {
-		return false
-	}
-	if c.config.Secret != "" {
-		// 签名 Cookie 的“存在”必须以验签通过为准，避免篡改值绕过业务的 Has 判断。
-		_, valid := c.unsign(c.config.Prefix+name, cookie.Value, c.config.Secret)
-		return valid
-	}
-	return true
-}
-
-// Delete 删除 Cookie
-func (c *Cookie) Delete(name string) {
-	c.Set(name, "", map[string]interface{}{"expire": -1})
-}
-
-// cookieOptions Cookie 选项（内部使用）
-type cookieOptions struct {
-	Path     string
-	Domain   string
-	Secure   bool
-	HttpOnly bool
-	SameSite string
-	Expire   int
-}
-
-// mergeOptions 合并配置和自定义选项
-func (c *Cookie) mergeOptions(options ...map[string]interface{}) cookieOptions {
-	opts := cookieOptions{
-		Path:     c.config.Path,
-		Domain:   c.config.Domain,
-		Secure:   c.config.Secure,
-		HttpOnly: c.config.HttpOnly,
-		SameSite: c.config.SameSite,
-		Expire:   c.config.Expire,
-	}
-
-	if len(options) > 0 {
-		opt := options[0]
-		if v, ok := opt["path"].(string); ok {
-			opts.Path = v
-		}
-		if v, ok := opt["domain"].(string); ok {
-			opts.Domain = v
-		}
-		if v, ok := opt["secure"].(bool); ok {
-			opts.Secure = v
-		}
-		if v, ok := opt["httponly"].(bool); ok {
-			opts.HttpOnly = v
-		}
-		if v, ok := opt["samesite"].(string); ok {
-			opts.SameSite = v
-		}
-		if v, ok := opt["expire"].(int); ok {
-			opts.Expire = v
-		} else if v, ok := opt["expire"].(float64); ok {
-			opts.Expire = int(v)
-		}
-	}
-	return opts
-}
-
-// signMaxAge 签名值的最大有效期（默认 7 天），超过后验签失败。
-const signMaxAge = 7 * 24 * 3600
-
-// sign 签名值，格式: value|timestamp.signature
-// 时间戳嵌入签名内容中，防止签名值被永久重放；
-// HMAC 额外覆盖 Cookie 名称（name），防止签名值在不同 Cookie 间被调换。
-func (c *Cookie) sign(name, value, secret string) string {
-	timestamp := fmt.Sprintf("%d", time.Now().Unix())
-	payload := value + "|" + timestamp
-	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write([]byte(name + "\x00" + payload))
-	signature := base64.URLEncoding.EncodeToString(mac.Sum(nil))
-	return payload + "." + signature
-}
-
-// unsign 验证签名并返回原始值。
-// HMAC 覆盖 Cookie 名称与时间戳，名称不匹配或已过期都会验签失败。
-func (c *Cookie) unsign(name, value, secret string) (string, bool) {
-	lastDot := strings.LastIndex(value, ".")
-	if lastDot < 0 {
-		return "", false
-	}
-
-	payload := value[:lastDot]
-	sig := value[lastDot+1:]
-
-	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write([]byte(name + "\x00" + payload))
-	expectedSig := base64.URLEncoding.EncodeToString(mac.Sum(nil))
-
-	if !hmac.Equal([]byte(sig), []byte(expectedSig)) {
-		return "", false
-	}
-
-	// 解析时间戳并检查有效期。签名内容必须包含时间戳，
-	// 否则视为非法格式直接拒绝，避免无时效检查的旧格式被永久重放。
-	pipeIdx := strings.LastIndex(payload, "|")
-	if pipeIdx < 0 {
-		return "", false
-	}
-
-	originalValue := payload[:pipeIdx]
-	timestampStr := payload[pipeIdx+1:]
-	ts, err := strconv.ParseInt(timestampStr, 10, 64)
-	if err != nil {
-		return "", false
-	}
-	if time.Now().Unix()-ts > signMaxAge {
-		return "", false // 签名已过期
-	}
-	return originalValue, true
 }

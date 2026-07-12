@@ -1,16 +1,38 @@
 package log
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 )
+
+var (
+	// ErrLogClosed 表示日志器已关闭，不能再接受新的刷盘请求。
+	ErrLogClosed = errors.New("日志器已关闭")
+	// ErrNilLogDriver 表示日志器收到 nil 驱动。
+	ErrNilLogDriver = errors.New("日志驱动不能为空")
+	// ErrInvalidLogChannel 表示通道名称或实例无效。
+	ErrInvalidLogChannel = errors.New("日志通道名称和实例不能为空")
+	// ErrLogChannelExists 表示同名通道已经注册，禁止静默覆盖。
+	ErrLogChannelExists = errors.New("日志通道已存在")
+	// ErrLogChannelCycle 表示注册会形成通道引用环。
+	ErrLogChannelCycle = errors.New("日志通道不能形成循环引用")
+	// ErrLogAlreadyStarted 表示异步队列已经创建，固定容量参数不能再修改。
+	ErrLogAlreadyStarted = errors.New("日志异步队列已经启动")
+)
+
+var channelRegistryMu sync.Mutex
+
+const maxPendingLogErrors = 64
 
 // Log 日志管理器。
 // 支持多驱动、上下文参数、调用位置记录、异步批量刷盘和关停保护。
@@ -21,20 +43,27 @@ type Log struct {
 	levels           []string
 	callerEnabled    bool
 	asyncCh          chan *LogEntry
+	flushCh          chan chan struct{}
 	asyncDone        chan struct{}
 	asyncOnce        sync.Once
 	shutdownOnce     sync.Once
+	inFlight         sync.WaitGroup
 	bufferSize       int
 	flushInterval    time.Duration
 	fallbackWriter   io.Writer
+	fallbackMu       sync.Mutex
 	driverErrorCount int64
+	errorMu          sync.Mutex
+	pendingErrors    []error
+	droppedErrors    uint64
+	closeErr         error
 	closed           bool
 }
 
 // NewLog 创建日志管理器。
 func NewLog(drivers ...Driver) *Log {
 	return &Log{
-		drivers:        drivers,
+		drivers:        append([]Driver(nil), drivers...),
 		channels:       make(map[string]*Log),
 		levels:         make([]string, 0),
 		bufferSize:     200,
@@ -44,13 +73,17 @@ func NewLog(drivers ...Driver) *Log {
 }
 
 // AddDriver 添加日志驱动。
-func (l *Log) AddDriver(driver Driver) {
+func (l *Log) AddDriver(driver Driver) error {
+	if isNilDriver(driver) {
+		return ErrNilLogDriver
+	}
 	l.stateMu.Lock()
 	defer l.stateMu.Unlock()
 	if l.closed {
-		return
+		return ErrLogClosed
 	}
 	l.drivers = append(l.drivers, driver)
+	return nil
 }
 
 // SetLevels 设置允许的日志级别。
@@ -67,24 +100,38 @@ func (l *Log) SetCallerEnabled(enabled bool) {
 	l.callerEnabled = enabled
 }
 
-// SetBufferSize 设置异步缓冲区大小。
-func (l *Log) SetBufferSize(size int) {
+// SetBufferSize 设置异步缓冲区大小，仅能在首次记录或刷盘前调用。
+func (l *Log) SetBufferSize(size int) error {
 	if size <= 0 {
-		size = 1
+		return errors.New("日志缓冲区大小必须大于 0")
 	}
 	l.stateMu.Lock()
 	defer l.stateMu.Unlock()
+	if l.closed {
+		return ErrLogClosed
+	}
+	if l.asyncCh != nil {
+		return ErrLogAlreadyStarted
+	}
 	l.bufferSize = size
+	return nil
 }
 
-// SetFlushInterval 设置定时刷盘间隔。
-func (l *Log) SetFlushInterval(d time.Duration) {
+// SetFlushInterval 设置定时刷盘间隔，仅能在首次记录或刷盘前调用。
+func (l *Log) SetFlushInterval(d time.Duration) error {
 	if d <= 0 {
-		d = time.Second
+		return errors.New("日志刷盘间隔必须大于 0")
 	}
 	l.stateMu.Lock()
 	defer l.stateMu.Unlock()
+	if l.closed {
+		return ErrLogClosed
+	}
+	if l.asyncCh != nil {
+		return ErrLogAlreadyStarted
+	}
 	l.flushInterval = d
+	return nil
 }
 
 // SetFallbackWriter 设置驱动失败时的兜底输出目标。
@@ -97,14 +144,63 @@ func (l *Log) SetFallbackWriter(writer io.Writer) {
 	l.fallbackWriter = writer
 }
 
-// RegisterChannel 注册命名日志通道，支持把不同类型日志隔离到不同驱动。
-func (l *Log) RegisterChannel(name string, channel *Log) {
+// RegisterChannel 注册命名日志通道，并拒绝无效、重复、已关闭或形成引用环的通道。
+func (l *Log) RegisterChannel(name string, channel *Log) error {
+	name = strings.TrimSpace(name)
 	if name == "" || channel == nil {
-		return
+		return ErrInvalidLogChannel
 	}
+
+	channelRegistryMu.Lock()
+	defer channelRegistryMu.Unlock()
+	if channel == l || logChannelReaches(channel, l) {
+		return ErrLogChannelCycle
+	}
+
 	l.stateMu.Lock()
 	defer l.stateMu.Unlock()
+	if l.closed {
+		return ErrLogClosed
+	}
+	channel.stateMu.RLock()
+	channelClosed := channel.closed
+	channel.stateMu.RUnlock()
+	if channelClosed {
+		return ErrLogClosed
+	}
+	if _, exists := l.channels[name]; exists {
+		return fmt.Errorf("%w: %s", ErrLogChannelExists, name)
+	}
+	if l.channels == nil {
+		l.channels = make(map[string]*Log)
+	}
 	l.channels[name] = channel
+	return nil
+}
+
+func logChannelReaches(start *Log, target *Log) bool {
+	visited := make(map[*Log]struct{})
+	stack := []*Log{start}
+	for len(stack) > 0 {
+		last := len(stack) - 1
+		current := stack[last]
+		stack = stack[:last]
+		if current == target {
+			return true
+		}
+		if _, exists := visited[current]; exists {
+			continue
+		}
+		visited[current] = struct{}{}
+		current.stateMu.RLock()
+		for _, child := range current.channels {
+			if child != nil {
+				stack = append(stack, child)
+			}
+		}
+		current.stateMu.RUnlock()
+	}
+	return false
 }
 
 // Channel 返回指定命名通道，未找到时回退到当前日志器，保证调用方无需额外判空。
@@ -165,17 +261,22 @@ func (l *Log) recordEntry(msg string, level string, ctx map[string]interface{}, 
 	l.ensureAsyncStarted()
 
 	l.stateMu.RLock()
-	defer l.stateMu.RUnlock()
-
 	if l.closed || l.asyncCh == nil {
+		l.stateMu.RUnlock()
 		return
 	}
 
 	select {
 	case l.asyncCh <- entry:
+		l.stateMu.RUnlock()
 	default:
 		// 通道已满时降级为同步写入，避免高峰期丢日志。
-		l.syncWriteEntryLocked(entry)
+		drivers := append([]Driver(nil), l.drivers...)
+		fallbackWriter := l.fallbackWriter
+		l.inFlight.Add(1)
+		l.stateMu.RUnlock()
+		defer l.inFlight.Done()
+		l.writeEntryToDrivers(drivers, fallbackWriter, entry)
 	}
 }
 
@@ -201,16 +302,17 @@ func (l *Log) ensureAsyncStarted() {
 		}
 
 		l.asyncCh = make(chan *LogEntry, channelSize)
+		l.flushCh = make(chan chan struct{})
 		l.asyncDone = make(chan struct{})
 		go l.asyncFlushLoop()
 	})
 }
 
-// syncWriteEntryLocked 在已持有读锁的前提下同步写入单条日志。
-func (l *Log) syncWriteEntryLocked(entry *LogEntry) {
-	for _, driver := range l.drivers {
-		if err := driver.WriteEntry(entry); err != nil {
-			l.reportDriverError(driver, "write", err, entry, 1)
+// writeEntryToDrivers 在不持有状态锁时调用驱动，避免外部 I/O 阻塞配置和关停流程。
+func (l *Log) writeEntryToDrivers(drivers []Driver, fallbackWriter io.Writer, entry *LogEntry) {
+	for _, driver := range drivers {
+		if err := safeDriverWrite(driver, entry); err != nil {
+			l.reportDriverError(driver, "write", err, fallbackWriter, 1)
 		}
 	}
 }
@@ -224,6 +326,31 @@ func (l *Log) asyncFlushLoop() {
 
 	for {
 		select {
+		case flushed := <-l.flushCh:
+			channelClosed := false
+		drainLoop:
+			for {
+				select {
+				case entry, ok := <-l.asyncCh:
+					if !ok {
+						channelClosed = true
+						break drainLoop
+					}
+					buffer = append(buffer, entry)
+				default:
+					break drainLoop
+				}
+			}
+			if len(buffer) > 0 {
+				l.flushToDrivers(buffer)
+				buffer = make([]*LogEntry, 0, bufferSize)
+			}
+			flushed <- struct{}{}
+			if channelClosed {
+				close(l.asyncDone)
+				return
+			}
+
 		case entry, ok := <-l.asyncCh:
 			if !ok {
 				if len(buffer) > 0 {
@@ -266,14 +393,16 @@ func (l *Log) getFlushInterval() time.Duration {
 	return l.flushInterval
 }
 
-// flushToDrivers 将日志条目批量写入所有驱动。
+// flushToDrivers 将日志条目批量写入驱动，状态锁只用于生成不可变快照。
 func (l *Log) flushToDrivers(entries []*LogEntry) {
 	l.stateMu.RLock()
-	defer l.stateMu.RUnlock()
+	drivers := append([]Driver(nil), l.drivers...)
+	fallbackWriter := l.fallbackWriter
+	l.stateMu.RUnlock()
 
-	for _, driver := range l.drivers {
-		if err := driver.SaveEntries(entries); err != nil {
-			l.reportDriverError(driver, "save", err, nil, len(entries))
+	for _, driver := range drivers {
+		if err := safeDriverSave(driver, entries); err != nil {
+			l.reportDriverError(driver, "save", err, fallbackWriter, len(entries))
 		}
 	}
 }
@@ -295,12 +424,22 @@ func (l *Log) Write(msg string, level string) {
 		}
 	}
 
+	drivers, fallbackWriter, accepted := l.beginSynchronousIO()
+	if !accepted {
+		return
+	}
+	defer l.inFlight.Done()
+	l.writeEntryToDrivers(drivers, fallbackWriter, entry)
+}
+
+func (l *Log) beginSynchronousIO() ([]Driver, io.Writer, bool) {
 	l.stateMu.RLock()
 	defer l.stateMu.RUnlock()
 	if l.closed {
-		return
+		return nil, nil, false
 	}
-	l.syncWriteEntryLocked(entry)
+	l.inFlight.Add(1)
+	return append([]Driver(nil), l.drivers...), l.fallbackWriter, true
 }
 
 // Record 记录日志到异步通道。
@@ -308,12 +447,39 @@ func (l *Log) Record(msg string, level string) {
 	l.recordEntry(msg, level, nil, 2)
 }
 
-// Save 为兼容旧接口保留，无需显式调用。
-func (l *Log) Save() {}
+// Flush 等待调用前已入队的日志完成刷盘，并返回尚未消费的驱动错误。
+func (l *Log) Flush(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	l.ensureAsyncStarted()
 
-// Shutdown 优雅关闭日志系统，避免与并发写入发生 send on closed channel。
-func (l *Log) Shutdown() {
+	flushed := make(chan struct{}, 1)
+	l.stateMu.RLock()
+	if l.closed || l.flushCh == nil {
+		l.stateMu.RUnlock()
+		return ErrLogClosed
+	}
+	select {
+	case l.flushCh <- flushed:
+		l.stateMu.RUnlock()
+	case <-ctx.Done():
+		l.stateMu.RUnlock()
+		return ctx.Err()
+	}
+
+	select {
+	case <-flushed:
+		return l.takeDriverErrors()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// Close 优雅关闭日志系统，等待在途写入并聚合全部刷盘、驱动和通道关闭错误。
+func (l *Log) Close() error {
 	l.shutdownOnce.Do(func() {
+		channelRegistryMu.Lock()
 		l.stateMu.Lock()
 		l.closed = true
 		asyncCh := l.asyncCh
@@ -325,6 +491,7 @@ func (l *Log) Shutdown() {
 			}
 		}
 		l.stateMu.Unlock()
+		channelRegistryMu.Unlock()
 
 		if asyncCh != nil {
 			close(asyncCh)
@@ -332,19 +499,30 @@ func (l *Log) Shutdown() {
 		if asyncDone != nil {
 			<-asyncDone
 		}
+		l.inFlight.Wait()
 
 		l.stateMu.RLock()
 		drivers := append([]Driver(nil), l.drivers...)
+		fallbackWriter := l.fallbackWriter
 		l.stateMu.RUnlock()
 		for _, driver := range drivers {
-			if err := driver.Close(); err != nil {
-				l.reportDriverError(driver, "close", err, nil, 0)
+			if err := safeDriverClose(driver); err != nil {
+				l.reportDriverError(driver, "close", err, fallbackWriter, 0)
 			}
 		}
+
+		closeErrors := []error{l.takeDriverErrors()}
 		for _, channel := range channels {
-			channel.Shutdown()
+			closeErrors = append(closeErrors, channel.Close())
 		}
+		l.closeErr = errors.Join(closeErrors...)
 	})
+	return l.closeErr
+}
+
+// Shutdown 保留旧名称但返回关闭错误；新代码应使用 Close。
+func (l *Log) Shutdown() error {
+	return l.Close()
 }
 
 // ErrorCtx 记录错误日志。
@@ -403,75 +581,123 @@ func (l *Log) Debug(msg string)     { l.recordEntry(msg, "debug", nil, 2) }
 func (l *Log) Sql(msg string)       { l.recordEntry(msg, "sql", nil, 2) }
 
 // reportDriverError 聚合驱动错误并写入兜底输出，避免磁盘故障时日志无声丢失。
-func (l *Log) reportDriverError(driver Driver, action string, err error, entry *LogEntry, batchSize int) {
+func (l *Log) reportDriverError(driver Driver, action string, err error, fallbackWriter io.Writer, batchSize int) {
 	if err == nil {
 		return
 	}
 
 	atomic.AddInt64(&l.driverErrorCount, 1)
+	wrapped := fmt.Errorf("日志驱动 %T 执行 %s 失败: %w", driver, action, err)
+	l.storePendingError(wrapped)
 
 	var builder strings.Builder
 	builder.WriteString("[log-driver-error]")
 	builder.WriteString(" action=" + action)
 	builder.WriteString(fmt.Sprintf(" driver=%T", driver))
-	builder.WriteString(" error=" + err.Error())
-	if entry != nil {
-		builder.WriteString(" message=" + entry.Message)
-	}
+	builder.WriteString(" error=" + sanitizeDriverErrorText(err.Error()))
 	if batchSize > 0 {
 		builder.WriteString(fmt.Sprintf(" batch=%d", batchSize))
 	}
 	builder.WriteString("\n")
 
-	l.stateMu.RLock()
-	fallbackWriter := l.fallbackWriter
-	l.stateMu.RUnlock()
 	if fallbackWriter == nil {
 		fallbackWriter = os.Stderr
 	}
-	_, _ = io.WriteString(fallbackWriter, builder.String())
+	l.fallbackMu.Lock()
+	fallbackErr := safeFallbackWrite(fallbackWriter, builder.String())
+	l.fallbackMu.Unlock()
+	if fallbackErr != nil {
+		l.storePendingError(fmt.Errorf("日志兜底输出失败: %w", fallbackErr))
+	}
 }
 
-// cloneContext 在入队前复制上下文，避免异步刷盘阶段读取到已被修改的 map。
-func cloneContext(ctx map[string]interface{}) map[string]interface{} {
-	if len(ctx) == 0 {
-		return nil
+func (l *Log) storePendingError(err error) {
+	if err == nil {
+		return
 	}
-
-	cloned := make(map[string]interface{}, len(ctx))
-	for key, value := range ctx {
-		cloned[key] = cloneContextValue(value)
+	l.errorMu.Lock()
+	defer l.errorMu.Unlock()
+	if len(l.pendingErrors) >= maxPendingLogErrors {
+		l.droppedErrors++
+		return
 	}
-	return cloned
+	l.pendingErrors = append(l.pendingErrors, err)
 }
 
-func cloneContextValue(value interface{}) interface{} {
-	switch typed := value.(type) {
-	case map[string]interface{}:
-		return cloneContext(typed)
-	case map[string]string:
-		cloned := make(map[string]string, len(typed))
-		for key, innerValue := range typed {
-			cloned[key] = innerValue
+func (l *Log) takeDriverErrors() error {
+	l.errorMu.Lock()
+	defer l.errorMu.Unlock()
+	errorsToJoin := append([]error(nil), l.pendingErrors...)
+	if l.droppedErrors > 0 {
+		errorsToJoin = append(errorsToJoin, fmt.Errorf("另有 %d 条日志驱动错误因数量限制被省略", l.droppedErrors))
+	}
+	joined := errors.Join(errorsToJoin...)
+	l.pendingErrors = nil
+	l.droppedErrors = 0
+	return joined
+}
+
+func safeDriverWrite(driver Driver, entry *LogEntry) (err error) {
+	if isNilDriver(driver) {
+		return ErrNilLogDriver
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("日志驱动 WriteEntry 发生 panic: %v", recovered)
 		}
-		return cloned
-	case []interface{}:
-		cloned := make([]interface{}, len(typed))
-		for index, item := range typed {
-			cloned[index] = cloneContextValue(item)
+	}()
+	return driver.WriteEntry(entry)
+}
+
+func safeDriverSave(driver Driver, entries []*LogEntry) (err error) {
+	if isNilDriver(driver) {
+		return ErrNilLogDriver
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("日志驱动 SaveEntries 发生 panic: %v", recovered)
 		}
-		return cloned
-	case []string:
-		return append([]string(nil), typed...)
-	case []int:
-		return append([]int(nil), typed...)
-	case []int64:
-		return append([]int64(nil), typed...)
-	case []float64:
-		return append([]float64(nil), typed...)
-	case []bool:
-		return append([]bool(nil), typed...)
+	}()
+	return driver.SaveEntries(entries)
+}
+
+func safeDriverClose(driver Driver) (err error) {
+	if isNilDriver(driver) {
+		return ErrNilLogDriver
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("日志驱动 Close 发生 panic: %v", recovered)
+		}
+	}()
+	return driver.Close()
+}
+
+func safeFallbackWrite(writer io.Writer, message string) (err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("兜底输出发生 panic: %v", recovered)
+		}
+	}()
+	written, err := io.WriteString(writer, message)
+	if err != nil {
+		return err
+	}
+	if written != len(message) {
+		return io.ErrShortWrite
+	}
+	return nil
+}
+
+func isNilDriver(driver Driver) bool {
+	if driver == nil {
+		return true
+	}
+	value := reflect.ValueOf(driver)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
 	default:
-		return value
+		return false
 	}
 }

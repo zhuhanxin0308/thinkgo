@@ -1,7 +1,7 @@
 package event
 
 // ==================== 框架生命周期事件 ====================
-// 对应 ThinkPHP 的内置事件：AppInit/HttpRun/HttpEnd/RouteLoaded/LogWrite/LogRecord
+// 对应 ThinkPHP 的内置事件：AppInit/HttpRun/HttpEnd/RouteLoaded
 
 // 以下常量定义框架内置的生命周期事件名称。
 // 应用层可通过 Dispatcher.Listen() 注册对应事件的监听器。
@@ -21,14 +21,6 @@ const (
 	// EventRouteLoaded 路由加载完成后触发。
 	// 对应 ThinkPHP 的 RouteLoaded 事件。
 	EventRouteLoaded = "framework.RouteLoaded"
-
-	// EventLogWrite 日志实际写入时触发。
-	// 对应 ThinkPHP 的 LogWrite 事件。
-	EventLogWrite = "framework.LogWrite"
-
-	// EventLogRecord 日志记录时触发（每条日志）。
-	// 对应 ThinkPHP 的 LogRecord 事件。
-	EventLogRecord = "framework.LogRecord"
 )
 
 // AppInitEvent 应用初始化事件。
@@ -73,18 +65,4 @@ type RouteLoadedEvent struct {
 // NewRouteLoadedEvent 创建路由加载完成事件。
 func NewRouteLoadedEvent() *RouteLoadedEvent {
 	return &RouteLoadedEvent{SimpleEvent: &SimpleEvent{name: EventRouteLoaded}}
-}
-
-// LogWriteEvent 日志写入事件。
-type LogWriteEvent struct {
-	*SimpleEvent
-	Channel string
-}
-
-// NewLogWriteEvent 创建日志写入事件。
-func NewLogWriteEvent(channel string) *LogWriteEvent {
-	return &LogWriteEvent{
-		SimpleEvent: &SimpleEvent{name: EventLogWrite},
-		Channel:     channel,
-	}
 }

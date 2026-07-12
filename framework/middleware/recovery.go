@@ -32,7 +32,10 @@ func (m *Recovery) Handle(req *context.Request, next func(*context.Request) *con
 			}
 
 			recorder := httptest.NewRecorder()
-			handler.Render(recorder, rawReq, recovered)
+			if err := handler.Render(recorder, rawReq, recovered); err != nil && m.Log != nil {
+				// ResponseRecorder 正常情况下不会写失败，此处仍保留诊断信息以防自定义实现异常。
+				m.Log.ErrorCtx("渲染恢复异常失败", map[string]interface{}{"error": err.Error()})
+			}
 			resp = responseFromRecorder(recorder)
 		}
 	}()
@@ -55,7 +58,7 @@ func responseFromRecorder(recorder *httptest.ResponseRecorder) *context.Response
 
 	for key, values := range recorder.Header() {
 		for _, value := range values {
-			resp.Headers().Add(key, value)
+			resp.AddHeader(key, value)
 		}
 	}
 

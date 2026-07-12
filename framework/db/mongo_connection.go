@@ -2,373 +2,631 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/primitive"
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
+	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
-// requireMongoScalar 拒绝把 map/slice 类型的值当作等值/比较条件，防止 NoSQL 运算符注入。
-// 例如从 JSON 请求体传入 {"$ne": null} 这类对象若被直接当作匹配值，会退化为运算符注入。
-// 统一查询 API 的条件值语义上只应是标量；切片仅由框架在 IN/NOT IN 内部构造。
+const (
+	defaultMongoOpTimeout = 10 * time.Second
+	maxMongoLikeLength    = 4096
+)
+
+var mongoCollectionPlaceholders = regexp.MustCompile(`^\(\s*\?(?:\s*,\s*\?)*\s*\)$`)
+
+// MongoConnection 将统一查询接口映射为有界上下文的 MongoDB 操作。
+type MongoConnection struct {
+	Client           *mongo.Client
+	Database         string
+	OperationTimeout time.Duration
+	closeOnce        sync.Once
+	closeErr         error
+}
+
+var _ ContextualConnection = (*MongoConnection)(nil)
+
 func requireMongoScalar(value interface{}) error {
 	if value == nil {
 		return nil
 	}
+	for {
+		reflected := reflect.ValueOf(value)
+		if reflected.Kind() != reflect.Pointer && reflected.Kind() != reflect.Interface {
+			break
+		}
+		if reflected.IsNil() {
+			return nil
+		}
+		value = reflected.Elem().Interface()
+	}
+	switch value.(type) {
+	case time.Time, bson.ObjectID, bson.DateTime, bson.Decimal128, bson.Binary:
+		return nil
+	}
 	switch reflect.TypeOf(value).Kind() {
 	case reflect.Map, reflect.Slice, reflect.Array, reflect.Struct:
-		// []byte（二进制数据）属于合法标量值，单独放行。
 		if _, ok := value.([]byte); ok {
 			return nil
 		}
-		return fmt.Errorf("MongoDB 条件值必须为标量，检测到潜在的运算符注入: %T", value)
+		return fmt.Errorf("%w: MongoDB 条件值必须为标量，实际为 %T", ErrInvalidQuery, value)
 	default:
 		return nil
 	}
 }
 
-// MongoConnection MongoDB 连接实现
-// 实现 Connection 接口，将框架的统一查询 API 转换为 MongoDB 操作
-type MongoConnection struct {
-	Client   *mongo.Client
-	Database string
+func (c *MongoConnection) validate() error {
+	if c == nil || c.Client == nil || strings.TrimSpace(c.Database) == "" {
+		return ErrDatabaseUnavailable
+	}
+	return nil
 }
 
-// collection 获取集合引用
-func (c *MongoConnection) collection(name string) *mongo.Collection {
-	return c.Client.Database(c.Database).Collection(name)
+func (c *MongoConnection) operationContext(parent context.Context) (context.Context, context.CancelFunc, error) {
+	if err := c.validate(); err != nil {
+		return nil, nil, err
+	}
+	if parent == nil {
+		return nil, nil, fmt.Errorf("%w: MongoDB 上下文不能为空", ErrInvalidQuery)
+	}
+	timeout := c.OperationTimeout
+	if timeout <= 0 {
+		timeout = defaultMongoOpTimeout
+	}
+	ctx, cancel := context.WithTimeout(parent, timeout)
+	return ctx, cancel, nil
 }
 
-// defaultMongoOpTimeout MongoDB 单次操作的默认超时时长。
-const defaultMongoOpTimeout = 10 * time.Second
-
-// ctx 创建带超时的上下文。
-func (c *MongoConnection) ctx() (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.Background(), defaultMongoOpTimeout)
+func (c *MongoConnection) collection(name string) (*mongo.Collection, error) {
+	if err := validateIdentifier(name); err != nil {
+		return nil, fmt.Errorf("%w: 非法 MongoDB 集合名: %w", ErrInvalidQuery, err)
+	}
+	if err := c.validate(); err != nil {
+		return nil, err
+	}
+	return c.Client.Database(c.Database).Collection(name), nil
 }
 
-// Select 查询多条记录
-func (c *MongoConnection) Select(table string, fields string, where []string, args []interface{}, order string, limit int, offset int) ([]map[string]interface{}, error) {
-	ctx, cancel := c.ctx()
+func (c *MongoConnection) Select(table, fields string, where []string, args []interface{}, order string, limit, offset int) ([]map[string]interface{}, error) {
+	return c.SelectContext(context.Background(), table, fields, where, args, order, limit, offset)
+}
+
+func (c *MongoConnection) SelectContext(parent context.Context, table, fields string, where []string, args []interface{}, order string, limit, offset int) ([]map[string]interface{}, error) {
+	ctx, cancel, err := c.operationContext(parent)
+	if err != nil {
+		return nil, err
+	}
 	defer cancel()
-
+	collection, err := c.collection(table)
+	if err != nil {
+		return nil, err
+	}
+	if limit < 0 || offset < 0 {
+		return nil, ErrInvalidPagination
+	}
 	filter, err := c.buildFilter(where, args)
 	if err != nil {
 		return nil, err
 	}
-	opts := options.Find()
-
-	// 字段投影
+	findOptions := options.Find()
 	if fields != "" && fields != "*" {
 		projection := bson.M{}
-		for _, f := range strings.Split(fields, ",") {
-			projection[strings.TrimSpace(f)] = 1
-		}
-		opts.SetProjection(projection)
-	}
-
-	// 排序
-	if order != "" {
-		sort := bson.D{}
-		for _, part := range strings.Split(order, ",") {
-			part = strings.TrimSpace(part)
-			if strings.HasSuffix(strings.ToLower(part), " desc") {
-				field := strings.TrimSuffix(strings.TrimSuffix(part, " desc"), " DESC")
-				sort = append(sort, bson.E{Key: strings.TrimSpace(field), Value: -1})
-			} else {
-				field := strings.TrimSuffix(strings.TrimSuffix(part, " asc"), " ASC")
-				sort = append(sort, bson.E{Key: strings.TrimSpace(field), Value: 1})
+		for _, rawField := range strings.Split(fields, ",") {
+			field := strings.TrimSpace(rawField)
+			if err := validateIdentifier(field); err != nil {
+				return nil, fmt.Errorf("%w: 非法 MongoDB 投影字段: %w", ErrInvalidQuery, err)
 			}
+			projection[field] = 1
 		}
-		opts.SetSort(sort)
+		findOptions.SetProjection(projection)
 	}
-
+	if order != "" {
+		if err := validateOrderClause(order); err != nil {
+			return nil, fmt.Errorf("%w: 非法 MongoDB 排序: %w", ErrInvalidQuery, err)
+		}
+		sortFields := bson.D{}
+		for _, item := range strings.Split(order, ",") {
+			parts := strings.Fields(item)
+			direction := 1
+			if len(parts) == 2 && strings.EqualFold(parts[1], "desc") {
+				direction = -1
+			}
+			sortFields = append(sortFields, bson.E{Key: parts[0], Value: direction})
+		}
+		findOptions.SetSort(sortFields)
+	}
 	if limit > 0 {
-		opts.SetLimit(int64(limit))
+		findOptions.SetLimit(int64(limit))
 	}
 	if offset > 0 {
-		opts.SetSkip(int64(offset))
+		findOptions.SetSkip(int64(offset))
 	}
 
-	cursor, err := c.collection(table).Find(ctx, filter, opts)
+	cursor, err := collection.Find(ctx, filter, findOptions)
 	if err != nil {
 		return nil, err
 	}
-	defer cursor.Close(ctx)
-
-	var results []bson.M
-	if err = cursor.All(ctx, &results); err != nil {
+	var documents []bson.M
+	readErr := cursor.All(ctx, &documents)
+	closeErr := closeMongoCursor(ctx, cursor)
+	if err := errors.Join(readErr, closeErr); err != nil {
 		return nil, err
 	}
-
-	// 转换 bson.M → map[string]interface{}，处理 ObjectID
-	maps := make([]map[string]interface{}, len(results))
-	for i, doc := range results {
-		m := make(map[string]interface{})
-		for k, v := range doc {
-			if oid, ok := v.(primitive.ObjectID); ok {
-				m[k] = oid.Hex() // ObjectID 转为十六进制字符串
-			} else {
-				m[k] = v
-			}
-		}
-		maps[i] = m
+	rows := make([]map[string]interface{}, len(documents))
+	for index, document := range documents {
+		rows[index] = normalizeMongoDocument(document)
 	}
-	return maps, nil
+	return rows, nil
 }
 
-// Insert 插入记录
-func (c *MongoConnection) Insert(table string, data map[string]interface{}) (int64, error) {
-	ctx, cancel := c.ctx()
+// closeMongoCursor 使用独立截止时间清理服务端游标，避免业务取消信号阻断资源释放。
+func closeMongoCursor(parent context.Context, cursor *mongo.Cursor) error {
+	base := context.Background()
+	if parent != nil {
+		base = context.WithoutCancel(parent)
+	}
+	ctx, cancel := context.WithTimeout(base, defaultMongoOpTimeout)
 	defer cancel()
+	return cursor.Close(ctx)
+}
 
-	res, err := c.collection(table).InsertOne(ctx, data)
+func (c *MongoConnection) Insert(table string, data map[string]interface{}) (int64, error) {
+	return c.InsertContext(context.Background(), table, data)
+}
+
+func (c *MongoConnection) InsertContext(parent context.Context, table string, data map[string]interface{}) (int64, error) {
+	ctx, cancel, err := c.operationContext(parent)
 	if err != nil {
 		return 0, err
 	}
-	// MongoDB 返回的 InsertedID 不是 int64，返回 1 表示成功
-	_ = res
+	defer cancel()
+	collection, err := c.collection(table)
+	if err != nil {
+		return 0, err
+	}
+	if len(data) == 0 {
+		return 0, fmt.Errorf("%w: MongoDB 插入数据不能为空", ErrInvalidQuery)
+	}
+	if err := validateDataKeys(data); err != nil {
+		return 0, fmt.Errorf("%w: 非法 MongoDB 字段: %w", ErrInvalidQuery, err)
+	}
+	if _, err := collection.InsertOne(ctx, cloneDatabaseMap(data)); err != nil {
+		return 0, err
+	}
 	return 1, nil
 }
 
-// Update 更新记录
 func (c *MongoConnection) Update(table string, data map[string]interface{}, where []string, args []interface{}) (int64, error) {
-	ctx, cancel := c.ctx()
-	defer cancel()
-
-	filter, err := c.buildFilter(where, args)
-	if err != nil {
-		return 0, err
-	}
-	update := bson.M{"$set": data}
-
-	res, err := c.collection(table).UpdateMany(ctx, filter, update)
-	if err != nil {
-		return 0, err
-	}
-	return res.ModifiedCount, nil
+	return c.UpdateContext(context.Background(), table, data, where, args)
 }
 
-// Delete 删除记录
-func (c *MongoConnection) Delete(table string, where []string, args []interface{}) (int64, error) {
-	ctx, cancel := c.ctx()
-	defer cancel()
-
-	filter, err := c.buildFilter(where, args)
-	if err != nil {
-		return 0, err
-	}
-	res, err := c.collection(table).DeleteMany(ctx, filter)
-	if err != nil {
-		return 0, err
-	}
-	return res.DeletedCount, nil
-}
-
-// Count 统计记录数
-func (c *MongoConnection) Count(table string, where []string, args []interface{}) (int64, error) {
-	ctx, cancel := c.ctx()
-	defer cancel()
-
-	filter, err := c.buildFilter(where, args)
-	if err != nil {
-		return 0, err
-	}
-	count, err := c.collection(table).CountDocuments(ctx, filter)
-	return count, err
-}
-
-// Close 关闭连接
-func (c *MongoConnection) Close() error {
-	return c.Client.Disconnect(context.Background())
-}
-
-// buildFilter 将 SQL 风格的 where 条件转换为 MongoDB bson.M 过滤器
-// 支持的格式：
-//   - "field = ?"           → {field: value}
-//   - "field != ?"          → {field: {$ne: value}}
-//   - "field > ?"           → {field: {$gt: value}}
-//   - "field >= ?"          → {field: {$gte: value}}
-//   - "field < ?"           → {field: {$lt: value}}
-//   - "field <= ?"          → {field: {$lte: value}}
-//   - "field LIKE ?"        → {field: {$regex: pattern}}
-//   - "field IN (?, ?, ?)"  → {field: {$in: [values...]}}
-//   - "field IS NULL"       → {field: nil}
-//   - "field IS NOT NULL"   → {field: {$ne: nil}}
-func (c *MongoConnection) buildFilter(where []string, args []interface{}) (bson.M, error) {
-	filter := bson.M{}
+func (c *MongoConnection) UpdateContext(parent context.Context, table string, data map[string]interface{}, where []string, args []interface{}) (int64, error) {
 	if len(where) == 0 {
-		return filter, nil
+		return 0, ErrUnsafeFullTableMutation
 	}
-
-	argIdx := 0
-	for _, cond := range where {
-		cond = strings.TrimSpace(cond)
-
-		// 永假条件
-		if cond == "1 = 0" {
-			filter["_impossible_"] = true
-			continue
-		}
-
-		// IS NULL / IS NOT NULL
-		upperCond := strings.ToUpper(cond)
-		if strings.HasSuffix(upperCond, " IS NULL") {
-			field := strings.TrimSpace(cond[:len(cond)-8])
-			filter[field] = nil
-			continue
-		}
-		if strings.HasSuffix(upperCond, " IS NOT NULL") {
-			field := strings.TrimSpace(cond[:len(cond)-12])
-			filter[field] = bson.M{"$ne": nil}
-			continue
-		}
-
-		// NOT IN 条件必须先于 IN 解析，避免字段名被误切成 "field NOT"。
-		if field, tail, ok := splitMongoCondition(cond, upperCond, " NOT IN ("); ok {
-			placeholderCount := strings.Count(tail, "?")
-			if argIdx+placeholderCount > len(args) {
-				return nil, fmt.Errorf("MongoDB 条件参数不足，无法解析 %q", cond)
-			}
-			notInValues := make([]interface{}, 0, placeholderCount)
-			for i := 0; i < placeholderCount; i++ {
-				if err := requireMongoScalar(args[argIdx]); err != nil {
-					return nil, err
-				}
-				notInValues = append(notInValues, args[argIdx])
-				argIdx++
-			}
-			filter[field] = bson.M{"$nin": notInValues}
-			continue
-		}
-
-		// IN 条件
-		if field, tail, ok := splitMongoCondition(cond, upperCond, " IN ("); ok {
-			// 统计占位符数量
-			placeholderCount := strings.Count(tail, "?")
-			if argIdx+placeholderCount > len(args) {
-				return nil, fmt.Errorf("MongoDB 条件参数不足，无法解析 %q", cond)
-			}
-			inValues := make([]interface{}, 0, placeholderCount)
-			for i := 0; i < placeholderCount; i++ {
-				if err := requireMongoScalar(args[argIdx]); err != nil {
-					return nil, err
-				}
-				inValues = append(inValues, args[argIdx])
-				argIdx++
-			}
-			filter[field] = bson.M{"$in": inValues}
-			continue
-		}
-
-		// NOT LIKE 条件必须先于 LIKE 解析，避免字段名被误切成 "field NOT"。
-		if field, _, ok := splitMongoCondition(cond, upperCond, " NOT LIKE "); ok {
-			if argIdx >= len(args) {
-				return nil, fmt.Errorf("MongoDB NOT LIKE 条件参数不足，无法解析 %q", cond)
-			}
-			if err := requireMongoScalar(args[argIdx]); err != nil {
-				return nil, err
-			}
-			filter[field] = bson.M{"$not": mongoLikeRegex(args[argIdx])}
-			argIdx++
-			continue
-		}
-
-		// LIKE 条件 → 正则
-		if field, _, ok := splitMongoCondition(cond, upperCond, " LIKE "); ok {
-			if argIdx >= len(args) {
-				return nil, fmt.Errorf("MongoDB LIKE 条件参数不足，无法解析 %q", cond)
-			}
-			if err := requireMongoScalar(args[argIdx]); err != nil {
-				return nil, err
-			}
-			filter[field] = mongoLikeRegex(args[argIdx])
-			argIdx++
-			continue
-		}
-
-		// BETWEEN 条件
-		if strings.Contains(upperCond, " BETWEEN ") {
-			parts := strings.SplitN(upperCond, " BETWEEN ", 2)
-			if len(parts) == 2 {
-				field := strings.TrimSpace(cond[:len(cond)-len(parts[1])-9])
-				if argIdx+2 > len(args) {
-					return nil, fmt.Errorf("MongoDB BETWEEN 条件参数不足，无法解析 %q", cond)
-				}
-				if err := requireMongoScalar(args[argIdx]); err != nil {
-					return nil, err
-				}
-				if err := requireMongoScalar(args[argIdx+1]); err != nil {
-					return nil, err
-				}
-				filter[field] = bson.M{"$gte": args[argIdx], "$lte": args[argIdx+1]}
-				argIdx += 2
-				continue
-			}
-		}
-
-		// 比较运算符
-		parsed := false
-		for _, op := range []struct {
-			sql   string
-			mongo string
-		}{
-			{">=", "$gte"},
-			{"<=", "$lte"},
-			{"!=", "$ne"},
-			{">", "$gt"},
-			{"<", "$lt"},
-			{"=", ""},
-		} {
-			if strings.Contains(cond, " "+op.sql+" ") {
-				parts := strings.SplitN(cond, " "+op.sql+" ", 2)
-				field := strings.TrimSpace(parts[0])
-				if argIdx >= len(args) {
-					return nil, fmt.Errorf("MongoDB 条件参数不足，无法解析 %q", cond)
-				}
-				if err := requireMongoScalar(args[argIdx]); err != nil {
-					return nil, err
-				}
-				if op.mongo == "" {
-					filter[field] = args[argIdx]
-				} else {
-					filter[field] = bson.M{op.mongo: args[argIdx]}
-				}
-				argIdx++
-				parsed = true
-				break
-			}
-		}
-		if !parsed {
-			// 无法解析的条件必须报错而非静默丢弃，否则可能退化为空 filter，
-			// 导致 UpdateMany/DeleteMany 误作用于整个集合，造成数据损坏。
-			return nil, fmt.Errorf("MongoDB 无法解析查询条件 %q，请使用受支持的条件形式或改用原生查询", cond)
-		}
+	ctx, cancel, err := c.operationContext(parent)
+	if err != nil {
+		return 0, err
 	}
-	return filter, nil
+	defer cancel()
+	collection, err := c.collection(table)
+	if err != nil {
+		return 0, err
+	}
+	if len(data) == 0 {
+		return 0, fmt.Errorf("%w: MongoDB 更新数据不能为空", ErrInvalidQuery)
+	}
+	if err := validateDataKeys(data); err != nil {
+		return 0, fmt.Errorf("%w: 非法 MongoDB 字段: %w", ErrInvalidQuery, err)
+	}
+	filter, err := c.buildFilter(where, args)
+	if err != nil {
+		return 0, err
+	}
+	result, err := collection.UpdateMany(ctx, filter, bson.M{"$set": cloneDatabaseMap(data)})
+	if err != nil {
+		return 0, err
+	}
+	return result.ModifiedCount, nil
 }
 
-func splitMongoCondition(cond string, upperCond string, keyword string) (string, string, bool) {
-	index := strings.Index(upperCond, keyword)
+func (c *MongoConnection) Delete(table string, where []string, args []interface{}) (int64, error) {
+	return c.DeleteContext(context.Background(), table, where, args)
+}
+
+func (c *MongoConnection) DeleteContext(parent context.Context, table string, where []string, args []interface{}) (int64, error) {
+	if len(where) == 0 {
+		return 0, ErrUnsafeFullTableMutation
+	}
+	ctx, cancel, err := c.operationContext(parent)
+	if err != nil {
+		return 0, err
+	}
+	defer cancel()
+	collection, err := c.collection(table)
+	if err != nil {
+		return 0, err
+	}
+	filter, err := c.buildFilter(where, args)
+	if err != nil {
+		return 0, err
+	}
+	result, err := collection.DeleteMany(ctx, filter)
+	if err != nil {
+		return 0, err
+	}
+	return result.DeletedCount, nil
+}
+
+func (c *MongoConnection) Count(table string, where []string, args []interface{}) (int64, error) {
+	return c.CountContext(context.Background(), table, where, args)
+}
+
+func (c *MongoConnection) CountContext(parent context.Context, table string, where []string, args []interface{}) (int64, error) {
+	ctx, cancel, err := c.operationContext(parent)
+	if err != nil {
+		return 0, err
+	}
+	defer cancel()
+	collection, err := c.collection(table)
+	if err != nil {
+		return 0, err
+	}
+	filter, err := c.buildFilter(where, args)
+	if err != nil {
+		return 0, err
+	}
+	return collection.CountDocuments(ctx, filter)
+}
+
+func (c *MongoConnection) Close() error {
+	if c == nil || c.Client == nil {
+		return ErrDatabaseUnavailable
+	}
+	c.closeOnce.Do(func() {
+		timeout := c.OperationTimeout
+		if timeout <= 0 {
+			timeout = defaultMongoOpTimeout
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		c.closeErr = c.Client.Disconnect(ctx)
+	})
+	return c.closeErr
+}
+
+func (c *MongoConnection) buildFilter(where []string, args []interface{}) (bson.M, error) {
+	filters := make([]bson.M, 0, len(where))
+	argumentIndex := 0
+	for _, expression := range where {
+		filter, err := c.parseMongoBoolean(expression, args, &argumentIndex)
+		if err != nil {
+			return nil, err
+		}
+		filters = append(filters, filter)
+	}
+	if argumentIndex != len(args) {
+		return nil, fmt.Errorf("%w: MongoDB 条件使用 %d 个参数，实际传入 %d 个", ErrInvalidQuery, argumentIndex, len(args))
+	}
+	return combineMongoAnd(filters), nil
+}
+
+func (c *MongoConnection) parseMongoBoolean(expression string, args []interface{}, argumentIndex *int) (bson.M, error) {
+	if parts, split, err := splitTopLevelBoolean(expression, "OR"); err != nil {
+		return nil, err
+	} else if split {
+		alternatives := make([]bson.M, 0, len(parts))
+		for _, part := range parts {
+			filter, err := c.parseMongoBoolean(part, args, argumentIndex)
+			if err != nil {
+				return nil, err
+			}
+			alternatives = append(alternatives, filter)
+		}
+		return bson.M{"$or": alternatives}, nil
+	}
+	if parts, split, err := splitTopLevelBoolean(expression, "AND"); err != nil {
+		return nil, err
+	} else if split {
+		filters := make([]bson.M, 0, len(parts))
+		for _, part := range parts {
+			filter, err := c.parseMongoBoolean(part, args, argumentIndex)
+			if err != nil {
+				return nil, err
+			}
+			filters = append(filters, filter)
+		}
+		return combineMongoAnd(filters), nil
+	}
+	leaf, err := trimBalancedOuterParentheses(strings.TrimSpace(expression))
+	if err != nil {
+		return nil, err
+	}
+	return c.parseMongoLeaf(leaf, args, argumentIndex)
+}
+
+func (c *MongoConnection) parseMongoLeaf(condition string, args []interface{}, argumentIndex *int) (bson.M, error) {
+	if condition == "1 = 0" {
+		return bson.M{"$expr": bson.M{"$eq": bson.A{1, 0}}}, nil
+	}
+	upper := strings.ToUpper(condition)
+	if strings.HasSuffix(upper, " IS NULL") {
+		field, err := mongoField(condition[:len(condition)-8])
+		if err != nil {
+			return nil, err
+		}
+		return bson.M{field: nil}, nil
+	}
+	if strings.HasSuffix(upper, " IS NOT NULL") {
+		field, err := mongoField(condition[:len(condition)-12])
+		if err != nil {
+			return nil, err
+		}
+		return bson.M{field: bson.M{"$ne": nil}}, nil
+	}
+
+	for _, collectionOperator := range []struct {
+		keyword string
+		mongo   string
+	}{
+		{keyword: " NOT IN ", mongo: "$nin"},
+		{keyword: " IN ", mongo: "$in"},
+	} {
+		if fieldText, tail, ok := splitMongoCondition(condition, collectionOperator.keyword); ok {
+			field, err := mongoField(fieldText)
+			if err != nil {
+				return nil, err
+			}
+			if !mongoCollectionPlaceholders.MatchString(tail) {
+				return nil, fmt.Errorf("%w: MongoDB 集合条件占位符非法 %q", ErrInvalidQuery, condition)
+			}
+			count := strings.Count(tail, "?")
+			values, err := consumeMongoValues(args, argumentIndex, count)
+			if err != nil {
+				return nil, err
+			}
+			return bson.M{field: bson.M{collectionOperator.mongo: values}}, nil
+		}
+	}
+
+	for _, likeOperator := range []struct {
+		keyword string
+		negated bool
+	}{
+		{keyword: " NOT LIKE ", negated: true},
+		{keyword: " LIKE ", negated: false},
+	} {
+		if fieldText, tail, ok := splitMongoCondition(condition, likeOperator.keyword); ok {
+			if strings.TrimSpace(tail) != "?" {
+				return nil, fmt.Errorf("%w: MongoDB LIKE 条件必须使用一个占位符", ErrInvalidQuery)
+			}
+			field, err := mongoField(fieldText)
+			if err != nil {
+				return nil, err
+			}
+			value, err := consumeMongoScalar(args, argumentIndex)
+			if err != nil {
+				return nil, err
+			}
+			regex, err := mongoLikeRegex(value)
+			if err != nil {
+				return nil, err
+			}
+			if likeOperator.negated {
+				return bson.M{field: bson.M{"$not": regex}}, nil
+			}
+			return bson.M{field: regex}, nil
+		}
+	}
+
+	if fieldText, tail, ok := splitMongoCondition(condition, " BETWEEN "); ok {
+		if strings.ToUpper(strings.Join(strings.Fields(tail), " ")) != "? AND ?" {
+			return nil, fmt.Errorf("%w: MongoDB BETWEEN 必须使用两个占位符", ErrInvalidQuery)
+		}
+		field, err := mongoField(fieldText)
+		if err != nil {
+			return nil, err
+		}
+		values, err := consumeMongoValues(args, argumentIndex, 2)
+		if err != nil {
+			return nil, err
+		}
+		return bson.M{field: bson.M{"$gte": values[0], "$lte": values[1]}}, nil
+	}
+
+	for _, comparison := range []struct {
+		sql   string
+		mongo string
+	}{
+		{sql: ">=", mongo: "$gte"}, {sql: "<=", mongo: "$lte"},
+		{sql: "!=", mongo: "$ne"}, {sql: "<>", mongo: "$ne"},
+		{sql: ">", mongo: "$gt"}, {sql: "<", mongo: "$lt"}, {sql: "=", mongo: ""},
+	} {
+		keyword := " " + comparison.sql + " "
+		if fieldText, tail, ok := splitMongoCondition(condition, keyword); ok {
+			if strings.TrimSpace(tail) != "?" {
+				return nil, fmt.Errorf("%w: MongoDB 比较条件必须使用一个占位符", ErrInvalidQuery)
+			}
+			field, err := mongoField(fieldText)
+			if err != nil {
+				return nil, err
+			}
+			value, err := consumeMongoScalar(args, argumentIndex)
+			if err != nil {
+				return nil, err
+			}
+			if comparison.mongo == "" {
+				return bson.M{field: value}, nil
+			}
+			return bson.M{field: bson.M{comparison.mongo: value}}, nil
+		}
+	}
+	return nil, fmt.Errorf("%w: MongoDB 无法解析条件 %q", ErrInvalidQuery, condition)
+}
+
+func splitMongoCondition(condition, keyword string) (string, string, bool) {
+	index := strings.Index(strings.ToUpper(condition), keyword)
 	if index < 0 {
 		return "", "", false
 	}
-	field := strings.TrimSpace(cond[:index])
-	tail := cond[index+len(keyword):]
-	return field, tail, field != ""
+	return strings.TrimSpace(condition[:index]), strings.TrimSpace(condition[index+len(keyword):]), true
 }
 
-func mongoLikeRegex(raw interface{}) bson.M {
-	// 先对用户输入做正则转义（防止正则元字符注入与 ReDoS），
-	// 再把 SQL LIKE 通配符 %/_ 映射为正则 .*/.，最后整体锚定。
-	escaped := regexp.QuoteMeta(fmt.Sprintf("%v", raw))
+func mongoField(field string) (string, error) {
+	field = strings.TrimSpace(field)
+	if err := validateIdentifier(field); err != nil {
+		return "", fmt.Errorf("%w: 非法 MongoDB 字段 %q: %w", ErrInvalidQuery, field, err)
+	}
+	return field, nil
+}
+
+func consumeMongoScalar(args []interface{}, index *int) (interface{}, error) {
+	if index == nil || *index >= len(args) {
+		return nil, fmt.Errorf("%w: MongoDB 条件参数不足", ErrInvalidQuery)
+	}
+	value := args[*index]
+	if err := requireMongoScalar(value); err != nil {
+		return nil, err
+	}
+	*index++
+	return value, nil
+}
+
+func consumeMongoValues(args []interface{}, index *int, count int) ([]interface{}, error) {
+	if count < 1 || index == nil || *index+count > len(args) {
+		return nil, fmt.Errorf("%w: MongoDB 条件参数不足", ErrInvalidQuery)
+	}
+	values := make([]interface{}, count)
+	for offset := 0; offset < count; offset++ {
+		value, err := consumeMongoScalar(args, index)
+		if err != nil {
+			return nil, err
+		}
+		values[offset] = value
+	}
+	return values, nil
+}
+
+func combineMongoAnd(filters []bson.M) bson.M {
+	if len(filters) == 0 {
+		return bson.M{}
+	}
+	result := bson.M{}
+	andFilters := make([]bson.M, 0)
+	for _, filter := range filters {
+		if len(filter) != 1 {
+			andFilters = append(andFilters, filter)
+			continue
+		}
+		for key, value := range filter {
+			if strings.HasPrefix(key, "$") {
+				andFilters = append(andFilters, filter)
+				continue
+			}
+			existing, duplicated := result[key]
+			if !duplicated {
+				result[key] = value
+				continue
+			}
+			existingOperators, existingOK := existing.(bson.M)
+			newOperators, newOK := value.(bson.M)
+			if existingOK && newOK && mergeMongoOperators(existingOperators, newOperators) {
+				result[key] = existingOperators
+				continue
+			}
+			delete(result, key)
+			andFilters = append(andFilters, bson.M{key: existing}, bson.M{key: value})
+		}
+	}
+	if len(andFilters) == 0 {
+		return result
+	}
+	if len(result) > 0 {
+		andFilters = append(andFilters, result)
+	}
+	if len(andFilters) == 1 {
+		return andFilters[0]
+	}
+	return bson.M{"$and": andFilters}
+}
+
+func mergeMongoOperators(target, source bson.M) bool {
+	for key := range source {
+		if _, duplicated := target[key]; duplicated {
+			return false
+		}
+	}
+	for key, value := range source {
+		target[key] = value
+	}
+	return true
+}
+
+func mongoLikeRegex(raw interface{}) (bson.M, error) {
+	var pattern string
+	switch typed := raw.(type) {
+	case string:
+		pattern = typed
+	case []byte:
+		pattern = string(typed)
+	default:
+		return nil, fmt.Errorf("%w: MongoDB LIKE 参数必须是字符串", ErrInvalidQuery)
+	}
+	if len(pattern) > maxMongoLikeLength {
+		return nil, fmt.Errorf("%w: MongoDB LIKE 模式过长", ErrInvalidQuery)
+	}
+	escaped := regexp.QuoteMeta(pattern)
 	escaped = strings.ReplaceAll(escaped, "%", ".*")
 	escaped = strings.ReplaceAll(escaped, "_", ".")
-	return bson.M{"$regex": "^" + escaped + "$", "$options": "i"}
+	return bson.M{"$regex": "^" + escaped + "$", "$options": "i"}, nil
+}
+
+func normalizeMongoDocument(document bson.M) map[string]interface{} {
+	result := make(map[string]interface{}, len(document))
+	for key, value := range document {
+		result[key] = normalizeMongoValue(value)
+	}
+	return result
+}
+
+func normalizeMongoValue(value interface{}) interface{} {
+	switch typed := value.(type) {
+	case bson.ObjectID:
+		return typed.Hex()
+	case bson.Binary:
+		return bson.Binary{Subtype: typed.Subtype, Data: append([]byte(nil), typed.Data...)}
+	case bson.M:
+		return normalizeMongoDocument(typed)
+	case map[string]interface{}:
+		return normalizeMongoDocument(bson.M(typed))
+	case bson.D:
+		result := make(map[string]interface{}, len(typed))
+		for _, element := range typed {
+			result[element.Key] = normalizeMongoValue(element.Value)
+		}
+		return result
+	case bson.A:
+		result := make([]interface{}, len(typed))
+		for index, item := range typed {
+			result[index] = normalizeMongoValue(item)
+		}
+		return result
+	case []interface{}:
+		result := make([]interface{}, len(typed))
+		for index, item := range typed {
+			result[index] = normalizeMongoValue(item)
+		}
+		return result
+	case []byte:
+		return append([]byte(nil), typed...)
+	default:
+		return value
+	}
 }

@@ -2,59 +2,112 @@ package context
 
 import (
 	"bytes"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"mime/multipart"
 	"net"
 	"net/http"
+	"net/textproto"
 	"net/url"
 	"strconv"
 	"strings"
 	"sync"
 )
 
-// Request 封装原生 HTTP 请求，并补齐框架层常用的参数访问能力。
-// data 字段通过读写锁保护；body/json/query/form 等惰性缓存通过 sync.Once 保护，
-// 使请求对象在被多个中间件/协程并发访问时仍然安全（与 data 的并发保护保持一致）。
+const (
+	// DefaultMultipartMemoryLimit 是 multipart 表单保留在内存中的默认上限，超出部分写入临时文件。
+	DefaultMultipartMemoryLimit int64 = 32 << 20
+	// DefaultMaxBodyBytes 是独立使用 Request 时的默认请求体硬上限。
+	DefaultMaxBodyBytes int64 = 10 << 20
+)
+
+var (
+	// ErrRequestBodyTooLarge 表示请求体超过配置的硬上限。
+	ErrRequestBodyTooLarge = errors.New("请求体超过大小上限")
+	// ErrRequestBodyUnavailable 表示 multipart 流已被解析，原始请求体不能再可靠读取。
+	ErrRequestBodyUnavailable = errors.New("请求体已被 multipart 解析消费")
+	// ErrInvalidJSONBody 表示 JSON 文档不完整、不唯一或结构非法。
+	ErrInvalidJSONBody = errors.New("JSON 请求体非法")
+	// ErrInvalidFormBody 表示表单请求体解析失败。
+	ErrInvalidFormBody = errors.New("表单请求体非法")
+	// ErrInvalidContentType 表示 Content-Type 请求头语法非法。
+	ErrInvalidContentType = errors.New("Content-Type 非法")
+	// ErrRequestCleaned 表示请求资源已清理，不能再次解析上传文件。
+	ErrRequestCleaned = errors.New("请求资源已清理")
+)
+
+// Request 封装原生 HTTP 请求，并为参数解析、上传清理和代理解析提供并发安全边界。
 type Request struct {
-	raw                  *http.Request
-	dataMu               sync.RWMutex
-	data                 map[string]interface{}
-	jsonBody             map[string]interface{}
-	jsonOnce             sync.Once
-	bodyCache            []byte
-	bodyOnce             sync.Once
-	bodyErr              error
-	queryCache           url.Values
-	queryOnce            sync.Once
-	formOnce             sync.Once
+	raw *http.Request
+
+	dataMu sync.RWMutex
+	data   map[string]interface{}
+
+	bodyOnce  sync.Once
+	bodyCache []byte
+
+	queryOnce  sync.Once
+	queryCache url.Values
+
+	contentTypeOnce sync.Once
+	mediaType       string
+	contentTypeErr  error
+
+	jsonOnce sync.Once
+	jsonBody map[string]interface{}
+
+	formOnce   sync.Once
+	formMu     sync.Mutex
+	cleaned    bool
+	cleanupErr error
+
+	errorMu sync.RWMutex
+	bodyErr error
+	jsonErr error
+	formErr error
+
 	trustedProxies       []*net.IPNet
 	multipartMemoryLimit int64
+	maxBodyBytes         int64
 }
 
-// DefaultMultipartMemoryLimit multipart 表单在内存中缓存的默认上限（32MB），
-// 超出部分写入临时文件。
-const DefaultMultipartMemoryLimit int64 = 32 << 20
-
-// NewRequest 创建请求包装器。
-func NewRequest(r *http.Request, options ...RequestOption) *Request {
+// NewRequest 创建请求包装器，并严格校验所有安全相关选项。
+func NewRequest(raw *http.Request, options ...RequestOption) (*Request, error) {
 	req := &Request{
-		raw:                  r,
+		raw:                  raw,
 		data:                 make(map[string]interface{}),
 		multipartMemoryLimit: DefaultMultipartMemoryLimit,
+		maxBodyBytes:         DefaultMaxBodyBytes,
 	}
-	for _, option := range options {
-		if option != nil {
-			option(req)
+	for index, option := range options {
+		if option == nil {
+			return nil, fmt.Errorf("%w: 第 %d 项", ErrInvalidRequestOption, index+1)
 		}
+		if err := option(req); err != nil {
+			return nil, fmt.Errorf("应用第 %d 个请求选项失败: %w", index+1, err)
+		}
+	}
+
+	if raw != nil && raw.Body != nil && raw.Body != http.NoBody {
+		raw.Body = newBodyLimitReadCloser(raw.Body, req.maxBodyBytes)
+	}
+	return req, nil
+}
+
+// MustNewRequest 为固定且可信的内部配置提供便捷构造，配置错误会立即触发 panic。
+func MustNewRequest(raw *http.Request, options ...RequestOption) *Request {
+	req, err := NewRequest(raw, options...)
+	if err != nil {
+		panic(err)
 	}
 	return req
 }
 
 // Method 获取请求方法。
 func (r *Request) Method() string {
-	if r.raw == nil {
+	if r == nil || r.raw == nil {
 		return ""
 	}
 	return r.raw.Method
@@ -62,7 +115,7 @@ func (r *Request) Method() string {
 
 // Host 获取请求主机。
 func (r *Request) Host() string {
-	if r.raw == nil {
+	if r == nil || r.raw == nil {
 		return ""
 	}
 	return r.raw.Host
@@ -70,147 +123,126 @@ func (r *Request) Host() string {
 
 // Path 获取请求路径。
 func (r *Request) Path() string {
-	if r.raw == nil || r.raw.URL == nil {
+	if r == nil || r.raw == nil || r.raw.URL == nil {
 		return ""
 	}
 	return r.raw.URL.Path
 }
 
-// Pathinfo 获取请求路径信息（Path 的别名）。
-// 对应 ThinkPHP 的 $request->pathinfo()
+// Pathinfo 是 Path 的兼容别名。
 func (r *Request) Pathinfo() string {
 	return r.Path()
 }
 
-// Ext 获取当前 URL 的后缀（不含点号）。
-// 例如 /index.html 返回 "html"，/api/user 返回 ""。
-// 对应 ThinkPHP 的 $request->ext()
+// Ext 获取当前 URL 最后一个路径段的后缀，不含点号。
 func (r *Request) Ext() string {
 	path := r.Path()
-	for i := len(path) - 1; i >= 0; i-- {
-		if path[i] == '.' {
-			return path[i+1:]
+	for index := len(path) - 1; index >= 0; index-- {
+		if path[index] == '.' {
+			return path[index+1:]
 		}
-		if path[i] == '/' {
+		if path[index] == '/' {
 			break
 		}
 	}
 	return ""
 }
 
-// Param 按“路由参数 > 请求体参数 > 查询参数”的优先级读取参数。
-func (r *Request) Param(key string, def ...string) string {
+// Param 按“路由参数 > 请求体参数 > 查询参数”的优先级读取标量参数。
+func (r *Request) Param(key string, defaults ...string) string {
 	if value, ok := r.paramValue(key); ok {
-		return stringifyRequestValue(value)
-	}
-	if len(def) > 0 {
-		return def[0]
-	}
-	return ""
-}
-
-// queryValues 解析并缓存 URL 查询参数，避免每次参数访问都重新解析查询串。
-// 通过 sync.Once 保证并发访问下只解析一次且无数据竞争。
-func (r *Request) queryValues() url.Values {
-	r.queryOnce.Do(func() {
-		if r.raw == nil || r.raw.URL == nil {
-			r.queryCache = url.Values{}
-			return
+		if text, valid := stringifyRequestValue(value); valid {
+			return text
 		}
-		r.queryCache = r.raw.URL.Query()
-	})
-	return r.queryCache
+	}
+	return firstDefault(defaults)
 }
 
-// Get 获取查询参数。
-func (r *Request) Get(key string, def ...string) string {
-	if r.raw == nil || r.raw.URL == nil {
-		if len(def) > 0 {
-			return def[0]
-		}
-		return ""
+// Get 获取查询参数，显式空值不会被默认值覆盖。
+func (r *Request) Get(key string, defaults ...string) string {
+	if values, ok := r.queryValues()[key]; ok && len(values) > 0 {
+		return values[0]
 	}
-	value := r.queryValues().Get(key)
-	if value == "" && len(def) > 0 {
-		return def[0]
-	}
-	return value
+	return firstDefault(defaults)
 }
 
-// Post 获取表单或 JSON 请求体中的参数。
-func (r *Request) Post(key string, def ...string) string {
-	if r.raw != nil {
-		r.ensureFormParsed()
-		if value := r.raw.PostFormValue(key); value != "" {
-			return value
+// Post 获取表单或 JSON 请求体中的标量参数，显式空值不会被默认值覆盖。
+func (r *Request) Post(key string, defaults ...string) string {
+	mediaType, _ := r.parsedMediaType()
+	if isFormMediaType(mediaType) {
+		_ = r.ensureFormParsed()
+		if r.raw != nil {
+			if values, ok := r.raw.PostForm[key]; ok && len(values) > 0 {
+				return values[0]
+			}
 		}
 	}
 
-	if strings.Contains(r.Header("Content-Type"), "application/json") {
-		if value := r.getJSONBodyValue(key); value != nil {
-			return stringifyRequestValue(value)
+	if isJSONMediaType(mediaType) {
+		if value, ok := r.getJSONBodyValue(key); ok {
+			if text, valid := stringifyRequestValue(value); valid {
+				return text
+			}
 		}
 	}
-
-	if len(def) > 0 {
-		return def[0]
-	}
-	return ""
+	return firstDefault(defaults)
 }
 
-// Route 仅从路由透传数据中读取参数，不会回落到查询、表单或 JSON。
-func (r *Request) Route(key string, def ...string) string {
+// Route 仅从路由和中间件透传数据中读取标量参数。
+func (r *Request) Route(key string, defaults ...string) string {
+	if r == nil {
+		return firstDefault(defaults)
+	}
 	r.dataMu.RLock()
 	value, ok := r.data[key]
 	r.dataMu.RUnlock()
 	if ok {
-		return stringifyRequestValue(value)
+		if text, valid := stringifyRequestValue(value); valid {
+			return text
+		}
 	}
-	if len(def) > 0 {
-		return def[0]
-	}
-	return ""
+	return firstDefault(defaults)
 }
 
-// All 返回合并后的全部参数，适合做批量读取和透传。
+// All 返回参数快照，嵌套 JSON、切片和字节数据均使用防御性副本。
 func (r *Request) All() map[string]interface{} {
 	result := make(map[string]interface{})
-
-	if r.raw != nil && r.raw.URL != nil {
-		for key, values := range r.queryValues() {
-			result[key] = normalizeStringSliceValue(values)
-		}
+	for key, values := range r.queryValues() {
+		result[key] = normalizeStringSliceValue(values)
 	}
 
-	if r.raw != nil {
-		r.ensureFormParsed()
-		for key, values := range r.raw.PostForm {
-			result[key] = normalizeStringSliceValue(values)
+	mediaType, _ := r.parsedMediaType()
+	if isFormMediaType(mediaType) {
+		_ = r.ensureFormParsed()
+		if r.raw != nil {
+			for key, values := range r.raw.PostForm {
+				result[key] = normalizeStringSliceValue(values)
+			}
 		}
 	}
-
-	if strings.Contains(r.Header("Content-Type"), "application/json") {
+	if isJSONMediaType(mediaType) {
 		r.parseJSONBody()
 		for key, value := range r.jsonBody {
-			result[key] = value
+			result[key] = deepCloneRequestValue(value)
 		}
 	}
 
-	r.dataMu.RLock()
-	for key, value := range r.data {
-		result[key] = value
+	if r != nil {
+		r.dataMu.RLock()
+		for key, value := range r.data {
+			result[key] = deepCloneRequestValue(value)
+		}
+		r.dataMu.RUnlock()
 	}
-	r.dataMu.RUnlock()
-
 	return result
 }
 
-// Only 只返回指定字段，缺失字段会按空字符串填充，保持兼容调用体验。
+// Only 返回指定字段的参数快照，缺失字段使用空字符串保持原 API 语义。
 func (r *Request) Only(keys ...string) map[string]interface{} {
 	result := make(map[string]interface{}, len(keys))
 	for _, key := range keys {
 		if value, ok := r.paramValue(key); ok {
-			result[key] = value
+			result[key] = deepCloneRequestValue(value)
 			continue
 		}
 		result[key] = ""
@@ -218,7 +250,7 @@ func (r *Request) Only(keys ...string) map[string]interface{} {
 	return result
 }
 
-// Except 返回排除指定字段后的参数集合。
+// Except 返回排除指定字段后的参数快照。
 func (r *Request) Except(keys ...string) map[string]interface{} {
 	result := r.All()
 	for _, key := range keys {
@@ -227,267 +259,226 @@ func (r *Request) Except(keys ...string) map[string]interface{} {
 	return result
 }
 
-// ParamInt 将参数解析为 int。
-func (r *Request) ParamInt(key string, def int) int {
-	value, ok := r.paramValue(key)
-	if !ok {
-		return def
-	}
-	switch typed := value.(type) {
-	case int:
-		return typed
-	case int8:
-		return int(typed)
-	case int16:
-		return int(typed)
-	case int32:
-		return int(typed)
-	case int64:
-		return int(typed)
-	case float32:
-		return int(typed)
-	case float64:
-		return int(typed)
-	case json.Number:
-		if parsed, err := typed.Int64(); err == nil {
-			return int(parsed)
-		}
-	}
-	parsed, err := strconv.Atoi(strings.TrimSpace(stringifyRequestValue(value)))
-	if err != nil {
-		return def
-	}
-	return parsed
-}
-
-// ParamInt64 将参数解析为 int64。
-func (r *Request) ParamInt64(key string, def int64) int64 {
-	value, ok := r.paramValue(key)
-	if !ok {
-		return def
-	}
-	switch typed := value.(type) {
-	case int:
-		return int64(typed)
-	case int8:
-		return int64(typed)
-	case int16:
-		return int64(typed)
-	case int32:
-		return int64(typed)
-	case int64:
-		return typed
-	case float32:
-		return int64(typed)
-	case float64:
-		return int64(typed)
-	case json.Number:
-		if parsed, err := typed.Int64(); err == nil {
-			return parsed
-		}
-	}
-	parsed, err := strconv.ParseInt(strings.TrimSpace(stringifyRequestValue(value)), 10, 64)
-	if err != nil {
-		return def
-	}
-	return parsed
-}
-
-// ParamFloat 将参数解析为 float64。
-func (r *Request) ParamFloat(key string, def float64) float64 {
-	value, ok := r.paramValue(key)
-	if !ok {
-		return def
-	}
-	switch typed := value.(type) {
-	case float32:
-		return float64(typed)
-	case float64:
-		return typed
-	case int:
-		return float64(typed)
-	case int8:
-		return float64(typed)
-	case int16:
-		return float64(typed)
-	case int32:
-		return float64(typed)
-	case int64:
-		return float64(typed)
-	case json.Number:
-		if parsed, err := typed.Float64(); err == nil {
-			return parsed
-		}
-	}
-	parsed, err := strconv.ParseFloat(strings.TrimSpace(stringifyRequestValue(value)), 64)
-	if err != nil {
-		return def
-	}
-	return parsed
-}
-
-// ParamBool 将参数解析为 bool，兼容 true/false、1/0、yes/no 等常见写法。
-func (r *Request) ParamBool(key string, def bool) bool {
-	value, ok := r.paramValue(key)
-	if !ok {
-		return def
-	}
-	switch typed := value.(type) {
-	case bool:
-		return typed
-	case int:
-		return typed != 0
-	case int8:
-		return typed != 0
-	case int16:
-		return typed != 0
-	case int32:
-		return typed != 0
-	case int64:
-		return typed != 0
-	case float32:
-		return typed != 0
-	case float64:
-		return typed != 0
-	}
-
-	text := strings.TrimSpace(strings.ToLower(stringifyRequestValue(value)))
-	switch text {
-	case "1", "true", "on", "yes":
-		return true
-	case "0", "false", "off", "no":
-		return false
-	default:
-		return def
-	}
-}
-
-// PostArray 从 JSON 请求体中提取字符串数组。
+// PostArray 从 JSON 请求体中提取标量字符串数组，出现复杂对象时拒绝隐式格式化。
 func (r *Request) PostArray(key string) []string {
-	if !strings.Contains(r.Header("Content-Type"), "application/json") {
+	mediaType, _ := r.parsedMediaType()
+	if !isJSONMediaType(mediaType) {
 		return nil
 	}
-
-	value := r.getJSONBodyValue(key)
-	switch typed := value.(type) {
-	case []string:
-		return append([]string(nil), typed...)
-	case []interface{}:
-		result := make([]string, 0, len(typed))
-		for _, item := range typed {
-			result = append(result, stringifyRequestValue(item))
+	value, ok := r.getJSONBodyValue(key)
+	if !ok {
+		return nil
+	}
+	items, ok := value.([]interface{})
+	if !ok {
+		if stringsValue, valid := value.([]string); valid {
+			return append([]string(nil), stringsValue...)
 		}
-		return result
-	default:
 		return nil
 	}
+
+	result := make([]string, 0, len(items))
+	for _, item := range items {
+		if item == nil {
+			return nil
+		}
+		text, valid := stringifyRequestValue(item)
+		if !valid {
+			return nil
+		}
+		result = append(result, text)
+	}
+	return result
 }
 
-// Body 返回原始请求体。
+// Body 返回原始请求体的防御性副本。
 func (r *Request) Body() ([]byte, error) {
-	return r.readBody(), r.bodyErr
+	body, err := r.readBody()
+	if err != nil {
+		return nil, err
+	}
+	return append([]byte(nil), body...), nil
 }
 
-// BodyReadError 返回已经发生的请求体读取错误，不会主动读取请求体。
+// BodyReadError 返回已经发生的请求体读取错误，不主动消费请求体。
 func (r *Request) BodyReadError() error {
+	if r == nil {
+		return nil
+	}
+	r.errorMu.RLock()
+	defer r.errorMu.RUnlock()
 	return r.bodyErr
 }
 
-// Json 将 JSON 请求体绑定到目标结构体。
+// Parse 根据 Content-Type 预解析结构化请求体，用于在业务逻辑前阻断非法输入。
+func (r *Request) Parse() error {
+	if r == nil {
+		return nil
+	}
+	if r.raw != nil && r.raw.ContentLength > r.maxBodyBytes {
+		err := fmt.Errorf("%w: 上限 %d 字节", ErrRequestBodyTooLarge, r.maxBodyBytes)
+		r.setBodyError(err)
+		return err
+	}
+
+	mediaType, err := r.parsedMediaType()
+	if err != nil {
+		return err
+	}
+	switch {
+	case isJSONMediaType(mediaType):
+		r.parseJSONBody()
+		return r.JSONError()
+	case isFormMediaType(mediaType):
+		return r.ensureFormParsed()
+	default:
+		_, err = r.readBody()
+		return err
+	}
+}
+
+// ParseError 返回目前已发现的内容类型、请求体、JSON 或表单解析错误。
+func (r *Request) ParseError() error {
+	if r == nil {
+		return nil
+	}
+	_, contentTypeErr := r.parsedMediaType()
+	r.errorMu.RLock()
+	bodyErr := r.bodyErr
+	jsonErr := r.jsonErr
+	formErr := r.formErr
+	r.errorMu.RUnlock()
+	if errors.Is(bodyErr, ErrRequestBodyUnavailable) {
+		bodyErr = nil
+	}
+	return errors.Join(contentTypeErr, bodyErr, jsonErr, formErr)
+}
+
+// JSONError 返回 JSON 惰性解析错误。
+func (r *Request) JSONError() error {
+	if r == nil {
+		return nil
+	}
+	r.errorMu.RLock()
+	defer r.errorMu.RUnlock()
+	return r.jsonErr
+}
+
+// Json 将单一且无重复键的 JSON 文档绑定到目标值。
 func (r *Request) Json(target interface{}) error {
-	body := r.readBody()
-	if r.bodyErr != nil {
-		return r.bodyErr
+	body, err := r.readBody()
+	if err != nil {
+		return err
 	}
-	return json.Unmarshal(body, target)
+	if err := decodeStrictJSONTarget(body, target); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidJSONBody, err)
+	}
+	return nil
 }
 
-// Header 获取请求头。
-func (r *Request) Header(key string, def ...string) string {
-	if r.raw == nil {
-		if len(def) > 0 {
-			return def[0]
-		}
-		return ""
+// Header 获取请求头，显式空值不会被默认值覆盖。
+func (r *Request) Header(key string, defaults ...string) string {
+	if r == nil || r.raw == nil {
+		return firstDefault(defaults)
 	}
-	value := r.raw.Header.Get(key)
-	if value == "" && len(def) > 0 {
-		return def[0]
+	canonicalKey := http.CanonicalHeaderKey(key)
+	if values, ok := r.raw.Header[canonicalKey]; ok {
+		return strings.Join(values, ", ")
 	}
-	return value
+	return firstDefault(defaults)
 }
 
-// Raw 返回原始请求对象。
+// Raw 返回原生请求对象；调用方不得并发修改该对象。
 func (r *Request) Raw() *http.Request {
+	if r == nil {
+		return nil
+	}
 	return r.raw
 }
 
-// IsGet 判断是否为 GET 请求。
-func (r *Request) IsGet() bool {
-	return r.Method() == http.MethodGet
-}
+func (r *Request) IsGet() bool    { return r.Method() == http.MethodGet }
+func (r *Request) IsPost() bool   { return r.Method() == http.MethodPost }
+func (r *Request) IsPut() bool    { return r.Method() == http.MethodPut }
+func (r *Request) IsDelete() bool { return r.Method() == http.MethodDelete }
 
-// IsPost 判断是否为 POST 请求。
-func (r *Request) IsPost() bool {
-	return r.Method() == http.MethodPost
-}
-
-// IsPut 判断是否为 PUT 请求。
-func (r *Request) IsPut() bool {
-	return r.Method() == http.MethodPut
-}
-
-// IsDelete 判断是否为 DELETE 请求。
-func (r *Request) IsDelete() bool {
-	return r.Method() == http.MethodDelete
-}
-
-// IsAjax 判断是否为 AJAX 请求。
+// IsAjax 判断请求是否由 XMLHttpRequest 发起。
 func (r *Request) IsAjax() bool {
 	return r.Header("X-Requested-With") == "XMLHttpRequest"
 }
 
-// Ip 获取客户端 IP。
+// Ip 获取经受信代理链解析后的客户端 IP。
 func (r *Request) Ip() string {
-	if r.raw == nil {
+	if r == nil || r.raw == nil {
 		return ""
 	}
 	return resolveClientIP(r.raw, r.trustedProxies)
 }
 
-// Input 是 Param 的别名，用于兼容旧调用习惯。
-func (r *Request) Input(key string, def ...string) string {
-	return r.Param(key, def...)
+// Input 是 Param 的兼容别名。
+func (r *Request) Input(key string, defaults ...string) string {
+	return r.Param(key, defaults...)
 }
 
-// File 获取上传文件。
+// File 获取上传文件元数据；返回值与请求清理生命周期绑定。
 func (r *Request) File(key string) (*multipart.FileHeader, error) {
-	if r.raw == nil {
-		return nil, fmt.Errorf("request is nil")
+	if r == nil || r.raw == nil {
+		return nil, errors.New("原生请求为空")
 	}
-	if err := r.raw.ParseMultipartForm(r.multipartMemoryLimit); err != nil {
-		return nil, err
+	if strings.TrimSpace(key) == "" {
+		return nil, errors.New("上传字段名不能为空")
 	}
-	file, header, err := r.raw.FormFile(key)
+	mediaType, err := r.parsedMediaType()
 	if err != nil {
 		return nil, err
 	}
-	_ = file.Close()
-	return header, nil
+	if mediaType != "multipart/form-data" {
+		return nil, fmt.Errorf("%w: 当前类型为 %q", ErrInvalidFormBody, mediaType)
+	}
+	if err := r.ensureFormParsed(); err != nil {
+		return nil, err
+	}
+
+	r.formMu.Lock()
+	defer r.formMu.Unlock()
+	if r.cleaned {
+		return nil, ErrRequestCleaned
+	}
+	if r.raw.MultipartForm == nil {
+		return nil, http.ErrMissingFile
+	}
+	headers := r.raw.MultipartForm.File[key]
+	if len(headers) == 0 || headers[0] == nil {
+		return nil, http.ErrMissingFile
+	}
+	copyHeader := *headers[0]
+	copyHeader.Header = make(textproto.MIMEHeader, len(headers[0].Header))
+	for headerName, values := range headers[0].Header {
+		copyHeader.Header[headerName] = append([]string(nil), values...)
+	}
+	return &copyHeader, nil
 }
 
-// Cleanup 释放 multipart 解析产生的临时文件。
-func (r *Request) Cleanup() {
-	if r.raw == nil || r.raw.MultipartForm == nil {
-		return
+// Cleanup 幂等释放 multipart 临时文件，并阻止清理后的再次解析。
+func (r *Request) Cleanup() error {
+	if r == nil {
+		return nil
 	}
-	_ = r.raw.MultipartForm.RemoveAll()
-	r.raw.MultipartForm = nil
+	r.formMu.Lock()
+	defer r.formMu.Unlock()
+	if r.cleaned {
+		return r.cleanupErr
+	}
+	r.cleaned = true
+	if r.raw != nil && r.raw.MultipartForm != nil {
+		r.cleanupErr = r.raw.MultipartForm.RemoveAll()
+		r.raw.MultipartForm = nil
+	}
+	return r.cleanupErr
 }
 
 // Cookie 获取 Cookie 值。
 func (r *Request) Cookie(key string) string {
-	if r.raw == nil {
+	if r == nil || r.raw == nil {
 		return ""
 	}
 	cookie, err := r.raw.Cookie(key)
@@ -497,18 +488,15 @@ func (r *Request) Cookie(key string) string {
 	return cookie.Value
 }
 
-// Has 判断参数是否存在。
+// Has 判断参数是否存在，显式 null 或空字符串也视为存在。
 func (r *Request) Has(key string) bool {
 	_, ok := r.paramValue(key)
 	return ok
 }
 
-// IsSsl 判断是否为 HTTPS 请求。
+// IsSsl 判断原生 TLS 或受信代理链是否声明 HTTPS。
 func (r *Request) IsSsl() bool {
-	if r.raw == nil {
-		return false
-	}
-	return isHTTPS(r.raw, r.trustedProxies)
+	return r != nil && r.raw != nil && isHTTPS(r.raw, r.trustedProxies)
 }
 
 // Scheme 获取请求协议。
@@ -519,17 +507,16 @@ func (r *Request) Scheme() string {
 	return "http"
 }
 
-// Port 获取请求端口。
+// Port 获取显式端口，未提供时按协议返回默认端口。
 func (r *Request) Port() string {
-	if r.raw == nil {
-		if r.IsSsl() {
-			return "443"
+	if r != nil && r.raw != nil {
+		host := strings.TrimSpace(r.raw.Host)
+		if host != "" && !isValidAbsoluteRequestHost(host) {
+			return ""
 		}
-		return "80"
-	}
-	_, port, err := net.SplitHostPort(r.raw.Host)
-	if err == nil {
-		return port
+		if _, port, err := net.SplitHostPort(host); err == nil {
+			return port
+		}
 	}
 	if r.IsSsl() {
 		return "443"
@@ -537,198 +524,412 @@ func (r *Request) Port() string {
 	return "80"
 }
 
-// Url 获取请求 URL，可选返回完整 URL。
+// Url 返回请求目标；complete=true 时返回带协议和主机的绝对地址。
 func (r *Request) Url(complete ...bool) string {
-	if r.raw == nil || r.raw.URL == nil {
+	if r == nil || r.raw == nil || r.raw.URL == nil {
 		return ""
 	}
-	if len(complete) > 0 && complete[0] {
-		return r.Scheme() + "://" + r.Host() + r.raw.URL.String()
+	if len(complete) == 0 || !complete[0] {
+		return r.raw.URL.RequestURI()
 	}
-	return r.raw.URL.String()
+	host := r.absoluteHost()
+	if host == "" {
+		return ""
+	}
+	copyURL := *r.raw.URL
+	copyURL.Scheme = r.Scheme()
+	copyURL.Host = host
+	return copyURL.String()
 }
 
-// BaseUrl 获取不带查询字符串的完整地址。
+// BaseUrl 获取不带查询字符串的绝对地址。
 func (r *Request) BaseUrl() string {
-	if r.raw == nil || r.raw.URL == nil {
+	if r == nil || r.raw == nil || r.raw.URL == nil {
 		return ""
 	}
-	return r.Scheme() + "://" + r.Host() + r.raw.URL.Path
+	host := r.absoluteHost()
+	if host == "" {
+		return ""
+	}
+	copyURL := *r.raw.URL
+	copyURL.Scheme = r.Scheme()
+	copyURL.Host = host
+	copyURL.RawQuery = ""
+	copyURL.ForceQuery = false
+	copyURL.Fragment = ""
+	return copyURL.String()
 }
 
 // Root 获取站点根地址。
 func (r *Request) Root() string {
-	return r.Scheme() + "://" + r.Host()
+	if r == nil {
+		return ""
+	}
+	host := r.absoluteHost()
+	if host == "" {
+		return ""
+	}
+	return r.Scheme() + "://" + host
 }
 
-// ContentType 获取请求内容类型。
+// ContentType 获取原始内容类型，缺失时保持框架既有的表单默认值。
 func (r *Request) ContentType() string {
-	contentType := r.Header("Content-Type")
-	if contentType == "" {
+	if r == nil || r.raw == nil {
 		return "application/x-www-form-urlencoded"
 	}
-	return contentType
+	if values, ok := r.raw.Header["Content-Type"]; ok {
+		return strings.Join(values, ", ")
+	}
+	return "application/x-www-form-urlencoded"
 }
 
-// Server 为兼容旧接口，继续从请求头读取对应键值。
+// MediaType 返回去除参数并规范为小写的媒体类型。
+func (r *Request) MediaType() (string, error) {
+	return r.parsedMediaType()
+}
+
+// Server 为兼容旧接口，从请求头读取对应键值。
 func (r *Request) Server(key string) string {
 	return r.Header(key)
 }
 
-// Set 写入中间件或路由透传数据。
+// Set 写入中间件或路由透传数据，零值 Request 也可安全使用。
 func (r *Request) Set(key string, value interface{}) {
+	if r == nil {
+		return
+	}
 	r.dataMu.Lock()
+	if r.data == nil {
+		r.data = make(map[string]interface{})
+	}
 	r.data[key] = value
 	r.dataMu.Unlock()
 }
 
 // GetData 获取透传数据。
 func (r *Request) GetData(key string) interface{} {
+	if r == nil {
+		return nil
+	}
 	r.dataMu.RLock()
 	defer r.dataMu.RUnlock()
 	return r.data[key]
 }
 
-// readBody 读取并缓存请求体，同时把原始 Body 复原给后续逻辑继续消费。
-// 通过 sync.Once 保证并发访问下只读取一次且无数据竞争。
-func (r *Request) readBody() []byte {
-	r.bodyOnce.Do(func() {
-		if r.raw == nil || r.raw.Body == nil {
-			r.bodyCache = []byte{}
+func (r *Request) queryValues() url.Values {
+	if r == nil {
+		return url.Values{}
+	}
+	r.queryOnce.Do(func() {
+		if r.raw == nil || r.raw.URL == nil {
+			r.queryCache = url.Values{}
 			return
 		}
+		r.queryCache = r.raw.URL.Query()
+	})
+	return r.queryCache
+}
 
-		body, err := io.ReadAll(r.raw.Body)
+func (r *Request) parsedMediaType() (string, error) {
+	if r == nil {
+		return "application/x-www-form-urlencoded", nil
+	}
+	r.contentTypeOnce.Do(func() {
+		contentType := r.ContentType()
+		mediaType, _, err := mime.ParseMediaType(contentType)
 		if err != nil {
-			r.bodyErr = err
+			r.contentTypeErr = fmt.Errorf("%w: %v", ErrInvalidContentType, err)
+			return
+		}
+		r.mediaType = strings.ToLower(mediaType)
+	})
+	return r.mediaType, r.contentTypeErr
+}
+
+func (r *Request) readBody() ([]byte, error) {
+	if r == nil {
+		return []byte{}, nil
+	}
+	r.bodyOnce.Do(func() {
+		if r.raw == nil || r.raw.Body == nil || r.raw.Body == http.NoBody {
 			r.bodyCache = []byte{}
 			return
 		}
+		if r.raw.ContentLength > r.maxBodyBytes {
+			r.setBodyError(fmt.Errorf("%w: 上限 %d 字节", ErrRequestBodyTooLarge, r.maxBodyBytes))
+			_ = r.raw.Body.Close()
+			r.raw.Body = http.NoBody
+			return
+		}
 
+		source := r.raw.Body
+		body, readErr := io.ReadAll(source)
+		closeErr := source.Close()
+		if readErr != nil {
+			r.setBodyError(normalizeBodyReadError(readErr, r.maxBodyBytes))
+			r.raw.Body = http.NoBody
+			return
+		}
+		if closeErr != nil {
+			r.setBodyError(fmt.Errorf("关闭请求体失败: %w", closeErr))
+			r.raw.Body = http.NoBody
+			return
+		}
 		r.bodyCache = body
 		r.raw.Body = io.NopCloser(bytes.NewReader(body))
 	})
-	return r.bodyCache
+	return r.bodyCache, r.BodyReadError()
 }
 
-// parseJSONBody 只解析一次 JSON 请求体，并缓存结果。
-// 通过 sync.Once 保证并发访问下只解析一次且无数据竞争。
 func (r *Request) parseJSONBody() {
-	r.jsonOnce.Do(func() {
-		r.jsonBody = make(map[string]interface{})
-
-		body := r.readBody()
-		if r.bodyErr != nil {
-			return
-		}
-		if len(body) == 0 {
-			return
-		}
-
-		decoder := json.NewDecoder(bytes.NewReader(body))
-		decoder.UseNumber()
-		if err := decoder.Decode(&r.jsonBody); err != nil {
-			r.jsonBody = make(map[string]interface{})
-		}
-	})
-}
-
-// ensureFormParsed 解析表单参数，并保证只执行一次（并发安全）。
-// 对 urlencoded 表单先缓存并复原请求体，避免 ParseForm 消费 body 后 Body()/Json() 读到空；
-// multipart 表单交由 File()/ParseMultipartForm 流式处理，不在此整体缓冲，以免大文件被读入内存。
-func (r *Request) ensureFormParsed() {
-	if r.raw == nil {
+	if r == nil {
 		return
 	}
-	r.formOnce.Do(func() {
-		if strings.Contains(r.Header("Content-Type"), "application/x-www-form-urlencoded") {
-			r.readBody()
+	r.jsonOnce.Do(func() {
+		r.jsonBody = make(map[string]interface{})
+		body, err := r.readBody()
+		if err != nil {
+			r.setJSONError(err)
+			return
 		}
-		_ = r.raw.ParseForm()
+		payload, err := decodeStrictJSONObject(body)
+		if err != nil {
+			r.setJSONError(fmt.Errorf("%w: %v", ErrInvalidJSONBody, err))
+			return
+		}
+		r.jsonBody = payload
 	})
 }
 
-// getJSONBodyValue 从缓存的 JSON 请求体中提取值。
-func (r *Request) getJSONBodyValue(key string) interface{} {
-	r.parseJSONBody()
-	if r.jsonBody == nil {
+func (r *Request) ensureFormParsed() error {
+	if r == nil || r.raw == nil {
 		return nil
 	}
-	return r.jsonBody[key]
+	r.formOnce.Do(func() {
+		mediaType, err := r.parsedMediaType()
+		if err != nil {
+			r.setFormError(err)
+			return
+		}
+		switch mediaType {
+		case "application/x-www-form-urlencoded":
+			body, bodyErr := r.readBody()
+			if bodyErr != nil {
+				r.setFormError(bodyErr)
+				return
+			}
+			if err := r.raw.ParseForm(); err != nil {
+				r.setFormError(fmt.Errorf("%w: %v", ErrInvalidFormBody, err))
+				return
+			}
+			r.raw.Body = io.NopCloser(bytes.NewReader(body))
+		case "multipart/form-data":
+			r.formMu.Lock()
+			defer r.formMu.Unlock()
+			if r.cleaned {
+				r.setFormError(ErrRequestCleaned)
+				return
+			}
+			// 未缓存的 multipart 必须保持流式解析，随后 Body 会明确报告不可用。
+			r.bodyOnce.Do(func() {
+				r.setBodyError(ErrRequestBodyUnavailable)
+			})
+			if err := r.raw.ParseMultipartForm(r.multipartMemoryLimit); err != nil {
+				r.setFormError(fmt.Errorf("%w: %w", ErrInvalidFormBody, normalizeBodyReadError(err, r.maxBodyBytes)))
+			}
+		}
+	})
+	r.errorMu.RLock()
+	defer r.errorMu.RUnlock()
+	return r.formErr
 }
 
-// paramValue 统一按路由参数 > 表单/JSON 请求体 > 查询参数的优先级取值。
+func (r *Request) getJSONBodyValue(key string) (interface{}, bool) {
+	r.parseJSONBody()
+	if r == nil || r.JSONError() != nil {
+		return nil, false
+	}
+	value, ok := r.jsonBody[key]
+	return value, ok
+}
+
 func (r *Request) paramValue(key string) (interface{}, bool) {
+	if r == nil {
+		return nil, false
+	}
 	r.dataMu.RLock()
-	if value, ok := r.data[key]; ok {
-		r.dataMu.RUnlock()
+	value, ok := r.data[key]
+	r.dataMu.RUnlock()
+	if ok {
 		return value, true
 	}
-	r.dataMu.RUnlock()
 
-	if r.raw != nil {
-		r.ensureFormParsed()
-		if values, ok := r.raw.PostForm[key]; ok && len(values) > 0 {
-			return normalizeStringSliceValue(values), true
+	mediaType, _ := r.parsedMediaType()
+	if isFormMediaType(mediaType) {
+		_ = r.ensureFormParsed()
+		if r.raw != nil {
+			if values, exists := r.raw.PostForm[key]; exists && len(values) > 0 {
+				return normalizeStringSliceValue(values), true
+			}
 		}
 	}
-
-	if strings.Contains(r.Header("Content-Type"), "application/json") {
-		r.parseJSONBody()
-		if r.bodyErr != nil {
-			return nil, false
-		}
-		if value, ok := r.jsonBody[key]; ok {
+	if isJSONMediaType(mediaType) {
+		if value, exists := r.getJSONBodyValue(key); exists {
 			return value, true
 		}
 	}
-
-	if r.raw != nil && r.raw.URL != nil {
-		if values, ok := r.queryValues()[key]; ok && len(values) > 0 {
-			return normalizeStringSliceValue(values), true
-		}
+	if values, exists := r.queryValues()[key]; exists && len(values) > 0 {
+		return normalizeStringSliceValue(values), true
 	}
-
 	return nil, false
 }
 
-// normalizeStringSliceValue 把表单和查询字符串中的多值结果规范成单值或切片。
-func normalizeStringSliceValue(values []string) interface{} {
-	if len(values) == 1 {
-		return values[0]
-	}
-	return append([]string(nil), values...)
+func (r *Request) setBodyError(err error) {
+	r.errorMu.Lock()
+	r.bodyErr = err
+	r.errorMu.Unlock()
 }
 
-// stringifyRequestValue 把各种可能的参数值稳定地转成字符串。
-func stringifyRequestValue(value interface{}) string {
-	switch typed := value.(type) {
-	case nil:
-		return ""
-	case string:
-		return typed
-	case []string:
-		return strings.Join(typed, ",")
-	case json.Number:
-		return typed.String()
-	case float64:
-		return formatFloat(typed)
-	case float32:
-		return formatFloat(float64(typed))
-	case bool:
-		if typed {
-			return "true"
+func (r *Request) setJSONError(err error) {
+	r.errorMu.Lock()
+	r.jsonErr = err
+	r.errorMu.Unlock()
+}
+
+func (r *Request) setFormError(err error) {
+	r.errorMu.Lock()
+	r.formErr = err
+	r.errorMu.Unlock()
+}
+
+func isJSONMediaType(mediaType string) bool {
+	return mediaType == "application/json" || strings.HasSuffix(mediaType, "+json")
+}
+
+func isFormMediaType(mediaType string) bool {
+	return mediaType == "application/x-www-form-urlencoded" || mediaType == "multipart/form-data"
+}
+
+func normalizeBodyReadError(err error, limit int64) error {
+	var maxBytesErr *http.MaxBytesError
+	if errors.Is(err, ErrRequestBodyTooLarge) || errors.As(err, &maxBytesErr) {
+		return fmt.Errorf("%w: 上限 %d 字节", ErrRequestBodyTooLarge, limit)
+	}
+	return err
+}
+
+type bodyLimitReadCloser struct {
+	source    io.ReadCloser
+	remaining int64
+}
+
+func newBodyLimitReadCloser(source io.ReadCloser, limit int64) io.ReadCloser {
+	return &bodyLimitReadCloser{source: source, remaining: limit}
+}
+
+func (r *bodyLimitReadCloser) Read(buffer []byte) (int, error) {
+	if len(buffer) == 0 {
+		return 0, nil
+	}
+	if r.remaining <= 0 {
+		var probe [1]byte
+		read, err := r.source.Read(probe[:])
+		if read > 0 {
+			return 0, ErrRequestBodyTooLarge
 		}
-		return "false"
-	default:
-		return fmt.Sprint(typed)
+		return 0, err
 	}
+	if r.remaining < int64(^uint64(0)>>1) && int64(len(buffer)) > r.remaining+1 {
+		buffer = buffer[:r.remaining+1]
+	}
+	read, err := r.source.Read(buffer)
+	if int64(read) > r.remaining {
+		allowed := int(r.remaining)
+		r.remaining = 0
+		return allowed, ErrRequestBodyTooLarge
+	}
+	r.remaining -= int64(read)
+	return read, err
 }
 
-// formatFloat 把 JSON 数值稳定转换为字符串，避免 1 被格式化成 1e+00。
-func formatFloat(value float64) string {
-	if value == float64(int64(value)) {
-		return strconv.FormatInt(int64(value), 10)
+func (r *Request) absoluteHost() string {
+	if r == nil || r.raw == nil {
+		return ""
 	}
-	return strconv.FormatFloat(value, 'f', -1, 64)
+	host := strings.TrimSpace(r.raw.Host)
+	if host == "" || strings.ContainsAny(host, "\\/@?#\x00\r\n\t ") || !isValidAbsoluteRequestHost(host) {
+		return ""
+	}
+	parsed, err := url.Parse("http://" + host)
+	if err != nil || parsed.User != nil || parsed.Host != host || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return ""
+	}
+	hostname := parsed.Hostname()
+	if hostname == "" || (net.ParseIP(hostname) == nil && !isValidRequestHostname(hostname)) {
+		return ""
+	}
+	return host
+}
+
+// isValidAbsoluteRequestHost 严格校验绝对 URL 使用的主机和可选端口，拒绝服务名端口及畸形 IPv6 括号。
+func isValidAbsoluteRequestHost(host string) bool {
+	if strings.HasPrefix(host, "[") {
+		closingBracket := strings.IndexByte(host, ']')
+		if closingBracket <= 1 {
+			return false
+		}
+		ip := net.ParseIP(host[1:closingBracket])
+		if ip == nil || ip.To4() != nil {
+			return false
+		}
+		remainder := host[closingBracket+1:]
+		return remainder == "" || strings.HasPrefix(remainder, ":") && isValidRequestPort(remainder[1:])
+	}
+	if strings.ContainsAny(host, "[]") || strings.Count(host, ":") > 1 {
+		return false
+	}
+	hostname := host
+	if parsedHost, port, hasPort := strings.Cut(host, ":"); hasPort {
+		if !isValidRequestPort(port) {
+			return false
+		}
+		hostname = parsedHost
+	}
+	hostname = strings.TrimSuffix(hostname, ".")
+	return hostname != "" && (net.ParseIP(hostname) != nil || isValidRequestHostname(hostname))
+}
+
+func isValidRequestPort(port string) bool {
+	if port == "" {
+		return false
+	}
+	for _, char := range port {
+		if char < '0' || char > '9' {
+			return false
+		}
+	}
+	parsed, err := strconv.ParseUint(port, 10, 16)
+	return err == nil && parsed > 0
+}
+
+func isValidRequestHostname(hostname string) bool {
+	hostname = strings.TrimSuffix(strings.ToLower(hostname), ".")
+	if hostname == "" || len(hostname) > 253 {
+		return false
+	}
+	for _, label := range strings.Split(hostname, ".") {
+		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, char := range label {
+			if !(char >= 'a' && char <= 'z') && !(char >= '0' && char <= '9') && char != '-' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func (r *bodyLimitReadCloser) Close() error {
+	return r.source.Close()
 }

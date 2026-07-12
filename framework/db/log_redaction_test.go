@@ -100,3 +100,17 @@ func TestWhereRawErrorLogRedactsLiteralSecrets(t *testing.T) {
 		t.Fatalf("WhereRaw 错误日志应保留脱敏标记，实际 ctx: %s", dumped)
 	}
 }
+
+// TestSQLRedactionCoversDollarQuotesAndComments 验证 PostgreSQL dollar quote
+// 以及 SQL 注释中的敏感文本不会进入错误日志。
+func TestSQLRedactionCoversDollarQuotesAndComments(t *testing.T) {
+	redacted := redactSQLText("SELECT $tag$dollar-secret$tag$ /* block-secret */ -- line-secret\nFROM users")
+	for _, secret := range []string{"dollar-secret", "block-secret", "line-secret"} {
+		if strings.Contains(redacted, secret) {
+			t.Fatalf("SQL 脱敏结果仍包含 %q: %s", secret, redacted)
+		}
+	}
+	if strings.Count(redacted, "[REDACTED]") < 3 {
+		t.Fatalf("dollar quote 和两类注释都应包含脱敏标记: %s", redacted)
+	}
+}

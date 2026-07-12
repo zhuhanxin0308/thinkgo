@@ -329,7 +329,7 @@ func TestModelStructCRUDTriggerEventsAndSetters(t *testing.T) {
 	}
 
 	// 3. 测试 Delete (软删除)
-	err = model.Delete()
+	_, err = model.Where("id = ?", user.ID).Delete()
 	if err != nil {
 		t.Fatalf("Delete 失败: %v", err)
 	}
@@ -366,5 +366,3 @@ func TestModelStructCRUDTriggerEventsAndSetters(t *testing.T) {
 		t.Fatal("Restore 预期将 delete_time 设为 nil，但非 nil")
 	}
 }
-
-

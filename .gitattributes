@@ -1,0 +1,20 @@
+# Go 工具链要求源码与模块清单使用 LF，避免 Windows 自动换行造成伪差异。
+.gitattributes text eol=lf
+.gitignore text eol=lf
+*.go text eol=lf
+go.mod text eol=lf
+go.sum text eol=lf
+
+# 项目文本统一使用 LF；Windows 批处理保留原生 CRLF。
+*.md text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.sh text eol=lf
+*.bat text eol=crlf
+
+# 构建产物按二进制处理，禁止换行转换。
+*.exe binary
+*.dll binary
+*.so binary
+*.dylib binary

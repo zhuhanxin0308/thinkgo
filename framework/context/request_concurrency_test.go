@@ -13,7 +13,7 @@ func TestRequestConcurrentLazyCaches(t *testing.T) {
 	body := `{"name":"alice","age":30}`
 	raw := httptest.NewRequest("POST", "/users?page=2", strings.NewReader(body))
 	raw.Header.Set("Content-Type", "application/json")
-	req := NewRequest(raw)
+	req := newRequestForTest(t, raw)
 
 	var wg sync.WaitGroup
 	for i := 0; i < 64; i++ {
@@ -43,7 +43,7 @@ func TestUrlencodedBodyPreservedAfterFormParse(t *testing.T) {
 	form := "name=bob&city=paris"
 	raw := httptest.NewRequest("POST", "/submit", strings.NewReader(form))
 	raw.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req := NewRequest(raw)
+	req := newRequestForTest(t, raw)
 
 	// 先触发表单解析
 	if got := req.Post("name"); got != "bob" {

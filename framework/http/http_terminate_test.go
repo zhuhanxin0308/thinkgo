@@ -43,7 +43,7 @@ func TestServeHTTPRunsTerminatorsAfterResponse(t *testing.T) {
 		return fwcontext.NewResponse().Content("ok")
 	}, routeMiddleware)
 
-	handler := NewHttp(app)
+	handler := newTestHTTPHandler(t, app)
 	req := httptest.NewRequest(http.MethodGet, "http://example.com/terminate", nil)
 	recorder := httptest.NewRecorder()
 

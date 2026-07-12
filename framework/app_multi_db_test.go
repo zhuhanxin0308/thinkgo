@@ -2,9 +2,11 @@ package framework
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"thinkgo/framework/db"
 )
@@ -42,7 +44,10 @@ func (c *appFakeManagerConnection) Close() error {
 }
 
 func TestAppInitializesMultiDatabaseManager(t *testing.T) {
-	db.RegisterConnector("test-manager", &appFakeManagerConnector{})
+	connectorName := fmt.Sprintf("test-manager-%d", time.Now().UnixNano())
+	if err := db.RegisterConnector(connectorName, &appFakeManagerConnector{}); err != nil {
+		t.Fatalf("注册多数据库测试连接器失败: %v", err)
+	}
 
 	baseDir := t.TempDir()
 	configDir := filepath.Join(baseDir, "config")
@@ -54,11 +59,11 @@ func TestAppInitializesMultiDatabaseManager(t *testing.T) {
 		"default": "primary",
 		"connections": map[string]interface{}{
 			"primary": map[string]interface{}{
-				"type":     "test-manager",
+				"type":     connectorName,
 				"database": "primary-db",
 			},
 			"analytics": map[string]interface{}{
-				"type":     "test-manager",
+				"type":     connectorName,
 				"database": "analytics-db",
 			},
 		},

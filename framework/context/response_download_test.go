@@ -1,7 +1,9 @@
 package context
 
 import (
+	"errors"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -69,5 +71,57 @@ func TestDownloadEmptyFilenameFallback(t *testing.T) {
 	cd := resp.Headers().Get("Content-Disposition")
 	if !strings.Contains(cd, `filename="download"`) {
 		t.Fatalf("非法文件名应回退为 download，实际: %q", cd)
+	}
+}
+
+// TestDownloadSafeRejectsSymlinkEscape 验证安全下载会按真实路径拒绝指向根目录外部的符号链接。
+func TestDownloadSafeRejectsSymlinkEscape(t *testing.T) {
+	workspace := t.TempDir()
+	baseDir := filepath.Join(workspace, "downloads")
+	if err := os.MkdirAll(baseDir, 0o755); err != nil {
+		t.Fatalf("创建下载根目录失败: %v", err)
+	}
+	secretPath := filepath.Join(workspace, "secret.txt")
+	if err := os.WriteFile(secretPath, []byte("private-secret"), 0o600); err != nil {
+		t.Fatalf("写入根目录外文件失败: %v", err)
+	}
+	linkPath := filepath.Join(baseDir, "linked.txt")
+	if err := os.Symlink(secretPath, linkPath); err != nil {
+		t.Skipf("当前环境不允许创建符号链接: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	err := NewResponse().DownloadSafe(baseDir, "linked.txt", "linked.txt").Send(recorder)
+	if !errors.Is(err, ErrUnsafeDownloadPath) {
+		t.Fatalf("符号链接越界应返回 ErrUnsafeDownloadPath，实际为 %v", err)
+	}
+	if recorder.Code != http.StatusForbidden || strings.Contains(recorder.Body.String(), "private-secret") {
+		t.Fatalf("符号链接越界必须返回 403 且不得泄露文件，status=%d body=%q", recorder.Code, recorder.Body.String())
+	}
+}
+
+// TestDownloadSendValidatesRegularFile 验证文件在写响应头前完成预检，并为正常下载写出准确长度。
+func TestDownloadSendValidatesRegularFile(t *testing.T) {
+	baseDir := t.TempDir()
+	filePath := filepath.Join(baseDir, "report.txt")
+	if err := os.WriteFile(filePath, []byte("report-body"), 0o600); err != nil {
+		t.Fatalf("写入下载文件失败: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	if err := NewResponse().DownloadSafe(baseDir, "report.txt", "report.txt").Send(recorder); err != nil {
+		t.Fatalf("发送安全下载失败: %v", err)
+	}
+	if recorder.Code != http.StatusOK || recorder.Body.String() != "report-body" || recorder.Header().Get("Content-Length") != "11" {
+		t.Fatalf("下载响应错误，status=%d length=%q body=%q", recorder.Code, recorder.Header().Get("Content-Length"), recorder.Body.String())
+	}
+
+	directoryRecorder := httptest.NewRecorder()
+	err := NewResponse().Download(baseDir, "directory").Send(directoryRecorder)
+	if err == nil || directoryRecorder.Code != http.StatusNotFound {
+		t.Fatalf("目录不得作为下载文件，status=%d err=%v", directoryRecorder.Code, err)
+	}
+	if directoryRecorder.Header().Get("Content-Disposition") != "" {
+		t.Fatal("文件预检失败时不得残留下载响应头")
 	}
 }

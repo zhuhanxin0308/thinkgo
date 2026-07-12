@@ -1,9 +1,12 @@
 package command
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"strings"
 
+	"thinkgo/framework"
 	"thinkgo/framework/console"
 )
 
@@ -17,9 +20,22 @@ type ConfigDump struct {
 func (c *ConfigDump) Configure() {
 	c.Signature = "config:dump"
 	c.Description = "Dump configuration values"
+	c.AddArgument("name", "Optional dot-separated configuration key", false)
 }
 
-func (c *ConfigDump) Execute(input *console.Input, output *console.Output) {
+func (c *ConfigDump) Execute(input *console.Input, output *console.Output) error {
+	if input == nil {
+		return fmt.Errorf("命令输入不能为空")
+	}
+	if output == nil {
+		return console.ErrInvalidOutput
+	}
+	if c.App == nil {
+		return framework.ErrNilApplication
+	}
+	if c.App.Config == nil {
+		return fmt.Errorf("应用配置不可用")
+	}
 	name := input.GetArgument(0)
 
 	var data interface{}
@@ -29,19 +45,33 @@ func (c *ConfigDump) Execute(input *console.Input, output *console.Output) {
 		data = c.App.Config.Get("")
 	}
 
-	data = redactConfigDumpData(data)
+	data, err := redactConfigDumpData(name, data)
+	if err != nil {
+		return fmt.Errorf("failed to normalize config: %w", err)
+	}
 	jsonBytes, err := json.MarshalIndent(data, "", "    ")
 	if err != nil {
-		output.Error("Failed to marshal config: " + err.Error())
-		return
+		return fmt.Errorf("failed to marshal config: %w", err)
 	}
 
 	output.Writeln(string(jsonBytes))
+	return nil
 }
 
-// redactConfigDumpData 递归复制配置并脱敏敏感字段，避免 config:dump 泄露密钥。
-func redactConfigDumpData(value interface{}) interface{} {
-	return redactConfigDumpValue("", value)
+// redactConfigDumpData 先按 JSON 语义归一化强类型映射、切片和结构体，
+// 再递归脱敏；UseNumber 避免大整数在归一化过程中损失精度。
+func redactConfigDumpData(key string, value interface{}) (interface{}, error) {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	decoder.UseNumber()
+	var normalized interface{}
+	if err := decoder.Decode(&normalized); err != nil {
+		return nil, err
+	}
+	return redactConfigDumpValue(key, normalized), nil
 }
 
 // redactConfigDumpValue 按字段名判断是否脱敏，普通值保持原样。
@@ -78,18 +108,31 @@ func isConfigDumpSensitiveKey(key string) bool {
 	sensitiveFragments := []string{
 		"authorization",
 		"cookie",
+		"credential",
 		"password",
 		"passwd",
+		"passphrase",
 		"private_key",
+		"privatekey",
 		"secret",
 		"session",
 		"token",
 		"api_key",
 		"apikey",
 		"access_key",
+		"accesskey",
+		"connection_string",
 	}
 	for _, fragment := range sensitiveFragments {
 		if key == fragment || strings.Contains(key, fragment) {
+			return true
+		}
+	}
+	// dsn/uri/url 仅按完整键片段匹配，避免把 security、duration 等普通字段误判。
+	for _, part := range strings.FieldsFunc(key, func(current rune) bool {
+		return current == '_' || current == '-' || current == '.'
+	}) {
+		if part == "dsn" || part == "uri" || part == "url" {
 			return true
 		}
 	}

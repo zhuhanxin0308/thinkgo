@@ -6,7 +6,7 @@ import "testing"
 func TestPaginationDialects(t *testing.T) {
 	t.Run("mysql", func(t *testing.T) {
 		order, limit := (&Mysql{}).Pagination("id DESC", 10, 20)
-		if order != " ORDER BY id DESC" || limit != " LIMIT 10 OFFSET 20" {
+		if order != " ORDER BY `id` DESC" || limit != " LIMIT 10 OFFSET 20" {
 			t.Fatalf("mysql 分页错误: order=%q limit=%q", order, limit)
 		}
 	})
@@ -27,7 +27,7 @@ func TestPaginationDialects(t *testing.T) {
 	})
 	t.Run("sqlsrv_no_paging", func(t *testing.T) {
 		order, limit := (&Sqlsrv{}).Pagination("name ASC", 0, 0)
-		if order != " ORDER BY name ASC" || limit != "" {
+		if order != " ORDER BY [name] ASC" || limit != "" {
 			t.Fatalf("SQL Server 无分页错误: order=%q limit=%q", order, limit)
 		}
 	})

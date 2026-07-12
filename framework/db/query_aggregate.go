@@ -1,7 +1,11 @@
 package db
 
 import (
+	"encoding/json"
 	"fmt"
+	"math"
+	"strconv"
+	"strings"
 )
 
 // Sum 计算字段求和。
@@ -51,26 +55,54 @@ func (q *Query) aggregate(fn, field string) (float64, error) {
 
 	switch v := val.(type) {
 	case float64:
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			break
+		}
 		return v, nil
 	case float32:
-		return float64(v), nil
+		value := float64(v)
+		if math.IsNaN(value) || math.IsInf(value, 0) {
+			break
+		}
+		return value, nil
 	case int64:
 		return float64(v), nil
 	case int:
 		return float64(v), nil
+	case int8:
+		return float64(v), nil
+	case int16:
+		return float64(v), nil
 	case int32:
 		return float64(v), nil
+	case uint:
+		return float64(v), nil
+	case uint8:
+		return float64(v), nil
+	case uint16:
+		return float64(v), nil
+	case uint32:
+		return float64(v), nil
+	case uint64:
+		return float64(v), nil
 	case []byte:
-		var f float64
-		fmt.Sscanf(string(v), "%f", &f)
-		return f, nil
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(string(v)), 64)
+		if err == nil && !math.IsNaN(parsed) && !math.IsInf(parsed, 0) {
+			return parsed, nil
+		}
 	case string:
-		var f float64
-		fmt.Sscanf(v, "%f", &f)
-		return f, nil
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
+		if err == nil && !math.IsNaN(parsed) && !math.IsInf(parsed, 0) {
+			return parsed, nil
+		}
+	case json.Number:
+		parsed, err := strconv.ParseFloat(string(v), 64)
+		if err == nil && !math.IsNaN(parsed) && !math.IsInf(parsed, 0) {
+			return parsed, nil
+		}
 	}
 
-	return 0, fmt.Errorf("unexpected aggregate value type: %T", val)
+	return 0, fmt.Errorf("%w: 无法解析 %T(%v)", ErrInvalidAggregateValue, val, val)
 }
 
 // Value 获取单条记录的单个字段值。
@@ -93,7 +125,11 @@ func (q *Query) Value(field string) (interface{}, error) {
 	if len(rows) == 0 {
 		return nil, nil
 	}
-	return rows[0][field], nil
+	value, exists := databaseResultField(rows[0], field)
+	if !exists {
+		return nil, q.reportError("value", fmt.Errorf("%w: 结果缺少字段 %q", ErrInvalidDatabaseRow, field), nil)
+	}
+	return value, nil
 }
 
 // Column 获取某个字段的所有值列表。
@@ -105,6 +141,9 @@ func (q *Query) Column(field string, key ...string) (interface{}, error) {
 	}
 	if err := validateIdentifier(field); err != nil {
 		return nil, q.reportError("column", fmt.Errorf("unsafe field name: %w", err), nil)
+	}
+	if len(key) > 1 {
+		return nil, q.reportError("column", fmt.Errorf("%w: Column 最多接收一个 key 字段", ErrInvalidQuery), nil)
 	}
 
 	cloned := q.clone()
@@ -125,17 +164,43 @@ func (q *Query) Column(field string, key ...string) (interface{}, error) {
 	// 带 key 时返回 map[string]interface{}
 	if len(key) > 0 && key[0] != "" {
 		result := make(map[string]interface{}, len(rows))
-		for _, row := range rows {
-			keyVal := fmt.Sprintf("%v", row[key[0]])
-			result[keyVal] = row[field]
+		for index, row := range rows {
+			keyValue, keyExists := databaseResultField(row, key[0])
+			fieldValue, fieldExists := databaseResultField(row, field)
+			if !keyExists || keyValue == nil || !fieldExists {
+				return nil, q.reportError("column", fmt.Errorf("%w: 第 %d 行缺少 key 或目标字段", ErrInvalidDatabaseRow, index), nil)
+			}
+			keyText := fmt.Sprint(keyValue)
+			if _, duplicated := result[keyText]; duplicated {
+				return nil, q.reportError("column", fmt.Errorf("%w: key %q 重复或字符串化后冲突", ErrInvalidDatabaseRow, keyText), nil)
+			}
+			result[keyText] = fieldValue
 		}
 		return result, nil
 	}
 
 	// 无 key 时返回 []interface{}
 	result := make([]interface{}, 0, len(rows))
-	for _, row := range rows {
-		result = append(result, row[field])
+	for index, row := range rows {
+		value, exists := databaseResultField(row, field)
+		if !exists {
+			return nil, q.reportError("column", fmt.Errorf("%w: 第 %d 行缺少字段 %q", ErrInvalidDatabaseRow, index, field), nil)
+		}
+		result = append(result, value)
 	}
 	return result, nil
+}
+
+// databaseResultField 优先读取完整字段名，并兼容 SQL 驱动把限定字段
+// table.column 的结果列名返回为末段 column 的行为。
+func databaseResultField(row map[string]interface{}, field string) (interface{}, bool) {
+	if value, exists := row[field]; exists {
+		return value, true
+	}
+	separator := strings.LastIndexByte(field, '.')
+	if separator < 0 || separator == len(field)-1 {
+		return nil, false
+	}
+	value, exists := row[field[separator+1:]]
+	return value, exists
 }

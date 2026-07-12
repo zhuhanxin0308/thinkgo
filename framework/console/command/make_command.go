@@ -2,9 +2,9 @@ package command
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
+
 	"thinkgo/framework/console"
 )
 
@@ -16,31 +16,13 @@ type MakeCommand struct {
 func (c *MakeCommand) Configure() {
 	c.Signature = "make:command"
 	c.Description = "Create a new console command class"
+	c.AddArgument("name", "Command type name", true)
 }
 
-func (c *MakeCommand) Execute(input *console.Input, output *console.Output) {
-	name, err := normalizeGeneratorName(input.GetArgument(0), "")
+func (c *MakeCommand) Execute(input *console.Input, output *console.Output) error {
+	name, err := normalizedGeneratorInput(c.App, input, output, "")
 	if err != nil {
-		output.Error("Invalid command name: " + err.Error())
-		return
-	}
-
-	// Ensure directory exists
-	dir := filepath.Join(c.App.BasePath, "app", "command")
-	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			output.Error(fmt.Sprintf("Failed to create command directory: %v", err))
-			return
-		}
-	}
-
-	// File path
-	filename := filepath.Join(dir, lowerGoFilename(name))
-
-	// Check if exists
-	if _, err := os.Stat(filename); !os.IsNotExist(err) {
-		output.Error(fmt.Sprintf("Command %s already exists.", name))
-		return
+		return fmt.Errorf("invalid command name: %w", err)
 	}
 
 	// Content
@@ -60,16 +42,16 @@ func (c *%s) Configure() {
 	c.Description = "应用命令 %s"
 }
 
-func (c *%s) Execute(input *console.Input, output *console.Output) {
+func (c *%s) Execute(input *console.Input, output *console.Output) error {
 	output.Info(c.GetSignature() + " " + c.GetDescription())
+	return nil
 }
 `, name, name, name, strings.ToLower(name), name, name)
 
-	// Write file
-	if err := os.WriteFile(filename, []byte(content), 0644); err != nil {
-		output.Error(fmt.Sprintf("Failed to create command: %v", err))
-		return
+	if err := writeGeneratedAppSource(c.App, filepath.Join("app", "command"), lowerGoFilename(name), []byte(content)); err != nil {
+		return fmt.Errorf("create command %s: %w", name, err)
 	}
 
 	output.Success(fmt.Sprintf("Command %s created successfully.", name))
+	return nil
 }

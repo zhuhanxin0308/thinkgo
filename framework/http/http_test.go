@@ -3,12 +3,14 @@ package http
 import (
 	"bytes"
 	"compress/gzip"
+	"errors"
 	"io"
 	stdhttp "net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"thinkgo/framework"
@@ -46,8 +48,17 @@ func newTestHTTPApp(t *testing.T, basePath string, compression map[string]interf
 		Log:        log.NewLog(),
 	}
 
-	t.Cleanup(app.Log.Shutdown)
+	t.Cleanup(func() { _ = app.Log.Close() })
 	return app
+}
+
+func newTestHTTPHandler(t *testing.T, app *framework.App) *Http {
+	t.Helper()
+	handler, err := NewHttp(app)
+	if err != nil {
+		t.Fatalf("创建 HTTP 内核失败: %v", err)
+	}
+	return handler
 }
 
 // TestServeHTTPPreventsStaticTraversal 验证静态文件处理不会越权访问 public 目录之外的文件。
@@ -64,7 +75,7 @@ func TestServeHTTPPreventsStaticTraversal(t *testing.T) {
 	}
 
 	app := newTestHTTPApp(t, basePath, map[string]interface{}{"enable": false})
-	handler := NewHttp(app)
+	handler := newTestHTTPHandler(t, app)
 
 	req := httptest.NewRequest(stdhttp.MethodGet, "http://example.com/", nil)
 	req.URL.Path = "/..\\secret.txt"
@@ -72,11 +83,29 @@ func TestServeHTTPPreventsStaticTraversal(t *testing.T) {
 
 	handler.ServeHTTP(recorder, req)
 
-	if recorder.Code != stdhttp.StatusNotFound {
-		t.Fatalf("目录穿越请求应返回 404，实际为 %d", recorder.Code)
+	if recorder.Code != stdhttp.StatusBadRequest {
+		t.Fatalf("目录穿越请求应返回 400，实际为 %d", recorder.Code)
 	}
 	if strings.Contains(recorder.Body.String(), "top-secret") {
 		t.Fatal("目录穿越请求不应读到 public 目录之外的内容")
+	}
+}
+
+// TestServeHTTPRejectsEncodedStaticSeparator 验证编码斜杠不能改变静态文件目录层级。
+func TestServeHTTPRejectsEncodedStaticSeparator(t *testing.T) {
+	basePath := t.TempDir()
+	nestedDir := filepath.Join(basePath, "public", "assets")
+	if err := os.MkdirAll(nestedDir, 0o755); err != nil {
+		t.Fatalf("创建静态目录失败: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(nestedDir, "private.txt"), []byte("private-static"), 0o600); err != nil {
+		t.Fatalf("写入静态文件失败: %v", err)
+	}
+	handler := newTestHTTPHandler(t, newTestHTTPApp(t, basePath, map[string]interface{}{"enable": false}))
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(stdhttp.MethodGet, "http://example.com/assets%2Fprivate.txt", nil))
+	if recorder.Code != stdhttp.StatusNotFound || strings.Contains(recorder.Body.String(), "private-static") {
+		t.Fatalf("编码路径分隔符不得命中静态文件，status=%d body=%q", recorder.Code, recorder.Body.String())
 	}
 }
 
@@ -93,7 +122,7 @@ func TestServeHTTPRejectsUnlistedHost(t *testing.T) {
 		return fwcontext.NewResponse().Content("ok")
 	})
 
-	handler := NewHttp(app)
+	handler := newTestHTTPHandler(t, app)
 	req := httptest.NewRequest(stdhttp.MethodGet, "http://evil.example.com/ok", nil)
 	recorder := httptest.NewRecorder()
 
@@ -120,7 +149,7 @@ func TestServeHTTPAllowsConfiguredHost(t *testing.T) {
 		return fwcontext.NewResponse().Content("ok")
 	})
 
-	handler := NewHttp(app)
+	handler := newTestHTTPHandler(t, app)
 	req := httptest.NewRequest(stdhttp.MethodGet, "http://app.example.com:8080/ok", nil)
 	recorder := httptest.NewRecorder()
 
@@ -131,6 +160,19 @@ func TestServeHTTPAllowsConfiguredHost(t *testing.T) {
 	}
 	if recorder.Body.String() != "ok" {
 		t.Fatalf("白名单内 Host 应进入业务路由，实际响应为 %s", recorder.Body.String())
+	}
+}
+
+// TestServeHTTPRejectsMalformedHostWithoutWhitelist 验证空白名单只放开合法 Host，不放开用户信息或控制字符语法。
+func TestServeHTTPRejectsMalformedHostWithoutWhitelist(t *testing.T) {
+	app := newTestHTTPApp(t, t.TempDir(), map[string]interface{}{"enable": false})
+	handler := newTestHTTPHandler(t, app)
+	req := httptest.NewRequest(stdhttp.MethodGet, "http://example.com/", nil)
+	req.Host = "trusted.example@evil.example"
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+	if recorder.Code != stdhttp.StatusMisdirectedRequest {
+		t.Fatalf("非法 Host 即使未配置白名单也应返回 421，实际为 %d", recorder.Code)
 	}
 }
 
@@ -153,7 +195,7 @@ func TestCompressionSkipsSmallResponse(t *testing.T) {
 		return fwcontext.NewResponse().Content("tiny")
 	})
 
-	handler := NewHttp(app)
+	handler := newTestHTTPHandler(t, app)
 	req := httptest.NewRequest(stdhttp.MethodGet, "http://example.com/tiny", nil)
 	req.Header.Set("Accept-Encoding", "gzip")
 	recorder := httptest.NewRecorder()
@@ -188,7 +230,7 @@ func TestCompressionCompressesLargeResponse(t *testing.T) {
 		return fwcontext.NewResponse().Content(largeBody)
 	})
 
-	handler := NewHttp(app)
+	handler := newTestHTTPHandler(t, app)
 	req := httptest.NewRequest(stdhttp.MethodGet, "http://example.com/large", nil)
 	req.Header.Set("Accept-Encoding", "gzip")
 	recorder := httptest.NewRecorder()
@@ -235,7 +277,7 @@ func TestNewServerUsesConfiguredTimeouts(t *testing.T) {
 		"multipart_max_memory_mb": 4,
 	})
 
-	handler := NewHttp(app)
+	handler := newTestHTTPHandler(t, app)
 	server := handler.newServer()
 
 	if server.Addr != "127.0.0.1:18080" {
@@ -275,7 +317,7 @@ func TestServeHTTPRejectsOversizedRequestBody(t *testing.T) {
 		return fwcontext.NewResponse().Content(string(body))
 	})
 
-	handler := NewHttp(app)
+	handler := newTestHTTPHandler(t, app)
 	req := httptest.NewRequest(stdhttp.MethodPost, "http://example.com/echo", strings.NewReader("0123456789"))
 	recorder := httptest.NewRecorder()
 
@@ -300,7 +342,7 @@ func TestServeHTTPRejectsChunkedOversizedRequestBody(t *testing.T) {
 		return fwcontext.NewResponse().Content("name=" + name)
 	})
 
-	handler := NewHttp(app)
+	handler := newTestHTTPHandler(t, app)
 	req := httptest.NewRequest(stdhttp.MethodPost, "http://example.com/profile?name=query", strings.NewReader(`{"name":"0123456789"}`))
 	req.ContentLength = -1
 	req.TransferEncoding = []string{"chunked"}
@@ -314,5 +356,125 @@ func TestServeHTTPRejectsChunkedOversizedRequestBody(t *testing.T) {
 	}
 	if strings.Contains(recorder.Body.String(), "query") {
 		t.Fatalf("body 读取失败后不应回落到 query 参数，实际响应为 %q", recorder.Body.String())
+	}
+}
+
+// TestServeHTTPRejectsStaticSymlinkEscape 验证 public 内符号链接不能跳转到根目录之外读取文件。
+func TestServeHTTPRejectsStaticSymlinkEscape(t *testing.T) {
+	basePath := t.TempDir()
+	publicDir := filepath.Join(basePath, "public")
+	if err := os.MkdirAll(publicDir, 0o755); err != nil {
+		t.Fatalf("创建 public 目录失败: %v", err)
+	}
+	secretPath := filepath.Join(basePath, "secret.txt")
+	if err := os.WriteFile(secretPath, []byte("symlink-secret"), 0o600); err != nil {
+		t.Fatalf("写入敏感文件失败: %v", err)
+	}
+	linkPath := filepath.Join(publicDir, "linked.txt")
+	if err := os.Symlink(secretPath, linkPath); err != nil {
+		t.Skipf("当前环境不允许创建符号链接: %v", err)
+	}
+
+	handler := newTestHTTPHandler(t, newTestHTTPApp(t, basePath, map[string]interface{}{"enable": false}))
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(stdhttp.MethodGet, "http://example.com/linked.txt", nil))
+	if recorder.Code != stdhttp.StatusNotFound || strings.Contains(recorder.Body.String(), "symlink-secret") {
+		t.Fatalf("越界符号链接必须返回 404，status=%d body=%q", recorder.Code, recorder.Body.String())
+	}
+}
+
+// TestServeHTTPDoesNotUseSPAFallbackForWriteMethods 验证写请求未命中路由时不会伪装成 SPA 页面成功响应。
+func TestServeHTTPDoesNotUseSPAFallbackForWriteMethods(t *testing.T) {
+	basePath := t.TempDir()
+	publicDir := filepath.Join(basePath, "public")
+	if err := os.MkdirAll(publicDir, 0o755); err != nil {
+		t.Fatalf("创建 public 目录失败: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(publicDir, "index.html"), []byte("spa-index"), 0o600); err != nil {
+		t.Fatalf("写入 SPA 入口失败: %v", err)
+	}
+
+	handler := newTestHTTPHandler(t, newTestHTTPApp(t, basePath, map[string]interface{}{"enable": false}))
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(stdhttp.MethodPost, "http://example.com/missing", nil))
+	if recorder.Code != stdhttp.StatusNotFound || strings.Contains(recorder.Body.String(), "spa-index") {
+		t.Fatalf("POST 未命中应返回 404，status=%d body=%q", recorder.Code, recorder.Body.String())
+	}
+}
+
+// TestServeHTTPRejectsMalformedJSONBeforeBusiness 验证结构化请求体错误在进入中间件和业务前被阻断。
+func TestServeHTTPRejectsMalformedJSONBeforeBusiness(t *testing.T) {
+	basePath := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(basePath, "public"), 0o755); err != nil {
+		t.Fatalf("创建 public 目录失败: %v", err)
+	}
+	app := newTestHTTPApp(t, basePath, map[string]interface{}{"enable": false})
+	var calls atomic.Int32
+	if _, err := app.Route.Post("/users", func(req *fwcontext.Request) *fwcontext.Response {
+		calls.Add(1)
+		return fwcontext.NewResponse().Content("created")
+	}); err != nil {
+		t.Fatalf("注册路由失败: %v", err)
+	}
+	handler := newTestHTTPHandler(t, app)
+	req := httptest.NewRequest(stdhttp.MethodPost, "http://example.com/users", strings.NewReader(`{"role":"user","role":"admin"}`))
+	req.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+	if recorder.Code != stdhttp.StatusBadRequest || calls.Load() != 0 {
+		t.Fatalf("非法 JSON 必须在业务前返回 400，status=%d calls=%d", recorder.Code, calls.Load())
+	}
+}
+
+// TestServeHTTPReturnsMethodNotAllowed 验证路径存在但方法不匹配时返回 405 和稳定 Allow 头。
+func TestServeHTTPReturnsMethodNotAllowed(t *testing.T) {
+	app := newTestHTTPApp(t, t.TempDir(), map[string]interface{}{"enable": false})
+	if _, err := app.Route.Get("/items", "Item@Index"); err != nil {
+		t.Fatalf("注册路由失败: %v", err)
+	}
+	handler := newTestHTTPHandler(t, app)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(stdhttp.MethodPost, "http://example.com/items", nil))
+	if recorder.Code != stdhttp.StatusMethodNotAllowed {
+		t.Fatalf("方法不匹配应返回 405，实际为 %d", recorder.Code)
+	}
+	if recorder.Header().Get("Allow") != "GET, HEAD, OPTIONS" {
+		t.Fatalf("Allow 头错误: %q", recorder.Header().Get("Allow"))
+	}
+}
+
+// TestNewHttpRejectsUnsafeConfiguration 验证服务安全边界配置不会被截断或静默回退。
+func TestNewHttpRejectsUnsafeConfiguration(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*framework.App)
+	}{
+		{name: "小数端口", mutate: func(app *framework.App) { app.Config.Set("app.server.port", 8080.5) }},
+		{name: "非法代理网段", mutate: func(app *framework.App) { app.Config.Set("app.server.trusted_proxies", []interface{}{"127.0.0.1/33"}) }},
+		{name: "HTTP3 未启用 TLS", mutate: func(app *framework.App) { app.Config.Set("app.server.http3", true) }},
+		{name: "零请求体上限", mutate: func(app *framework.App) { app.Config.Set("app.server.max_body_bytes", 0) }},
+		{name: "读取超时短于请求头超时", mutate: func(app *framework.App) {
+			app.Config.Set("app.server.read_header_timeout_ms", 2000)
+			app.Config.Set("app.server.read_timeout_ms", 1000)
+		}},
+		{name: "未知配置键", mutate: func(app *framework.App) { app.Config.Set("app.server.max_boby_bytes", 100) }},
+		{name: "非法 gzip 等级", mutate: func(app *framework.App) {
+			app.Config.Set("app.compression", map[string]interface{}{"enable": true, "levels": map[string]interface{}{"gzip": 99}})
+		}},
+		{name: "大小写重复的压缩算法", mutate: func(app *framework.App) {
+			app.Config.Set("app.compression", map[string]interface{}{
+				"enable": true,
+				"levels": map[string]interface{}{"gzip": 1, "GZIP": 2},
+			})
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			app := newTestHTTPApp(t, t.TempDir(), map[string]interface{}{"enable": false})
+			test.mutate(app)
+			if _, err := NewHttp(app); !errors.Is(err, ErrInvalidHTTPConfig) {
+				t.Fatalf("应返回 ErrInvalidHTTPConfig，实际为 %v", err)
+			}
+		})
 	}
 }

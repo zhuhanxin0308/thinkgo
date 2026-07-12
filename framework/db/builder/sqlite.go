@@ -26,6 +26,8 @@ func (s *Sqlite) QuoteIdentifier(name string) string {
 	return sqliteQuote(name)
 }
 
+func (s *Sqlite) QuoteFields(fields string) string { return sqliteQuoteFields(fields) }
+
 // Select builds a SELECT query
 func (s *Sqlite) Select(table string, fields string, where []string, order string, limit int, offset int) string {
 	query := fmt.Sprintf("SELECT %s FROM %s", sqliteQuoteFields(fields), sqliteQuote(table))
@@ -40,11 +42,13 @@ func (s *Sqlite) Select(table string, fields string, where []string, order strin
 func (s *Sqlite) Pagination(order string, limit int, offset int) (string, string) {
 	orderClause := ""
 	if order != "" {
-		orderClause = " ORDER BY " + order
+		orderClause = " ORDER BY " + quoteOrderWith(order, `"`, `"`)
 	}
 	limitClause := ""
 	if limit > 0 {
 		limitClause += fmt.Sprintf(" LIMIT %d", limit)
+	} else if offset > 0 {
+		limitClause = " LIMIT -1"
 	}
 	if offset > 0 {
 		limitClause += fmt.Sprintf(" OFFSET %d", offset)
@@ -58,6 +62,9 @@ func (s *Sqlite) LockClause(string) string { return "" }
 // SupportsLastInsertId SQLite 支持 LastInsertId。
 func (s *Sqlite) SupportsLastInsertId() bool { return true }
 
+// MaxBindParams 返回 SQLite 默认编译配置的保守参数上限。
+func (s *Sqlite) MaxBindParams() int { return 999 }
+
 // InsertReturning SQLite 无需 RETURNING 写法。
 func (s *Sqlite) InsertReturning(string, map[string]interface{}, string) (string, []interface{}, bool) {
 	return "", nil, false
@@ -69,9 +76,9 @@ func (s *Sqlite) Insert(table string, data map[string]interface{}) (string, []in
 	values := make([]interface{}, 0, len(data))
 	placeholders := make([]string, 0, len(data))
 
-	for k, v := range data {
+	for _, k := range sortedMapKeys(data) {
 		keys = append(keys, sqliteQuote(k))
-		values = append(values, v)
+		values = append(values, data[k])
 		placeholders = append(placeholders, "?")
 	}
 
@@ -88,9 +95,9 @@ func (s *Sqlite) Update(table string, data map[string]interface{}, where []strin
 	sets := make([]string, 0, len(data))
 	values := make([]interface{}, 0, len(data))
 
-	for k, v := range data {
+	for _, k := range sortedMapKeys(data) {
 		sets = append(sets, fmt.Sprintf("%s = ?", sqliteQuote(k)))
-		values = append(values, v)
+		values = append(values, data[k])
 	}
 
 	query := fmt.Sprintf("UPDATE %s SET %s", sqliteQuote(table), strings.Join(sets, ", "))

@@ -2,8 +2,8 @@ package command
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
+
 	"thinkgo/framework/console"
 )
 
@@ -15,31 +15,13 @@ type MakeMiddleware struct {
 func (c *MakeMiddleware) Configure() {
 	c.Signature = "make:middleware"
 	c.Description = "Create a new middleware class"
+	c.AddArgument("name", "Middleware type name", true)
 }
 
-func (c *MakeMiddleware) Execute(input *console.Input, output *console.Output) {
-	name, err := normalizeGeneratorName(input.GetArgument(0), "")
+func (c *MakeMiddleware) Execute(input *console.Input, output *console.Output) error {
+	name, err := normalizedGeneratorInput(c.App, input, output, "")
 	if err != nil {
-		output.Error("Invalid middleware name: " + err.Error())
-		return
-	}
-
-	// Ensure directory exists
-	dir := filepath.Join(c.App.BasePath, "app", "middleware")
-	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			output.Error(fmt.Sprintf("Failed to create middleware directory: %v", err))
-			return
-		}
-	}
-
-	// File path
-	filename := filepath.Join(dir, lowerGoFilename(name))
-
-	// Check if exists
-	if _, err := os.Stat(filename); !os.IsNotExist(err) {
-		output.Error(fmt.Sprintf("Middleware %s already exists.", name))
-		return
+		return fmt.Errorf("invalid middleware name: %w", err)
 	}
 
 	// Content
@@ -63,11 +45,10 @@ func (m *%s) Handle(req *context.Request, next middleware.Next) *context.Respons
 }
 `, name, name, name)
 
-	// Write file
-	if err := os.WriteFile(filename, []byte(content), 0644); err != nil {
-		output.Error(fmt.Sprintf("Failed to create middleware: %v", err))
-		return
+	if err := writeGeneratedAppSource(c.App, filepath.Join("app", "middleware"), lowerGoFilename(name), []byte(content)); err != nil {
+		return fmt.Errorf("create middleware %s: %w", name, err)
 	}
 
 	output.Success(fmt.Sprintf("Middleware %s created successfully.", name))
+	return nil
 }

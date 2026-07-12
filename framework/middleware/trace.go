@@ -12,6 +12,7 @@ import (
 
 	"thinkgo/framework/context"
 	"thinkgo/framework/debug"
+	frameworkVersion "thinkgo/framework/version"
 )
 
 // Trace middleware
@@ -309,7 +310,7 @@ func buildDebugBar(info map[string]interface{}) string {
 func renderBasePanel(info map[string]interface{}) string {
 	var builder strings.Builder
 	builder.WriteString(`<table class="tg-table">`)
-	writeDebugRow(&builder, "Version", "ThinkGo 1.0.0")
+	writeDebugRow(&builder, "Version", frameworkVersion.Framework)
 	writeDebugRow(&builder, "Time", fmt.Sprintf("%.4fs", debugFloat64(info["time"])))
 	writeDebugRow(&builder, "Memory", formatDebugBytes(debugUint64(info["mem"])))
 	writeDebugRow(&builder, "Method", debugText(info["req_method"]))

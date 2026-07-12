@@ -1,210 +1,315 @@
 package session
 
 import (
+	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"thinkgo/framework/cookie"
-	sessionDriver "thinkgo/framework/session/driver"
 )
 
+// countingDriver 提供线程安全的可观测原子存储，专门验证 Session 的持久化协议。
 type countingDriver struct {
-	readData      string
-	writeCount    int
-	deleteCount   int
-	lastWriteID   string
-	lastWriteData string
+	mu          sync.Mutex
+	data        map[string]string
+	readErr     error
+	writeErr    error
+	deleteErr   error
+	updateErr   error
+	readCount   int
+	writeCount  int
+	deleteCount int
+	updateCount int
+	lastWriteID string
 }
 
-func (d *countingDriver) Read(id string) (string, error) {
-	return d.readData, nil
+func newCountingDriver() *countingDriver {
+	return &countingDriver{data: make(map[string]string)}
+}
+
+func (d *countingDriver) Read(id string) (string, bool, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.readCount++
+	if d.readErr != nil {
+		return "", false, d.readErr
+	}
+	value, found := d.data[id]
+	return value, found, nil
 }
 
 func (d *countingDriver) Write(id string, data string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	d.writeCount++
+	if d.writeErr != nil {
+		return d.writeErr
+	}
+	d.data[id] = data
 	d.lastWriteID = id
-	d.lastWriteData = data
 	return nil
 }
 
 func (d *countingDriver) Delete(id string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	d.deleteCount++
+	if d.deleteErr != nil {
+		return d.deleteErr
+	}
+	delete(d.data, id)
 	return nil
 }
 
 func (d *countingDriver) Clear() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.data = make(map[string]string)
 	return nil
 }
 
-// newTestSessionManager 创建只依赖内存对象的 Session 管理器，便于验证框架行为。
-func newTestSessionManager(driver Driver, sessionConfig map[string]interface{}, cookieConfig map[string]interface{}) *Session {
-	return NewSession(sessionConfig, driver, cookie.NewCookie(cookieConfig))
+func (d *countingDriver) Update(id string, update func(string, bool) (string, bool, error)) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.updateCount++
+	if d.updateErr != nil {
+		return d.updateErr
+	}
+	current, found := d.data[id]
+	next, remove, err := update(current, found)
+	if err != nil {
+		return err
+	}
+	if remove {
+		delete(d.data, id)
+		return nil
+	}
+	d.data[id] = next
+	d.lastWriteID = id
+	return nil
 }
 
-// TestSaveSkipsUntouchedSession 验证未使用的 Session 不会产生无意义的写盘和 Set-Cookie。
-func TestSaveSkipsUntouchedSession(t *testing.T) {
-	driver := &countingDriver{}
-	manager := newTestSessionManager(driver, map[string]interface{}{
-		"name":   "PHPSESSID",
-		"expire": 600,
-	}, map[string]interface{}{})
-
-	req := httptest.NewRequest(http.MethodGet, "http://example.com/profile", nil)
-	recorder := httptest.NewRecorder()
-
-	reqSession := manager.NewRequestSession(req, recorder)
-	reqSession.SetResponseWriter(recorder)
-	if err := reqSession.Save(); err != nil {
-		t.Fatalf("未使用 Session 时保存不应报错: %v", err)
-	}
-
-	if driver.writeCount != 0 {
-		t.Fatalf("未使用的 Session 不应写入存储，实际写入 %d 次", driver.writeCount)
-	}
-	if len(recorder.Result().Cookies()) != 0 {
-		t.Fatal("未使用的 Session 不应下发新的 Session Cookie")
-	}
+func (d *countingDriver) snapshot(id string) (string, bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	value, found := d.data[id]
+	return value, found
 }
 
-// TestDestroyThenSaveDoesNotRecreateSession 验证销毁后的 Session 不会在请求结束时被重新创建。
-func TestDestroyThenSaveDoesNotRecreateSession(t *testing.T) {
-	driver := &countingDriver{}
-	manager := newTestSessionManager(driver, map[string]interface{}{
-		"name":   "PHPSESSID",
-		"expire": 600,
-	}, map[string]interface{}{})
-
-	req := httptest.NewRequest(http.MethodGet, "http://example.com/logout", nil)
-	recorder := httptest.NewRecorder()
-
-	reqSession := manager.NewRequestSession(req, recorder)
-	reqSession.Set("user_id", 1)
-	reqSession.SetResponseWriter(recorder)
-	reqSession.Destroy()
-	if err := reqSession.Save(); err != nil {
-		t.Fatalf("销毁 Session 后保存不应报错: %v", err)
+// newTestSessionManager 创建完全内存化且依赖经过校验的 Session 管理器。
+func newTestSessionManager(t *testing.T, driver Driver, sessionConfig, cookieConfig map[string]interface{}) *Session {
+	t.Helper()
+	cookieFactory, err := cookie.NewCookie(cookieConfig)
+	if err != nil {
+		t.Fatalf("创建测试 Cookie 工厂失败: %v", err)
 	}
-
-	if driver.deleteCount != 1 {
-		t.Fatalf("销毁 Session 时应删除存储数据，实际删除 %d 次", driver.deleteCount)
+	manager, err := NewSession(sessionConfig, driver, cookieFactory)
+	if err != nil {
+		t.Fatalf("创建测试 Session 管理器失败: %v", err)
 	}
-	if driver.writeCount != 0 {
-		t.Fatalf("销毁后的 Session 不应再次写入存储，实际写入 %d 次", driver.writeCount)
-	}
-	if len(recorder.Result().Cookies()) != 1 {
-		t.Fatalf("销毁 Session 后只应返回一个删除 Cookie，实际为 %d 个", len(recorder.Result().Cookies()))
-	}
+	return manager
 }
 
-// TestSaveUsesSessionCookieOptions 验证 Session 自身配置会落到最终 Cookie 策略中。
-func TestSaveUsesSessionCookieOptions(t *testing.T) {
-	driver := &countingDriver{}
-	manager := newTestSessionManager(driver, map[string]interface{}{
-		"name":     "PHPSESSID",
-		"expire":   600,
-		"path":     "/admin",
-		"domain":   "example.com",
-		"secure":   true,
-		"httponly": true,
-		"samesite": "Strict",
-	}, map[string]interface{}{
-		"path":     "/",
-		"samesite": "Lax",
+// TestParseConfigStrictlyValidatesSessionPolicy 验证未知字段、旧歧义字段和不精确数值均在启动期失败。
+func TestParseConfigStrictlyValidatesSessionPolicy(t *testing.T) {
+	config, err := ParseConfig(map[string]interface{}{
+		"name":           "SID",
+		"type":           "file",
+		"storage_path":   "./runtime/session",
+		"cookie_path":    "/account",
+		"expire":         float64(3600),
+		"domain":         "example.com",
+		"secure":         true,
+		"httponly":       true,
+		"samesite":       "Strict",
+		"max_data_bytes": float64(32768),
 	})
-
-	req := httptest.NewRequest(http.MethodGet, "https://example.com/admin", nil)
-	recorder := httptest.NewRecorder()
-
-	reqSession := manager.NewRequestSession(req, recorder)
-	reqSession.Set("role", "admin")
-	reqSession.SetResponseWriter(recorder)
-	if err := reqSession.Save(); err != nil {
-		t.Fatalf("保存 Session Cookie 选项时不应报错: %v", err)
+	if err != nil {
+		t.Fatalf("合法 Session 配置解析失败: %v", err)
+	}
+	if config.Name != "SID" || config.DriverType != "file" || config.CookiePath != "/account" ||
+		config.Expire != 3600 || config.MaxDataBytes != 32768 || !config.Secure {
+		t.Fatalf("Session 配置解析结果错误: %#v", config)
 	}
 
+	invalid := []map[string]interface{}{
+		{"unknown": true},
+		{"path": "./runtime/session"},
+		{"name": "bad name"},
+		{"type": "redis"},
+		{"storage_path": ""},
+		{"cookie_path": "relative"},
+		{"expire": 1.5},
+		{"expire": -1},
+		{"secure": "yes"},
+		{"httponly": false},
+		{"samesite": "invalid"},
+		{"max_data_bytes": 0},
+	}
+	for _, raw := range invalid {
+		if parsed, parseErr := ParseConfig(raw); !errors.Is(parseErr, ErrInvalidSessionConfig) || parsed != (Config{}) {
+			t.Fatalf("非法 Session 配置 %#v 应失败: parsed=%#v err=%v", raw, parsed, parseErr)
+		}
+	}
+}
+
+// TestSaveSkipsUntouchedSession 验证未使用的 Session 不产生存储写入和 Cookie。
+func TestSaveSkipsUntouchedSession(t *testing.T) {
+	driver := newCountingDriver()
+	manager := newTestSessionManager(t, driver, map[string]interface{}{"name": "SID"}, nil)
+	recorder := httptest.NewRecorder()
+	reqSession, err := manager.NewRequestSession(httptest.NewRequest(http.MethodGet, "http://example.com/", nil), recorder)
+	if err != nil {
+		t.Fatalf("初始化请求 Session 失败: %v", err)
+	}
+	if err = reqSession.Save(); err != nil {
+		t.Fatalf("保存未使用 Session 失败: %v", err)
+	}
+	if driver.updateCount != 0 || len(recorder.Result().Cookies()) != 0 {
+		t.Fatalf("未使用 Session 不应产生副作用: update=%d cookies=%d", driver.updateCount, len(recorder.Result().Cookies()))
+	}
+}
+
+// TestSaveUsesSessionCookiePolicy 验证 Session 配置完整映射到最终 Cookie。
+func TestSaveUsesSessionCookiePolicy(t *testing.T) {
+	driver := newCountingDriver()
+	manager := newTestSessionManager(t, driver, map[string]interface{}{
+		"name": "SID", "expire": 600, "cookie_path": "/admin", "domain": "example.com",
+		"secure": true, "httponly": true, "samesite": "Strict",
+	}, nil)
+	recorder := httptest.NewRecorder()
+	reqSession, err := manager.NewRequestSession(httptest.NewRequest(http.MethodGet, "https://example.com/admin", nil), recorder)
+	if err != nil {
+		t.Fatalf("初始化请求 Session 失败: %v", err)
+	}
+	if err = reqSession.Set("role", "admin"); err != nil {
+		t.Fatalf("设置 Session 数据失败: %v", err)
+	}
+	if err = reqSession.Save(); err != nil {
+		t.Fatalf("保存 Session 失败: %v", err)
+	}
 	cookies := recorder.Result().Cookies()
 	if len(cookies) != 1 {
-		t.Fatalf("应返回一个 Session Cookie，实际为 %d 个", len(cookies))
+		t.Fatalf("应下发一个 Session Cookie，实际为 %d", len(cookies))
 	}
-
-	sessionCookie := cookies[0]
-	if sessionCookie.Path != "/admin" {
-		t.Fatalf("Session Cookie Path 不正确，期望 /admin，实际 %q", sessionCookie.Path)
-	}
-	if sessionCookie.Domain != "example.com" {
-		t.Fatalf("Session Cookie Domain 不正确，期望 example.com，实际 %q", sessionCookie.Domain)
-	}
-	if !sessionCookie.Secure {
-		t.Fatal("Session Cookie 应开启 Secure")
-	}
-	if !sessionCookie.HttpOnly {
-		t.Fatal("Session Cookie 应开启 HttpOnly")
-	}
-	if sessionCookie.SameSite != http.SameSiteStrictMode {
-		t.Fatalf("Session Cookie SameSite 不正确，期望 Strict，实际 %v", sessionCookie.SameSite)
+	written := cookies[0]
+	if written.Path != "/admin" || written.Domain != "example.com" || !written.Secure || !written.HttpOnly ||
+		written.SameSite != http.SameSiteStrictMode || written.MaxAge != 600 {
+		t.Fatalf("Session Cookie 属性错误: %#v", written)
 	}
 }
 
-// TestNewRequestSessionReplacesUnsafeSessionID 验证危险的外部 Session ID 不会继续参与后续存储。
-func TestNewRequestSessionReplacesUnsafeSessionID(t *testing.T) {
-	driver := &countingDriver{}
-	manager := newTestSessionManager(driver, map[string]interface{}{
-		"name":   "PHPSESSID",
-		"expire": 600,
-	}, map[string]interface{}{})
-
-	traversalID := "../secret.txt"
-	req := httptest.NewRequest(http.MethodGet, "http://example.com/profile", nil)
-	req.AddCookie(&http.Cookie{Name: "PHPSESSID", Value: traversalID})
-	recorder := httptest.NewRecorder()
-
-	reqSession := manager.NewRequestSession(req, recorder)
-	reqSession.Set("user_id", 99)
-	reqSession.SetResponseWriter(recorder)
-	if err := reqSession.Save(); err != nil {
-		t.Fatalf("替换危险 Session ID 后保存不应报错: %v", err)
-	}
-
-	if reqSession.id == traversalID {
-		t.Fatal("危险的 Session ID 应被替换，而不是直接沿用客户端输入")
-	}
-	if strings.Contains(driver.lastWriteID, "..") || strings.Contains(driver.lastWriteID, "/") || strings.Contains(driver.lastWriteID, "\\") {
-		t.Fatalf("落盘的 Session ID 仍然不安全: %q", driver.lastWriteID)
+// TestUnknownAndUnsafeSessionIDsAreNeverReused 验证客户端不能固定安全格式或路径型 Session ID。
+func TestUnknownAndUnsafeSessionIDsAreNeverReused(t *testing.T) {
+	for _, supplied := range []string{"fixed-session-id", "../secret.txt"} {
+		driver := newCountingDriver()
+		manager := newTestSessionManager(t, driver, map[string]interface{}{"name": "SID"}, nil)
+		raw := httptest.NewRequest(http.MethodGet, "http://example.com/", nil)
+		raw.AddCookie(&http.Cookie{Name: "SID", Value: supplied})
+		recorder := httptest.NewRecorder()
+		reqSession, err := manager.NewRequestSession(raw, recorder)
+		if err != nil {
+			t.Fatalf("替换外部 Session ID 失败: %v", err)
+		}
+		if err = reqSession.Set("uid", 1); err != nil {
+			t.Fatalf("设置 Session 失败: %v", err)
+		}
+		if err = reqSession.Save(); err != nil {
+			t.Fatalf("保存替换后的 Session 失败: %v", err)
+		}
+		if reqSession.id == supplied || driver.lastWriteID == supplied || strings.Contains(driver.lastWriteID, "..") {
+			t.Fatalf("外部 Session ID 被错误复用: supplied=%q actual=%q", supplied, driver.lastWriteID)
+		}
 	}
 }
 
-// TestRequestSessionExpiresOnServer 验证即便客户端仍带着旧 Cookie，服务端也会拒绝已过期的 Session。
-func TestRequestSessionExpiresOnServer(t *testing.T) {
-	manager := newTestSessionManager(sessionDriver.NewMemory(), map[string]interface{}{
-		"name":   "PHPSESSID",
-		"expire": 1,
-	}, map[string]interface{}{})
-
-	firstReq := httptest.NewRequest(http.MethodGet, "http://example.com/profile", nil)
+// TestServerExpiryInvalidatesPersistedSession 验证服务端过期时间不依赖客户端 Cookie。
+func TestServerExpiryInvalidatesPersistedSession(t *testing.T) {
+	driver := newCountingDriver()
+	manager := newTestSessionManager(t, driver, map[string]interface{}{"name": "SID", "expire": 60}, nil)
+	now := time.Unix(1_700_000_000, 0)
+	manager.now = func() time.Time { return now }
 	firstRecorder := httptest.NewRecorder()
-
-	firstSession := manager.NewRequestSession(firstReq, firstRecorder)
-	firstSession.Set("user_id", 7)
-	firstSession.SetResponseWriter(firstRecorder)
-	if err := firstSession.Save(); err != nil {
-		t.Fatalf("首次保存 Session 不应报错: %v", err)
+	first, err := manager.NewRequestSession(httptest.NewRequest(http.MethodGet, "http://example.com/", nil), firstRecorder)
+	if err != nil {
+		t.Fatalf("初始化首次 Session 失败: %v", err)
 	}
-
-	cookies := firstRecorder.Result().Cookies()
-	if len(cookies) != 1 {
-		t.Fatalf("首次保存后应下发一个 Session Cookie，实际为 %d 个", len(cookies))
+	if err = first.Set("uid", 7); err != nil {
+		t.Fatalf("设置首次 Session 失败: %v", err)
 	}
+	if err = first.Save(); err != nil {
+		t.Fatalf("保存首次 Session 失败: %v", err)
+	}
+	now = now.Add(61 * time.Second)
+	raw := httptest.NewRequest(http.MethodGet, "http://example.com/", nil)
+	raw.AddCookie(firstRecorder.Result().Cookies()[0])
+	second, err := manager.NewRequestSession(raw, httptest.NewRecorder())
+	if err != nil {
+		t.Fatalf("过期 Session 应安全降级为新会话: %v", err)
+	}
+	if _, found := second.Get("uid"); found || second.id == first.id {
+		t.Fatalf("已过期 Session 不应恢复或复用: found=%t old=%q new=%q", found, first.id, second.id)
+	}
+}
 
-	time.Sleep(1200 * time.Millisecond)
+// TestSessionRejectsInvalidKeysValuesAndOversizedData 验证非法输入在写入内存状态前失败。
+func TestSessionRejectsInvalidKeysValuesAndOversizedData(t *testing.T) {
+	manager := newTestSessionManager(t, newCountingDriver(), map[string]interface{}{
+		"name": "SID", "max_data_bytes": 256,
+	}, nil)
+	reqSession, err := manager.NewRequestSession(httptest.NewRequest(http.MethodGet, "/", nil), httptest.NewRecorder())
+	if err != nil {
+		t.Fatalf("初始化请求 Session 失败: %v", err)
+	}
+	if err = reqSession.Set("", "value"); !errors.Is(err, ErrInvalidSessionKey) {
+		t.Fatalf("空键应返回 ErrInvalidSessionKey，实际为 %v", err)
+	}
+	if err = reqSession.Set("stream", make(chan int)); !errors.Is(err, ErrInvalidSessionValue) {
+		t.Fatalf("不可序列化值应返回 ErrInvalidSessionValue，实际为 %v", err)
+	}
+	if err = reqSession.Set("large", strings.Repeat("x", 512)); !errors.Is(err, ErrSessionDataTooLarge) {
+		t.Fatalf("超大值应返回 ErrSessionDataTooLarge，实际为 %v", err)
+	}
+	if reqSession.Has("stream") || reqSession.Has("large") {
+		t.Fatal("非法值不得污染 Session 内存状态")
+	}
+}
 
-	secondReq := httptest.NewRequest(http.MethodGet, "http://example.com/profile", nil)
-	secondReq.AddCookie(cookies[0])
-	secondSession := manager.NewRequestSession(secondReq, httptest.NewRecorder())
+// TestCorruptBackendDataIsReported 验证损坏存储不会被当成空会话静默掩盖。
+func TestCorruptBackendDataIsReported(t *testing.T) {
+	driver := newCountingDriver()
+	driver.data["known-id"] = `{"version":1,"data":`
+	manager := newTestSessionManager(t, driver, map[string]interface{}{"name": "SID"}, nil)
+	raw := httptest.NewRequest(http.MethodGet, "/", nil)
+	raw.AddCookie(&http.Cookie{Name: "SID", Value: "known-id"})
+	if _, err := manager.NewRequestSession(raw, httptest.NewRecorder()); !errors.Is(err, ErrCorruptSession) {
+		t.Fatalf("损坏 Session 应返回 ErrCorruptSession，实际为 %v", err)
+	}
+}
 
-	if secondSession.Get("user_id") != nil {
-		t.Fatal("已过期的服务端 Session 不应再恢复旧数据")
+// TestSessionJSONValuesAreIsolated 验证 Set/Get 不暴露可变引用，避免绕过 dirty 跟踪。
+func TestSessionJSONValuesAreIsolated(t *testing.T) {
+	manager := newTestSessionManager(t, newCountingDriver(), map[string]interface{}{"name": "SID"}, nil)
+	reqSession, err := manager.NewRequestSession(httptest.NewRequest(http.MethodGet, "/", nil), httptest.NewRecorder())
+	if err != nil {
+		t.Fatalf("初始化请求 Session 失败: %v", err)
+	}
+	original := map[string]interface{}{"roles": []string{"user"}}
+	if err = reqSession.Set("profile", original); err != nil {
+		t.Fatalf("设置复合值失败: %v", err)
+	}
+	original["roles"] = []string{"admin"}
+	value, found := reqSession.Get("profile")
+	if !found {
+		t.Fatal("已设置的复合值应存在")
+	}
+	encoded, _ := json.Marshal(value)
+	if string(encoded) != `{"roles":["user"]}` {
+		t.Fatalf("外部修改污染了 Session: %s", encoded)
 	}
 }

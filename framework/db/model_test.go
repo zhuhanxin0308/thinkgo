@@ -78,12 +78,18 @@ func TestModelTableName(t *testing.T) {
 	type User struct{}
 	type UserSession struct{}
 
-	name1 := GetTableName(User{})
+	name1, err := GetTableName(User{})
+	if err != nil {
+		t.Fatalf("推断 User 表名失败: %v", err)
+	}
 	if name1 != "user" {
 		t.Fatalf("User 应推断为 user，实际 %s", name1)
 	}
 
-	name2 := GetTableName(UserSession{})
+	name2, err := GetTableName(UserSession{})
+	if err != nil {
+		t.Fatalf("推断 UserSession 表名失败: %v", err)
+	}
 	if name2 != "user_session" {
 		t.Fatalf("UserSession 应推断为 user_session，实际 %s", name2)
 	}

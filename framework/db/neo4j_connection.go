@@ -5,43 +5,89 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/neo4j/neo4j-go-driver/v5/neo4j"
 )
 
-// Neo4jConnection Neo4j 图数据库连接实现
-// 将框架统一查询 API 映射为 Cypher 查询
-// table 参数映射为 Neo4j 的 Label（节点标签）
+const (
+	defaultNeo4jOpTimeout = 10 * time.Second
+	maxCypherLikeLength   = 4096
+)
+
+var cypherCollectionPlaceholders = regexp.MustCompile(`^\(\s*\?(?:\s*,\s*\?)*\s*\)$`)
+
+// Neo4jConnection 将统一查询接口映射为参数化 Cypher。
 type Neo4jConnection struct {
-	Driver neo4j.DriverWithContext
+	Driver           neo4j.DriverWithContext
+	Database         string
+	OperationTimeout time.Duration
+	closeOnce        sync.Once
+	closeErr         error
+	executor         neo4jOperationExecutor
 }
 
-// neo4jIdentifier 对将被直接拼接进 Cypher 的标签/属性名做纵深校验。
-// 即便上层查询构建器已校验，连接层仍独立把关，避免任何绕过路径导致 Cypher 注入。
-func neo4jIdentifier(name string) (string, error) {
-	name = strings.TrimSpace(name)
-	if err := validateIdentifier(name); err != nil {
-		return "", fmt.Errorf("不安全的 Neo4j 标识符 %q: %w", name, err)
+var _ ContextualConnection = (*Neo4jConnection)(nil)
+
+func (c *Neo4jConnection) validate() error {
+	if c == nil || (c.Driver == nil && c.executor == nil) {
+		return ErrDatabaseUnavailable
 	}
-	return name, nil
+	return nil
 }
 
-// Select 查询节点
-// table 作为 Label 使用
-func (c *Neo4jConnection) Select(table string, fields string, where []string, args []interface{}, order string, limit int, offset int) ([]map[string]interface{}, error) {
-	ctx := context.Background()
-	session := c.Driver.NewSession(ctx, neo4j.SessionConfig{AccessMode: neo4j.AccessModeRead})
-	defer session.Close(ctx)
+func (c *Neo4jConnection) operationContext(parent context.Context) (context.Context, context.CancelFunc, error) {
+	if err := c.validate(); err != nil {
+		return nil, nil, err
+	}
+	if parent == nil {
+		return nil, nil, fmt.Errorf("%w: Neo4j 上下文不能为空", ErrInvalidQuery)
+	}
+	timeout := c.OperationTimeout
+	if timeout <= 0 {
+		timeout = defaultNeo4jOpTimeout
+	}
+	ctx, cancel := context.WithTimeout(parent, timeout)
+	return ctx, cancel, nil
+}
 
-	label, err := neo4jIdentifier(table)
+func (c *Neo4jConnection) operationExecutor() neo4jOperationExecutor {
+	if c.executor != nil {
+		return c.executor
+	}
+	return &neo4jDriverExecutor{driver: c.Driver, database: c.Database}
+}
+
+func cypherIdentifier(name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if strings.Contains(name, ".") {
+		return "", fmt.Errorf("%w: Neo4j 标识符不支持点分层级 %q", ErrInvalidQuery, name)
+	}
+	if err := validateIdentifier(name); err != nil {
+		return "", fmt.Errorf("%w: 非法 Neo4j 标识符 %q: %w", ErrInvalidQuery, name, err)
+	}
+	return "`" + name + "`", nil
+}
+
+func (c *Neo4jConnection) Select(table, fields string, where []string, args []interface{}, order string, limit, offset int) ([]map[string]interface{}, error) {
+	return c.SelectContext(context.Background(), table, fields, where, args, order, limit, offset)
+}
+
+func (c *Neo4jConnection) SelectContext(parent context.Context, table, fields string, where []string, args []interface{}, order string, limit, offset int) ([]map[string]interface{}, error) {
+	ctx, cancel, err := c.operationContext(parent)
 	if err != nil {
 		return nil, err
 	}
-
-	// 构建 Cypher 查询
+	defer cancel()
+	if limit < 0 || offset < 0 {
+		return nil, ErrInvalidPagination
+	}
+	label, err := cypherIdentifier(table)
+	if err != nil {
+		return nil, err
+	}
 	cypher := fmt.Sprintf("MATCH (n:%s)", label)
-
-	// WHERE 子句
 	whereClause, params, err := c.buildCypherWhere(where, args)
 	if err != nil {
 		return nil, err
@@ -49,43 +95,44 @@ func (c *Neo4jConnection) Select(table string, fields string, where []string, ar
 	if whereClause != "" {
 		cypher += " WHERE " + whereClause
 	}
-
-	// RETURN 子句（字段投影）
-	if fields != "" && fields != "*" {
-		returnFields := make([]string, 0)
-		for _, f := range strings.Split(fields, ",") {
-			field, err := neo4jIdentifier(f)
+	projected := fields != "" && fields != "*"
+	if projected {
+		projections := make([]string, 0)
+		aliases := make(map[string]struct{})
+		for _, rawField := range strings.Split(fields, ",") {
+			field, alias, err := parseCypherProjection(rawField)
 			if err != nil {
 				return nil, err
 			}
-			returnFields = append(returnFields, fmt.Sprintf("n.%s AS %s", field, field))
+			if _, duplicated := aliases[alias]; duplicated {
+				return nil, fmt.Errorf("%w: Neo4j 投影别名 %s 重复", ErrInvalidQuery, alias)
+			}
+			aliases[alias] = struct{}{}
+			projections = append(projections, fmt.Sprintf("n.%s AS %s", field, alias))
 		}
-		cypher += " RETURN " + strings.Join(returnFields, ", ")
+		cypher += " RETURN " + strings.Join(projections, ", ")
 	} else {
 		cypher += " RETURN n"
 	}
-
-	// ORDER BY
 	if order != "" {
-		orderParts := make([]string, 0)
-		for _, part := range strings.Split(order, ",") {
-			part = strings.TrimSpace(part)
-			direction := ""
-			if strings.HasSuffix(strings.ToLower(part), " desc") {
-				part = strings.TrimSpace(part[:len(part)-5])
-				direction = " DESC"
-			} else if strings.HasSuffix(strings.ToLower(part), " asc") {
-				part = strings.TrimSpace(part[:len(part)-4])
-			}
-			field, err := neo4jIdentifier(part)
+		if err := validateOrderClause(order); err != nil {
+			return nil, fmt.Errorf("%w: 非法 Neo4j 排序: %w", ErrInvalidQuery, err)
+		}
+		parts := make([]string, 0)
+		for _, rawPart := range strings.Split(order, ",") {
+			items := strings.Fields(rawPart)
+			field, err := cypherIdentifier(items[0])
 			if err != nil {
 				return nil, err
 			}
-			orderParts = append(orderParts, fmt.Sprintf("n.%s%s", field, direction))
+			direction := ""
+			if len(items) == 2 {
+				direction = " " + strings.ToUpper(items[1])
+			}
+			parts = append(parts, "n."+field+direction)
 		}
-		cypher += " ORDER BY " + strings.Join(orderParts, ", ")
+		cypher += " ORDER BY " + strings.Join(parts, ", ")
 	}
-
 	if offset > 0 {
 		cypher += fmt.Sprintf(" SKIP %d", offset)
 	}
@@ -93,336 +140,377 @@ func (c *Neo4jConnection) Select(table string, fields string, where []string, ar
 		cypher += fmt.Sprintf(" LIMIT %d", limit)
 	}
 
-	result, err := session.Run(ctx, cypher, params)
+	records, err := c.operationExecutor().Collect(ctx, neo4j.AccessModeRead, cypher, params)
 	if err != nil {
 		return nil, err
 	}
-
-	var results []map[string]interface{}
-	for result.Next(ctx) {
-		record := result.Record()
-		if fields != "" && fields != "*" {
-			// 返回投影字段
-			row := make(map[string]interface{})
+	rows := make([]map[string]interface{}, 0, len(records))
+	for index, record := range records {
+		if projected {
+			row := make(map[string]interface{}, len(record.Keys))
+			seenKeys := make(map[string]struct{}, len(record.Keys))
 			for _, key := range record.Keys {
-				val, _ := record.Get(key)
-				row[key] = val
+				if _, duplicated := seenKeys[key]; duplicated {
+					return nil, fmt.Errorf("%w: Neo4j 第 %d 行包含重复字段 %q", ErrInvalidDatabaseRow, index, key)
+				}
+				seenKeys[key] = struct{}{}
+				value, exists := record.Get(key)
+				if !exists {
+					return nil, fmt.Errorf("%w: Neo4j 第 %d 行缺少字段 %q", ErrInvalidDatabaseRow, index, key)
+				}
+				row[key] = value
 			}
-			results = append(results, row)
-		} else {
-			// 返回节点属性
-			if node, ok := record.Values[0].(neo4j.Node); ok {
-				results = append(results, node.Props)
-			}
+			rows = append(rows, row)
+			continue
 		}
+		if len(record.Values) != 1 {
+			return nil, fmt.Errorf("%w: Neo4j 节点查询列数错误", ErrInvalidDatabaseRow)
+		}
+		node, ok := record.Values[0].(neo4j.Node)
+		if !ok {
+			return nil, fmt.Errorf("%w: Neo4j 返回值不是节点", ErrInvalidDatabaseRow)
+		}
+		rows = append(rows, cloneDatabaseMap(node.Props))
 	}
-
-	if err := result.Err(); err != nil {
-		return nil, err
-	}
-	return results, nil
+	return rows, nil
 }
 
-// Insert 创建节点
+func parseCypherProjection(raw string) (field, alias string, err error) {
+	item := strings.TrimSpace(raw)
+	aliasName := item
+	upper := strings.ToUpper(item)
+	if index := strings.Index(upper, " AS "); index >= 0 {
+		aliasName = strings.TrimSpace(item[index+4:])
+		item = strings.TrimSpace(item[:index])
+	}
+	field, err = cypherIdentifier(item)
+	if err != nil {
+		return "", "", err
+	}
+	alias, err = cypherIdentifier(aliasName)
+	return field, alias, err
+}
+
 func (c *Neo4jConnection) Insert(table string, data map[string]interface{}) (int64, error) {
-	ctx := context.Background()
-	session := c.Driver.NewSession(ctx, neo4j.SessionConfig{AccessMode: neo4j.AccessModeWrite})
-	defer session.Close(ctx)
-
-	label, err := neo4jIdentifier(table)
-	if err != nil {
-		return 0, err
-	}
-
-	cypher := fmt.Sprintf("CREATE (n:%s $props) RETURN elementId(n)", label)
-	result, err := session.Run(ctx, cypher, map[string]interface{}{"props": data})
-	if err != nil {
-		return 0, err
-	}
-
-	if result.Next(ctx) {
-		// elementId 返回字符串，返回 1 表示成功
-		return 1, nil
-	}
-
-	return 0, result.Err()
+	return c.InsertContext(context.Background(), table, data)
 }
 
-// Update 更新节点属性
-func (c *Neo4jConnection) Update(table string, data map[string]interface{}, where []string, args []interface{}) (int64, error) {
-	ctx := context.Background()
-	session := c.Driver.NewSession(ctx, neo4j.SessionConfig{AccessMode: neo4j.AccessModeWrite})
-	defer session.Close(ctx)
-
-	label, err := neo4jIdentifier(table)
+func (c *Neo4jConnection) InsertContext(parent context.Context, table string, data map[string]interface{}) (int64, error) {
+	ctx, cancel, err := c.operationContext(parent)
 	if err != nil {
 		return 0, err
 	}
+	defer cancel()
+	if len(data) == 0 {
+		return 0, fmt.Errorf("%w: Neo4j 插入数据不能为空", ErrInvalidQuery)
+	}
+	if err := validateDataKeys(data); err != nil {
+		return 0, fmt.Errorf("%w: 非法 Neo4j 属性: %w", ErrInvalidQuery, err)
+	}
+	label, err := cypherIdentifier(table)
+	if err != nil {
+		return 0, err
+	}
+	record, err := c.operationExecutor().Single(ctx, neo4j.AccessModeWrite, fmt.Sprintf("CREATE (n:%s $props) RETURN count(n)", label), map[string]interface{}{"props": cloneDatabaseMap(data)})
+	if err != nil {
+		return 0, err
+	}
+	return cypherCount(record)
+}
 
-	cypher := fmt.Sprintf("MATCH (n:%s)", label)
+func (c *Neo4jConnection) Update(table string, data map[string]interface{}, where []string, args []interface{}) (int64, error) {
+	return c.UpdateContext(context.Background(), table, data, where, args)
+}
 
+func (c *Neo4jConnection) UpdateContext(parent context.Context, table string, data map[string]interface{}, where []string, args []interface{}) (int64, error) {
+	if len(where) == 0 {
+		return 0, ErrUnsafeFullTableMutation
+	}
+	ctx, cancel, err := c.operationContext(parent)
+	if err != nil {
+		return 0, err
+	}
+	defer cancel()
+	if len(data) == 0 {
+		return 0, fmt.Errorf("%w: Neo4j 更新数据不能为空", ErrInvalidQuery)
+	}
+	if err := validateDataKeys(data); err != nil {
+		return 0, fmt.Errorf("%w: 非法 Neo4j 属性: %w", ErrInvalidQuery, err)
+	}
+	label, err := cypherIdentifier(table)
+	if err != nil {
+		return 0, err
+	}
 	whereClause, params, err := c.buildCypherWhere(where, args)
 	if err != nil {
 		return 0, err
 	}
+	params["props"] = cloneDatabaseMap(data)
+	cypher := fmt.Sprintf("MATCH (n:%s) WHERE %s SET n += $props RETURN count(n)", label, whereClause)
+	record, err := c.operationExecutor().Single(ctx, neo4j.AccessModeWrite, cypher, params)
+	if err != nil {
+		return 0, err
+	}
+	return cypherCount(record)
+}
+
+func (c *Neo4jConnection) Delete(table string, where []string, args []interface{}) (int64, error) {
+	return c.DeleteContext(context.Background(), table, where, args)
+}
+
+func (c *Neo4jConnection) DeleteContext(parent context.Context, table string, where []string, args []interface{}) (int64, error) {
+	if len(where) == 0 {
+		return 0, ErrUnsafeFullTableMutation
+	}
+	ctx, cancel, err := c.operationContext(parent)
+	if err != nil {
+		return 0, err
+	}
+	defer cancel()
+	label, err := cypherIdentifier(table)
+	if err != nil {
+		return 0, err
+	}
+	whereClause, params, err := c.buildCypherWhere(where, args)
+	if err != nil {
+		return 0, err
+	}
+	cypher := fmt.Sprintf("MATCH (n:%s) WHERE %s DETACH DELETE n", label, whereClause)
+	return c.operationExecutor().Execute(ctx, neo4j.AccessModeWrite, cypher, params)
+}
+
+func (c *Neo4jConnection) Count(table string, where []string, args []interface{}) (int64, error) {
+	return c.CountContext(context.Background(), table, where, args)
+}
+
+func (c *Neo4jConnection) CountContext(parent context.Context, table string, where []string, args []interface{}) (int64, error) {
+	ctx, cancel, err := c.operationContext(parent)
+	if err != nil {
+		return 0, err
+	}
+	defer cancel()
+	label, err := cypherIdentifier(table)
+	if err != nil {
+		return 0, err
+	}
+	whereClause, params, err := c.buildCypherWhere(where, args)
+	if err != nil {
+		return 0, err
+	}
+	cypher := fmt.Sprintf("MATCH (n:%s)", label)
 	if whereClause != "" {
 		cypher += " WHERE " + whereClause
 	}
-
-	// SET 子句
-	setParts := make([]string, 0, len(data))
-	for k, v := range data {
-		field, err := neo4jIdentifier(k)
-		if err != nil {
-			return 0, err
-		}
-		paramKey := "set_" + field
-		setParts = append(setParts, fmt.Sprintf("n.%s = $%s", field, paramKey))
-		params[paramKey] = v
-	}
-	cypher += " SET " + strings.Join(setParts, ", ")
 	cypher += " RETURN count(n)"
-
-	result, err := session.Run(ctx, cypher, params)
+	record, err := c.operationExecutor().Single(ctx, neo4j.AccessModeRead, cypher, params)
 	if err != nil {
 		return 0, err
 	}
-
-	if result.Next(ctx) {
-		if count, ok := result.Record().Values[0].(int64); ok {
-			return count, nil
-		}
-	}
-	return 0, result.Err()
+	return cypherCount(record)
 }
 
-// Delete 删除节点
-func (c *Neo4jConnection) Delete(table string, where []string, args []interface{}) (int64, error) {
-	ctx := context.Background()
-	session := c.Driver.NewSession(ctx, neo4j.SessionConfig{AccessMode: neo4j.AccessModeWrite})
-	defer session.Close(ctx)
-
-	label, err := neo4jIdentifier(table)
-	if err != nil {
-		return 0, err
+func cypherCount(record *neo4j.Record) (int64, error) {
+	if record == nil || len(record.Values) != 1 {
+		return 0, fmt.Errorf("%w: Neo4j 计数结果结构非法", ErrInvalidDatabaseRow)
 	}
-
-	whereClause, params, err := c.buildCypherWhere(where, args)
-	if err != nil {
-		return 0, err
+	count, ok := record.Values[0].(int64)
+	if !ok || count < 0 {
+		return 0, fmt.Errorf("%w: Neo4j 计数结果类型为 %T", ErrInvalidAggregateValue, record.Values[0])
 	}
-
-	// Neo4j 不直接返回删除计数，先计数再删除
-	countCypher := fmt.Sprintf("MATCH (n:%s)", label)
-	if whereClause != "" {
-		countCypher += " WHERE " + whereClause
-	}
-	countCypher += " RETURN count(n)"
-
-	countResult, err := session.Run(ctx, countCypher, params)
-	if err != nil {
-		return 0, err
-	}
-	var count int64
-	if countResult.Next(ctx) {
-		if c, ok := countResult.Record().Values[0].(int64); ok {
-			count = c
-		}
-	}
-
-	// 执行删除
-	deleteCypher := fmt.Sprintf("MATCH (n:%s)", label)
-	if whereClause != "" {
-		deleteCypher += " WHERE " + whereClause
-	}
-	deleteCypher += " DETACH DELETE n"
-	_, err = session.Run(ctx, deleteCypher, params)
-	if err != nil {
-		return 0, err
-	}
-
 	return count, nil
 }
 
-// Count 统计节点数
-func (c *Neo4jConnection) Count(table string, where []string, args []interface{}) (int64, error) {
-	ctx := context.Background()
-	session := c.Driver.NewSession(ctx, neo4j.SessionConfig{AccessMode: neo4j.AccessModeRead})
-	defer session.Close(ctx)
-
-	label, err := neo4jIdentifier(table)
-	if err != nil {
-		return 0, err
-	}
-
-	cypher := fmt.Sprintf("MATCH (n:%s)", label)
-
-	whereClause, params, err := c.buildCypherWhere(where, args)
-	if err != nil {
-		return 0, err
-	}
-	if whereClause != "" {
-		cypher += " WHERE " + whereClause
-	}
-
-	cypher += " RETURN count(n)"
-	result, err := session.Run(ctx, cypher, params)
-	if err != nil {
-		return 0, err
-	}
-
-	if result.Next(ctx) {
-		return result.Record().Values[0].(int64), nil
-	}
-	return 0, result.Err()
-}
-
-// Close 关闭连接
 func (c *Neo4jConnection) Close() error {
-	return c.Driver.Close(context.Background())
+	if c == nil || (c.Driver == nil && c.executor == nil) {
+		return ErrDatabaseUnavailable
+	}
+	c.closeOnce.Do(func() {
+		timeout := c.OperationTimeout
+		if timeout <= 0 {
+			timeout = defaultNeo4jOpTimeout
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		c.closeErr = c.operationExecutor().Close(ctx)
+	})
+	return c.closeErr
 }
 
-// buildCypherWhere 将 SQL 风格 where 条件转换为 Cypher WHERE 子句
-// 返回 (Cypher WHERE 表达式, 参数 map, error)。属性名会经过标识符校验，值统一参数化。
 func (c *Neo4jConnection) buildCypherWhere(where []string, args []interface{}) (string, map[string]interface{}, error) {
 	params := make(map[string]interface{})
-	if len(where) == 0 {
-		return "", params, nil
-	}
-
 	clauses := make([]string, 0, len(where))
-	argIdx := 0
-
-	for i, cond := range where {
-		cond = strings.TrimSpace(cond)
-		paramName := fmt.Sprintf("w%d", i)
-
-		upperCond := strings.ToUpper(cond)
-		if strings.HasSuffix(upperCond, " IS NULL") {
-			field, err := neo4jIdentifier(cond[:len(cond)-8])
-			if err != nil {
-				return "", nil, err
-			}
-			clauses = append(clauses, fmt.Sprintf("n.%s IS NULL", field))
-			continue
+	argumentIndex := 0
+	parameterIndex := 0
+	for _, expression := range where {
+		clause, err := c.parseCypherBoolean(expression, args, &argumentIndex, &parameterIndex, params)
+		if err != nil {
+			return "", nil, err
 		}
-		if strings.HasSuffix(upperCond, " IS NOT NULL") {
-			field, err := neo4jIdentifier(cond[:len(cond)-12])
-			if err != nil {
-				return "", nil, err
-			}
-			clauses = append(clauses, fmt.Sprintf("n.%s IS NOT NULL", field))
-			continue
-		}
-
-		if field, _, ok := splitCypherCondition(cond, " NOT IN "); ok {
-			field, err := neo4jIdentifier(field)
-			if err != nil {
-				return "", nil, err
-			}
-			values, err := consumeCypherValues(cond, args, &argIdx)
-			if err != nil {
-				return "", nil, err
-			}
-			params[paramName] = values
-			clauses = append(clauses, fmt.Sprintf("NOT (n.%s IN $%s)", field, paramName))
-			continue
-		}
-
-		if field, _, ok := splitCypherCondition(cond, " IN "); ok {
-			field, err := neo4jIdentifier(field)
-			if err != nil {
-				return "", nil, err
-			}
-			values, err := consumeCypherValues(cond, args, &argIdx)
-			if err != nil {
-				return "", nil, err
-			}
-			params[paramName] = values
-			clauses = append(clauses, fmt.Sprintf("n.%s IN $%s", field, paramName))
-			continue
-		}
-
-		if field, _, ok := splitCypherCondition(cond, " NOT LIKE "); ok {
-			field, err := neo4jIdentifier(field)
-			if err != nil {
-				return "", nil, err
-			}
-			if argIdx >= len(args) {
-				return "", nil, fmt.Errorf("Neo4j 条件参数不足，无法解析 %q", cond)
-			}
-			params[paramName] = cypherLikeRegex(fmt.Sprint(args[argIdx]))
-			argIdx++
-			clauses = append(clauses, fmt.Sprintf("NOT (n.%s =~ $%s)", field, paramName))
-			continue
-		}
-
-		if field, _, ok := splitCypherCondition(cond, " LIKE "); ok {
-			field, err := neo4jIdentifier(field)
-			if err != nil {
-				return "", nil, err
-			}
-			if argIdx >= len(args) {
-				return "", nil, fmt.Errorf("Neo4j 条件参数不足，无法解析 %q", cond)
-			}
-			params[paramName] = cypherLikeRegex(fmt.Sprint(args[argIdx]))
-			argIdx++
-			clauses = append(clauses, fmt.Sprintf("n.%s =~ $%s", field, paramName))
-			continue
-		}
-
-		if field, _, ok := splitCypherCondition(cond, " BETWEEN "); ok {
-			field, err := neo4jIdentifier(field)
-			if err != nil {
-				return "", nil, err
-			}
-			if argIdx+2 > len(args) {
-				return "", nil, fmt.Errorf("Neo4j BETWEEN 条件参数不足，无法解析 %q", cond)
-			}
-			params[paramName+"_start"] = args[argIdx]
-			params[paramName+"_end"] = args[argIdx+1]
-			argIdx += 2
-			clauses = append(clauses, fmt.Sprintf("n.%s >= $%s_start AND n.%s <= $%s_end", field, paramName, field, paramName))
-			continue
-		}
-
-		parsed := false
-		for _, op := range []string{">=", "<=", "!=", "<>", ">", "<", "="} {
-			if strings.Contains(cond, " "+op+" ") {
-				parts := strings.SplitN(cond, " "+op+" ", 2)
-				field, err := neo4jIdentifier(parts[0])
-				if err != nil {
-					return "", nil, err
-				}
-				cypherOp := op
-				if op == "!=" {
-					cypherOp = "<>"
-				}
-				if argIdx < len(args) {
-					params[paramName] = args[argIdx]
-					argIdx++
-					clauses = append(clauses, fmt.Sprintf("n.%s %s $%s", field, cypherOp, paramName))
-				} else {
-					return "", nil, fmt.Errorf("Neo4j 条件参数不足，无法解析 %q", cond)
-				}
-				parsed = true
-				break
-			}
-		}
-		if !parsed {
-			// 条件解析必须 fail-closed，避免过滤条件被静默丢弃后误更新/删除整类节点。
-			return "", nil, fmt.Errorf("Neo4j 无法解析查询条件 %q，请使用受支持的条件形式", cond)
-		}
+		clauses = append(clauses, clause)
 	}
-	if argIdx != len(args) {
-		return "", nil, fmt.Errorf("Neo4j 条件参数数量不匹配，已使用 %d 个，实际传入 %d 个", argIdx, len(args))
+	if argumentIndex != len(args) {
+		return "", nil, fmt.Errorf("%w: Neo4j 条件使用 %d 个参数，实际传入 %d 个", ErrInvalidQuery, argumentIndex, len(args))
 	}
-
 	return strings.Join(clauses, " AND "), params, nil
 }
 
-// splitCypherCondition 按关键字拆分条件，并保留原始大小写字段名。
-func splitCypherCondition(condition string, keyword string) (string, string, bool) {
+func (c *Neo4jConnection) parseCypherBoolean(expression string, args []interface{}, argumentIndex, parameterIndex *int, params map[string]interface{}) (string, error) {
+	if parts, split, err := splitTopLevelBoolean(expression, "OR"); err != nil {
+		return "", err
+	} else if split {
+		clauses := make([]string, 0, len(parts))
+		for _, part := range parts {
+			clause, err := c.parseCypherBoolean(part, args, argumentIndex, parameterIndex, params)
+			if err != nil {
+				return "", err
+			}
+			clauses = append(clauses, clause)
+		}
+		return "(" + strings.Join(clauses, " OR ") + ")", nil
+	}
+	if parts, split, err := splitTopLevelBoolean(expression, "AND"); err != nil {
+		return "", err
+	} else if split {
+		clauses := make([]string, 0, len(parts))
+		for _, part := range parts {
+			clause, err := c.parseCypherBoolean(part, args, argumentIndex, parameterIndex, params)
+			if err != nil {
+				return "", err
+			}
+			clauses = append(clauses, clause)
+		}
+		return "(" + strings.Join(clauses, " AND ") + ")", nil
+	}
+	leaf, err := trimBalancedOuterParentheses(strings.TrimSpace(expression))
+	if err != nil {
+		return "", err
+	}
+	return c.parseCypherLeaf(leaf, args, argumentIndex, parameterIndex, params)
+}
+
+func (c *Neo4jConnection) parseCypherLeaf(condition string, args []interface{}, argumentIndex, parameterIndex *int, params map[string]interface{}) (string, error) {
+	if condition == "1 = 0" {
+		return "false", nil
+	}
+	upper := strings.ToUpper(condition)
+	if strings.HasSuffix(upper, " IS NULL") || strings.HasSuffix(upper, " IS NOT NULL") {
+		suffix := " IS NULL"
+		if strings.HasSuffix(upper, " IS NOT NULL") {
+			suffix = " IS NOT NULL"
+		}
+		field, err := cypherIdentifier(condition[:len(condition)-len(suffix)])
+		if err != nil {
+			return "", err
+		}
+		return "n." + field + suffix, nil
+	}
+
+	for _, collectionOperator := range []struct {
+		keyword string
+		negated bool
+	}{
+		{keyword: " NOT IN ", negated: true},
+		{keyword: " IN ", negated: false},
+	} {
+		if fieldText, tail, ok := splitCypherCondition(condition, collectionOperator.keyword); ok {
+			if !cypherCollectionPlaceholders.MatchString(tail) {
+				return "", fmt.Errorf("%w: Neo4j 集合条件占位符非法", ErrInvalidQuery)
+			}
+			field, err := cypherIdentifier(fieldText)
+			if err != nil {
+				return "", err
+			}
+			values, err := consumeCypherValues(args, argumentIndex, strings.Count(tail, "?"))
+			if err != nil {
+				return "", err
+			}
+			name := nextCypherParameter(parameterIndex)
+			params[name] = values
+			clause := fmt.Sprintf("n.%s IN $%s", field, name)
+			if collectionOperator.negated {
+				clause = "NOT (" + clause + ")"
+			}
+			return clause, nil
+		}
+	}
+
+	for _, likeOperator := range []struct {
+		keyword string
+		negated bool
+	}{
+		{keyword: " NOT LIKE ", negated: true},
+		{keyword: " LIKE ", negated: false},
+	} {
+		if fieldText, tail, ok := splitCypherCondition(condition, likeOperator.keyword); ok {
+			if strings.TrimSpace(tail) != "?" {
+				return "", fmt.Errorf("%w: Neo4j LIKE 必须使用一个占位符", ErrInvalidQuery)
+			}
+			field, err := cypherIdentifier(fieldText)
+			if err != nil {
+				return "", err
+			}
+			value, err := consumeCypherValue(args, argumentIndex)
+			if err != nil {
+				return "", err
+			}
+			pattern, err := cypherLikeRegex(value)
+			if err != nil {
+				return "", err
+			}
+			name := nextCypherParameter(parameterIndex)
+			params[name] = pattern
+			clause := fmt.Sprintf("n.%s =~ $%s", field, name)
+			if likeOperator.negated {
+				clause = "NOT (" + clause + ")"
+			}
+			return clause, nil
+		}
+	}
+
+	if fieldText, tail, ok := splitCypherCondition(condition, " BETWEEN "); ok {
+		if strings.ToUpper(strings.Join(strings.Fields(tail), " ")) != "? AND ?" {
+			return "", fmt.Errorf("%w: Neo4j BETWEEN 必须使用两个占位符", ErrInvalidQuery)
+		}
+		field, err := cypherIdentifier(fieldText)
+		if err != nil {
+			return "", err
+		}
+		values, err := consumeCypherValues(args, argumentIndex, 2)
+		if err != nil {
+			return "", err
+		}
+		name := nextCypherParameter(parameterIndex)
+		params[name+"_start"] = values[0]
+		params[name+"_end"] = values[1]
+		return fmt.Sprintf("n.%s >= $%s_start AND n.%s <= $%s_end", field, name, field, name), nil
+	}
+
+	for _, operator := range []string{">=", "<=", "!=", "<>", ">", "<", "="} {
+		keyword := " " + operator + " "
+		if fieldText, tail, ok := splitCypherCondition(condition, keyword); ok {
+			if strings.TrimSpace(tail) != "?" {
+				return "", fmt.Errorf("%w: Neo4j 比较条件必须使用一个占位符", ErrInvalidQuery)
+			}
+			field, err := cypherIdentifier(fieldText)
+			if err != nil {
+				return "", err
+			}
+			value, err := consumeCypherValue(args, argumentIndex)
+			if err != nil {
+				return "", err
+			}
+			name := nextCypherParameter(parameterIndex)
+			params[name] = value
+			if operator == "!=" {
+				operator = "<>"
+			}
+			return fmt.Sprintf("n.%s %s $%s", field, operator, name), nil
+		}
+	}
+	return "", fmt.Errorf("%w: Neo4j 无法解析条件 %q", ErrInvalidQuery, condition)
+}
+
+func splitCypherCondition(condition, keyword string) (string, string, bool) {
 	index := strings.Index(strings.ToUpper(condition), keyword)
 	if index < 0 {
 		return "", "", false
@@ -430,34 +518,55 @@ func splitCypherCondition(condition string, keyword string) (string, string, boo
 	return strings.TrimSpace(condition[:index]), strings.TrimSpace(condition[index+len(keyword):]), true
 }
 
-// consumeCypherValues 根据条件中的占位符数量消费参数，供 IN/NOT IN 条件复用。
-func consumeCypherValues(condition string, args []interface{}, argIndex *int) ([]interface{}, error) {
-	count := strings.Count(condition, "?")
-	if count == 0 {
-		return nil, fmt.Errorf("Neo4j 集合条件缺少占位符: %q", condition)
+func consumeCypherValue(args []interface{}, index *int) (interface{}, error) {
+	if index == nil || *index >= len(args) {
+		return nil, fmt.Errorf("%w: Neo4j 条件参数不足", ErrInvalidQuery)
 	}
-	if *argIndex+count > len(args) {
-		return nil, fmt.Errorf("Neo4j 条件参数不足，无法解析 %q", condition)
+	value := args[*index]
+	*index++
+	return value, nil
+}
+
+func consumeCypherValues(args []interface{}, index *int, count int) ([]interface{}, error) {
+	if count < 1 || index == nil || *index+count > len(args) {
+		return nil, fmt.Errorf("%w: Neo4j 条件参数不足", ErrInvalidQuery)
 	}
-	values := append([]interface{}(nil), args[*argIndex:*argIndex+count]...)
-	*argIndex += count
+	values := append([]interface{}(nil), args[*index:*index+count]...)
+	*index += count
 	return values, nil
 }
 
-// cypherLikeRegex 把 SQL LIKE 模式转换为 Cypher 正则，并转义用户输入中的正则元字符。
-func cypherLikeRegex(pattern string) string {
+func nextCypherParameter(index *int) string {
+	name := fmt.Sprintf("w%d", *index)
+	*index++
+	return name
+}
+
+func cypherLikeRegex(value interface{}) (string, error) {
+	var pattern string
+	switch typed := value.(type) {
+	case string:
+		pattern = typed
+	case []byte:
+		pattern = string(typed)
+	default:
+		return "", fmt.Errorf("%w: Neo4j LIKE 参数必须是字符串", ErrInvalidQuery)
+	}
+	if len(pattern) > maxCypherLikeLength {
+		return "", fmt.Errorf("%w: Neo4j LIKE 模式过长", ErrInvalidQuery)
+	}
 	var builder strings.Builder
 	builder.WriteString("(?i)^")
-	for _, char := range pattern {
-		switch char {
+	for _, character := range pattern {
+		switch character {
 		case '%':
 			builder.WriteString(".*")
 		case '_':
 			builder.WriteByte('.')
 		default:
-			builder.WriteString(regexp.QuoteMeta(string(char)))
+			builder.WriteString(regexp.QuoteMeta(string(character)))
 		}
 	}
 	builder.WriteByte('$')
-	return builder.String()
+	return builder.String(), nil
 }

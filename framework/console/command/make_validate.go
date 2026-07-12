@@ -2,76 +2,60 @@ package command
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
+
 	"thinkgo/framework/console"
 )
 
-// MakeValidate command
+// MakeValidate 生成可直接配置规则的验证器源码。
 type MakeValidate struct {
 	console.Command
 }
 
+// Configure 配置验证器生成命令。
 func (c *MakeValidate) Configure() {
 	c.Signature = "make:validate"
 	c.Description = "Create a new validator class"
+	c.AddArgument("name", "Validator type name", true)
 }
 
-func (c *MakeValidate) Execute(input *console.Input, output *console.Output) {
-	name, err := normalizeGeneratorName(input.GetArgument(0), "")
+// Execute 校验名称后安全创建验证器文件。
+func (c *MakeValidate) Execute(input *console.Input, output *console.Output) error {
+	name, err := normalizedGeneratorInput(c.App, input, output, "")
 	if err != nil {
-		output.Error("Invalid validator name: " + err.Error())
-		return
+		return fmt.Errorf("invalid validator name: %w", err)
 	}
 
-	// Ensure directory exists
-	dir := filepath.Join(c.App.BasePath, "app", "validate")
-	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			output.Error(fmt.Sprintf("Failed to create validator directory: %v", err))
-			return
-		}
-	}
-
-	// File path
-	filename := filepath.Join(dir, lowerGoFilename(name))
-
-	// Check if exists
-	if _, err := os.Stat(filename); !os.IsNotExist(err) {
-		output.Error(fmt.Sprintf("Validator %s already exists.", name))
-		return
-	}
-
-	// Content
+	// 模板直接使用无共享调用状态的新验证器 API。
 	content := fmt.Sprintf(`package validate
 
 import (
 	"thinkgo/framework/validate"
 )
 
-// %s validator
+// %s 验证器
 type %s struct {
 	validate.Validator
 }
 
+// New%s 创建验证器并复制规则与消息配置。
 func New%s() *%s {
 	v := &%s{}
-	v.Rule = map[string]string{
+	v.SetRules(map[string]string{
 		"name": "required|max:25",
-	}
-	v.Message = map[string]string{
+	})
+	v.SetMessages(map[string]string{
 		"name.required": "名称不能为空",
 		"name.max":      "名称长度不能超过 25",
-	}
+	})
 	return v
 }
-`, name, name, name, name, name)
+`, name, name, name, name, name, name)
 
-	// Write file
-	if err := os.WriteFile(filename, []byte(content), 0644); err != nil {
-		output.Error(fmt.Sprintf("Failed to create validator: %v", err))
-		return
+	if err := writeGeneratedAppSource(c.App, filepath.Join("app", "validate"), lowerGoFilename(name), []byte(content)); err != nil {
+		return fmt.Errorf("create validator %s: %w", name, err)
 	}
 
 	output.Success(fmt.Sprintf("Validator %s created successfully.", name))
+	return nil
 }

@@ -2,47 +2,31 @@ package command
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
+
 	"thinkgo/framework/console"
 )
 
-// MakeListener command
+// MakeListener 生成事件监听器源码。
 type MakeListener struct {
 	console.Command
 }
 
+// Configure 配置监听器生成命令。
 func (c *MakeListener) Configure() {
 	c.Signature = "make:listener"
 	c.Description = "Create a new listener class"
+	c.AddArgument("name", "Listener type name", true)
 }
 
-func (c *MakeListener) Execute(input *console.Input, output *console.Output) {
-	name, err := normalizeGeneratorName(input.GetArgument(0), "")
+// Execute 校验名称后安全创建监听器文件。
+func (c *MakeListener) Execute(input *console.Input, output *console.Output) error {
+	name, err := normalizedGeneratorInput(c.App, input, output, "")
 	if err != nil {
-		output.Error("Invalid listener name: " + err.Error())
-		return
+		return fmt.Errorf("invalid listener name: %w", err)
 	}
 
-	// Ensure directory exists
-	dir := filepath.Join(c.App.BasePath, "app", "listener")
-	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			output.Error(fmt.Sprintf("Failed to create listener directory: %v", err))
-			return
-		}
-	}
-
-	// File path
-	filename := filepath.Join(dir, lowerGoFilename(name))
-
-	// Check if exists
-	if _, err := os.Stat(filename); !os.IsNotExist(err) {
-		output.Error(fmt.Sprintf("Listener %s already exists.", name))
-		return
-	}
-
-	// Content
+	// 模板实现可返回错误的事件监听器接口。
 	content := fmt.Sprintf(`package listener
 
 import (
@@ -54,16 +38,19 @@ import (
 type %s struct{}
 
 // Handle 处理框架事件。
-func (l *%s) Handle(event event.Event) {
-	fmt.Printf("Event received: %%s\n", event.Name())
+func (l *%s) Handle(currentEvent event.Event) error {
+	if currentEvent == nil {
+		return event.ErrInvalidEvent
+	}
+	fmt.Printf("Event received: %%s\n", currentEvent.Name())
+	return nil
 }
 `, name, name, name)
 
-	// Write file
-	if err := os.WriteFile(filename, []byte(content), 0644); err != nil {
-		output.Error(fmt.Sprintf("Failed to create listener: %v", err))
-		return
+	if err := writeGeneratedAppSource(c.App, filepath.Join("app", "listener"), lowerGoFilename(name), []byte(content)); err != nil {
+		return fmt.Errorf("create listener %s: %w", name, err)
 	}
 
 	output.Success(fmt.Sprintf("Listener %s created successfully.", name))
+	return nil
 }

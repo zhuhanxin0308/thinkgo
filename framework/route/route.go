@@ -1,783 +1,957 @@
 package route
 
 import (
+	"errors"
 	"fmt"
-	"net"
-	"net/url"
+	"net/http"
 	"reflect"
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 
 	"thinkgo/framework/context"
 	"thinkgo/framework/middleware"
 )
 
-// HandlerFunc 描述路由处理器，可以是闭包，也可以是 Controller@Action 字符串。
+const (
+	anyMethod                = "*"
+	maxRoutePathLength       = 2048
+	maxRouteSegments         = 64
+	maxOptionalRouteSegments = 8
+	maxRoutePatternLength    = 512
+	maxRouteNameLength       = 128
+)
+
+var (
+	ErrRouterFrozen           = errors.New("路由器已冻结")
+	ErrInvalidRoute           = errors.New("路由定义非法")
+	ErrDuplicateRoute         = errors.New("路由重复")
+	ErrDuplicateRouteName     = errors.New("路由名称重复")
+	ErrInvalidRouteHandler    = errors.New("路由处理器非法")
+	ErrInvalidRouteMiddleware = errors.New("路由中间件非法")
+	ErrInvalidRoutePattern    = errors.New("路由参数约束非法")
+	ErrRouteTooComplex        = errors.New("路由结构过于复杂")
+	ErrNilRequest             = errors.New("路由匹配请求不能为空")
+	ErrInvalidRequestPath     = errors.New("请求路径非法")
+	ErrInvalidRouteParameter  = errors.New("路由参数非法")
+	ErrInvalidRouteDomain     = errors.New("路由域名非法")
+	ErrInvalidResourceAction  = errors.New("资源路由动作非法")
+	ErrMethodNotAllowed       = errors.New("请求方法不允许")
+)
+
+// HandlerFunc 描述路由处理器，只允许 Controller@Action 字符串或标准处理函数。
 type HandlerFunc interface{}
 
-// Route 表示单条路由规则。
+// MethodNotAllowedError 携带稳定排序后的 Allow 方法集合。
+type MethodNotAllowedError struct {
+	Allowed []string
+}
+
+func (e *MethodNotAllowedError) Error() string {
+	return fmt.Sprintf("%v，可用方法: %s", ErrMethodNotAllowed, strings.Join(e.Allowed, ", "))
+}
+
+func (e *MethodNotAllowedError) Unwrap() error {
+	return ErrMethodNotAllowed
+}
+
+// Route 是注册完成后的路由对象；字段封闭以防冻结后被绕过修改。
 type Route struct {
-	Method     string
-	Path       string
-	Handler    HandlerFunc
-	Middleware []middleware.Handler
-	// Auto 标记该路由由自动路由解析生成（URL → Controller@Action），
-	// 分发层会对其施加更严格的方法可达性限制，避免暴露控制器基类方法。
-	Auto             bool
-	name             string
-	patterns         map[string]string
-	compiledPatterns map[string]*regexp.Regexp
-	invalidPatterns  map[string]bool
-	pathParts        []string // 注册时预切分的路径片段，避免每次请求重复切分
-	domain           string
-	ext              string
-	router           *Router
+	router      *Router
+	method      string
+	path        string
+	handler     HandlerFunc
+	middlewares []middleware.Handler
+	auto        bool
+	name        string
+	patterns    map[string]string
+	compiled    map[string]*regexp.Regexp
+	domain      string
+	ext         string
+	pathParts   []routePart
+	order       int
 }
 
-// Router 管理应用内全部路由，并维护静态、动态、命名路由索引。
+type routePart struct {
+	literal  string
+	param    string
+	optional bool
+}
+
+// RouteInfo 是不暴露内部可变状态的路由列表快照。
+type RouteInfo struct {
+	Method          string
+	Path            string
+	Handler         HandlerFunc
+	Name            string
+	Domain          string
+	Extension       string
+	Auto            bool
+	MiddlewareCount int
+}
+
+// Router 管理注册期路由，并在 Freeze 后提供只读匹配索引。
 type Router struct {
-	routes          []*Route
-	staticRoutes    map[string]map[string]*Route
-	dynamicRoutes   map[string][]*Route
-	namedRoutes     map[string]*Route
-	groups          []string
-	groupDomains    []string
-	groupMiddleware [][]middleware.Handler
-	missRoute       *Route
-	// 自动路由配置（对应 ThinkPHP 的 URL 解析模式）
-	autoRoute         bool   // 是否启用自动路由
-	defaultController string // 默认控制器名（对应 ThinkPHP 的 default_controller）
-	defaultAction     string // 默认动作名（对应 ThinkPHP 的 default_action）
+	mu sync.RWMutex
+
+	routes        []*Route
+	staticRoutes  map[string]map[string][]*Route
+	dynamicRoutes map[string][]*Route
+	namedRoutes   map[string]*Route
+	missRoute     *Route
+	frozen        bool
+	freezeErr     error
+
+	autoRoute         bool
+	defaultController string
+	defaultAction     string
 }
 
-// ResourceRoute 表示一组 RESTful 资源路由，支持 only/except 精细裁剪。
+// Group 是不可变的路由注册作用域，可安全嵌套且不会污染其他协程的注册上下文。
+type Group struct {
+	router      *Router
+	prefix      string
+	domain      string
+	middlewares []middleware.Handler
+}
+
+// ResourceRoute 表示一组可原子裁剪的 RESTful 资源路由。
 type ResourceRoute struct {
 	router *Router
 	routes map[string]*Route
 }
 
-// resourceDefinitions 定义 RESTful 资源路由的标准动作集合。
-// 动作名与 ThinkPHP 8 保持一致：save（创建）、read（详情）。
+type routeDefinition struct {
+	method      string
+	path        string
+	handler     HandlerFunc
+	middlewares []middleware.Handler
+	domain      string
+}
+
 var resourceDefinitions = []struct {
 	action     string
 	method     string
 	pathSuffix string
 	handler    string
 }{
-	{action: "index", method: "GET", pathSuffix: "", handler: "@Index"},
-	{action: "create", method: "GET", pathSuffix: "/create", handler: "@Create"},
-	{action: "save", method: "POST", pathSuffix: "", handler: "@Save"},
-	{action: "read", method: "GET", pathSuffix: "/:id", handler: "@Read"},
-	{action: "edit", method: "GET", pathSuffix: "/:id/edit", handler: "@Edit"},
-	{action: "update", method: "PUT", pathSuffix: "/:id", handler: "@Update"},
-	{action: "delete", method: "DELETE", pathSuffix: "/:id", handler: "@Delete"},
+	{action: "index", method: http.MethodGet, pathSuffix: "", handler: "@Index"},
+	{action: "create", method: http.MethodGet, pathSuffix: "/create", handler: "@Create"},
+	{action: "save", method: http.MethodPost, pathSuffix: "", handler: "@Save"},
+	{action: "read", method: http.MethodGet, pathSuffix: "/:id", handler: "@Read"},
+	{action: "edit", method: http.MethodGet, pathSuffix: "/:id/edit", handler: "@Edit"},
+	{action: "update", method: http.MethodPut, pathSuffix: "/:id", handler: "@Update"},
+	{action: "delete", method: http.MethodDelete, pathSuffix: "/:id", handler: "@Delete"},
 }
 
-// NewRouter 创建路由管理器。
+// NewRouter 创建处于注册状态的路由器。
 func NewRouter() *Router {
 	return &Router{
 		routes:            make([]*Route, 0),
-		staticRoutes:      make(map[string]map[string]*Route),
+		staticRoutes:      make(map[string]map[string][]*Route),
 		dynamicRoutes:     make(map[string][]*Route),
 		namedRoutes:       make(map[string]*Route),
-		groups:            make([]string, 0),
-		groupDomains:      make([]string, 0),
-		groupMiddleware:   make([][]middleware.Handler, 0),
 		defaultController: "Index",
 		defaultAction:     "index",
 	}
 }
 
-// EnableAutoRoute 启用自动路由。
-// 对应 ThinkPHP 的 url_route_must = false 时的 URL 解析模式。
-// URL 路径将自动映射到 Controller@Action，无需手动注册路由。
-func (r *Router) EnableAutoRoute(enable bool) *Router {
+// EnableAutoRoute 设置只读自动路由开关。
+func (r *Router) EnableAutoRoute(enable bool) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.frozen {
+		return ErrRouterFrozen
+	}
 	r.autoRoute = enable
-	return r
+	return nil
 }
 
-// SetDefaultController 设置自动路由的默认控制器名。
-func (r *Router) SetDefaultController(name string) *Router {
+// SetDefaultController 设置自动路由默认控制器。
+func (r *Router) SetDefaultController(name string) error {
+	if !isValidAutoControllerName(name) {
+		return fmt.Errorf("%w: 默认控制器 %q 非法", ErrInvalidRouteHandler, name)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.frozen {
+		return ErrRouterFrozen
+	}
 	r.defaultController = name
-	return r
+	return nil
 }
 
-// SetDefaultAction 设置自动路由的默认动作名。
-func (r *Router) SetDefaultAction(name string) *Router {
+// SetDefaultAction 设置自动路由默认动作。
+func (r *Router) SetDefaultAction(name string) error {
+	if !isValidAutoRouteSegment(name) {
+		return fmt.Errorf("%w: 默认动作 %q 非法", ErrInvalidRouteHandler, name)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.frozen {
+		return ErrRouterFrozen
+	}
 	r.defaultAction = name
-	return r
+	return nil
 }
 
-// Add 注册新路由。
-func (r *Router) Add(method, path string, handler HandlerFunc, middlewares ...middleware.Handler) *Route {
-	fullPath := path
-	if len(r.groups) > 0 {
-		fullPath = strings.Join(r.groups, "") + path
+func (r *Router) Add(method, path string, handler HandlerFunc, handlers ...middleware.Handler) (*Route, error) {
+	return r.rootGroup().Add(method, path, handler, handlers...)
+}
+
+func (r *Router) Get(path string, handler HandlerFunc, handlers ...middleware.Handler) (*Route, error) {
+	return r.Add(http.MethodGet, path, handler, handlers...)
+}
+
+func (r *Router) Post(path string, handler HandlerFunc, handlers ...middleware.Handler) (*Route, error) {
+	return r.Add(http.MethodPost, path, handler, handlers...)
+}
+
+func (r *Router) Put(path string, handler HandlerFunc, handlers ...middleware.Handler) (*Route, error) {
+	return r.Add(http.MethodPut, path, handler, handlers...)
+}
+
+func (r *Router) Delete(path string, handler HandlerFunc, handlers ...middleware.Handler) (*Route, error) {
+	return r.Add(http.MethodDelete, path, handler, handlers...)
+}
+
+func (r *Router) Patch(path string, handler HandlerFunc, handlers ...middleware.Handler) (*Route, error) {
+	return r.Add(http.MethodPatch, path, handler, handlers...)
+}
+
+func (r *Router) Options(path string, handler HandlerFunc, handlers ...middleware.Handler) (*Route, error) {
+	return r.Add(http.MethodOptions, path, handler, handlers...)
+}
+
+func (r *Router) Head(path string, handler HandlerFunc, handlers ...middleware.Handler) (*Route, error) {
+	return r.Add(http.MethodHead, path, handler, handlers...)
+}
+
+func (r *Router) Any(path string, handler HandlerFunc, handlers ...middleware.Handler) (*Route, error) {
+	return r.Add(anyMethod, path, handler, handlers...)
+}
+
+// Group 创建前缀隔离的注册作用域。
+func (r *Router) Group(prefix string, fn func(*Group) error, handlers ...middleware.Handler) error {
+	return r.rootGroup().Group(prefix, fn, handlers...)
+}
+
+// Domain 创建域名隔离的注册作用域。
+func (r *Router) Domain(domain string, fn func(*Group) error, handlers ...middleware.Handler) error {
+	return r.rootGroup().Domain(domain, fn, handlers...)
+}
+
+// DomainGroup 创建域名与前缀同时隔离的注册作用域。
+func (r *Router) DomainGroup(domain, prefix string, fn func(*Group) error, handlers ...middleware.Handler) error {
+	return r.rootGroup().DomainGroup(domain, prefix, fn, handlers...)
+}
+
+func (r *Router) Resource(path, controller string) (*ResourceRoute, error) {
+	return r.rootGroup().Resource(path, controller)
+}
+
+func (r *Router) Rule(path string, handler HandlerFunc, methods string, handlers ...middleware.Handler) ([]*Route, error) {
+	return r.rootGroup().Rule(path, handler, methods, handlers...)
+}
+
+// Redirect 注册经过状态码和目标校验的重定向路由。
+func (r *Router) Redirect(path, target string, codes ...int) (*Route, error) {
+	return r.rootGroup().Redirect(path, target, codes...)
+}
+
+// Miss 注册唯一的未命中处理器。
+func (r *Router) Miss(handler HandlerFunc) (*Route, error) {
+	if err := validateRouteHandler(handler); err != nil {
+		return nil, err
 	}
-	if !strings.HasPrefix(fullPath, "/") {
-		fullPath = "/" + fullPath
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.frozen {
+		return nil, ErrRouterFrozen
 	}
-
-	allMiddleware := make([]middleware.Handler, 0)
-	for _, groupHandlers := range r.groupMiddleware {
-		allMiddleware = append(allMiddleware, groupHandlers...)
-	}
-	allMiddleware = append(allMiddleware, middlewares...)
-
-	route := &Route{
-		Method:           method,
-		Path:             fullPath,
-		Handler:          handler,
-		Middleware:       allMiddleware,
-		patterns:         make(map[string]string),
-		compiledPatterns: make(map[string]*regexp.Regexp),
-		invalidPatterns:  make(map[string]bool),
-		router:           r,
-	}
-	if domain := r.currentGroupDomain(); domain != "" {
-		route.domain = domain
-	}
-
-	r.appendRoute(route)
-	return route
-}
-
-// Get 注册 GET 路由。
-func (r *Router) Get(path string, handler HandlerFunc, middlewares ...middleware.Handler) *Route {
-	return r.Add("GET", path, handler, middlewares...)
-}
-
-// Post 注册 POST 路由。
-func (r *Router) Post(path string, handler HandlerFunc, middlewares ...middleware.Handler) *Route {
-	return r.Add("POST", path, handler, middlewares...)
-}
-
-// Put 注册 PUT 路由。
-func (r *Router) Put(path string, handler HandlerFunc, middlewares ...middleware.Handler) *Route {
-	return r.Add("PUT", path, handler, middlewares...)
-}
-
-// Delete 注册 DELETE 路由。
-func (r *Router) Delete(path string, handler HandlerFunc, middlewares ...middleware.Handler) *Route {
-	return r.Add("DELETE", path, handler, middlewares...)
-}
-
-// Patch 注册 PATCH 路由。
-func (r *Router) Patch(path string, handler HandlerFunc, middlewares ...middleware.Handler) *Route {
-	return r.Add("PATCH", path, handler, middlewares...)
-}
-
-// Options 注册 OPTIONS 路由。
-func (r *Router) Options(path string, handler HandlerFunc, middlewares ...middleware.Handler) *Route {
-	return r.Add("OPTIONS", path, handler, middlewares...)
-}
-
-// Head 注册 HEAD 路由。
-func (r *Router) Head(path string, handler HandlerFunc, middlewares ...middleware.Handler) *Route {
-	return r.Add("HEAD", path, handler, middlewares...)
-}
-
-// Any 注册匹配全部 HTTP 方法的路由。
-func (r *Router) Any(path string, handler HandlerFunc, middlewares ...middleware.Handler) *Route {
-	return r.Add("*", path, handler, middlewares...)
-}
-
-// Group 创建带前缀的路由组。
-func (r *Router) Group(prefix string, fn func(), middlewares ...middleware.Handler) {
-	r.enterGroup(prefix, "", middlewares...)
-	defer r.leaveGroup()
-	fn()
-}
-
-// Domain 在同一域名下批量注册路由。
-func (r *Router) Domain(domain string, fn func(), middlewares ...middleware.Handler) {
-	r.enterGroup("", domain, middlewares...)
-	defer r.leaveGroup()
-	fn()
-}
-
-// DomainGroup 在同一域名和前缀下批量注册路由。
-func (r *Router) DomainGroup(domain string, prefix string, fn func(), middlewares ...middleware.Handler) {
-	r.enterGroup(prefix, domain, middlewares...)
-	defer r.leaveGroup()
-	fn()
-}
-
-// Resource 注册 RESTful 资源路由，并返回可继续裁剪的资源对象。
-func (r *Router) Resource(path, controller string) *ResourceRoute {
-	resource := &ResourceRoute{
-		router: r,
-		routes: make(map[string]*Route),
-	}
-	for _, definition := range resourceDefinitions {
-		route := r.Add(definition.method, path+definition.pathSuffix, controller+definition.handler)
-		resource.routes[definition.action] = route
-	}
-	return resource
-}
-
-// Match 匹配请求并提取路由参数。
-func (r *Router) Match(req *context.Request) (*Route, map[string]string) {
-	method := req.Method()
-	path := req.Path()
-
-	if route := r.matchStatic(method, path, req.Host()); route != nil {
-		return route, nil
-	}
-	if route := r.matchStatic("*", path, req.Host()); route != nil {
-		return route, nil
-	}
-
-	// 请求路径只切分一次，供所有动态路由复用。
-	host := req.Host()
-	requestParts := splitPathParts(path)
-	for _, route := range r.dynamicRoutes[method] {
-		if !matchDomain(route.domain, host) {
-			continue
-		}
-		if matched, params := route.matchPathParts(path, requestParts); matched {
-			return route, params
-		}
-	}
-	for _, route := range r.dynamicRoutes["*"] {
-		if !matchDomain(route.domain, host) {
-			continue
-		}
-		if matched, params := route.matchPathParts(path, requestParts); matched {
-			return route, params
-		}
-	}
-
-	// 自动路由：当显式路由匹配失败时，尝试将 URL 路径解析为 Controller@Action
-	// 对应 ThinkPHP 的 URL 自动解析规则：/controller/action → Controller@Action
-	if r.autoRoute {
-		if autoRoute := r.resolveAutoRoute(path); autoRoute != nil {
-			return autoRoute, nil
-		}
-	}
-
 	if r.missRoute != nil {
-		return r.missRoute, nil
+		return nil, fmt.Errorf("%w: Miss 路由只能注册一次", ErrDuplicateRoute)
 	}
-	return nil, nil
+	r.missRoute = &Route{
+		router:      r,
+		method:      anyMethod,
+		path:        "__miss__",
+		handler:     handler,
+		middlewares: []middleware.Handler{},
+		patterns:    make(map[string]string),
+		compiled:    make(map[string]*regexp.Regexp),
+	}
+	return r.missRoute, nil
 }
 
-// resolveAutoRoute 根据 URL 路径自动解析控制器和动作。
-// 支持的 URL 格式：
-//
-//	/ → Index@index（默认控制器默认动作）
-//	/user → User@index（指定控制器默认动作）
-//	/user/edit → User@Edit（指定控制器和动作）
-//	/admin/user/edit → Admin.User@Edit（多层级控制器）
-func (r *Router) resolveAutoRoute(urlPath string) *Route {
-	// 去除前后斜杠并分割
-	trimmed := strings.Trim(urlPath, "/")
-	if trimmed == "" {
-		if !isValidAutoControllerName(r.defaultController) || !isValidAutoRouteSegment(r.defaultAction) {
-			return nil
-		}
-		// 根路径：默认控制器 + 默认动作
-		return &Route{
-			Method:  "*",
-			Path:    urlPath,
-			Handler: r.defaultController + "@" + ucfirst(r.defaultAction),
-			Auto:    true,
-		}
-	}
-
-	parts := strings.Split(trimmed, "/")
-	for _, part := range parts {
-		if !isValidAutoRouteSegment(part) {
-			return nil
-		}
-	}
-
-	var controller, action string
-
-	switch len(parts) {
-	case 1:
-		// /user → User@index
-		controller = ucfirst(parts[0])
-		action = ucfirst(r.defaultAction)
-	default:
-		// /user/edit → User@Edit
-		// /admin/user/edit → Admin.User@Edit（多层级通过 . 分隔）
-		controllerParts := make([]string, 0, len(parts)-1)
-		for _, p := range parts[:len(parts)-1] {
-			controllerParts = append(controllerParts, ucfirst(p))
-		}
-		controller = strings.Join(controllerParts, ".")
-		action = ucfirst(parts[len(parts)-1])
-	}
-
-	return &Route{
-		Method:  "*",
-		Path:    urlPath,
-		Handler: controller + "@" + action,
-		Auto:    true,
-	}
+func (r *Router) rootGroup() *Group {
+	return &Group{router: r, middlewares: []middleware.Handler{}}
 }
 
-// isValidAutoControllerName 校验自动路由控制器名，允许点号分隔多级控制器。
-func isValidAutoControllerName(name string) bool {
-	parts := strings.Split(name, ".")
-	for _, part := range parts {
-		if !isValidAutoRouteSegment(part) {
-			return false
+func (g *Group) Add(method, path string, handler HandlerFunc, handlers ...middleware.Handler) (*Route, error) {
+	definitions := []routeDefinition{{
+		method:      method,
+		path:        joinRoutePath(g.prefix, path),
+		handler:     handler,
+		middlewares: mergeMiddleware(g.middlewares, handlers),
+		domain:      g.domain,
+	}}
+	routes, err := g.router.registerDefinitions(definitions)
+	if err != nil {
+		return nil, err
+	}
+	return routes[0], nil
+}
+
+func (g *Group) Get(path string, handler HandlerFunc, handlers ...middleware.Handler) (*Route, error) {
+	return g.Add(http.MethodGet, path, handler, handlers...)
+}
+
+func (g *Group) Post(path string, handler HandlerFunc, handlers ...middleware.Handler) (*Route, error) {
+	return g.Add(http.MethodPost, path, handler, handlers...)
+}
+
+func (g *Group) Put(path string, handler HandlerFunc, handlers ...middleware.Handler) (*Route, error) {
+	return g.Add(http.MethodPut, path, handler, handlers...)
+}
+
+func (g *Group) Delete(path string, handler HandlerFunc, handlers ...middleware.Handler) (*Route, error) {
+	return g.Add(http.MethodDelete, path, handler, handlers...)
+}
+
+func (g *Group) Patch(path string, handler HandlerFunc, handlers ...middleware.Handler) (*Route, error) {
+	return g.Add(http.MethodPatch, path, handler, handlers...)
+}
+
+func (g *Group) Options(path string, handler HandlerFunc, handlers ...middleware.Handler) (*Route, error) {
+	return g.Add(http.MethodOptions, path, handler, handlers...)
+}
+
+func (g *Group) Head(path string, handler HandlerFunc, handlers ...middleware.Handler) (*Route, error) {
+	return g.Add(http.MethodHead, path, handler, handlers...)
+}
+
+func (g *Group) Any(path string, handler HandlerFunc, handlers ...middleware.Handler) (*Route, error) {
+	return g.Add(anyMethod, path, handler, handlers...)
+}
+
+func (g *Group) Group(prefix string, fn func(*Group) error, handlers ...middleware.Handler) error {
+	return g.scoped("", prefix, fn, handlers...)
+}
+
+func (g *Group) Domain(domain string, fn func(*Group) error, handlers ...middleware.Handler) error {
+	return g.scoped(domain, "", fn, handlers...)
+}
+
+func (g *Group) DomainGroup(domain, prefix string, fn func(*Group) error, handlers ...middleware.Handler) error {
+	return g.scoped(domain, prefix, fn, handlers...)
+}
+
+func (g *Group) scoped(domain, prefix string, fn func(*Group) error, handlers ...middleware.Handler) error {
+	if fn == nil {
+		return fmt.Errorf("%w: 分组回调不能为空", ErrInvalidRoute)
+	}
+	if err := validateMiddleware(handlers); err != nil {
+		return err
+	}
+	nextDomain := g.domain
+	if strings.TrimSpace(domain) != "" {
+		validated, err := normalizeAndValidateRouteDomain(domain)
+		if err != nil {
+			return err
 		}
+		nextDomain = validated
 	}
-	return true
-}
-
-// isValidAutoRouteSegment 只允许可映射到 Go 标识符的 ASCII 片段。
-func isValidAutoRouteSegment(segment string) bool {
-	if segment == "" {
-		return false
+	nextPrefix := joinRoutePath(g.prefix, prefix)
+	if nextPrefix == "/" {
+		nextPrefix = ""
 	}
-
-	for index := 0; index < len(segment); index++ {
-		char := segment[index]
-		isLetter := (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z')
-		isDigit := char >= '0' && char <= '9'
-		if index == 0 {
-			if !isLetter && char != '_' {
-				return false
-			}
-			continue
-		}
-		if !isLetter && !isDigit && char != '_' {
-			return false
-		}
-	}
-	return true
-}
-
-// ucfirst 将字符串首字母转大写。
-func ucfirst(s string) string {
-	if s == "" {
-		return s
-	}
-	runes := []rune(s)
-	if runes[0] >= 'a' && runes[0] <= 'z' {
-		runes[0] -= 32
-	}
-	return string(runes)
-}
-
-// GetRoutes 返回已注册的全部路由。
-func (r *Router) GetRoutes() []*Route {
-	return r.routes
-}
-
-// URL 根据命名路由和参数反向生成 URL。
-func (r *Router) URL(name string, params map[string]interface{}) (string, error) {
-	route, ok := r.namedRoutes[name]
-	if !ok || route == nil {
-		return "", fmt.Errorf("route %q not found", name)
-	}
-
-	consumed := make(map[string]bool)
-	parts := splitPathParts(route.Path)
-	pathParts := make([]string, 0, len(parts))
-	for _, part := range parts {
-		if !strings.HasPrefix(part, ":") {
-			pathParts = append(pathParts, part)
-			continue
-		}
-
-		paramName := strings.TrimPrefix(part, ":")
-		optional := strings.HasSuffix(paramName, "?")
-		paramName = strings.TrimSuffix(paramName, "?")
-
-		value, exists := params[paramName]
-		text := ""
-		if exists {
-			text = fmt.Sprint(value)
-		}
-
-		if text == "" {
-			if optional {
-				continue
-			}
-			return "", fmt.Errorf("route %q missing required param %q", name, paramName)
-		}
-
-		consumed[paramName] = true
-		pathParts = append(pathParts, url.PathEscape(text))
-	}
-
-	builtPath := "/" + strings.Join(pathParts, "/")
-	if builtPath == "//" {
-		builtPath = "/"
-	}
-	if route.ext != "" && !strings.HasSuffix(builtPath, "."+route.ext) {
-		builtPath += "." + route.ext
-	}
-
-	if len(params) == 0 {
-		return builtPath, nil
-	}
-
-	queryKeys := make([]string, 0)
-	for key, value := range params {
-		if consumed[key] || value == nil {
-			continue
-		}
-		queryKeys = append(queryKeys, key)
-	}
-	if len(queryKeys) == 0 {
-		return builtPath, nil
-	}
-
-	sort.Strings(queryKeys)
-	values := make(url.Values)
-	for _, key := range queryKeys {
-		values.Set(key, fmt.Sprint(params[key]))
-	}
-	return builtPath + "?" + values.Encode(), nil
-}
-
-// Name 设置路由名称。
-func (r *Route) Name(name string) *Route {
-	if r.router != nil && r.name != "" && r.router.namedRoutes[r.name] == r {
-		delete(r.router.namedRoutes, r.name)
-	}
-	r.name = name
-	if r.router != nil && name != "" {
-		r.router.namedRoutes[name] = r
-	}
-	return r
-}
-
-// Pattern 设置参数正则约束。
-func (r *Route) Pattern(param, pattern string) *Route {
-	if r.patterns == nil {
-		r.patterns = make(map[string]string)
-	}
-	if r.compiledPatterns == nil {
-		r.compiledPatterns = make(map[string]*regexp.Regexp)
-	}
-	if r.invalidPatterns == nil {
-		r.invalidPatterns = make(map[string]bool)
-	}
-	r.patterns[param] = pattern
-	if compiled, err := regexp.Compile("^" + pattern + "$"); err == nil {
-		r.compiledPatterns[param] = compiled
-		delete(r.invalidPatterns, param)
-	} else {
-		// 正则配置错误必须失败关闭，避免把受约束参数静默降级为任意匹配。
-		delete(r.compiledPatterns, param)
-		r.invalidPatterns[param] = true
-	}
-	return r
-}
-
-// Domain 设置域名约束。
-func (r *Route) Domain(domain string) *Route {
-	r.domain = domain
-	return r
-}
-
-// Ext 设置扩展名约束。
-func (r *Route) Ext(ext string) *Route {
-	r.ext = ext
-	return r
-}
-
-// WithoutMiddleware 从当前路由中移除指定中间件。
-func (r *Route) WithoutMiddleware(targets ...middleware.Handler) *Route {
-	if len(targets) == 0 {
-		return r
-	}
-
-	filtered := make([]middleware.Handler, 0, len(r.Middleware))
-	for _, handler := range r.Middleware {
-		if !containsMiddleware(targets, handler) {
-			filtered = append(filtered, handler)
+	if nextPrefix != "" {
+		if _, _, err := parseRoutePath(nextPrefix); err != nil {
+			return err
 		}
 	}
-	r.Middleware = filtered
-	return r
+	next := &Group{
+		router:      g.router,
+		prefix:      nextPrefix,
+		domain:      nextDomain,
+		middlewares: mergeMiddleware(g.middlewares, handlers),
+	}
+	return fn(next)
 }
 
-// Only 仅保留指定资源动作。
-func (r *ResourceRoute) Only(actions ...string) *ResourceRoute {
-	allowed := make(map[string]bool, len(actions))
-	for _, action := range actions {
-		allowed[strings.ToLower(strings.TrimSpace(action))] = true
+func (g *Group) Resource(path, controller string) (*ResourceRoute, error) {
+	if !isValidAutoControllerName(controller) {
+		return nil, fmt.Errorf("%w: 资源控制器 %q 非法", ErrInvalidRouteHandler, controller)
 	}
-	for action, route := range r.routes {
-		if !allowed[action] {
-			r.router.removeRoute(route)
-			delete(r.routes, action)
+	definitions := make([]routeDefinition, 0, len(resourceDefinitions))
+	for _, definition := range resourceDefinitions {
+		definitions = append(definitions, routeDefinition{
+			method:      definition.method,
+			path:        joinRoutePath(g.prefix, path+definition.pathSuffix),
+			handler:     controller + definition.handler,
+			middlewares: append([]middleware.Handler(nil), g.middlewares...),
+			domain:      g.domain,
+		})
+	}
+	routes, err := g.router.registerDefinitions(definitions)
+	if err != nil {
+		return nil, err
+	}
+	resource := &ResourceRoute{router: g.router, routes: make(map[string]*Route, len(routes))}
+	for index, definition := range resourceDefinitions {
+		resource.routes[definition.action] = routes[index]
+	}
+	return resource, nil
+}
+
+func (g *Group) Rule(path string, handler HandlerFunc, methods string, handlers ...middleware.Handler) ([]*Route, error) {
+	parts := strings.Split(methods, "|")
+	if len(parts) == 0 {
+		return nil, fmt.Errorf("%w: methods 不能为空", ErrInvalidRoute)
+	}
+	definitions := make([]routeDefinition, 0, len(parts))
+	for _, method := range parts {
+		method = strings.TrimSpace(method)
+		if method == "" {
+			return nil, fmt.Errorf("%w: methods 包含空项", ErrInvalidRoute)
 		}
+		definitions = append(definitions, routeDefinition{
+			method:      method,
+			path:        joinRoutePath(g.prefix, path),
+			handler:     handler,
+			middlewares: mergeMiddleware(g.middlewares, handlers),
+			domain:      g.domain,
+		})
 	}
-	return r
+	return g.router.registerDefinitions(definitions)
 }
 
-// Except 排除指定资源动作。
-func (r *ResourceRoute) Except(actions ...string) *ResourceRoute {
-	excluded := make(map[string]bool, len(actions))
-	for _, action := range actions {
-		excluded[strings.ToLower(strings.TrimSpace(action))] = true
+func (g *Group) Redirect(path, target string, codes ...int) (*Route, error) {
+	if strings.TrimSpace(target) == "" || strings.ContainsAny(target, "\r\n\x00") {
+		return nil, fmt.Errorf("%w: 重定向目标非法", ErrInvalidRouteHandler)
 	}
-	for action, route := range r.routes {
-		if excluded[action] {
-			r.router.removeRoute(route)
-			delete(r.routes, action)
-		}
+	statusCode := http.StatusFound
+	if len(codes) > 1 {
+		return nil, fmt.Errorf("%w: 重定向状态码只能提供一个", ErrInvalidRoute)
 	}
-	return r
-}
-
-// Miss 设置 404 兜底路由。
-func (r *Router) Miss(handler HandlerFunc) *Route {
-	route := &Route{
-		Method:           "*",
-		Path:             "__miss__",
-		Handler:          handler,
-		Middleware:       make([]middleware.Handler, 0),
-		patterns:         make(map[string]string),
-		compiledPatterns: make(map[string]*regexp.Regexp),
-		router:           r,
+	if len(codes) == 1 {
+		statusCode = codes[0]
 	}
-	r.missRoute = route
-	return route
-}
-
-// Rule 通过 methods 参数批量注册多方法路由。
-func (r *Router) Rule(path string, handler HandlerFunc, methods string, middlewares ...middleware.Handler) {
-	for _, method := range strings.Split(methods, "|") {
-		method = strings.TrimSpace(strings.ToUpper(method))
-		if method != "" {
-			r.Add(method, path, handler, middlewares...)
-		}
+	if !isRedirectStatus(statusCode) {
+		return nil, fmt.Errorf("%w: 重定向状态码 %d 非法", ErrInvalidRoute, statusCode)
 	}
-}
-
-// Redirect 注册重定向路由。
-func (r *Router) Redirect(path, target string, code ...int) {
-	statusCode := httpStatusFound
-	if len(code) > 0 {
-		statusCode = code[0]
-	}
-	r.Any(path, func(req *context.Request) *context.Response {
+	return g.Any(path, func(_ *context.Request) *context.Response {
 		return context.NewResponse().Redirect(target, statusCode)
 	})
 }
 
-const httpStatusFound = 302
-
-func (r *Router) enterGroup(prefix string, domain string, middlewares ...middleware.Handler) {
-	r.groups = append(r.groups, prefix)
-	r.groupDomains = append(r.groupDomains, domain)
-	r.groupMiddleware = append(r.groupMiddleware, middlewares)
+// isRedirectStatus 只接受客户端重定向语义明确且仍在通用客户端中使用的状态码。
+func isRedirectStatus(statusCode int) bool {
+	switch statusCode {
+	case http.StatusMovedPermanently,
+		http.StatusFound,
+		http.StatusSeeOther,
+		http.StatusTemporaryRedirect,
+		http.StatusPermanentRedirect:
+		return true
+	default:
+		return false
+	}
 }
 
-func (r *Router) leaveGroup() {
-	r.groupMiddleware = r.groupMiddleware[:len(r.groupMiddleware)-1]
-	r.groupDomains = r.groupDomains[:len(r.groupDomains)-1]
-	r.groups = r.groups[:len(r.groups)-1]
-}
+// Freeze 原子构建全部只读索引，并封闭后续注册和修改。
+func (r *Router) Freeze() error {
+	r.mu.RLock()
+	if r.frozen {
+		err := r.freezeErr
+		r.mu.RUnlock()
+		return err
+	}
+	r.mu.RUnlock()
 
-func (r *Router) currentGroupDomain() string {
-	for index := len(r.groupDomains) - 1; index >= 0; index-- {
-		if strings.TrimSpace(r.groupDomains[index]) != "" {
-			return strings.TrimSpace(r.groupDomains[index])
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.frozen {
+		return r.freezeErr
+	}
+
+	staticRoutes := make(map[string]map[string][]*Route)
+	dynamicRoutes := make(map[string][]*Route)
+	for _, registered := range r.routes {
+		parts, optionalCount, err := parseRoutePath(registered.path)
+		if err != nil {
+			r.freezeErr = err
+			r.frozen = true
+			return err
 		}
-	}
-	return ""
-}
-
-func (r *Router) appendRoute(route *Route) {
-	// 预切分动态路由的路径片段，匹配时直接复用，避免每个请求重复 split。
-	if !isStaticRoute(route.Path) {
-		route.pathParts = splitPathParts(route.Path)
-	}
-	if isStaticRoute(route.Path) {
-		if _, ok := r.staticRoutes[route.Method]; !ok {
-			r.staticRoutes[route.Method] = make(map[string]*Route)
+		if optionalCount > maxOptionalRouteSegments {
+			r.freezeErr = fmt.Errorf("%w: %s", ErrRouteTooComplex, registered.path)
+			r.frozen = true
+			return r.freezeErr
 		}
-		r.staticRoutes[route.Method][route.Path] = route
-	} else {
-		r.dynamicRoutes[route.Method] = append(r.dynamicRoutes[route.Method], route)
-	}
-	r.routes = append(r.routes, route)
-}
-
-func (r *Router) removeRoute(route *Route) {
-	if route == nil {
-		return
-	}
-
-	for index, current := range r.routes {
-		if current == route {
-			r.routes = append(r.routes[:index], r.routes[index+1:]...)
-			break
-		}
-	}
-
-	if isStaticRoute(route.Path) {
-		if methodRoutes, ok := r.staticRoutes[route.Method]; ok {
-			delete(methodRoutes, route.Path)
-		}
-	} else {
-		if routes, ok := r.dynamicRoutes[route.Method]; ok {
-			filtered := make([]*Route, 0, len(routes))
-			for _, current := range routes {
-				if current != route {
-					filtered = append(filtered, current)
-				}
+		registered.pathParts = parts
+		if isStaticRouteParts(parts) {
+			if _, ok := staticRoutes[registered.method]; !ok {
+				staticRoutes[registered.method] = make(map[string][]*Route)
 			}
-			r.dynamicRoutes[route.Method] = filtered
+			key := pathPartsKey(routePartsWithExtension(parts, registered.ext))
+			staticRoutes[registered.method][key] = append(staticRoutes[registered.method][key], registered)
+			continue
 		}
+		dynamicRoutes[registered.method] = append(dynamicRoutes[registered.method], registered)
 	}
-
-	if route.name != "" && r.namedRoutes[route.name] == route {
-		delete(r.namedRoutes, route.name)
+	for method := range dynamicRoutes {
+		sort.SliceStable(dynamicRoutes[method], func(left, right int) bool {
+			return routeSpecificity(dynamicRoutes[method][left]) > routeSpecificity(dynamicRoutes[method][right])
+		})
 	}
+	r.staticRoutes = staticRoutes
+	r.dynamicRoutes = dynamicRoutes
+	r.freezeErr = nil
+	r.frozen = true
+	return nil
 }
 
-func (r *Router) matchStatic(method string, path string, host string) *Route {
-	if methodRoutes, ok := r.staticRoutes[method]; ok {
-		if route, ok := methodRoutes[path]; ok && matchDomain(route.domain, host) {
-			return route
+// Routes 返回稳定的路由元数据快照。
+func (r *Router) Routes() ([]RouteInfo, error) {
+	if err := r.Freeze(); err != nil {
+		return nil, err
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	result := make([]RouteInfo, 0, len(r.routes))
+	for _, registered := range r.routes {
+		result = append(result, RouteInfo{
+			Method:          registered.method,
+			Path:            registered.path,
+			Handler:         registered.handler,
+			Name:            registered.name,
+			Domain:          registered.domain,
+			Extension:       registered.ext,
+			Auto:            registered.auto,
+			MiddlewareCount: len(registered.middlewares),
+		})
+	}
+	return result, nil
+}
+
+func (r *Router) registerDefinitions(definitions []routeDefinition) ([]*Route, error) {
+	prepared := make([]*Route, 0, len(definitions))
+	for _, definition := range definitions {
+		method, err := normalizeRouteMethod(definition.method)
+		if err != nil {
+			return nil, err
+		}
+		path, _, err := canonicalRoutePath(definition.path)
+		if err != nil {
+			return nil, err
+		}
+		if err = validateRouteHandler(definition.handler); err != nil {
+			return nil, err
+		}
+		if err = validateMiddleware(definition.middlewares); err != nil {
+			return nil, err
+		}
+		domain, err := normalizeAndValidateRouteDomain(definition.domain)
+		if err != nil {
+			return nil, err
+		}
+		prepared = append(prepared, &Route{
+			router:      r,
+			method:      method,
+			path:        path,
+			handler:     definition.handler,
+			middlewares: append([]middleware.Handler(nil), definition.middlewares...),
+			patterns:    make(map[string]string),
+			compiled:    make(map[string]*regexp.Regexp),
+			domain:      domain,
+		})
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.frozen {
+		return nil, ErrRouterFrozen
+	}
+	for _, candidate := range prepared {
+		if duplicate := r.findDuplicateLocked(candidate, nil, prepared); duplicate != nil {
+			return nil, fmt.Errorf("%w: %s %s domain=%q", ErrDuplicateRoute, candidate.method, candidate.path, candidate.domain)
+		}
+	}
+	for _, registered := range prepared {
+		registered.order = len(r.routes)
+		r.routes = append(r.routes, registered)
+	}
+	return prepared, nil
+}
+
+func (r *Router) findDuplicateLocked(candidate, ignored *Route, candidates []*Route) *Route {
+	for _, existing := range r.routes {
+		if existing != ignored && sameRouteIdentity(existing, candidate) {
+			return existing
+		}
+	}
+	for _, existing := range candidates {
+		if existing != candidate && existing != ignored && sameRouteIdentity(existing, candidate) {
+			return existing
 		}
 	}
 	return nil
 }
 
-// matchPath 匹配请求路径（自行切分），保留单参数签名供测试与外部调用。
-func (r *Route) matchPath(requestPath string) (bool, map[string]string) {
-	return r.matchPathParts(requestPath, splitPathParts(requestPath))
+func sameRouteIdentity(left, right *Route) bool {
+	return left.method == right.method && left.path == right.path && left.domain == right.domain && left.ext == right.ext
 }
 
-// matchPathParts 用预切分的请求路径片段匹配路由。
-// requestParts 由调用方一次性切分后传入，路由自身片段在注册时已预切分。
-func (r *Route) matchPathParts(requestPath string, requestParts []string) (bool, map[string]string) {
-	if r.Path == requestPath {
-		return true, nil
+// mutableRouter 返回路由所属的可配置路由器，零值路由统一以错误方式安全失败。
+func (r *Route) mutableRouter() (*Router, error) {
+	if r == nil || r.router == nil {
+		return nil, ErrInvalidRoute
 	}
-	if isStaticRoute(r.Path) {
-		return false, nil
-	}
-
-	routeParts := r.pathParts
-	if routeParts == nil {
-		routeParts = splitPathParts(r.Path)
-	}
-
-	params := make(map[string]string)
-	if r.matchParts(routeParts, requestParts, 0, 0, params) {
-		if len(params) == 0 {
-			return true, nil
-		}
-		return true, params
-	}
-	return false, nil
+	return r.router, nil
 }
 
-func (r *Route) matchParts(routeParts []string, requestParts []string, routeIndex int, requestIndex int, params map[string]string) bool {
-	if routeIndex == len(routeParts) {
-		return requestIndex == len(requestParts)
+// WithName 设置唯一的路由名称。
+func (r *Route) WithName(name string) error {
+	router, err := r.mutableRouter()
+	if err != nil {
+		return err
 	}
+	name = strings.TrimSpace(name)
+	if !isValidRouteName(name) {
+		return fmt.Errorf("%w: %q", ErrInvalidRoute, name)
+	}
+	router.mu.Lock()
+	defer router.mu.Unlock()
+	if router.frozen {
+		return ErrRouterFrozen
+	}
+	if existing := router.namedRoutes[name]; existing != nil && existing != r {
+		return fmt.Errorf("%w: %q", ErrDuplicateRouteName, name)
+	}
+	if r.name != "" {
+		delete(router.namedRoutes, r.name)
+	}
+	r.name = name
+	router.namedRoutes[name] = r
+	return nil
+}
 
-	part := routeParts[routeIndex]
-	if strings.HasPrefix(part, ":") {
-		paramName := strings.TrimPrefix(part, ":")
-		optional := strings.HasSuffix(paramName, "?")
-		paramName = strings.TrimSuffix(paramName, "?")
+// WithPattern 设置已声明参数的正则约束。
+func (r *Route) WithPattern(param, pattern string) error {
+	router, err := r.mutableRouter()
+	if err != nil {
+		return err
+	}
+	param = strings.TrimSpace(param)
+	if !routeHasParam(r.path, param) {
+		return fmt.Errorf("%w: 路径 %s 不包含参数 %q", ErrInvalidRoutePattern, r.path, param)
+	}
+	if pattern == "" || len(pattern) > maxRoutePatternLength || strings.Contains(pattern, "(?P<") || strings.Contains(pattern, "(?<") {
+		return fmt.Errorf("%w: 参数 %q 的约束非法", ErrInvalidRoutePattern, param)
+	}
+	compiled, err := regexp.Compile("^(?:" + pattern + ")$")
+	if err != nil {
+		return fmt.Errorf("%w: 参数 %q: %v", ErrInvalidRoutePattern, param, err)
+	}
+	router.mu.Lock()
+	defer router.mu.Unlock()
+	if router.frozen {
+		return ErrRouterFrozen
+	}
+	r.patterns[param] = pattern
+	r.compiled[param] = compiled
+	return nil
+}
 
-		if optional {
-			if requestIndex < len(requestParts) && r.validateRouteParam(paramName, requestParts[requestIndex]) {
-				params[paramName] = requestParts[requestIndex]
-				if r.matchParts(routeParts, requestParts, routeIndex+1, requestIndex+1, params) {
-					return true
-				}
-				delete(params, paramName)
+// WithDomain 设置精确域名约束。
+func (r *Route) WithDomain(domain string) error {
+	router, routeErr := r.mutableRouter()
+	if routeErr != nil {
+		return routeErr
+	}
+	normalized, err := normalizeAndValidateRouteDomain(domain)
+	if err != nil {
+		return err
+	}
+	if normalized == "" {
+		return fmt.Errorf("%w: 单路由域名不能为空", ErrInvalidRouteDomain)
+	}
+	router.mu.Lock()
+	defer router.mu.Unlock()
+	if router.frozen {
+		return ErrRouterFrozen
+	}
+	candidate := *r
+	candidate.domain = normalized
+	if router.findDuplicateLocked(&candidate, r, nil) != nil {
+		return fmt.Errorf("%w: %s %s domain=%q", ErrDuplicateRoute, r.method, r.path, normalized)
+	}
+	r.domain = normalized
+	return nil
+}
+
+// WithExtension 设置参与匹配和 URL 生成的扩展名约束。
+func (r *Route) WithExtension(extension string) error {
+	router, routeErr := r.mutableRouter()
+	if routeErr != nil {
+		return routeErr
+	}
+	normalized, err := normalizeRouteExtension(extension)
+	if err != nil {
+		return err
+	}
+	router.mu.Lock()
+	defer router.mu.Unlock()
+	if router.frozen {
+		return ErrRouterFrozen
+	}
+	candidate := *r
+	candidate.ext = normalized
+	if router.findDuplicateLocked(&candidate, r, nil) != nil {
+		return fmt.Errorf("%w: %s %s extension=%q", ErrDuplicateRoute, r.method, r.path, normalized)
+	}
+	r.ext = normalized
+	return nil
+}
+
+// WithoutMiddleware 仅在目标函数指针唯一时移除，歧义时失败关闭。
+func (r *Route) WithoutMiddleware(targets ...middleware.Handler) error {
+	router, err := r.mutableRouter()
+	if err != nil {
+		return err
+	}
+	if len(targets) == 0 {
+		return nil
+	}
+	if err = validateMiddleware(targets); err != nil {
+		return err
+	}
+	router.mu.Lock()
+	defer router.mu.Unlock()
+	if router.frozen {
+		return ErrRouterFrozen
+	}
+	working := append([]middleware.Handler(nil), r.middlewares...)
+	for _, target := range targets {
+		pointer := reflect.ValueOf(target).Pointer()
+		matchedIndex := -1
+		for index, candidate := range working {
+			if reflect.ValueOf(candidate).Pointer() != pointer {
+				continue
 			}
-
-			params[paramName] = ""
-			if r.matchParts(routeParts, requestParts, routeIndex+1, requestIndex, params) {
-				return true
+			if matchedIndex >= 0 {
+				return fmt.Errorf("%w: 中间件函数身份存在歧义", ErrInvalidRouteMiddleware)
 			}
-			delete(params, paramName)
-			return false
+			matchedIndex = index
 		}
-
-		if requestIndex >= len(requestParts) {
-			return false
+		if matchedIndex < 0 {
+			return fmt.Errorf("%w: 待移除中间件不存在", ErrInvalidRouteMiddleware)
 		}
-		if !r.validateRouteParam(paramName, requestParts[requestIndex]) {
-			return false
-		}
-		params[paramName] = requestParts[requestIndex]
-		if r.matchParts(routeParts, requestParts, routeIndex+1, requestIndex+1, params) {
-			return true
-		}
-		delete(params, paramName)
-		return false
+		working = append(working[:matchedIndex], working[matchedIndex+1:]...)
 	}
-
-	if requestIndex >= len(requestParts) || part != requestParts[requestIndex] {
-		return false
-	}
-	return r.matchParts(routeParts, requestParts, routeIndex+1, requestIndex+1, params)
+	r.middlewares = working
+	return nil
 }
 
-func (r *Route) validateRouteParam(paramName string, value string) bool {
-	if r.invalidPatterns[paramName] {
+func (r *Route) Method() string {
+	if r == nil {
+		return ""
+	}
+	if r.router != nil {
+		r.router.mu.RLock()
+		defer r.router.mu.RUnlock()
+	}
+	return r.method
+}
+
+func (r *Route) Path() string {
+	if r == nil {
+		return ""
+	}
+	if r.router != nil {
+		r.router.mu.RLock()
+		defer r.router.mu.RUnlock()
+	}
+	return r.path
+}
+
+func (r *Route) Handler() HandlerFunc {
+	if r == nil {
+		return nil
+	}
+	if r.router != nil {
+		r.router.mu.RLock()
+		defer r.router.mu.RUnlock()
+	}
+	return r.handler
+}
+
+func (r *Route) IsAuto() bool {
+	if r == nil {
 		return false
 	}
-	if compiled, ok := r.compiledPatterns[paramName]; ok {
-		return compiled.MatchString(value)
+	if r.router != nil {
+		r.router.mu.RLock()
+		defer r.router.mu.RUnlock()
+	}
+	return r.auto
+}
+
+// Middlewares 返回防御性副本。
+func (r *Route) Middlewares() []middleware.Handler {
+	if r == nil {
+		return nil
+	}
+	if r.router != nil {
+		r.router.mu.RLock()
+		defer r.router.mu.RUnlock()
+	}
+	return append([]middleware.Handler(nil), r.middlewares...)
+}
+
+func (r *ResourceRoute) Only(actions ...string) error {
+	if len(actions) == 0 {
+		return fmt.Errorf("%w: Only 至少需要一个动作", ErrInvalidResourceAction)
+	}
+	selected, err := validateResourceActions(actions)
+	if err != nil {
+		return err
+	}
+	return r.filter(func(action string) bool { return selected[action] })
+}
+
+func (r *ResourceRoute) Except(actions ...string) error {
+	selected, err := validateResourceActions(actions)
+	if err != nil {
+		return err
+	}
+	return r.filter(func(action string) bool { return !selected[action] })
+}
+
+func (r *ResourceRoute) filter(keep func(string) bool) error {
+	if r == nil || r.router == nil {
+		return ErrInvalidRoute
+	}
+	r.router.mu.Lock()
+	defer r.router.mu.Unlock()
+	if r.router.frozen {
+		return ErrRouterFrozen
+	}
+	for action, registered := range r.routes {
+		if keep(action) {
+			continue
+		}
+		r.router.removeRouteLocked(registered)
+		delete(r.routes, action)
+	}
+	return nil
+}
+
+func (r *Router) removeRouteLocked(target *Route) {
+	for index, registered := range r.routes {
+		if registered == target {
+			r.routes = append(r.routes[:index], r.routes[index+1:]...)
+			break
+		}
+	}
+	if target.name != "" && r.namedRoutes[target.name] == target {
+		delete(r.namedRoutes, target.name)
+	}
+}
+
+func validateResourceActions(actions []string) (map[string]bool, error) {
+	valid := make(map[string]bool, len(resourceDefinitions))
+	for _, definition := range resourceDefinitions {
+		valid[definition.action] = true
+	}
+	selected := make(map[string]bool, len(actions))
+	for _, action := range actions {
+		action = strings.ToLower(strings.TrimSpace(action))
+		if !valid[action] {
+			return nil, fmt.Errorf("%w: %q", ErrInvalidResourceAction, action)
+		}
+		selected[action] = true
+	}
+	return selected, nil
+}
+
+func validateRouteHandler(handler HandlerFunc) error {
+	switch typed := handler.(type) {
+	case string:
+		parts := strings.Split(typed, "@")
+		if len(parts) != 2 || !isValidAutoControllerName(parts[0]) || !isValidAutoRouteSegment(parts[1]) {
+			return fmt.Errorf("%w: %q", ErrInvalidRouteHandler, typed)
+		}
+	case func(*context.Request) *context.Response:
+		if typed == nil {
+			return ErrInvalidRouteHandler
+		}
+	default:
+		return fmt.Errorf("%w: 类型 %T", ErrInvalidRouteHandler, handler)
+	}
+	return nil
+}
+
+func validateMiddleware(handlers []middleware.Handler) error {
+	for index, handler := range handlers {
+		if handler == nil {
+			return fmt.Errorf("%w: 第 %d 项为空", ErrInvalidRouteMiddleware, index+1)
+		}
+	}
+	return nil
+}
+
+func mergeMiddleware(parent, current []middleware.Handler) []middleware.Handler {
+	merged := make([]middleware.Handler, 0, len(parent)+len(current))
+	merged = append(merged, parent...)
+	merged = append(merged, current...)
+	return merged
+}
+
+func normalizeRouteMethod(method string) (string, error) {
+	method = strings.ToUpper(strings.TrimSpace(method))
+	if method == anyMethod {
+		return method, nil
+	}
+	if method == "" {
+		return "", fmt.Errorf("%w: HTTP 方法为空", ErrInvalidRoute)
+	}
+	for _, char := range method {
+		if !(char >= 'A' && char <= 'Z') && !(char >= '0' && char <= '9') && !strings.ContainsRune("!#$%&'*+-.^_`|~", char) {
+			return "", fmt.Errorf("%w: HTTP 方法 %q 非法", ErrInvalidRoute, method)
+		}
+	}
+	return method, nil
+}
+
+func isValidRouteName(name string) bool {
+	if name == "" || len(name) > maxRouteNameLength {
+		return false
+	}
+	for index, char := range name {
+		letter := char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z'
+		digit := char >= '0' && char <= '9'
+		if index == 0 && !letter && char != '_' {
+			return false
+		}
+		if index > 0 && !letter && !digit && !strings.ContainsRune("._-", char) {
+			return false
+		}
 	}
 	return true
 }
 
-func isStaticRoute(path string) bool {
-	return !strings.Contains(path, ":")
-}
-
-func splitPathParts(path string) []string {
-	trimmed := strings.Trim(path, "/")
-	if trimmed == "" {
-		return []string{}
+func routeHasParam(path, name string) bool {
+	if name == "" {
+		return false
 	}
-	return strings.Split(trimmed, "/")
-}
-
-func matchDomain(routeDomain string, host string) bool {
-	routeDomain = normalizeRouteHost(routeDomain)
-	if routeDomain == "" {
-		return true
-	}
-	return routeDomain == normalizeRouteHost(host)
-}
-
-// normalizeRouteHost 规范化域名匹配用 Host，避免端口或大小写导致合法路由失配。
-func normalizeRouteHost(rawHost string) string {
-	host := strings.TrimSpace(rawHost)
-	if host == "" {
-		return ""
-	}
-	if parsedHost, _, err := net.SplitHostPort(host); err == nil {
-		host = parsedHost
-	}
-	host = strings.Trim(host, "[]")
-	return strings.TrimSuffix(strings.ToLower(host), ".")
-}
-
-func containsMiddleware(targets []middleware.Handler, candidate middleware.Handler) bool {
-	for _, target := range targets {
-		if middlewareEqual(target, candidate) {
+	for _, part := range strings.Split(strings.Trim(path, "/"), "/") {
+		if strings.TrimSuffix(strings.TrimPrefix(part, ":"), "?") == name && strings.HasPrefix(part, ":") {
 			return true
 		}
 	}
 	return false
-}
-
-func middlewareEqual(left middleware.Handler, right middleware.Handler) bool {
-	return reflect.ValueOf(left).Pointer() == reflect.ValueOf(right).Pointer()
 }

@@ -1,77 +1,133 @@
 package db
 
 import (
+	"errors"
 	"fmt"
+	"sort"
 	"sync"
 )
 
-// Manager 管理多数据库连接，并保留默认连接语义。
+// Manager 管理不可静默覆盖的命名连接，并提供幂等关闭生命周期。
 type Manager struct {
 	defaultName string
 	connections map[string]*DB
 	lock        sync.RWMutex
+	closed      bool
+	initErr     error
+	closeOnce   sync.Once
+	closeErr    error
 }
 
-// NewManager 创建数据库连接管理器。
+// ValidateConnectionName 校验应用配置使用的命名连接标识。
+func ValidateConnectionName(name string) error {
+	if !connectorNamePattern.MatchString(name) {
+		return fmt.Errorf("%w: %q", ErrInvalidConnectionName, name)
+	}
+	return nil
+}
+
+// NewManager 创建数据库连接管理器；非法默认名称会在首次操作时显式返回。
 func NewManager(defaultName string) *Manager {
-	return &Manager{
+	manager := &Manager{
 		defaultName: defaultName,
 		connections: make(map[string]*DB),
 	}
+	if err := ValidateConnectionName(defaultName); err != nil {
+		manager.initErr = err
+	}
+	return manager
 }
 
-// Add 注册命名连接。
-func (m *Manager) Add(name string, connection *DB) {
-	if m == nil || name == "" || connection == nil {
-		return
+// Add 注册命名连接，拒绝非法依赖、重复名称和关闭后写入。
+func (m *Manager) Add(name string, connection *DB) error {
+	if m == nil {
+		return ErrDatabaseUnavailable
+	}
+	if err := ValidateConnectionName(name); err != nil {
+		return err
+	}
+	if connection == nil {
+		return ErrDatabaseUnavailable
+	}
+	if _, err := connection.connectionSnapshot(); err != nil {
+		return err
 	}
 	m.lock.Lock()
 	defer m.lock.Unlock()
+	if m.initErr != nil {
+		return m.initErr
+	}
+	if m.closed {
+		return ErrDatabaseManagerClosed
+	}
+	if _, exists := m.connections[name]; exists {
+		return fmt.Errorf("%w: %s", ErrDuplicateConnection, name)
+	}
 	m.connections[name] = connection
+	return nil
 }
 
-// Default 返回默认连接。
-func (m *Manager) Default() *DB {
+// Default 返回默认连接并显式区分配置错误、关闭和缺失。
+func (m *Manager) Default() (*DB, error) {
 	if m == nil {
-		return nil
+		return nil, ErrDatabaseUnavailable
 	}
-	m.lock.RLock()
-	defer m.lock.RUnlock()
-	return m.connections[m.defaultName]
+	return m.Connection(m.defaultName)
 }
 
 // Connection 返回指定名称的连接。
 func (m *Manager) Connection(name string) (*DB, error) {
 	if m == nil {
-		return nil, fmt.Errorf("database manager is nil")
+		return nil, ErrDatabaseUnavailable
+	}
+	if err := ValidateConnectionName(name); err != nil {
+		return nil, err
 	}
 	m.lock.RLock()
 	defer m.lock.RUnlock()
+	if m.initErr != nil {
+		return nil, m.initErr
+	}
+	if m.closed {
+		return nil, ErrDatabaseManagerClosed
+	}
 	connection, ok := m.connections[name]
 	if !ok || connection == nil {
-		return nil, fmt.Errorf("database connection not found: %s", name)
+		return nil, fmt.Errorf("%w: %s", ErrConnectionNotFound, name)
 	}
 	return connection, nil
 }
 
-// Close 关闭全部已注册连接，并避免重复关闭同一实例。
+// Close 关闭每个唯一 DB 实例，聚合全部错误，并向并发调用返回稳定结果。
 func (m *Manager) Close() error {
 	if m == nil {
 		return nil
 	}
-
-	m.lock.RLock()
-	defer m.lock.RUnlock()
-
-	closed := make(map[*DB]bool)
-	for _, connection := range m.connections {
-		if connection == nil || closed[connection] {
-			continue
+	m.closeOnce.Do(func() {
+		m.lock.Lock()
+		m.closed = true
+		names := make([]string, 0, len(m.connections))
+		for name := range m.connections {
+			names = append(names, name)
 		}
-		if err := connection.Close(); err != nil {
-			return err
+		sort.Strings(names)
+		connections := make([]*DB, 0, len(names))
+		seen := make(map[*DB]bool, len(names))
+		for _, name := range names {
+			connection := m.connections[name]
+			if connection == nil || seen[connection] {
+				continue
+			}
+			seen[connection] = true
+			connections = append(connections, connection)
 		}
-		closed[connection] = true
-	}
-	return nil
+		m.lock.Unlock()
+
+		var result error
+		for _, connection := range connections {
+			result = errors.Join(result, connection.Close())
+		}
+		m.closeErr = result
+	})
+	return m.closeErr
 }

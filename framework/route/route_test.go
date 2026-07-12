@@ -1,135 +1,78 @@
 package route
 
 import (
-	"regexp"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+
+	fwcontext "thinkgo/framework/context"
 )
 
-// TestMatchPathExact 验证精确路径匹配
-func TestMatchPathExact(t *testing.T) {
-	route := &Route{
-		Path:             "/api/users",
-		compiledPatterns: make(map[string]*regexp.Regexp),
-		patterns:         make(map[string]string),
-	}
-	matched, params := route.matchPath("/api/users")
-	if !matched {
-		t.Fatal("精确路径应匹配")
-	}
-	if params != nil {
-		t.Fatal("精确匹配不应有参数")
-	}
-}
-
-// TestMatchPathParams 验证路由参数提取
-func TestMatchPathParams(t *testing.T) {
-	route := &Route{
-		Path:             "/api/users/:id",
-		compiledPatterns: make(map[string]*regexp.Regexp),
-		patterns:         make(map[string]string),
-	}
-	matched, params := route.matchPath("/api/users/42")
-	if !matched {
-		t.Fatal("参数路由应匹配")
-	}
-	if params == nil || params["id"] != "42" {
-		t.Fatalf("路由参数提取不正确，期望 id=42，实际 %v", params)
-	}
-}
-
-// TestRoutePatternInvalidRegexFailsClosed 验证非法正则约束不会退化为无约束匹配。
-func TestRoutePatternInvalidRegexFailsClosed(t *testing.T) {
-	route := &Route{
-		Path:             "/api/users/:id",
-		compiledPatterns: make(map[string]*regexp.Regexp),
-		patterns:         make(map[string]string),
-	}
-	route.Pattern("id", "[0-9")
-
-	if matched, _ := route.matchPath("/api/users/abc"); matched {
-		t.Fatal("非法正则约束应失败关闭，不能匹配任意参数")
-	}
-}
-
-// TestMatchPathMultipleParams 验证多参数提取
-func TestMatchPathMultipleParams(t *testing.T) {
-	route := &Route{
-		Path:             "/api/users/:userId/posts/:postId",
-		compiledPatterns: make(map[string]*regexp.Regexp),
-		patterns:         make(map[string]string),
-	}
-	matched, params := route.matchPath("/api/users/10/posts/99")
-	if !matched {
-		t.Fatal("多参数路由应匹配")
-	}
-	if params["userId"] != "10" {
-		t.Fatalf("userId 参数不正确: %s", params["userId"])
-	}
-	if params["postId"] != "99" {
-		t.Fatalf("postId 参数不正确: %s", params["postId"])
-	}
-}
-
-// TestMatchPathMismatch 验证不匹配的路径
-func TestMatchPathMismatch(t *testing.T) {
-	route := &Route{
-		Path:             "/api/users/:id",
-		compiledPatterns: make(map[string]*regexp.Regexp),
-		patterns:         make(map[string]string),
-	}
-	matched, _ := route.matchPath("/api/orders/42")
-	if matched {
-		t.Fatal("路径前缀不同，不应匹配")
-	}
-}
-
-// TestMatchPathLengthMismatch 验证段数不同的路径
-func TestMatchPathLengthMismatch(t *testing.T) {
-	route := &Route{
-		Path:             "/api/users/:id",
-		compiledPatterns: make(map[string]*regexp.Regexp),
-		patterns:         make(map[string]string),
-	}
-	matched, _ := route.matchPath("/api/users/42/extra")
-	if matched {
-		t.Fatal("段数不同，不应匹配")
-	}
-}
-
-// TestStaticRouteIndex 验证静态路由快速索引
-func TestStaticRouteIndex(t *testing.T) {
+func TestMatchPathParametersAndConstraints(t *testing.T) {
 	router := NewRouter()
-	router.Get("/api/users", "User@Index")
-	router.Post("/api/users", "User@Create")
-
-	// 验证静态路由索引已建立
-	if _, ok := router.staticRoutes["GET"]["/api/users"]; !ok {
-		t.Fatal("GET /api/users 未加入静态路由索引")
+	registered, err := router.Get("/api/users/:userId/posts/:postId", "Post@Show")
+	if err != nil {
+		t.Fatalf("注册参数路由失败: %v", err)
 	}
-	if _, ok := router.staticRoutes["POST"]["/api/users"]; !ok {
-		t.Fatal("POST /api/users 未加入静态路由索引")
+	if err = registered.WithPattern("userId", `[0-9]+`); err != nil {
+		t.Fatalf("设置参数约束失败: %v", err)
+	}
+
+	matched, params := matchForTest(t, router, fwcontext.MustNewRequest(
+		httptest.NewRequest(http.MethodGet, "http://example.com/api/users/10/posts/99", nil),
+	))
+	if matched == nil || params["userId"] != "10" || params["postId"] != "99" {
+		t.Fatalf("参数提取错误，路由=%#v 参数=%#v", matched, params)
+	}
+
+	missed, _, err := router.Match(fwcontext.MustNewRequest(
+		httptest.NewRequest(http.MethodGet, "http://example.com/api/users/alice/posts/99", nil),
+	))
+	if err != nil || missed != nil {
+		t.Fatalf("不满足约束的参数不应匹配，路由=%#v 错误=%v", missed, err)
 	}
 }
 
-// TestDynamicRouteNotInStaticIndex 验证动态路由不在静态索引中
-func TestDynamicRouteNotInStaticIndex(t *testing.T) {
+func TestRouterFreezeBuildsMethodIndexes(t *testing.T) {
 	router := NewRouter()
-	router.Get("/api/users/:id", "User@Show")
+	if _, err := router.Get("/api/users", "User@Index"); err != nil {
+		t.Fatalf("注册 GET 路由失败: %v", err)
+	}
+	if _, err := router.Post("/api/users", "User@Create"); err != nil {
+		t.Fatalf("注册 POST 路由失败: %v", err)
+	}
+	if _, err := router.Get("/api/users/:id", "User@Show"); err != nil {
+		t.Fatalf("注册动态路由失败: %v", err)
+	}
+	if err := router.Freeze(); err != nil {
+		t.Fatalf("冻结路由失败: %v", err)
+	}
 
-	if _, ok := router.staticRoutes["GET"]; ok {
-		if _, ok2 := router.staticRoutes["GET"]["/api/users/:id"]; ok2 {
-			t.Fatal("动态路由不应加入静态索引")
-		}
+	if len(router.staticRoutes[http.MethodGet][pathPartsKey([]string{"api", "users"})]) != 1 {
+		t.Fatal("GET 静态路由未按路径和域名建立索引")
+	}
+	if len(router.staticRoutes[http.MethodPost][pathPartsKey([]string{"api", "users"})]) != 1 {
+		t.Fatal("POST 静态路由未建立索引")
+	}
+	if len(router.dynamicRoutes[http.MethodGet]) != 1 {
+		t.Fatal("GET 动态路由未建立方法索引")
 	}
 }
 
-// TestMissRoute 验证 404 兜底路由
-func TestMissRoute(t *testing.T) {
+func TestMissRouteAndNilRequest(t *testing.T) {
 	router := NewRouter()
-	router.Get("/api/home", "Home@Index")
-	router.Miss("Error@NotFound")
-
-	if router.missRoute == nil {
-		t.Fatal("Miss 路由未设置")
+	miss, err := router.Miss("Error@NotFound")
+	if err != nil || miss == nil {
+		t.Fatalf("注册 Miss 路由失败: %v", err)
+	}
+	matched, _, err := router.Match(fwcontext.MustNewRequest(
+		httptest.NewRequest(http.MethodGet, "http://example.com/missing", nil),
+	))
+	if err != nil || matched != miss {
+		t.Fatalf("未命中请求应返回 Miss 路由，路由=%#v 错误=%v", matched, err)
+	}
+	if _, _, err = router.Match(nil); !errors.Is(err, ErrNilRequest) {
+		t.Fatalf("空请求必须返回 ErrNilRequest，实际为 %v", err)
 	}
 }

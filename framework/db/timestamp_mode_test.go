@@ -98,8 +98,7 @@ func TestSoftDeleteUsesUnixSecondsWhenConfigured(t *testing.T) {
 	database.timestampValueType = TimestampValueTypeUnix
 
 	model := NewModel(database, "users").SoftDelete()
-	model.Where("id = ?", 7)
-	if err := model.Delete(); err != nil {
+	if _, err := model.Where("id = ?", 7).Delete(); err != nil {
 		t.Fatalf("软删除不应返回错误，实际为 %v", err)
 	}
 	if _, ok := conn.updateData["delete_time"].(int64); !ok {
@@ -161,7 +160,7 @@ func TestNormalizeTimestampValueType(t *testing.T) {
 		{"timestamp", TimestampValueTypeTimestamp},
 		{"date", TimestampValueTypeDate},
 		{"  datetime  ", TimestampValueTypeDateTime},
-		{"", TimestampValueTypeUnix},       // 空串回退到 unix
+		{"", TimestampValueTypeUnix},        // 空串回退到 unix
 		{"invalid", TimestampValueTypeUnix}, // 未知类型回退到 unix
 	}
 	for _, tc := range cases {

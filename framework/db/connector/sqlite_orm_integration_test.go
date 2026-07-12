@@ -105,7 +105,7 @@ func TestSqliteInsertAllBatching(t *testing.T) {
 	database := newSqliteTestDB(t)
 	defer database.Close()
 
-	// users 表 3 列 → batchRows = 60000/3 = 20000；插入 20001 行触发 2 批。
+	// users 表 3 列、SQLite 参数预算 999 → 每批 333 行；插入 20001 行会稳定触发多批事务。
 	rows := make([]map[string]interface{}, 0, 20001)
 	for i := 1; i <= 20001; i++ {
 		rows = append(rows, map[string]interface{}{"id": i, "name": "u", "status": 1})
