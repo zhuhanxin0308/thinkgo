@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"thinkgo/framework/lang"
 )
@@ -69,6 +70,7 @@ func (r Result) Violations() []Violation {
 type validationOptions struct {
 	scene      string
 	collectAll bool
+	location   *time.Location
 }
 
 // Option 配置一次 Validate 调用，不修改共享验证器。
@@ -100,6 +102,17 @@ func CollectAllErrors() Option {
 	}
 }
 
+// WithLocation 设置本次验证中日期规则使用的应用时区。
+func WithLocation(location *time.Location) Option {
+	return func(options *validationOptions) error {
+		if location == nil {
+			return fmt.Errorf("%w: 时区不能为空", ErrInvalidOption)
+		}
+		options.location = location
+		return nil
+	}
+}
+
 // Validator 保存可并发读取的验证配置；每次 Validate 返回独立 Result。
 type Validator struct {
 	configMu sync.RWMutex
@@ -109,6 +122,8 @@ type Validator struct {
 	language *lang.Lang
 	version  uint64
 	plans    map[string]cachedValidationPlan
+	location *time.Location
+	now      func() time.Time
 }
 
 type validatorConfig struct {
@@ -128,7 +143,29 @@ func NewValidator() *Validator {
 		messages: make(map[string]string),
 		scenes:   make(map[string][]string),
 		plans:    make(map[string]cachedValidationPlan),
+		location: time.Local,
+		now:      time.Now,
 	}
+}
+
+// ValidateRules 使用规则快照执行无场景验证，适合控制器便捷 API 的热路径。
+// 规则配置错误仍通过 error 返回；成功的规则快照会进入有界进程级缓存。
+func ValidateRules(data map[string]interface{}, rules map[string]string, options ...Option) (Result, error) {
+	cacheKey, cacheable := sharedValidationPlanKey(rules, nil, "")
+	if cacheable {
+		if validator, ok := processValidatorCache.load(cacheKey); ok {
+			return validator.Validate(data, options...)
+		}
+	}
+	validator := NewValidator().SetRules(rules)
+	result, err := validator.Validate(data, options...)
+	if err != nil {
+		return result, err
+	}
+	if cacheable {
+		processValidatorCache.store(cacheKey, validator)
+	}
+	return result, nil
 }
 
 // SetRules 原子替换规则，并复制调用方 map。
@@ -176,6 +213,20 @@ func (v *Validator) SetLang(language *lang.Lang) *Validator {
 	return v
 }
 
+// SetLocation 设置验证器默认使用的应用时区。
+func (v *Validator) SetLocation(location *time.Location) *Validator {
+	if v == nil {
+		return v
+	}
+	if location == nil {
+		location = time.Local
+	}
+	v.configMu.Lock()
+	v.location = location
+	v.configMu.Unlock()
+	return v
+}
+
 // Validate 执行一次无状态验证；规则或场景配置错误通过 error 返回。
 func (v *Validator) Validate(data map[string]interface{}, optionFunctions ...Option) (Result, error) {
 	if v == nil {
@@ -190,6 +241,7 @@ func (v *Validator) Validate(data map[string]interface{}, optionFunctions ...Opt
 			return Result{}, err
 		}
 	}
+	location, current := v.runtimeTime(options.location)
 
 	config, plan, err := v.configAndPlan(options.scene)
 	if err != nil {
@@ -202,7 +254,7 @@ func (v *Validator) Validate(data map[string]interface{}, optionFunctions ...Opt
 			if !exists && !rule.requiresPresence() {
 				continue
 			}
-			if evaluateRule(data, field.name, value, exists, rule) {
+			if evaluateRule(data, field.name, value, exists, rule, location, current) {
 				continue
 			}
 			result.violations = append(result.violations, buildViolation(config, field, rule))
@@ -212,6 +264,24 @@ func (v *Validator) Validate(data map[string]interface{}, optionFunctions ...Opt
 		}
 	}
 	return result, nil
+}
+
+// runtimeTime 获取本次验证使用的时区和当前时间，避免日期规则读取进程全局时区。
+func (v *Validator) runtimeTime(override *time.Location) (*time.Location, time.Time) {
+	v.configMu.RLock()
+	location := v.location
+	clock := v.now
+	v.configMu.RUnlock()
+	if override != nil {
+		location = override
+	}
+	if location == nil {
+		location = time.Local
+	}
+	if clock == nil {
+		clock = time.Now
+	}
+	return location, clock().In(location)
 }
 
 func (v *Validator) configAndPlan(scene string) (validatorConfig, []compiledField, error) {
@@ -227,9 +297,30 @@ func (v *Validator) configAndPlan(scene string) (validatorConfig, []compiledFiel
 		scenes := v.scenes
 		v.configMu.RUnlock()
 
+		cacheKey, cacheable := sharedValidationPlanKey(rules, scenes, scene)
+		if cacheable {
+			if plan, ok := processValidationPlanCache.load(cacheKey); ok {
+				v.configMu.Lock()
+				if v.version != version {
+					v.configMu.Unlock()
+					continue
+				}
+				if v.plans == nil {
+					v.plans = make(map[string]cachedValidationPlan)
+				}
+				v.plans[scene] = cachedValidationPlan{version: version, fields: plan}
+				config := validatorConfig{messages: v.messages, language: v.language}
+				v.configMu.Unlock()
+				return config, plan, nil
+			}
+		}
+
 		plan, err := compileValidationPlan(rules, scenes, scene)
 		if err != nil {
 			return validatorConfig{}, nil, err
+		}
+		if cacheable {
+			processValidationPlanCache.store(cacheKey, plan)
 		}
 		v.configMu.Lock()
 		if v.version != version {

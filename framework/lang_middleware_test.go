@@ -30,7 +30,7 @@ func newLanguageMiddlewareApp(t *testing.T, config map[string]interface{}) *App 
 	if err := manager.LoadAll(directory); err != nil {
 		t.Fatalf("加载语言包失败: %v", err)
 	}
-	return &App{Lang: manager}
+	return &App{lang: manager}
 }
 
 func runLanguageMiddleware(t *testing.T, app *App, raw *http.Request) string {

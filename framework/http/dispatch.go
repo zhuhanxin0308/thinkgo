@@ -9,6 +9,7 @@ import (
 
 	"thinkgo/framework"
 	"thinkgo/framework/context"
+	frameworkLog "thinkgo/framework/log"
 	"thinkgo/framework/middleware"
 	"thinkgo/framework/route"
 )
@@ -42,15 +43,25 @@ func (h *Http) dispatch(matchedRoute *route.Route, req *context.Request) *contex
 	if !ok {
 		return h.dispatchInternalError("", fmt.Errorf("不支持的路由处理器类型 %T", handler))
 	}
-	parts := strings.Split(handlerName, "@")
-	if len(parts) != 2 {
+	controllerName, actionName, hasSeparator := strings.Cut(handlerName, "@")
+	if !hasSeparator || controllerName == "" || actionName == "" || strings.Contains(actionName, "@") {
 		return h.dispatchInternalError(handlerName, errors.New("控制器路由格式非法"))
 	}
-	if matchedRoute.IsAuto() && isReservedControllerMethod(parts[1]) {
+	if matchedRoute.IsAuto() && isReservedControllerMethod(actionName) {
 		return context.NewResponse().Code(http.StatusNotFound).Content("404 Not Found")
 	}
 
-	controllerInstance, err := h.app.Make(parts[0])
+	controllerInstance, err := h.app.Make(controllerName)
+	if err != nil && matchedRoute.IsAuto() {
+		// 控制器层对应 ThinkPHP 的 url_controller_layer；直接名称作为兼容回退。
+		if layer := strings.TrimSpace(matchedRoute.ControllerLayer()); layer != "" {
+			layeredName := layer + "." + controllerName
+			if layeredInstance, layeredErr := h.app.Make(layeredName); layeredErr == nil {
+				controllerInstance = layeredInstance
+				err = nil
+			}
+		}
+	}
 	if err != nil {
 		return h.dispatchInternalError(handlerName, err)
 	}
@@ -58,35 +69,43 @@ func (h *Http) dispatch(matchedRoute *route.Route, req *context.Request) *contex
 	if !controllerValue.IsValid() || isNilReflectValue(controllerValue) {
 		return h.dispatchInternalError(handlerName, errors.New("控制器实例为空"))
 	}
-	plan, err := h.resolveDispatchPlan(handlerName, controllerValue.Type(), !matchedRoute.IsAuto())
+	// 自动路由的处理器名称和控制器类型同样稳定，复用反射计划可避免每次请求重复解析方法签名。
+	plan, err := h.resolveDispatchPlan(handlerName, actionName, controllerValue.Type(), true)
 	if err != nil {
 		return h.dispatchInternalError(handlerName, err)
 	}
 
-	if plan.initMethod != nil {
-		results := plan.initMethod.Func.Call([]reflect.Value{controllerValue, reflect.ValueOf(h.app), reflect.ValueOf(req)})
-		if plan.initReturnsError {
-			if initErr := reflectResultError(results[0]); initErr != nil {
-				return h.dispatchInternalError(handlerName, fmt.Errorf("控制器初始化失败: %w", initErr))
+	dispatchAfterPreInit := func(current *context.Request) *context.Response {
+		if plan.initMethod != nil {
+			results := plan.initMethod.Func.Call([]reflect.Value{controllerValue, reflect.ValueOf(h.app), reflect.ValueOf(current)})
+			if plan.initReturnsError {
+				if initErr := reflectResultError(results[0]); initErr != nil {
+					return h.dispatchInternalError(handlerName, fmt.Errorf("控制器初始化失败: %w", initErr))
+				}
 			}
 		}
+		handlers, err := h.resolveControllerMiddleware(controllerInstance, actionName)
+		if err != nil {
+			return h.dispatchInternalError(handlerName, err)
+		}
+
+		invokeAction := func(current *context.Request) *context.Response {
+			return h.invokeControllerAction(handlerName, controllerValue, plan, current)
+		}
+		if len(handlers) == 0 {
+			return invokeAction(current)
+		}
+		return middleware.ThenHandlers(current, handlers, invokeAction)
 	}
-	handlers, err := h.resolveControllerMiddleware(controllerInstance, parts[1])
+
+	preInitHandlers, err := h.resolvePreInitControllerMiddleware(controllerInstance, actionName)
 	if err != nil {
 		return h.dispatchInternalError(handlerName, err)
 	}
-
-	invokeAction := func(current *context.Request) *context.Response {
-		return h.invokeControllerAction(handlerName, controllerValue, plan, current)
+	if len(preInitHandlers) == 0 {
+		return dispatchAfterPreInit(req)
 	}
-	if len(handlers) == 0 {
-		return invokeAction(req)
-	}
-	controllerPipeline := middleware.NewPipeline()
-	for _, handler := range handlers {
-		controllerPipeline.Pipe(handler)
-	}
-	return controllerPipeline.Then(req, invokeAction)
+	return middleware.ThenHandlers(req, preInitHandlers, dispatchAfterPreInit)
 }
 
 func (h *Http) invokeControllerAction(handlerName string, controller reflect.Value, plan *controllerDispatchPlan, req *context.Request) *context.Response {
@@ -117,7 +136,7 @@ func (h *Http) invokeControllerAction(handlerName string, controller reflect.Val
 	return response
 }
 
-func (h *Http) resolveDispatchPlan(handlerName string, controllerType reflect.Type, cacheable bool) (*controllerDispatchPlan, error) {
+func (h *Http) resolveDispatchPlan(handlerName, actionName string, controllerType reflect.Type, cacheable bool) (*controllerDispatchPlan, error) {
 	if cacheable {
 		h.dispatchPlanMu.RLock()
 		cached := h.dispatchPlans[handlerName]
@@ -127,17 +146,16 @@ func (h *Http) resolveDispatchPlan(handlerName string, controllerType reflect.Ty
 		}
 	}
 
-	parts := strings.Split(handlerName, "@")
-	if len(parts) != 2 {
+	if actionName == "" || strings.Contains(actionName, "@") {
 		return nil, errors.New("控制器路由格式非法")
 	}
-	actionMethod, exists := controllerType.MethodByName(parts[1])
+	actionMethod, exists := controllerType.MethodByName(actionName)
 	if !exists {
-		return nil, fmt.Errorf("控制器方法不存在: %s", parts[1])
+		return nil, fmt.Errorf("控制器方法不存在: %s", actionName)
 	}
 	plan := &controllerDispatchPlan{controllerType: controllerType, actionMethod: actionMethod}
 	if err := validateActionSignature(plan); err != nil {
-		return nil, fmt.Errorf("控制器动作 %s 签名非法: %w", parts[1], err)
+		return nil, fmt.Errorf("控制器动作 %s 签名非法: %w", actionName, err)
 	}
 	if initMethod, ok := controllerType.MethodByName("Init"); ok {
 		copied := initMethod
@@ -209,12 +227,41 @@ type controllerMiddlewareProvider interface {
 	GetMiddleware() []framework.ControllerMiddleware
 }
 
+// controllerPreInitMiddlewareProvider 为需要在 Init 前执行中间件的控制器提供可选能力。
+// 使用独立接口可以兼容仍在 Init 中声明传统控制器中间件的旧控制器。
+type controllerPreInitMiddlewareProvider interface {
+	GetPreInitMiddleware() []framework.ControllerMiddleware
+}
+
+type controllerMiddlewareDeclarationsProvider struct {
+	declarations []framework.ControllerMiddleware
+}
+
+func (p controllerMiddlewareDeclarationsProvider) GetMiddleware() []framework.ControllerMiddleware {
+	return p.declarations
+}
+
+func (h *Http) resolvePreInitControllerMiddleware(controllerInstance interface{}, action string) ([]middleware.Handler, error) {
+	provider, ok := controllerInstance.(controllerPreInitMiddlewareProvider)
+	if !ok {
+		return nil, nil
+	}
+	declarations := provider.GetPreInitMiddleware()
+	if len(declarations) == 0 {
+		return nil, nil
+	}
+	return h.resolveControllerMiddleware(controllerMiddlewareDeclarationsProvider{declarations: declarations}, action)
+}
+
 func (h *Http) resolveControllerMiddleware(controllerInstance interface{}, action string) ([]middleware.Handler, error) {
 	provider, ok := controllerInstance.(controllerMiddlewareProvider)
 	if !ok {
 		return nil, nil
 	}
 	declarations := provider.GetMiddleware()
+	if len(declarations) == 0 {
+		return nil, nil
+	}
 	handlers := make([]middleware.Handler, 0, len(declarations))
 	for index, declaration := range declarations {
 		declaration.Name = strings.TrimSpace(declaration.Name)
@@ -233,7 +280,7 @@ func (h *Http) resolveControllerMiddleware(controllerInstance interface{}, actio
 		if !controllerMiddlewareApplies(declaration, action) {
 			continue
 		}
-		handler := h.app.Middleware.ResolveAlias(declaration.Name)
+		handler := h.middleware.ResolveAlias(declaration.Name)
 		if handler == nil {
 			return nil, fmt.Errorf("控制器中间件别名 %q 未注册", declaration.Name)
 		}
@@ -243,6 +290,9 @@ func (h *Http) resolveControllerMiddleware(controllerInstance interface{}, actio
 }
 
 func validateControllerActionFilter(actions []string) error {
+	if len(actions) == 0 {
+		return nil
+	}
 	seen := make(map[string]bool, len(actions))
 	for _, action := range actions {
 		action = strings.TrimSpace(action)
@@ -344,10 +394,10 @@ func isNilReflectValue(value reflect.Value) bool {
 }
 
 func (h *Http) dispatchInternalError(handler string, err error) *context.Response {
-	if h.app != nil && h.app.Log != nil && err != nil {
-		h.app.Log.ErrorCtx("HTTP 控制器分发失败", map[string]interface{}{
+	if h.log != nil && err != nil {
+		h.log.ErrorCtx("HTTP 控制器分发失败", map[string]interface{}{
 			"handler": handler,
-			"error":   err.Error(),
+			"error":   frameworkLog.SanitizeErrorText(err.Error()),
 		})
 	}
 	message := http.StatusText(http.StatusInternalServerError)

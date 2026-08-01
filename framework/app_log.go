@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 
 	"thinkgo/framework/log"
@@ -14,6 +14,22 @@ import (
 
 // createAppLogChannel 严格解析单个日志通道，配置错误在启动阶段立即返回。
 func createAppLogChannel(app *App, channelConfig map[string]interface{}, addConsole bool) (*log.Log, error) {
+	allowedFields := map[string]struct{}{
+		"type": {}, "level": {}, "path": {}, "overflow_policy": {},
+		"max_file_size": {}, "retention_days": {}, "max_files": {},
+		"max_total_size": {},
+	}
+	unknownFields := make([]string, 0)
+	for key := range channelConfig {
+		if _, exists := allowedFields[key]; !exists {
+			unknownFields = append(unknownFields, key)
+		}
+	}
+	if len(unknownFields) > 0 {
+		sort.Strings(unknownFields)
+		return nil, fmt.Errorf("日志通道包含未知配置字段: %s", strings.Join(unknownFields, ", "))
+	}
+
 	driverType := "file"
 	if value, exists := channelConfig["type"]; exists {
 		typed, ok := value.(string)
@@ -30,15 +46,19 @@ func createAppLogChannel(app *App, channelConfig map[string]interface{}, addCons
 	if err != nil {
 		return nil, err
 	}
-	path := app.BasePath + RuntimeLogDir
+	overflowPolicy, err := readLogOverflowPolicy(channelConfig)
+	if err != nil {
+		return nil, err
+	}
+	path := app.RuntimeLogPath()
 	if value, exists := channelConfig["path"]; exists {
 		typed, ok := value.(string)
 		if !ok || strings.TrimSpace(typed) == "" {
 			return nil, invalidLogConfigValueError("path", value)
 		}
-		path = strings.TrimSpace(typed)
-		if !filepath.IsAbs(path) {
-			path = filepath.Join(app.BasePath, path)
+		path, err = app.resolveStoragePath(strings.TrimSpace(typed))
+		if err != nil {
+			return nil, fmt.Errorf("解析日志路径失败: %w", err)
 		}
 	}
 
@@ -51,6 +71,7 @@ func createAppLogChannel(app *App, channelConfig map[string]interface{}, addCons
 		return nil, err
 	}
 	logger := log.NewLog(fileDriver)
+	logger.SetLocation(app.Location())
 	if addConsole {
 		if err := logger.AddDriver(logDriver.NewConsole()); err != nil {
 			_ = logger.Close()
@@ -59,7 +80,31 @@ func createAppLogChannel(app *App, channelConfig map[string]interface{}, addCons
 		logger.SetCallerEnabled(true)
 	}
 	logger.SetLevels(levels)
+	if err := logger.SetOverflowPolicy(overflowPolicy); err != nil {
+		_ = logger.Close()
+		return nil, fmt.Errorf("设置日志溢出策略失败: %w", err)
+	}
 	return logger, nil
+}
+
+// readLogOverflowPolicy 解析日志队列溢出策略；缺省值保持同步写入兼容行为。
+func readLogOverflowPolicy(config map[string]interface{}) (log.OverflowPolicy, error) {
+	raw, exists := config["overflow_policy"]
+	if !exists || raw == nil {
+		return log.OverflowSync, nil
+	}
+	value, ok := raw.(string)
+	if !ok {
+		return log.OverflowSync, fmt.Errorf("%w: 日志配置 overflow_policy 的类型无效: %T", log.ErrInvalidOverflowPolicy, raw)
+	}
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "sync":
+		return log.OverflowSync, nil
+	case "drop":
+		return log.OverflowDrop, nil
+	default:
+		return log.OverflowSync, fmt.Errorf("%w: 日志配置 overflow_policy 的值无效: %q", log.ErrInvalidOverflowPolicy, value)
+	}
 }
 
 func readLogFileOptions(config map[string]interface{}) (logDriver.FileOptions, error) {

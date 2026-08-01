@@ -23,6 +23,8 @@ const (
 	fileCleanupInterval        = time.Hour
 )
 
+var errUnsafeLogFilePath = errors.New("日志文件路径必须指向当前打开的普通文件")
+
 // FileOptions 定义文件轮转和磁盘容量治理边界；零值使用安全默认值。
 type FileOptions struct {
 	MaxFileSize   int64
@@ -44,6 +46,7 @@ type File struct {
 	currentSize       int64
 	lastCleanupTime   time.Time
 	initializationErr error
+	location          *time.Location
 }
 
 type managedLogFile struct {
@@ -96,7 +99,30 @@ func newFile(path string, options FileOptions) *File {
 		retentionDays: options.RetentionDays,
 		maxFiles:      options.MaxFiles,
 		maxTotalSize:  options.MaxTotalSize,
+		location:      time.Local,
 	}
+}
+
+// SetLocation 设置文件日志按应用时区进行保留和清理。
+func (d *File) SetLocation(location *time.Location) {
+	if d == nil {
+		return
+	}
+	if location == nil {
+		location = time.Local
+	}
+	d.mu.Lock()
+	d.location = location
+	d.mu.Unlock()
+}
+
+// now 返回文件驱动使用的当前应用时间。
+func (d *File) now() time.Time {
+	location := d.location
+	if location == nil {
+		location = time.Local
+	}
+	return time.Now().In(location)
 }
 
 func normalizeFileOptions(options FileOptions) (FileOptions, error) {
@@ -152,7 +178,7 @@ func (d *File) WriteEntry(entry *log.LogEntry) error {
 	if err = file.Sync(); err != nil {
 		return errors.Join(err, d.closeFileLocked(filename))
 	}
-	return d.maybeCleanupLocked(time.Now())
+	return d.maybeCleanupLocked(d.now())
 }
 
 // SaveEntries 按日期顺序批量写入，每个目标文件仅同步一次。
@@ -209,7 +235,7 @@ func (d *File) SaveEntries(entries []*log.LogEntry) error {
 			return errors.Join(err, d.closeCurrentLocked())
 		}
 	}
-	return d.maybeCleanupLocked(time.Now())
+	return d.maybeCleanupLocked(d.now())
 }
 
 // Close 关闭当前缓存句柄。
@@ -231,9 +257,13 @@ func (d *File) getOrCreateFileLocked(filename string) (*os.File, error) {
 		}
 	}
 
+	// #nosec G304 -- filename 由驱动自己的日志目录和轮转命名规则生成，并非请求输入。
 	file, err := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return nil, err
+	}
+	if err := validateOpenedLogFile(filename, file); err != nil {
+		return nil, errors.Join(err, file.Close())
 	}
 	if err := restrictLogPath(filename, false); err != nil {
 		return nil, errors.Join(fmt.Errorf("限制日志文件权限失败: %w", err), file.Close())
@@ -248,6 +278,29 @@ func (d *File) getOrCreateFileLocked(filename string) (*os.File, error) {
 	// 新日志文件会改变数量和容量，强制本次写入后重新执行治理。
 	d.lastCleanupTime = time.Time{}
 	return file, nil
+}
+
+// validateOpenedLogFile 防止预先存在的符号链接或路径替换把日志写入目录之外。
+// 以已打开文件句柄为准，后续路径被替换时当前句柄仍不会跟随到新目标。
+func validateOpenedLogFile(filename string, file *os.File) error {
+	if file == nil {
+		return errUnsafeLogFilePath
+	}
+	openedInfo, err := file.Stat()
+	if err != nil {
+		return fmt.Errorf("获取已打开日志文件信息失败: %w", err)
+	}
+	pathInfo, err := os.Lstat(filename)
+	if err != nil {
+		return fmt.Errorf("检查日志文件路径失败: %w", err)
+	}
+	if pathInfo.Mode()&os.ModeSymlink != 0 || !pathInfo.Mode().IsRegular() {
+		return errUnsafeLogFilePath
+	}
+	if !os.SameFile(openedInfo, pathInfo) {
+		return errUnsafeLogFilePath
+	}
+	return nil
 }
 
 func (d *File) closeFileLocked(filename string) error {

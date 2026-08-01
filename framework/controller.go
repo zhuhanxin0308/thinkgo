@@ -2,7 +2,11 @@ package framework
 
 import (
 	"strings"
+
+	"thinkgo/framework/cache"
 	"thinkgo/framework/context"
+	"thinkgo/framework/debug"
+	"thinkgo/framework/log"
 	"thinkgo/framework/validate"
 )
 
@@ -29,6 +33,12 @@ func (c *Controller) GetMiddleware() []ControllerMiddleware {
 	return c.middleware
 }
 
+// GetPreInitMiddleware 返回必须在控制器 Init 之前执行的中间件声明。
+// 认证、租户解析等会保护 Init 副作用的逻辑应通过该方法声明；默认返回空列表以兼容旧控制器。
+func (c *Controller) GetPreInitMiddleware() []ControllerMiddleware {
+	return nil
+}
+
 // SetMiddleware 设置控制器级中间件。
 // 对应 ThinkPHP 控制器中的 $middleware 属性声明。
 // 子控制器可在构造时调用此方法声明所需的中间件。
@@ -48,7 +58,7 @@ func (c *Controller) Assign(key string, value interface{}) {
 	c.viewData[key] = value
 }
 
-// View 渲染模板
+// View 渲染模板，并把成功模板记录写入当前请求 collector。
 func (c *Controller) View(name string, data ...map[string]interface{}) string {
 	// 合并已赋值数据与传入数据
 	d := make(map[string]interface{})
@@ -62,13 +72,22 @@ func (c *Controller) View(name string, data ...map[string]interface{}) string {
 	}
 
 	var b strings.Builder
-	err := c.App.View.Render(&b, name, d)
+	err := c.App.view.RenderWithDebug(debug.FromRequest(c.Request), &b, name, d)
 	if err != nil {
 		// 记录详细错误到日志，不将模板路径等敏感信息暴露给用户
-		c.App.Log.Error("模板渲染失败 [" + name + "]: " + err.Error())
+		c.App.log.Error("模板渲染失败 [" + name + "]: " + log.SanitizeErrorText(err.Error()))
 		return "页面渲染出错，请稍后再试"
 	}
 	return b.String()
+}
+
+// RequestCache 返回绑定当前请求 collector 的缓存 facade。
+// facade 与应用根缓存共享驱动和生命周期状态，但调试数据仅属于当前请求。
+func (c *Controller) RequestCache() *cache.Cache {
+	if c == nil || c.App == nil || c.App.cache == nil {
+		return nil
+	}
+	return c.App.cache.WithDebug(debug.FromRequest(c.Request))
 }
 
 // Fetch View 的别名
@@ -110,7 +129,10 @@ func (c *Controller) Redirect(url string, code ...int) *context.Response {
 
 // Validate 验证请求数据，数据违规与规则配置错误分别通过 Result 和 error 返回。
 func (c *Controller) Validate(data map[string]interface{}, rules map[string]string) (validate.Result, error) {
-	return validate.NewValidator().SetRules(rules).Validate(data)
+	if c != nil && c.App != nil {
+		return validate.ValidateRules(data, rules, validate.WithLocation(c.App.Location()))
+	}
+	return validate.ValidateRules(data, rules)
 }
 
 // Lang 获取多语言翻译（便捷方法）
@@ -128,7 +150,7 @@ func (c *Controller) Lang(key string, vars ...map[string]interface{}) string {
 			lang = l
 		}
 	}
-	return c.App.Lang.Get(key, v, lang)
+	return c.App.lang.Get(key, v, lang)
 }
 
 // GetLang 获取当前请求的语言标识

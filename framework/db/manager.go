@@ -11,6 +11,7 @@ import (
 type Manager struct {
 	defaultName string
 	connections map[string]*DB
+	handles     map[ConnectionID]*managedConnection
 	lock        sync.RWMutex
 	closed      bool
 	initErr     error
@@ -31,6 +32,7 @@ func NewManager(defaultName string) *Manager {
 	manager := &Manager{
 		defaultName: defaultName,
 		connections: make(map[string]*DB),
+		handles:     make(map[ConnectionID]*managedConnection),
 	}
 	if err := ValidateConnectionName(defaultName); err != nil {
 		manager.initErr = err
@@ -49,7 +51,18 @@ func (m *Manager) Add(name string, connection *DB) error {
 	if connection == nil {
 		return ErrDatabaseUnavailable
 	}
-	if _, err := connection.connectionSnapshot(); err != nil {
+	var identity ConnectionID
+	if err := connection.WithConnection(func(backend Connection) error {
+		identity = backend.ConnectionID()
+		if identity == "" {
+			return fmt.Errorf("%w: connection identity cannot be empty", ErrInvalidDatabaseConfig)
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	candidateHandle, err := connection.managedConnectionHandle()
+	if err != nil {
 		return err
 	}
 	m.lock.Lock()
@@ -62,6 +75,18 @@ func (m *Manager) Add(name string, connection *DB) error {
 	}
 	if _, exists := m.connections[name]; exists {
 		return fmt.Errorf("%w: %s", ErrDuplicateConnection, name)
+	}
+	handle, exists := m.handles[identity]
+	if !exists {
+		handle = candidateHandle
+	}
+	if err := connection.attachManagedConnection(handle); err != nil {
+		return err
+	}
+	// Manager 接管物理连接的关闭时机，先封闭全部 DB 包装器，再等待共享租约。
+	handle.managerOwned.Store(true)
+	if !exists {
+		m.handles[identity] = handle
 	}
 	m.connections[name] = connection
 	return nil
@@ -121,11 +146,20 @@ func (m *Manager) Close() error {
 			seen[connection] = true
 			connections = append(connections, connection)
 		}
+		handles := make([]*managedConnection, 0, len(m.handles))
+		for _, handle := range m.handles {
+			if handle != nil {
+				handles = append(handles, handle)
+			}
+		}
 		m.lock.Unlock()
 
 		var result error
 		for _, connection := range connections {
-			result = errors.Join(result, connection.Close())
+			connection.markClosed()
+		}
+		for _, handle := range handles {
+			result = errors.Join(result, handle.Close())
 		}
 		m.closeErr = result
 	})

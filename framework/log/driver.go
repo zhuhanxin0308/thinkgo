@@ -62,3 +62,8 @@ type Driver interface {
 	// Close 关闭驱动，释放资源
 	Close() error
 }
+
+// LocationAwareDriver 表示能够使用应用时区执行内部日期清理的日志驱动。
+type LocationAwareDriver interface {
+	SetLocation(location *time.Location)
+}

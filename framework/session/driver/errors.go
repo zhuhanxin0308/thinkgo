@@ -21,6 +21,10 @@ var (
 	ErrSessionLockTimeout = errors.New("会话文件锁超时")
 	// ErrInvalidSessionUpdate 表示原子更新回调为空。
 	ErrInvalidSessionUpdate = errors.New("会话原子更新回调非法")
+	// ErrInvalidMemoryCapacity 表示内存 Session 容量配置为负数。
+	ErrInvalidMemoryCapacity = errors.New("内存会话容量非法")
+	// ErrMemoryCapacityExhausted 表示内存 Session 已达到容量上限且无法继续写入。
+	ErrMemoryCapacityExhausted = errors.New("内存会话容量已耗尽")
 )
 
 // validateSessionID 统一约束所有驱动入口，避免存储键注入与资源滥用。

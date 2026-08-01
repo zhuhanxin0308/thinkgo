@@ -38,7 +38,3 @@ func buildSqlsrvDSN(config db.Config) string {
 	}
 	return dsn.String()
 }
-
-func init() {
-	mustRegisterConnector("sqlsrv", &Sqlsrv{})
-}

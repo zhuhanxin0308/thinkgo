@@ -129,6 +129,77 @@ func TestFileAtomicUpdatePreventsLostWrites(t *testing.T) {
 	}
 }
 
+// TestFileSessionConcurrentAcrossInstances 验证同一目录下的独立驱动实例共享文件锁语义。
+func TestFileSessionConcurrentAcrossInstances(t *testing.T) {
+	first, directory := newTestFileDriver(t)
+	second, err := NewFile(directory)
+	if err != nil {
+		t.Fatalf("创建第二个文件 Session 驱动失败: %v", err)
+	}
+
+	const workers = 48
+	var waitGroup sync.WaitGroup
+	errorsChannel := make(chan error, workers)
+	for index := 0; index < workers; index++ {
+		waitGroup.Add(1)
+		driver := first
+		if index%2 != 0 {
+			driver = second
+		}
+		go func(currentDriver *File) {
+			defer waitGroup.Done()
+			errorsChannel <- currentDriver.Update("shared-counter", func(current string, found bool) (string, bool, error) {
+				value := 0
+				if found {
+					parsed, parseErr := strconv.Atoi(current)
+					if parseErr != nil {
+						return "", false, parseErr
+					}
+					value = parsed
+				}
+				return strconv.Itoa(value + 1), false, nil
+			})
+		}(driver)
+	}
+	waitGroup.Wait()
+	close(errorsChannel)
+	for updateErr := range errorsChannel {
+		if updateErr != nil {
+			t.Fatalf("跨实例并发更新失败: %v", updateErr)
+		}
+	}
+	value, found, err := second.Read("shared-counter")
+	if err != nil || !found || value != strconv.Itoa(workers) {
+		t.Fatalf("跨实例计数结果错误: value=%q found=%t err=%v", value, found, err)
+	}
+
+	const lifecycleRounds = 24
+	errorsChannel = make(chan error, lifecycleRounds*3)
+	for round := 0; round < lifecycleRounds; round++ {
+		waitGroup.Add(3)
+		go func(value int) {
+			defer waitGroup.Done()
+			errorsChannel <- first.Write("lifecycle", strconv.Itoa(value))
+		}(round)
+		go func() {
+			defer waitGroup.Done()
+			_, _, readErr := second.Read("lifecycle")
+			errorsChannel <- readErr
+		}()
+		go func() {
+			defer waitGroup.Done()
+			errorsChannel <- second.Delete("lifecycle")
+		}()
+	}
+	waitGroup.Wait()
+	close(errorsChannel)
+	for lifecycleErr := range errorsChannel {
+		if lifecycleErr != nil {
+			t.Fatalf("跨实例读写删除失败: %v", lifecycleErr)
+		}
+	}
+}
+
 // TestFileRejectsSymlinkAndOversizedEntries 验证受管文件不能借助符号链接越权且读取有硬上限。
 func TestFileRejectsSymlinkAndOversizedEntries(t *testing.T) {
 	driver, _ := newTestFileDriver(t)

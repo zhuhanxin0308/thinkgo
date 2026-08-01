@@ -2,7 +2,6 @@ package command
 
 import (
 	"fmt"
-	"path/filepath"
 	"strings"
 
 	"thinkgo/framework/console"
@@ -17,10 +16,11 @@ func (c *MakeCommand) Configure() {
 	c.Signature = "make:command"
 	c.Description = "Create a new console command class"
 	c.AddArgument("name", "Command type name", true)
+	configureApplicationOption(&c.Command)
 }
 
 func (c *MakeCommand) Execute(input *console.Input, output *console.Output) error {
-	name, err := normalizedGeneratorInput(c.App, input, output, "")
+	name, err := normalizedGeneratorInput(&c.Command, input, output, "")
 	if err != nil {
 		return fmt.Errorf("invalid command name: %w", err)
 	}
@@ -48,7 +48,7 @@ func (c *%s) Execute(input *console.Input, output *console.Output) error {
 }
 `, name, name, name, strings.ToLower(name), name, name)
 
-	if err := writeGeneratedAppSource(c.App, filepath.Join("app", "command"), lowerGoFilename(name), []byte(content)); err != nil {
+	if err := writeGeneratedAppSource(c.App, "command", lowerGoFilename(name), []byte(content)); err != nil {
 		return fmt.Errorf("create command %s: %w", name, err)
 	}
 

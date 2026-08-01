@@ -21,6 +21,7 @@ func (c *ConfigDump) Configure() {
 	c.Signature = "config:dump"
 	c.Description = "Dump configuration values"
 	c.AddArgument("name", "Optional dot-separated configuration key", false)
+	configureApplicationOption(&c.Command)
 }
 
 func (c *ConfigDump) Execute(input *console.Input, output *console.Output) error {
@@ -33,19 +34,20 @@ func (c *ConfigDump) Execute(input *console.Input, output *console.Output) error
 	if c.App == nil {
 		return framework.ErrNilApplication
 	}
-	if c.App.Config == nil {
-		return fmt.Errorf("应用配置不可用")
+	configuration, err := resolveApplicationConfig(c.App)
+	if err != nil {
+		return fmt.Errorf("应用配置不可用: %w", err)
 	}
 	name := input.GetArgument(0)
 
 	var data interface{}
 	if name != "" {
-		data = c.App.Config.Get(name)
+		data = configuration.Get(name)
 	} else {
-		data = c.App.Config.Get("")
+		data = configuration.Get("")
 	}
 
-	data, err := redactConfigDumpData(name, data)
+	data, err = redactConfigDumpData(name, data)
 	if err != nil {
 		return fmt.Errorf("failed to normalize config: %w", err)
 	}
@@ -104,6 +106,7 @@ func isConfigDumpSensitiveKey(key string) bool {
 	if key == "" {
 		return false
 	}
+	normalizedKey := strings.NewReplacer("-", "_", ".", "_").Replace(key)
 
 	sensitiveFragments := []string{
 		"authorization",
@@ -114,6 +117,9 @@ func isConfigDumpSensitiveKey(key string) bool {
 		"passphrase",
 		"private_key",
 		"privatekey",
+		"signing_key",
+		"encryption_key",
+		"client_secret",
 		"secret",
 		"session",
 		"token",
@@ -124,12 +130,19 @@ func isConfigDumpSensitiveKey(key string) bool {
 		"connection_string",
 	}
 	for _, fragment := range sensitiveFragments {
-		if key == fragment || strings.Contains(key, fragment) {
+		if normalizedKey == fragment || strings.Contains(normalizedKey, fragment) {
+			return true
+		}
+	}
+	for _, part := range strings.FieldsFunc(normalizedKey, func(current rune) bool {
+		return current == '_'
+	}) {
+		if part == "pass" {
 			return true
 		}
 	}
 	// dsn/uri/url 仅按完整键片段匹配，避免把 security、duration 等普通字段误判。
-	for _, part := range strings.FieldsFunc(key, func(current rune) bool {
+	for _, part := range strings.FieldsFunc(normalizedKey, func(current rune) bool {
 		return current == '_' || current == '-' || current == '.'
 	}) {
 		if part == "dsn" || part == "uri" || part == "url" {

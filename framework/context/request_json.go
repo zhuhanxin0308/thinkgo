@@ -48,6 +48,22 @@ func decodeStrictJSONTarget(body []byte, target interface{}) error {
 	return nil
 }
 
+func decodeJSONTarget(body []byte, target interface{}) error {
+	if target == nil {
+		return errors.New("JSON 绑定目标不能为空")
+	}
+	targetValue := reflect.ValueOf(target)
+	if targetValue.Kind() != reflect.Pointer || targetValue.IsNil() {
+		return errors.New("JSON 绑定目标必须是非空指针")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	return requireJSONEOF(decoder)
+}
+
 func decodeStrictJSONValue(body []byte) (interface{}, error) {
 	if len(bytes.TrimSpace(body)) == 0 {
 		return nil, errors.New("JSON 请求体不能为空")

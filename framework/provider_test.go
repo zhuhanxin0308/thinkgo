@@ -29,7 +29,7 @@ func (p *mockProvider) Boot(app *App) error {
 // TestRegisterProvider 验证服务提供者注册
 func TestRegisterProvider(t *testing.T) {
 	app := &App{
-		Container: NewContainer(),
+		container: NewContainer(),
 	}
 
 	provider := &mockProvider{}
@@ -48,7 +48,7 @@ func TestRegisterProvider(t *testing.T) {
 // TestBootProviders 验证服务提供者启动
 func TestBootProviders(t *testing.T) {
 	app := &App{
-		Container: NewContainer(),
+		container: NewContainer(),
 	}
 
 	p1 := &mockProvider{}
@@ -69,10 +69,30 @@ func TestBootProviders(t *testing.T) {
 	}
 }
 
+// TestApplicationStateTracksProviderBoot 验证 Provider 启动会更新应用生命周期状态。
+func TestApplicationStateTracksProviderBoot(t *testing.T) {
+	app := &App{
+		container: NewContainer(),
+		lifecycle: appLifecycle{state: ApplicationStateConstructed},
+	}
+	if err := app.RegisterProvider(&mockProvider{}); err != nil {
+		t.Fatalf("注册状态测试 Provider 失败: %v", err)
+	}
+	if app.State() != ApplicationStateConstructed {
+		t.Fatalf("注册 Provider 后状态不应提前变化: %v", app.State())
+	}
+	if err := app.BootProviders(); err != nil {
+		t.Fatalf("启动状态测试 Provider 失败: %v", err)
+	}
+	if app.State() != ApplicationStateInitialized {
+		t.Fatalf("Provider 启动后状态错误: %v", app.State())
+	}
+}
+
 // TestProviderOrder 验证 Register → Boot 顺序
 func TestProviderOrder(t *testing.T) {
 	app := &App{
-		Container: NewContainer(),
+		container: NewContainer(),
 	}
 
 	order := make([]string, 0)
@@ -105,7 +125,7 @@ func TestProviderOrder(t *testing.T) {
 // TestBootProvidersIsIdempotent 验证 Provider 启动阶段只执行一次，避免重复注册事件、路由等副作用。
 func TestBootProvidersIsIdempotent(t *testing.T) {
 	app := &App{
-		Container: NewContainer(),
+		container: NewContainer(),
 	}
 
 	provider := &countingProvider{}
@@ -127,7 +147,7 @@ func TestBootProvidersIsIdempotent(t *testing.T) {
 // TestRegisterProviderConcurrentBootWaitsForRegister 验证并发启动时不会让 Boot 早于 Register 完成。
 func TestRegisterProviderConcurrentBootWaitsForRegister(t *testing.T) {
 	app := &App{
-		Container: NewContainer(),
+		container: NewContainer(),
 	}
 	provider := newBlockingProvider()
 
@@ -230,7 +250,7 @@ func (p *failingProvider) Boot(app *App) error     { return p.bootErr }
 
 // TestProviderErrorsAndDuplicatesFailClosed 验证 Provider 错误、重复与启动后的迟到注册都可观测。
 func TestProviderErrorsAndDuplicatesFailClosed(t *testing.T) {
-	app := &App{Container: NewContainer()}
+	app := &App{container: NewContainer()}
 	var nilProvider *failingProvider
 	if err := app.RegisterProvider(nilProvider); !errors.Is(err, ErrInvalidProvider) {
 		t.Fatalf("类型化 nil Provider 应返回 ErrInvalidProvider，实际为 %v", err)
@@ -265,7 +285,7 @@ func TestProviderErrorsAndDuplicatesFailClosed(t *testing.T) {
 // TestProviderBootFailureIsStableAndPanicSafe 验证 Boot 失败会缓存，panic 会转换为错误而非击穿进程。
 func TestProviderBootFailureIsStableAndPanicSafe(t *testing.T) {
 	bootErr := errors.New("boot failed")
-	app := &App{Container: NewContainer()}
+	app := &App{container: NewContainer()}
 	if err := app.RegisterProvider(&failingProvider{bootErr: bootErr}); err != nil {
 		t.Fatalf("注册失败 Provider 失败: %v", err)
 	}
@@ -278,12 +298,12 @@ func TestProviderBootFailureIsStableAndPanicSafe(t *testing.T) {
 		t.Fatalf("Boot 错误应包含可读的服务提供者上下文，实际为 %v", first)
 	}
 
-	panicApp := &App{Container: NewContainer()}
+	panicApp := &App{container: NewContainer()}
 	panicProvider := &callbackProvider{register: func() { panic("register panic") }}
 	if err := panicApp.RegisterProvider(panicProvider); !errors.Is(err, ErrProviderCallbackPanic) {
 		t.Fatalf("Register panic 应转换为 ErrProviderCallbackPanic，实际为 %v", err)
 	}
-	bootPanicApp := &App{Container: NewContainer()}
+	bootPanicApp := &App{container: NewContainer()}
 	if err := bootPanicApp.RegisterProvider(&callbackProvider{boot: func() { panic("boot panic") }}); err != nil {
 		t.Fatalf("注册 Boot panic Provider 失败: %v", err)
 	}
@@ -291,8 +311,8 @@ func TestProviderBootFailureIsStableAndPanicSafe(t *testing.T) {
 		t.Fatalf("Boot panic 应转换为 ErrProviderCallbackPanic，实际为 %v", err)
 	}
 	lifecycleErr := errors.New("app init listener failed")
-	eventApp := &App{Container: NewContainer(), Event: event.NewDispatcher()}
-	if err := eventApp.Event.Listen(event.EventAppInit, &event.SimpleListener{Handler: func(event.Event) error {
+	eventApp := &App{container: NewContainer(), event: event.NewDispatcher()}
+	if err := eventApp.event.Listen(event.EventAppInit, &event.SimpleListener{Handler: func(event.Event) error {
 		return lifecycleErr
 	}}); err != nil {
 		t.Fatalf("注册生命周期监听器失败: %v", err)
@@ -323,7 +343,7 @@ func (p *callbackProvider) Boot(app *App) error {
 
 // TestConcurrentBootProvidersWaitsForFirstBoot 验证并发重复启动会等待首次 Boot 完成并共享结果。
 func TestConcurrentBootProvidersWaitsForFirstBoot(t *testing.T) {
-	app := &App{Container: NewContainer()}
+	app := &App{container: NewContainer()}
 	bootStarted := make(chan struct{})
 	allowBootFinish := make(chan struct{})
 	provider := &callbackProvider{boot: func() {
@@ -354,7 +374,7 @@ func TestConcurrentBootProvidersWaitsForFirstBoot(t *testing.T) {
 
 // TestConcurrentProviderRegistrationPreservesAdmissionOrder 验证并发 Register 完成顺序不会改变 Boot 顺序。
 func TestConcurrentProviderRegistrationPreservesAdmissionOrder(t *testing.T) {
-	app := &App{Container: NewContainer()}
+	app := &App{container: NewContainer()}
 	firstRegisterStarted := make(chan struct{})
 	allowFirstRegister := make(chan struct{})
 	bootOrder := make([]string, 0, 2)
@@ -388,18 +408,18 @@ func TestConcurrentProviderRegistrationPreservesAdmissionOrder(t *testing.T) {
 
 // TestProviderLifecycleEventsUseDeterministicOrder 验证 AppInit 位于全部 Register 后、Boot 前，RouteLoaded 位于 Boot 后。
 func TestProviderLifecycleEventsUseDeterministicOrder(t *testing.T) {
-	app := &App{Container: NewContainer(), Event: event.NewDispatcher()}
+	app := &App{container: NewContainer(), event: event.NewDispatcher()}
 	order := make([]string, 0, 4)
 	provider := &callbackProvider{
 		register: func() {
 			order = append(order, "register")
-			if err := app.Event.Listen(event.EventAppInit, &event.SimpleListener{Handler: func(event.Event) error {
+			if err := app.event.Listen(event.EventAppInit, &event.SimpleListener{Handler: func(event.Event) error {
 				order = append(order, "app_init")
 				return nil
 			}}); err != nil {
 				panic(err)
 			}
-			if err := app.Event.Listen(event.EventRouteLoaded, &event.SimpleListener{Handler: func(event.Event) error {
+			if err := app.event.Listen(event.EventRouteLoaded, &event.SimpleListener{Handler: func(event.Event) error {
 				order = append(order, "route_loaded")
 				return nil
 			}}); err != nil {
@@ -437,7 +457,7 @@ func TestProviderShutdownUsesReverseOrderAndAggregatesErrors(t *testing.T) {
 	firstErr := errors.New("first shutdown failed")
 	secondErr := errors.New("second shutdown failed")
 	order := make([]string, 0, 2)
-	app := &App{Container: NewContainer()}
+	app := &App{container: NewContainer()}
 	first := &shutdownTrackingProvider{name: "first", order: &order, err: firstErr}
 	second := &shutdownTrackingProvider{name: "second", order: &order, err: secondErr}
 	if err := app.RegisterProvider(first); err != nil {

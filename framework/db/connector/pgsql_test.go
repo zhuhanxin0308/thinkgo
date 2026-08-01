@@ -8,7 +8,7 @@ import (
 )
 
 // TestBuildPgsqlDSNEscapesCredentialsAndRequiresTLS 验证 PostgreSQL DSN 不能被特殊字符注入，并默认启用 TLS。
-func TestBuildPgsqlDSNEscapesCredentialsAndRequiresTLS(t *testing.T) {
+func TestBuildPgsqlDSNEscapesCredentialsAndVerifiesTLS(t *testing.T) {
 	dsn := buildPgsqlDSN(db.Config{
 		Username: "pg:user",
 		Password: "p@ss word&sslmode=disable",
@@ -28,8 +28,8 @@ func TestBuildPgsqlDSNEscapesCredentialsAndRequiresTLS(t *testing.T) {
 	if parsed.Host != "db.internal:5432" || parsed.EscapedPath() != "/think%20go" {
 		t.Fatalf("PostgreSQL DSN 地址或库名解析错误: host=%q path=%q", parsed.Host, parsed.EscapedPath())
 	}
-	if parsed.Query().Get("sslmode") != "require" {
-		t.Fatalf("PostgreSQL DSN 默认应启用 sslmode=require，实际为 %q", parsed.Query().Get("sslmode"))
+	if parsed.Query().Get("sslmode") != "verify-full" {
+		t.Fatalf("PostgreSQL DSN 默认应启用 sslmode=verify-full，实际为 %q", parsed.Query().Get("sslmode"))
 	}
 }
 

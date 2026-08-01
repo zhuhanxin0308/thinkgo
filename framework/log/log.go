@@ -26,13 +26,53 @@ var (
 	ErrLogChannelExists = errors.New("日志通道已存在")
 	// ErrLogChannelCycle 表示注册会形成通道引用环。
 	ErrLogChannelCycle = errors.New("日志通道不能形成循环引用")
+	// ErrLogChannelOwned 表示子通道已经归属于另一个父日志器。
+	ErrLogChannelOwned = errors.New("日志通道已经归属于其他父日志器")
 	// ErrLogAlreadyStarted 表示异步队列已经创建，固定容量参数不能再修改。
 	ErrLogAlreadyStarted = errors.New("日志异步队列已经启动")
+	// ErrInvalidOverflowPolicy 表示日志队列溢出策略不是受支持的值。
+	ErrInvalidOverflowPolicy = errors.New("日志溢出策略无效")
 )
 
 var channelRegistryMu sync.Mutex
 
 const maxPendingLogErrors = 64
+
+// OverflowPolicy 定义异步日志队列达到容量上限后的处理方式。
+type OverflowPolicy uint8
+
+const (
+	// OverflowSync 保持默认兼容行为，在队列满时同步写入。
+	OverflowSync OverflowPolicy = iota
+	// OverflowDrop 在队列满时立即丢弃，并通过原子计数记录数量。
+	OverflowDrop
+)
+
+const (
+	// LevelEmergency 表示最高优先级的紧急日志。
+	LevelEmergency = "emergency"
+	// LevelAlert 表示需要立即关注的告警日志。
+	LevelAlert = "alert"
+	// LevelCritical 表示关键故障日志。
+	LevelCritical = "critical"
+	// LevelError 表示错误日志。
+	LevelError = "error"
+	// LevelWarning 表示警告日志。
+	LevelWarning = "warning"
+	// LevelNotice 表示提示性日志。
+	LevelNotice = "notice"
+	// LevelInfo 表示常规信息日志。
+	LevelInfo = "info"
+	// LevelDebug 表示调试日志。
+	LevelDebug = "debug"
+	// LevelSQL 表示 SQL 诊断日志。
+	LevelSQL = "sql"
+)
+
+type levelSnapshot struct {
+	allowAll bool
+	levels   map[string]struct{}
+}
 
 // Log 日志管理器。
 // 支持多驱动、上下文参数、调用位置记录、异步批量刷盘和关停保护。
@@ -40,7 +80,8 @@ type Log struct {
 	stateMu          sync.RWMutex
 	drivers          []Driver
 	channels         map[string]*Log
-	levels           []string
+	parent           *Log
+	levels           atomic.Pointer[levelSnapshot]
 	callerEnabled    bool
 	asyncCh          chan *LogEntry
 	flushCh          chan chan struct{}
@@ -56,20 +97,68 @@ type Log struct {
 	errorMu          sync.Mutex
 	pendingErrors    []error
 	droppedErrors    uint64
+	droppedEntries   uint64
+	overflowPolicy   OverflowPolicy
 	closeErr         error
 	closed           bool
+	location         *time.Location
 }
 
 // NewLog 创建日志管理器。
 func NewLog(drivers ...Driver) *Log {
-	return &Log{
+	logger := &Log{
 		drivers:        append([]Driver(nil), drivers...),
 		channels:       make(map[string]*Log),
-		levels:         make([]string, 0),
 		bufferSize:     200,
 		flushInterval:  5 * time.Second,
 		fallbackWriter: os.Stderr,
+		location:       time.Local,
 	}
+	logger.levels.Store(newLevelSnapshot(nil))
+	return logger
+}
+
+// SetLocation 设置日志条目和日志清理使用的应用时区，并同步到子通道和支持时区的驱动。
+func (l *Log) SetLocation(location *time.Location) {
+	if l == nil {
+		return
+	}
+	if location == nil {
+		location = time.Local
+	}
+	l.stateMu.Lock()
+	l.location = location
+	drivers := append([]Driver(nil), l.drivers...)
+	channels := make([]*Log, 0, len(l.channels))
+	for _, channel := range l.channels {
+		if channel != nil && channel != l {
+			channels = append(channels, channel)
+		}
+	}
+	l.stateMu.Unlock()
+
+	for _, driver := range drivers {
+		if locationAware, ok := driver.(LocationAwareDriver); ok {
+			locationAware.SetLocation(location)
+		}
+	}
+	for _, channel := range channels {
+		channel.SetLocation(location)
+	}
+}
+
+// now 返回按日志配置时区转换后的当前时间。
+func (l *Log) now() time.Time {
+	if l == nil {
+		return time.Now().In(time.Local)
+	}
+	l.stateMu.RLock()
+	location := l.location
+	l.stateMu.RUnlock()
+	if location == nil {
+		location = time.Local
+	}
+	return time.Now().In(location)
 }
 
 // AddDriver 添加日志驱动。
@@ -78,19 +167,79 @@ func (l *Log) AddDriver(driver Driver) error {
 		return ErrNilLogDriver
 	}
 	l.stateMu.Lock()
-	defer l.stateMu.Unlock()
 	if l.closed {
+		l.stateMu.Unlock()
 		return ErrLogClosed
 	}
 	l.drivers = append(l.drivers, driver)
+	location := l.location
+	l.stateMu.Unlock()
+	if locationAware, ok := driver.(LocationAwareDriver); ok {
+		locationAware.SetLocation(location)
+	}
 	return nil
 }
 
 // SetLevels 设置允许的日志级别。
 func (l *Log) SetLevels(levels []string) {
+	if l == nil {
+		return
+	}
+	l.levels.Store(newLevelSnapshot(levels))
+}
+
+// IsLevelEnabled 判断日志级别是否启用，读取不可变快照时不获取互斥锁。
+func (l *Log) IsLevelEnabled(level string) bool {
+	if l == nil {
+		return false
+	}
+	snapshot := l.levels.Load()
+	if snapshot == nil || snapshot.allowAll {
+		return true
+	}
+	_, enabled := snapshot.levels[normalizeLogLevel(level)]
+	return enabled
+}
+
+// SetOverflowPolicy 设置异步队列溢出策略；队列启动后策略保持不变。
+func (l *Log) SetOverflowPolicy(policy OverflowPolicy) error {
+	if l == nil || (policy != OverflowSync && policy != OverflowDrop) {
+		return ErrInvalidOverflowPolicy
+	}
 	l.stateMu.Lock()
 	defer l.stateMu.Unlock()
-	l.levels = append([]string(nil), levels...)
+	if l.closed {
+		return ErrLogClosed
+	}
+	if l.asyncCh != nil {
+		return ErrLogAlreadyStarted
+	}
+	l.overflowPolicy = policy
+	return nil
+}
+
+// DroppedEntryCount 返回因显式 drop 策略而丢弃的异步日志数量。
+func (l *Log) DroppedEntryCount() uint64 {
+	if l == nil {
+		return 0
+	}
+	return atomic.LoadUint64(&l.droppedEntries)
+}
+
+// newLevelSnapshot 创建不会再被修改的级别快照，避免请求热路径重复规范化字符串。
+func newLevelSnapshot(levels []string) *levelSnapshot {
+	if len(levels) == 0 {
+		return &levelSnapshot{allowAll: true}
+	}
+	allowed := make(map[string]struct{}, len(levels))
+	for _, level := range levels {
+		allowed[normalizeLogLevel(level)] = struct{}{}
+	}
+	return &levelSnapshot{levels: allowed}
+}
+
+func normalizeLogLevel(level string) string {
+	return strings.ToLower(strings.TrimSpace(level))
 }
 
 // SetCallerEnabled 设置是否记录调用位置。
@@ -158,23 +307,36 @@ func (l *Log) RegisterChannel(name string, channel *Log) error {
 	}
 
 	l.stateMu.Lock()
-	defer l.stateMu.Unlock()
 	if l.closed {
+		l.stateMu.Unlock()
 		return ErrLogClosed
 	}
-	channel.stateMu.RLock()
+	channel.stateMu.Lock()
 	channelClosed := channel.closed
-	channel.stateMu.RUnlock()
 	if channelClosed {
+		channel.stateMu.Unlock()
+		l.stateMu.Unlock()
 		return ErrLogClosed
+	}
+	if channel.parent != nil && channel.parent != l {
+		channel.stateMu.Unlock()
+		l.stateMu.Unlock()
+		return ErrLogChannelOwned
 	}
 	if _, exists := l.channels[name]; exists {
+		channel.stateMu.Unlock()
+		l.stateMu.Unlock()
 		return fmt.Errorf("%w: %s", ErrLogChannelExists, name)
 	}
 	if l.channels == nil {
 		l.channels = make(map[string]*Log)
 	}
 	l.channels[name] = channel
+	channel.parent = l
+	location := l.location
+	channel.stateMu.Unlock()
+	l.stateMu.Unlock()
+	channel.SetLocation(location)
 	return nil
 }
 
@@ -222,31 +384,14 @@ func (l *Log) DriverErrorCount() int64 {
 	return atomic.LoadInt64(&l.driverErrorCount)
 }
 
-// isLevelAllowed 检查日志级别是否允许。
-func (l *Log) isLevelAllowed(level string) bool {
-	l.stateMu.RLock()
-	defer l.stateMu.RUnlock()
-
-	if len(l.levels) == 0 {
-		return true
-	}
-
-	for _, value := range l.levels {
-		if strings.EqualFold(value, level) {
-			return true
-		}
-	}
-	return false
-}
-
 // recordEntry 创建并记录一条日志条目。
 func (l *Log) recordEntry(msg string, level string, ctx map[string]interface{}, callerSkip int) {
-	if !l.isLevelAllowed(level) {
+	if !l.IsLevelEnabled(level) {
 		return
 	}
 
 	entry := &LogEntry{
-		Time:    time.Now(),
+		Time:    l.now(),
 		Level:   level,
 		Message: msg,
 		Context: cloneContext(ctx),
@@ -270,6 +415,11 @@ func (l *Log) recordEntry(msg string, level string, ctx map[string]interface{}, 
 	case l.asyncCh <- entry:
 		l.stateMu.RUnlock()
 	default:
+		if l.overflowPolicy == OverflowDrop {
+			atomic.AddUint64(&l.droppedEntries, 1)
+			l.stateMu.RUnlock()
+			return
+		}
 		// 通道已满时降级为同步写入，避免高峰期丢日志。
 		drivers := append([]Driver(nil), l.drivers...)
 		fallbackWriter := l.fallbackWriter
@@ -409,12 +559,12 @@ func (l *Log) flushToDrivers(entries []*LogEntry) {
 
 // Write 立即同步写入一条日志。
 func (l *Log) Write(msg string, level string) {
-	if !l.isLevelAllowed(level) {
+	if !l.IsLevelEnabled(level) {
 		return
 	}
 
 	entry := &LogEntry{
-		Time:    time.Now(),
+		Time:    l.now(),
 		Level:   level,
 		Message: msg,
 	}
@@ -527,58 +677,73 @@ func (l *Log) Shutdown() error {
 
 // ErrorCtx 记录错误日志。
 func (l *Log) ErrorCtx(msg string, ctx map[string]interface{}) {
-	l.recordEntry(msg, "error", ctx, 2)
+	l.recordEntry(msg, LevelError, ctx, 2)
 }
 
 // WarningCtx 记录警告日志。
 func (l *Log) WarningCtx(msg string, ctx map[string]interface{}) {
-	l.recordEntry(msg, "warning", ctx, 2)
+	l.recordEntry(msg, LevelWarning, ctx, 2)
 }
 
 // InfoCtx 记录信息日志。
 func (l *Log) InfoCtx(msg string, ctx map[string]interface{}) {
-	l.recordEntry(msg, "info", ctx, 2)
+	l.recordEntry(msg, LevelInfo, ctx, 2)
 }
 
 // DebugCtx 记录调试日志。
 func (l *Log) DebugCtx(msg string, ctx map[string]interface{}) {
-	l.recordEntry(msg, "debug", ctx, 2)
+	l.recordEntry(msg, LevelDebug, ctx, 2)
 }
 
 // Errorf 格式化记录错误日志。
 func (l *Log) Errorf(format string, args ...interface{}) {
-	l.recordEntry(fmt.Sprintf(format, args...), "error", nil, 2)
+	if !l.IsLevelEnabled(LevelError) {
+		return
+	}
+	l.recordEntry(fmt.Sprintf(format, args...), LevelError, nil, 2)
 }
 
 // Warningf 格式化记录警告日志。
 func (l *Log) Warningf(format string, args ...interface{}) {
-	l.recordEntry(fmt.Sprintf(format, args...), "warning", nil, 2)
+	if !l.IsLevelEnabled(LevelWarning) {
+		return
+	}
+	l.recordEntry(fmt.Sprintf(format, args...), LevelWarning, nil, 2)
 }
 
 // Infof 格式化记录信息日志。
 func (l *Log) Infof(format string, args ...interface{}) {
-	l.recordEntry(fmt.Sprintf(format, args...), "info", nil, 2)
+	if !l.IsLevelEnabled(LevelInfo) {
+		return
+	}
+	l.recordEntry(fmt.Sprintf(format, args...), LevelInfo, nil, 2)
 }
 
 // Debugf 格式化记录调试日志。
 func (l *Log) Debugf(format string, args ...interface{}) {
-	l.recordEntry(fmt.Sprintf(format, args...), "debug", nil, 2)
+	if !l.IsLevelEnabled(LevelDebug) {
+		return
+	}
+	l.recordEntry(fmt.Sprintf(format, args...), LevelDebug, nil, 2)
 }
 
 // Sqlf 格式化记录 SQL 日志。
 func (l *Log) Sqlf(format string, args ...interface{}) {
-	l.recordEntry(fmt.Sprintf(format, args...), "sql", nil, 2)
+	if !l.IsLevelEnabled(LevelSQL) {
+		return
+	}
+	l.recordEntry(fmt.Sprintf(format, args...), LevelSQL, nil, 2)
 }
 
-func (l *Log) Emergency(msg string) { l.recordEntry(msg, "emergency", nil, 2) }
-func (l *Log) Alert(msg string)     { l.recordEntry(msg, "alert", nil, 2) }
-func (l *Log) Critical(msg string)  { l.recordEntry(msg, "critical", nil, 2) }
-func (l *Log) Error(msg string)     { l.recordEntry(msg, "error", nil, 2) }
-func (l *Log) Warning(msg string)   { l.recordEntry(msg, "warning", nil, 2) }
-func (l *Log) Notice(msg string)    { l.recordEntry(msg, "notice", nil, 2) }
-func (l *Log) Info(msg string)      { l.recordEntry(msg, "info", nil, 2) }
-func (l *Log) Debug(msg string)     { l.recordEntry(msg, "debug", nil, 2) }
-func (l *Log) Sql(msg string)       { l.recordEntry(msg, "sql", nil, 2) }
+func (l *Log) Emergency(msg string) { l.recordEntry(msg, LevelEmergency, nil, 2) }
+func (l *Log) Alert(msg string)     { l.recordEntry(msg, LevelAlert, nil, 2) }
+func (l *Log) Critical(msg string)  { l.recordEntry(msg, LevelCritical, nil, 2) }
+func (l *Log) Error(msg string)     { l.recordEntry(msg, LevelError, nil, 2) }
+func (l *Log) Warning(msg string)   { l.recordEntry(msg, LevelWarning, nil, 2) }
+func (l *Log) Notice(msg string)    { l.recordEntry(msg, LevelNotice, nil, 2) }
+func (l *Log) Info(msg string)      { l.recordEntry(msg, LevelInfo, nil, 2) }
+func (l *Log) Debug(msg string)     { l.recordEntry(msg, LevelDebug, nil, 2) }
+func (l *Log) Sql(msg string)       { l.recordEntry(msg, LevelSQL, nil, 2) }
 
 // reportDriverError 聚合驱动错误并写入兜底输出，避免磁盘故障时日志无声丢失。
 func (l *Log) reportDriverError(driver Driver, action string, err error, fallbackWriter io.Writer, batchSize int) {

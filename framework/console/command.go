@@ -2,6 +2,7 @@ package console
 
 import (
 	"fmt"
+	"strings"
 
 	"thinkgo/framework"
 )
@@ -21,6 +22,7 @@ type Command struct {
 	Signature   string
 	Description string
 	App         *framework.App
+	Manager     *framework.ApplicationManager
 	Input       *Input
 	Output      *Output
 	optionDefs  []OptionDefinition
@@ -52,6 +54,41 @@ func (c *Command) GetDescription() string {
 // SetApp sets the app instance
 func (c *Command) SetApp(app *framework.App) {
 	c.App = app
+}
+
+// SetApplicationManager 为命令注入应用管理器，供 --app 选择目标 App。
+func (c *Command) SetApplicationManager(manager *framework.ApplicationManager) {
+	if c == nil {
+		return
+	}
+	c.Manager = manager
+}
+
+// SelectApplication 根据当前输入切换命令使用的应用实例。
+func (c *Command) SelectApplication(input *Input) error {
+	if c == nil || input == nil {
+		return nil
+	}
+	if c.Manager == nil {
+		if strings.TrimSpace(input.GetOption("app")) != "" {
+			return fmt.Errorf("--app 需要应用管理器")
+		}
+		return nil
+	}
+	name := strings.TrimSpace(input.GetOption("app"))
+	if name == "" {
+		c.App = c.Manager.DefaultApplication()
+		if c.App == nil {
+			return framework.ErrNilApplication
+		}
+		return nil
+	}
+	app, exists := c.Manager.Application(name)
+	if !exists || app == nil {
+		return fmt.Errorf("%w: %q", framework.ErrApplicationNotFound, name)
+	}
+	c.App = app
+	return nil
 }
 
 // AddOption 声明命令支持的选项，供帮助展示与 Input.Parse 解析使用。

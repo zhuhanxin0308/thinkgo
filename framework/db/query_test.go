@@ -1,27 +1,28 @@
 package db
 
 import (
+	"context"
 	"sync"
 	"testing"
 )
 
 // mockConnection 模拟数据库连接（用于测试 Query 并发安全性）
-type mockConnection struct{}
+type mockConnection struct{ connectionIdentityState }
 
-func (m *mockConnection) Select(table, fields string, where []string, args []interface{}, order string, limit, offset int) ([]map[string]interface{}, error) {
-	return []map[string]interface{}{{"table": table, "where_count": len(where)}}, nil
+func (m *mockConnection) Select(_ context.Context, request SelectRequest) ([]map[string]interface{}, error) {
+	return []map[string]interface{}{{"table": request.Table(), "where_count": len(request.Predicate().Clauses())}}, nil
 }
-func (m *mockConnection) Insert(table string, data map[string]interface{}) (int64, error) {
-	return 1, nil
+func (m *mockConnection) Insert(_ context.Context, request InsertRequest) (InsertResult, error) {
+	return InsertResult{Affected: 1, ID: int64(1), IDKnown: request.WantsID(), Data: request.Data()}, nil
 }
-func (m *mockConnection) Update(table string, data map[string]interface{}, where []string, args []interface{}) (int64, error) {
-	return 1, nil
+func (m *mockConnection) Update(_ context.Context, request UpdateRequest) (UpdateResult, error) {
+	return UpdateResult{Affected: 1, Data: request.Data()}, nil
 }
-func (m *mockConnection) Delete(table string, where []string, args []interface{}) (int64, error) {
-	return 1, nil
+func (m *mockConnection) Delete(context.Context, DeleteRequest) (DeleteResult, error) {
+	return DeleteResult{Deleted: 1}, nil
 }
-func (m *mockConnection) Count(table string, where []string, args []interface{}) (int64, error) {
-	return int64(len(where)), nil
+func (m *mockConnection) Count(_ context.Context, request CountRequest) (int64, error) {
+	return int64(len(request.Predicate().Clauses())), nil
 }
 func (m *mockConnection) Close() error { return nil }
 
@@ -41,9 +42,9 @@ func TestQueryConcurrentSafety(t *testing.T) {
 			// 每个 goroutine 查询不同的表
 			tableName := "table_" + formatIdx(idx)
 			q := db.Table(tableName)
-			q.Where("id = ?", idx)
-			q.Where("status = ?", 1)
-			q.Limit(10)
+			q = q.Where("id = ?", idx)
+			q = q.Where("status = ?", 1)
+			q = q.Limit(10)
 
 			rows, err := q.Select()
 			if err != nil {
@@ -86,7 +87,7 @@ func TestQueryTableReturnsNewInstance(t *testing.T) {
 	q1 := db.Table("users")
 	q2 := db.Table("orders")
 
-	q1.Where("id = ?", 1)
+	q1 = q1.Where("id = ?", 1)
 
 	// q2 不应受 q1 的 where 条件影响
 	if len(q2.where) != 0 {

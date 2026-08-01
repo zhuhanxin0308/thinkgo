@@ -23,6 +23,10 @@ var (
 	ErrInvalidDriverTTL = errors.New("缓存驱动 TTL 非法")
 	// ErrInvalidCachePath 表示文件缓存根目录不可用。
 	ErrInvalidCachePath = errors.New("文件缓存目录非法")
+	// ErrInvalidMemoryCapacity 表示内存缓存容量配置为负数。
+	ErrInvalidMemoryCapacity = errors.New("内存缓存容量非法")
+	// ErrMemoryCapacityExhausted 表示有界内存缓存没有可安全淘汰的普通条目。
+	ErrMemoryCapacityExhausted = errors.New("内存缓存容量已耗尽")
 	// ErrUnsafeCacheEntry 表示缓存项不是根目录内的普通文件。
 	ErrUnsafeCacheEntry = errors.New("文件缓存项不安全")
 	// ErrCacheEntryTooLarge 表示磁盘缓存项超过读取上限。
@@ -31,10 +35,16 @@ var (
 	ErrCorruptCacheEntry = errors.New("文件缓存项损坏")
 	// ErrInvalidCacheLock 表示锁 owner 或 TTL 无效、锁文件损坏。
 	ErrInvalidCacheLock = errors.New("缓存锁无效")
+	// ErrCacheLockBusy 表示在限定窗口内未能获得缓存锁。
+	ErrCacheLockBusy = errors.New("缓存锁忙")
+	// ErrCacheLockLost 表示临界区结束时锁已经过期或被替换。
+	ErrCacheLockLost = errors.New("缓存锁已丢失")
 	// ErrInvalidRedisConfig 表示 Redis 驱动配置类型或范围错误。
 	ErrInvalidRedisConfig = errors.New("Redis 缓存配置非法")
 	// ErrInvalidRedisClient 表示 Redis 驱动没有可用客户端。
 	ErrInvalidRedisClient = errors.New("Redis 缓存客户端不可用")
+	// ErrInvalidRedisContext 表示 Redis 缓存操作上下文为空。
+	ErrInvalidRedisContext = errors.New("Redis 缓存上下文无效")
 	// ErrUnsafeRedisFlush 表示空前缀 Redis 未授权执行 FLUSHDB。
 	ErrUnsafeRedisFlush = errors.New("Redis 空前缀清空未授权")
 	// ErrInvalidCacheDatabase 表示 DB 缓存连接不可用。
@@ -43,6 +53,8 @@ var (
 	ErrInvalidCacheTable = errors.New("DB 缓存表名非法")
 	// ErrCacheKeyTooLong 表示驱动后端无法存储该长度的键。
 	ErrCacheKeyTooLong = errors.New("缓存键超过驱动上限")
+	// ErrCacheBatchTooLarge 表示驱动批量操作超过资源预算。
+	ErrCacheBatchTooLarge = errors.New("缓存批量操作过大")
 )
 
 func validateDriverTTL(ttl time.Duration) error {

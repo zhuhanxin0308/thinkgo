@@ -2,93 +2,102 @@
 
 ThinkGo 是一个参考 ThinkPHP 使用习惯实现的 Go Web 框架。框架保留控制器、模型、视图、路由、中间件、配置、事件、验证、缓存、会话、日志和命令行等核心概念，同时按 Go 的长期运行进程、显式依赖和并发安全方式实现。
 
+发布与供应链门禁见 [RELEASING.md](RELEASING.md)，安全报告和依赖风险见 [SECURITY.md](SECURITY.md)。
+
 ## 环境要求
 
-- Go 版本以 `go.mod` 为准，当前最低为 `go 1.26.5`，包含 `crypto/tls`、`html/template`、`net/http`、`os.Root` 等标准库安全修复。本机 Go 低于该版本时，`GOTOOLCHAIN=auto`（默认）会自动拉取匹配工具链。
-- 运行 Web 服务前必须保证 `config/database.json` 或 `.env` 中的数据库配置可用。
+- Go 版本以 `go.mod` 为准，当前为 `go 1.26.5`。本机 Go 低于该版本时，`GOTOOLCHAIN=auto`（默认）会自动拉取匹配工具链。
+- Web 服务可以在没有数据库配置或数据库暂时不可达时启动；依赖数据库的业务请求会在访问时返回明确错误，数据库配置存在但结构非法时仍拒绝启动。
 - 如启用 TLS 或 HTTP/3，证书文件必须存在，默认读取 `runtime/cert.pem` 和 `runtime/key.pem`。
-- 依赖统一通过 Go Modules 管理，详见[依赖管理](#依赖管理)。完整开发约束见 [`docs/开发规范.md`](docs/开发规范.md)。
-- 按章节组织的框架文档见 [`docs/README.md`](docs/README.md)。
+- 依赖统一通过 Go Modules 管理，详见[依赖管理](#依赖管理)。完整开发约束见 [`docs/基础/开发规范.md`](docs/基础/开发规范.md)。
 
 ## 目录规范
 
 ```text
 thinkgo/
 ├── app/
-│   ├── controller/      # 控制器，必须通过 init 注册
-│   ├── middleware/      # 应用全局中间件，必须通过 init 注册
-│   ├── model/           # 业务模型
-│   ├── validate/        # 验证器
-│   └── lang/            # 多语言 JSON 文件
+│   ├── index/           # 默认应用
+│   │   ├── application.go
+│   │   ├── controller/  # 控制器
+│   │   ├── middleware/  # 应用全局中间件
+│   │   ├── model/       # 业务模型
+│   │   ├── service/     # 业务服务与仓储
+│   │   ├── validate/    # 验证器
+│   │   ├── lang/        # 多语言 JSON 文件
+│   │   └── route/       # 应用路由
+│   └── admin/           # 其它应用使用同样结构
 ├── cmd/
-│   ├── think/           # 命令行入口
-│   └── cert/            # 本地开发证书工具
+│   └── think/           # 命令行入口
 ├── config/              # JSON 配置文件
 ├── framework/           # 框架核心
 ├── public/              # 静态资源目录
-├── route/               # 路由定义
 ├── runtime/             # 日志、缓存、会话、证书等运行时文件
 └── main.go              # HTTP 服务入口
 ```
 
-业务代码放在 `app`、`route`、`config` 和 `cmd`。框架核心能力放在 `framework`，除修复框架能力外不要把业务逻辑写入框架目录。
+业务代码放在 `app/<应用名>`，项目级装配放在 `config`、`cmd` 和根入口。框架核心能力放在 `framework`，除修复框架能力外不要把业务逻辑写入框架目录。
 
 ## 启动方式
-
+正式环境
 ```bash
 go run main.go
+```
+
+开发环境--支持热重载
+```bash
+#linux
+go run cmd/think/main.go run -p 8080
+# window
+go run .\cmd\think\main.go run -p 8080 
 ```
 
 默认 HTTP 配置在 `config/app.json`。命令行工具使用：
 
 ```bash
 go run cmd/think/main.go list
-go run cmd/think/main.go route:list
-go run cmd/think/main.go config:dump
+go run cmd/think/main.go route:list --app admin
+go run cmd/think/main.go config:dump --app admin
 go run cmd/think/main.go run            # 使用配置/默认端口启动
 go run cmd/think/main.go run -p 9000    # 指定监听端口（-p 或 --port），覆盖配置与 .env
+go run cmd/think/main.go make:controller Account --app admin
 ```
 
-`run` 命令会自动探测 [air](https://github.com/air-verse/air)：已安装时以热重载方式启动（修改代码自动重新构建），未安装时通过 `App.Run()` 以普通模式启动并提示安装方法。初始化或 Provider 启动失败时不会继续监听端口，退出时统一关闭应用资源。两种模式下 `-p` 均生效——指定的端口通过环境变量传递给热重载子进程，且优先级高于 `.env` 中的 `SERVER_PORT`。热重载模式会自动准备 `bin` 目录并输出 `bin/server` 或 `bin/server.exe`。
+`run` 命令会自动探测 [air](https://github.com/air-verse/air)：已安装时以热重载方式启动（修改代码自动重新构建），未安装时通过 `App.Run()` 以普通模式启动并提示安装方法。初始化或 Provider 启动失败时不会继续监听端口，退出时统一关闭应用资源。两种模式下 `-p` 均生效——指定的端口通过环境变量传递给热重载子进程，且优先级高于 `.env` 中的 `SERVER_PORT`。热重载模式会自动准备 `bin` 目录并输出 `bin/server` 或 `bin/server.exe`。热重载由命令行直接传递 Air 参数，不需要 `.air.toml`；默认排除 `runtime`、`bin`、`tmp`、`framework`、`cmd`、`vendor`、`testdata` 和 `assets`。
 
-Windows 交叉构建 Linux amd64 可运行 `build_linux.bat`，产物为 `bin/thinkgo-linux-amd64-nocgo`。该产物明确关闭 CGO，不包含 SQLite 驱动能力；完整 SQLite 构建必须在具备 C 工具链的目标环境中启用 CGO。
+Windows 与 Linux 端分别可运行 `build.bat` 和 `./build.sh`，两个脚本都会展示当前 Go 支持的 `GOOS/GOARCH` 列表并支持交互选择，也可传入 `GOOS/GOARCH` 参数构建任意 Go 支持的平台。两个脚本均明确关闭 CGO，不包含 SQLite 驱动能力；完整 SQLite 构建必须在具备 C 工具链的目标环境中启用 CGO。
 
 每次修改代码后必须运行：
 
 ```bash
-go test ./...
+go test -shuffle=on -count=1 ./...
+CGO_ENABLED=1 go test -race -shuffle=on -count=1 ./...
 ```
 
 ## 入口规范
 
-HTTP 入口必须导入控制器、中间件和路由包，触发各包的 `init` 自动注册。
+HTTP 入口只导入应用入口包，触发 `ApplicationDefinition` 登记；应用组件由各自的 `application.go` 注册到独立 `App`。
 
 ```go
 package main
 
 import (
-	"fmt"
-	"os"
-
-	_ "thinkgo/app/controller" // 注册控制器
-	_ "thinkgo/app/middleware" // 注册全局中间件
+	_ "thinkgo/app/index" // 登记 index 应用
 	"thinkgo/framework"
 	"thinkgo/framework/http"
-	_ "thinkgo/route" // 注册路由
 )
 
 func main() {
-	app := framework.NewApp()
-	kernel, err := http.NewHttp(app)
+	manager, err := framework.NewApplicationManager("")
 	if err != nil {
-		_ = app.Close()
-		fmt.Fprintln(os.Stderr, "HTTP kernel initialization failed:", err)
-		os.Exit(1)
+		panic(err)
 	}
-	app.Kernel = kernel
-	if err := app.Run(); err != nil {
-		fmt.Fprintln(os.Stderr, "Application exited with error:", err)
-		os.Exit(1)
+	host, err := http.NewMultiHttp(manager)
+	if err != nil {
+		_ = manager.Close()
+		panic(err)
+	}
+	if err := host.Run(); err != nil {
+		panic(err)
 	}
 }
 ```
@@ -99,20 +108,25 @@ func main() {
 
 配置文件统一放在 `config/*.json`，文件名即一级配置命名空间，例如 `config/app.json` 对应 `app`，`config/database.json` 对应 `database`。
 
+应用构造必须选择严格入口：`framework.BuildApp` 和 `framework.BuildConsoleApp` 在初始化失败时只返回 `error`，不会返回半初始化应用；需要在初始化前注册组件时使用 `NewAppUninitialized` 或 `NewConsoleAppUninitialized`，并显式调用 `Initialize`、检查错误。旧的自动初始化构造入口不再提供。
+
 配置读取使用点路径。**优先使用类型安全访问器**，避免直接对 `Get` 的返回值做类型断言（配置项缺失或类型不符时断言会 panic）：
 
 ```go
+cfg, err := framework.ResolveServiceAs[*config.Config](app, framework.ServiceConfig)
+if err != nil {
+	return err
+}
+
 // 推荐：类型安全，缺失或类型不符时回退默认值，不会 panic
-debug := app.Config.GetBool("app.app_debug", false)
-port := app.Config.GetInt("app.server.port", 8080)
-name := app.Config.GetString("app.app_name", "ThinkGo")
-server := app.Config.GetMap("app.server") // 始终返回非 nil map
+debug := cfg.GetBool("app.app_debug", false)
+port := cfg.GetInt("app.server.port", 8080)
+name := cfg.GetString("app.app_name", "ThinkGo")
+server := cfg.GetMap("app.server") // 始终返回非 nil map
 
 // 仅在确定类型时才使用裸 Get
-raw := app.Config.Get("app.server.tls")
+raw := cfg.Get("app.server.tls")
 ```
-
-`Get` 和 `GetMap` 返回递归隔离的 map/slice 快照；修改返回值不会影响共享配置。共享配置写入必须使用 `Set`。
 
 配置优先级（从高到低）：
 
@@ -123,16 +137,17 @@ raw := app.Config.Get("app.server.tls")
 
 环境变量遵循 12-factor 约定：**真实系统环境变量优先于 `.env` 文件**，便于容器/CI/命令行（如 `run -p` 注入的 `SERVER_PORT`）覆盖仓库里的 `.env` 默认值；`.env` 仅作为本地兜底。框架加载 `.env` 时只写入内部存储，不会调用 `os.Setenv` 污染进程环境（避免 `DB_PASS` 等敏感值被子进程继承）。
 
-`.env` 缺失时继续使用系统环境变量和默认配置；其他读取或语法错误会中止加载且包含文件、行号。布尔变量通过 `Env.GetBool` 读取并检查错误，非法值不会静默使用默认值。
-
-> 注意：环境变量覆盖仅对框架显式桥接的键生效（`APP_DEBUG`、`APP_TRACE`、`SERVER_*`、`DB_*` 等）。其余配置项只走 `config/*.json` 与默认值。
+> 注意：环境变量覆盖仅对框架显式桥接的键生效（`APP_DEBUG`、`APP_TRACE`、`APP_METRICS_ENABLE`、`APP_CSRF_ENABLE`、`COOKIE_SECRET`、`CSRF_SECRET`、`SERVER_*`、`DB_*` 等）。其余配置项只走 `config/*.json` 与默认值。
 
 常用环境变量：
 
 ```text
-APP_ENV=production
 APP_DEBUG=true
 APP_TRACE=true
+APP_METRICS_ENABLE=true
+APP_CSRF_ENABLE=true
+COOKIE_SECRET=至少32字节的随机密钥
+CSRF_SECRET=至少32字节的随机密钥
 SERVER_HOST=0.0.0.0
 SERVER_PORT=8081
 SERVER_TLS_ENABLE=false
@@ -147,51 +162,52 @@ DB_NAME=thinkgo
 
 ## 路由用法
 
-路由必须集中定义在 `route` 包，并通过 `framework.MustRegisterRouteLoader` 注册可返回错误的加载函数。
+路由必须定义在所属应用的 `app/<应用名>/route` 包，并由该应用的 `application.go` 通过 `app.RegisterRouteLoader` 注册加载函数。
 
 ```go
 package route
 
 import (
-	"thinkgo/framework"
 	"thinkgo/framework/context"
+	"thinkgo/framework/route"
 )
 
-func init() {
-	framework.MustRegisterRouteLoader(Load)
-}
 
 func Load(app *framework.App) error {
-	home, err := app.Route.Get("/", func(req *context.Request) *context.Response {
-		return context.NewResponse().Content("ThinkGo")
-	})
+	router, err := framework.ResolveServiceAs[*route.Router](app, framework.ServiceRoute)
 	if err != nil {
 		return err
 	}
-	if err = home.WithName("home"); err != nil {
+	if _, err := router.Get("/", func(req *context.Request) *context.Response {
+		return context.NewResponse().Content("ThinkGo")
+	}); err != nil {
 		return err
 	}
 
-	users, err := app.Route.Get("/api/users", "User@Index")
-	if err != nil {
-		return err
-	}
-	return users.WithName("users.index")
+	return nil
 }
 ```
 
-路由注册返回 `(*route.Route, error)`，路由配置方法返回 `error`；加载器必须逐项处理。HTTP 内核启动或首次匹配时会冻结路由，之后的修改返回 `route.ErrRouterFrozen`。
+在应用入口注册：
+
+```go
+if err := app.RegisterRouteLoader(route.Load); err != nil {
+	return err
+}
+```
 
 支持的路由能力：
 
 - `Get`、`Post`、`Put`、`Delete`、`Patch`、`Options`、`Head`、`Any`。
-- `Group`、`Domain`、`DomainGroup` 的回调接收隔离的 `*route.Group` 并返回错误。
-- `Resource` 返回 `(*ResourceRoute, error)`，`Only` 和 `Except` 返回错误。
-- `WithName` 命名路由。
-- `WithPattern` 参数正则。
-- `WithExtension` 后缀约束；`WithDomain` 设置单路由域名。
+- `Group(prefix, fn, middlewares...)`。
+- `Domain(domain, fn, middlewares...)`。
+- `DomainGroup(domain, prefix, fn, middlewares...)`。
+- `Resource(path, controller).Only(...)` 和 `Except(...)`。
+- `Name(name)` 命名路由。
+- `Pattern(param, regex)` 参数正则。
+- `Ext(ext)` 后缀约束。
 - `Miss(handler)` 兜底路由。
-- `Redirect(path, target, code...)` 重定向路由，状态码仅支持 `301`、`302`、`303`、`307`、`308`。
+- `Redirect(path, target, code...)` 重定向路由。
 
 控制器路由使用 `"Controller@Action"`。闭包路由必须返回 `*context.Response`。
 
@@ -207,13 +223,13 @@ func Load(app *framework.App) error {
 }
 ```
 
-- `url_route_must`：`true`（默认，**安全基线**）表示只允许显式注册的路由；`false` 时开启只读自动路由——未命中显式路由的 GET/HEAD URL 会按 `/控制器/动作` 自动解析为 `Controller@Action`。
-- **安全提示**：自动路由会让业务控制器导出的只读动作成为可达端点（框架已屏蔽基类内置方法，写方法返回 405）。仅在受控场景开启。
+- `url_route_must`：`true`（默认，**安全基线**）表示只允许显式注册的路由；`false` 时开启自动路由——未命中显式路由的 URL 会按 `/控制器/动作` 自动解析为 `Controller@Action`。
+- **安全提示**：自动路由会把控制器上所有导出方法暴露为可达端点（框架已屏蔽基类内置方法）。仅在受控场景开启，且不要在控制器里放不希望被路由触达的导出辅助方法。
 - `default_controller` / `default_action`：自动路由下根路径与缺省动作的回退目标。
 
 ## 控制器用法
 
-控制器放在 `app/controller`，包名必须是 `controller`。每个控制器必须在 `init` 中注册，注册名必须和路由中的控制器名一致。
+控制器放在 `app/<应用名>/controller`，包名必须是 `controller`。每个控制器必须在所属应用的 `application.go` 中注册，注册名必须和该应用路由中的控制器名一致。
 
 ```go
 package controller
@@ -225,14 +241,17 @@ type User struct {
 	framework.Controller
 }
 
-func init() {
-	// 每次请求都会创建新的控制器实例，避免并发请求共享状态。
-	framework.MustRegisterController("User", &User{})
-}
-
 // Index 返回用户列表。
 func (c *User) Index() string {
 	return "User List"
+}
+```
+
+在 `app/index/application.go` 中注册：
+
+```go
+if err := app.RegisterController("User", &controller.User{}); err != nil {
+	return err
 }
 ```
 
@@ -270,12 +289,10 @@ all := req.All()
 only := req.Only("name", "email")
 ```
 
-HTTP 内核会在业务逻辑前调用 `req.Parse()`：重复或尾随 JSON、非法表单返回 400，请求体超限返回 413。独立构造请求使用 `context.NewRequest(raw, options...) (*Request, error)`，结束时处理 `Cleanup() error`。
-
 参数优先级：
 
 ```text
-路由参数 > 表单参数 > JSON 请求体 > 查询参数
+路由参数 > 表单/查询参数 > JSON 参数
 ```
 
 响应对象为 `*context.Response`。
@@ -301,8 +318,6 @@ return context.NewResponse().Code(201).Json(map[string]interface{}{
 - `NoContent()` 204 响应。
 - `Abort(code, payload)` 快速终止响应。
 
-直接调用 `Response.Send(writer)` 时必须处理返回的 `error`。响应头控制字符会被整体拒绝，`Content-Length`、`Transfer-Encoding` 等分帧字段由 HTTP 内核管理。JSON/XML/JSONP 序列化失败会固定返回通用 500，不能被后续链式实体覆盖。
-
 ## 中间件用法
 
 中间件函数签名固定为：
@@ -311,7 +326,7 @@ return context.NewResponse().Code(201).Json(map[string]interface{}{
 func(req *context.Request, next func(*context.Request) *context.Response) *context.Response
 ```
 
-应用全局中间件放在 `app/middleware`，包名必须是 `middleware`，并在 `init` 中注册。
+应用中间件全部放在 `app/<应用名>/middleware`，包名必须是 `middleware`。每个应用在自己的 `application.go` 中注册全局中间件；不同应用可以拥有同名中间件而不会互相覆盖。
 
 ```go
 package middleware
@@ -320,10 +335,6 @@ import (
 	"thinkgo/framework"
 	"thinkgo/framework/context"
 )
-
-func init() {
-	framework.MustRegisterGlobalMiddleware(Auth)
-}
 
 // Auth 校验请求身份。
 func Auth(req *context.Request, next func(*context.Request) *context.Response) *context.Response {
@@ -334,17 +345,36 @@ func Auth(req *context.Request, next func(*context.Request) *context.Response) *
 }
 ```
 
+在所属应用入口注册：
+
+```go
+if err := app.RegisterGlobalMiddleware(middleware.Auth); err != nil {
+	return err
+}
+```
+
 路由级中间件直接作为路由参数传入：
 
 ```go
-_, err := app.Route.Get("/api/profile", "User@Profile", middleware.Auth)
+router, err := framework.ResolveServiceAs[*route.Router](app, framework.ServiceRoute)
+if err != nil {
+	return err
+}
+_, err = router.Get("/api/profile", "User@Profile", middleware.Auth)
+if err != nil {
+	return err
+}
 ```
 
 控制器级中间件通过别名声明，由分发器按动作过滤后应用。先在管道注册别名，再在控制器 `Init` 中声明：
 
 ```go
 // 注册别名（通常在应用启动阶段）
-app.Middleware.Alias("auth", middleware.Auth)
+pipeline, err := framework.ResolveServiceAs[*middleware.Pipeline](app, framework.ServiceMiddleware)
+if err != nil {
+	return err
+}
+pipeline.Alias("auth", middleware.Auth)
 
 // 控制器中声明：Only 仅命中列表内动作，Except 排除列表内动作，二者都空则全部动作生效
 func (c *User) Init(app *framework.App, req *context.Request) {
@@ -355,26 +385,47 @@ func (c *User) Init(app *framework.App, req *context.Request) {
 
 执行顺序为：全局中间件 → 路由中间件 → 控制器中间件 → 控制器动作。
 
+完整的管道、生命周期、Recovery、Session、Trace、CSRF、CORS、请求编号和管理员中间件说明见 [`docs/中间件/README.md`](docs/中间件/README.md)。
+
 需要响应发送后的终结逻辑时，使用 `middleware.Lifecycle` 或 `PipeLifecycle`。
 
 ## 数据库用法
 
-数据库配置在 `config/database.json`。`default` 必须引用非空 `connections` 中已声明的连接；未知字段、错误类型、非法范围或连接失败会形成启动错误，不会创建隐式回退连接。默认连接通过 `app.DB` 使用，多连接通过 `app.DBManager.Connection(name)` 获取；`DBManager.Default()` 返回 `(*db.DB, error)`。
+数据库配置在 `config/database.json`。应用服务通过 `framework.ServiceDB` 和 `framework.ServiceDBManager` 解析；控制台应用跳过数据库连接时，`ServiceDB` 会返回明确错误。
+
+本节代码属于服务/仓储层示例，不应直接写在控制器中。HTTP 调用链必须是 `Controller -> Validator -> Service -> Model/ORM`：控制器使用验证器校验参数后只调用服务，服务优先使用 ORM，复杂查询才使用参数化原生 SQL。完整数据库能力按特性拆分在 [`docs/数据库/README.md`](docs/数据库/README.md)。
+
+MySQL 默认启用 TLS 并校验证书；受信任的开发环境如需跳过校验，应在连接 `params` 中显式设置 `"tls": "skip-verify"`。该选项不适合生产环境，生产环境应配置正确的 CA 证书链；`tls_verify` 不是框架支持的配置字段。
+
+从旧 ORM 升级时请先阅读 [ORM 升级迁移指南](docs/数据库/ORM升级迁移指南.md)；`Insert` 返回值、不可变链式调用、Searcher、连接租约、游标、锁和 Neo4j 删除均有破坏性调整。
 
 ```go
-user, err := app.DB.Name("users").
+database, err := framework.ResolveServiceAs[*db.DB](app, framework.ServiceDB)
+if err != nil {
+	return err
+}
+manager, err := framework.ResolveServiceAs[*db.Manager](app, framework.ServiceDBManager)
+if err != nil {
+	return err
+}
+
+user, err := database.Name("users").
 	WhereField("id", "=", 1).
 	Find()
 
-rows, err := app.DB.Name("users").
+rows, err := database.Name("users").
 	WhereLike("name", "%张%").
 	Order("id DESC").
 	Page(1, 20).
 	Select()
 
-id, err := app.DB.Name("users").Insert(map[string]interface{}{
+affected, err := database.Name("users").Insert(map[string]interface{}{
 	"name": "张三",
 	"age":  18,
+})
+
+id, err := database.Name("users").InsertGetId(map[string]interface{}{
+	"name": "李四",
 })
 ```
 
@@ -384,22 +435,19 @@ id, err := app.DB.Name("users").Insert(map[string]interface{}{
 - 只有复杂 SQL 表达式才使用 `WhereRaw`，并且必须手动保证参数化。
 - `Update` 和 `Delete` 禁止无 `WHERE` 条件，避免误更新或误删除全表。
 - 表名和字段名必须使用安全标识符，不要拼接用户输入。
-- 插入、更新和批量写入会复制调用方 `map`，自动时间戳、模型回调与主键回填不会污染输入。
 
-关联查询（JOIN）会对 JOIN 表套用与主表一致的前缀规则：`Name()` 创建的查询给 JOIN 表追加前缀，`Table()` 创建的查询按完整表名处理。JOIN 条件仅支持安全的 `字段 op 字段` 形式（支持 `table.field` 与 `AND` 连接），紧凑写法与带空格写法均可。未调用 `Field` 时只返回主表的 `主表.*`，避免关联表同名列覆盖；需要关联表字段时必须显式选择，并为同名列设置唯一别名。
+关联查询（JOIN）会对 JOIN 表套用与主表一致的前缀规则：`Name()` 创建的查询给 JOIN 表追加前缀，`Table()` 创建的查询按完整表名处理。JOIN 条件仅支持安全的 `字段 op 字段` 形式（支持 `table.field` 与 `AND` 连接），紧凑写法与带空格写法均可。
 
 事务用法：
 
 ```go
-err := app.DB.Transaction(func(tx *db.Tx) error {
-	if _, err := tx.Table("users").Insert(data); err != nil {
+err := database.Transaction(func(tx *db.Tx) error {
+	if _, err := tx.Name("users").Insert(data); err != nil {
 		return err
 	}
 	return nil
 })
 ```
-
-闭包业务错误与回滚错误会通过 `errors.Join` 同时保留；panic 会先回滚再原样抛出。事务提交或回滚后再次操作返回 `ErrTransactionDone`，不会退回普通连接。数据库关闭会等待活动事务和查询释放连接租约。
 
 带上下文与隔离级别的事务（推荐在 HTTP 请求中使用，便于随请求取消/超时回滚）：
 
@@ -410,7 +458,7 @@ import (
 )
 
 // 把请求上下文传入，请求取消/超时时事务自动回滚。
-err := app.DB.TransactionContext(req.Raw().Context(), func(tx *db.Tx) error {
+err := database.TransactionContext(req.Raw().Context(), func(tx *db.Tx) error {
 	// 事务内经 tx.Table / tx.Name 创建的查询自动继承该 context。
 	if _, err := tx.Name("users").WhereField("id", "=", 1).Update(data); err != nil {
 		return err
@@ -419,7 +467,7 @@ err := app.DB.TransactionContext(req.Raw().Context(), func(tx *db.Tx) error {
 })
 
 // 需要指定隔离级别时使用 BeginTx：
-tx, err := app.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+tx, err := database.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
 ```
 
 ### 查询上下文（超时与取消）
@@ -430,7 +478,7 @@ tx, err := app.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
 ctx, cancel := context.WithTimeout(req.Raw().Context(), 3*time.Second)
 defer cancel()
 
-rows, err := app.DB.Name("orders").
+rows, err := database.Name("orders").
 	WithContext(ctx).
 	WhereField("status", "=", 1).
 	Select()
@@ -438,7 +486,7 @@ rows, err := app.DB.Name("orders").
 
 模型查询同样支持 `mq.WithContext(ctx)`。未设置时回退到 `context.Background()`。
 
-> 说明：内置 SQL、MongoDB 和 Neo4j 连接都实现了 context 接口；MongoDB/Neo4j 还提供默认 10 秒操作上限。传入 `nil` context 会返回 `ErrInvalidQuery`。
+> 说明：context 仅对实现了 `ContextualConnection` 的连接（如内置的 SQL 连接）生效；Mongo/Neo4j 等连接自带超时控制。
 
 ### 统计与分页（JOIN / GROUP / DISTINCT）
 
@@ -446,39 +494,55 @@ rows, err := app.DB.Name("orders").
 
 ```go
 // JOIN：统计连接过滤后的真实行数；分页 total 准确。
-p, err := app.DB.Name("orders").
+p, err := database.Name("orders").
 	Join("users", "orders.user_id = users.id").
 	Where("status = ?", 1).
 	Paginate(1, 20)
 
 // DISTINCT：统计去重后的行数。
-n, err := app.DB.Name("orders").Distinct().Field("user_id").Count()
+n, err := database.Name("orders").Distinct().Field("user_id").Count()
 ```
 
 ### 大数据量遍历（游标分页）
 
 - `Chunk(count, cb)`：基于 `OFFSET` 的分块遍历。实现简单，但大表深分页性能随页码下降，且遍历期间增删数据可能漏读/重复。
-- `ChunkById(count, pk, cb)`：基于主键游标（`WHERE id > ? ORDER BY id LIMIT count`）的分块遍历，**推荐用于大表全量遍历**，无 OFFSET 性能问题。满批结果必须包含类型稳定且严格递增的游标，否则返回 `ErrInvalidDatabaseRow`。
+- `ChunkById(count, pk, cb)`：基于主键游标（`WHERE id > ? ORDER BY id LIMIT count`）的分块遍历，**推荐用于大表全量遍历**，无 OFFSET 性能问题。
+- `SeekPage(pageSize, pk, after)`：基于主键游标读取单页，不执行 `COUNT` 或 `OFFSET`，适合不需要精确总数的大表列表接口。
+- `Each(cb)`：SQL 和 MongoDB 连接按行流式读取，不物化完整结果集；回调返回 `false` 可提前停止。其它连接会明确返回能力错误。
 
 ```go
-err := app.DB.Name("users").ChunkById(1000, "id", func(rows []map[string]interface{}) bool {
+err := database.Name("users").ChunkById(1000, "id", func(rows []map[string]interface{}) bool {
 	// 处理本批数据；返回 false 可提前终止。
+	return true
+})
+
+page, err := database.Name("users").
+	Field("id,name,status").
+	WhereField("status", "=", 1).
+	SeekPage(20, "id", nil)
+if err != nil {
+	return err
+}
+// page.NextCursor 编码后作为下一页的 after；page.HasMore 表示是否还有数据。
+
+err = database.Name("users").Each(func(row map[string]interface{}) bool {
+	// 处理单行大结果集；长查询建议先绑定 WithContext(ctx)。
 	return true
 })
 ```
 
 ### 批量插入
 
-`InsertAll` 在占位符总数（行数 × 列数）超过当前方言上限时自动分批；多批写入会包裹在事务中以保证原子性：
+`InsertAll` 会同时按占位符上限和方言提供的 SQL 包大小预算自动分批；MySQL 使用连接参数 `maxAllowedPacket` 作为预算依据。多批写入会包裹在事务中以保证原子性：
 
 ```go
-affected, err := app.DB.Name("users").InsertAll([]map[string]interface{}{
+affected, err := database.Name("users").InsertAll([]map[string]interface{}{
 	{"name": "a", "age": 1},
 	{"name": "b", "age": 2},
 })
 ```
 
-要求所有行的字段集合一致，否则报错（避免错位写入脏数据）。多批操作任一批次失败时会回滚，并同时保留执行与回滚错误。
+要求所有行的字段集合一致，否则报错（避免错位写入脏数据）。
 
 ### 悲观锁
 
@@ -488,17 +552,19 @@ affected, err := app.DB.Name("users").InsertAll([]map[string]interface{}{
 |---|---|---|
 | MySQL | `FOR UPDATE` | `LOCK IN SHARE MODE` |
 | PostgreSQL | `FOR UPDATE` | `FOR SHARE` |
-| SQLite | 不输出（无行级锁） | 不输出 |
+| SQLite | 返回 `ErrUnsupportedFeature` | 返回 `ErrUnsupportedFeature` |
+| SQL Server | 主表 `WITH (UPDLOCK, ROWLOCK)` | 主表 `WITH (HOLDLOCK, ROWLOCK)` |
+| Oracle | `FOR UPDATE` | 返回 `ErrUnsupportedFeature` |
 
 ### 多方言与 PostgreSQL 注意事项
 
-- 框架统一以 `?` 占位符构建 SQL，执行前按方言转换（MySQL/SQLite `?`、PostgreSQL `$N`、SQL Server `@pN`、Oracle `:N`）；PostgreSQL 单字符 JSONB `?` 操作符在框架 SQL 中写作 `??`，`?|`、`?&`、`@?` 可直接使用。
+- 框架统一以 `?` 占位符构建 SQL，执行前按方言转换（MySQL/SQLite `?`、PostgreSQL `$N`、SQL Server `@pN`、Oracle `:N`）。
 - 分页语法自动适配：MySQL/PostgreSQL/SQLite 用 `LIMIT/OFFSET`，SQL Server/Oracle 用 `OFFSET … FETCH`（无显式排序时 SQL Server 会补默认排序以满足语法）。
-- **PostgreSQL 自增主键回传**：`lib/pq` 不支持 `LastInsertId()`，框架自动改用 `INSERT … RETURNING <primary_key>`；非 `id` 主键必须在模型上调用 `PrimaryKey("实际主键")`。
+- **PostgreSQL 自增主键回传**：`lib/pq` 不支持 `LastInsertId()`，框架自动改用 `INSERT … RETURNING <primary_key>`；模型使用默认主键时为 `id`，自定义主键必须通过 `PrimaryKey` 声明。
 
 ### 错误日志脱敏
 
-数据库错误日志只记录字段名、SQL 模板与参数数量，**不记录字段值与绑定参数值**；原生 SQL 和 `WhereRaw` 中的字符串字面量、PostgreSQL dollar quote、行注释与块注释内容会先脱敏再写日志，避免密码、令牌、个人信息等泄露。
+数据库错误日志只记录字段名、SQL 模板与参数数量，**不记录字段值与绑定参数值**，避免密码、令牌、个人信息等通过日志泄露。
 
 ### 表达式条件 `WhereExp` 的安全边界
 
@@ -506,35 +572,54 @@ affected, err := app.DB.Name("users").InsertAll([]map[string]interface{}{
 
 ### 性能调优（可选）
 
-所有 SQL 连接统一应用连接池配置并在返回前执行有界 `PingContext`。MySQL 默认启用 `tls=true`；如需减少每条查询的预编译往返，可在受信配置的字符串参数中设置 `interpolateParams=true`。高风险参数 `multiStatements`、`allowAllFiles`、`allowCleartextPasswords`、`allowFallbackToPlaintext` 的 `true` 值会被拒绝。
+内置 SQL 连接会在连接生命周期内对重复 SQL 使用有界的服务端 Prepared Statement 缓存，事务路径仍使用事务专属执行器。一般不需要启用 `interpolateParams`；如需进行客户端参数插值 A/B 测试，可在 `config/database.json` 的连接参数中设置 `interpolateParams=true`，但应以真实 MySQL 基准结果为准。
 
 ## 模型用法
 
-模型放在 `app/model`。表名必须明确，除非确认默认蛇形命名符合真实表名。
+模型全部平铺在 `app/<应用名>/model`，不在该目录下继续创建业务子目录；一张真实表对应一个模型文件，文件按真实表名命名，不增加模型后缀。优先使用 `NewModelAuto`，仅在结构体名转蛇形后与真实表名不一致时显式绑定表名。
 
 ```go
 package model
 
 import "thinkgo/framework/db"
 
-// User 用户模型。
-type User struct {
+// Users 用户模型，对应 users 表。
+type Users struct {
 	*db.Model
 }
 
-func NewUser(database *db.DB) *User {
-	m := &User{}
-	m.Model = db.NewModel(database, "users")
-	return m
+func NewUsers(database *db.DB) (*Users, error) {
+	base, err := db.NewModelAuto(database, Users{})
+	if err != nil {
+		return nil, err
+	}
+	return &Users{Model: base}, nil
+}
+```
+
+当结构体名称能准确对应表名时，可以省略显式表名：
+
+```go
+// AdminUsers 对应 admin_users 表；NewModelAuto 不会自动补复数。
+type AdminUsers struct {
+	*db.Model
+}
+
+func NewAdminUsers(database *db.DB) (*AdminUsers, error) {
+	base, err := db.NewModelAuto(database, AdminUsers{})
+	if err != nil {
+		return nil, err
+	}
+	return &AdminUsers{Model: base}, nil
 }
 ```
 
 模型支持：
 
-- `Find`、`Select`、`Insert`、`UpdateMap`、`DeleteRecord`。
+- `Find`、`Select`、`Insert`（影响行数）、`InsertGetId`（真实主键）、`Create`、`Save`、`UpdateMap`、`DeleteRecord`。
 - `AutoTimestamp`、`CreateTimeField`、`UpdateTimeField`。
 - `SoftDelete`、`WithTrashed`、`OnlyTrashed`、`Restore`、`ForceDelete`；更新、删除和恢复均要求业务 WHERE，自动软删除条件不能绕过全表保护。
-- `Getter`、`Setter`、`Searcher`（注册方法返回 `error`）。
+- `Getter`、`Setter`、`Searcher`（注册方法返回 `error`；Searcher 回调必须返回新的 `*db.Query`）。
 - `On` 注册模型事件并返回 `error`。
 - `DefineHasOne`、`DefineHasMany`、`DefineBelongsTo`、`DefineBelongsToMany` 均返回 `error`；预加载按强类型键关联，非默认主键请用 `PrimaryKey` 显式声明。
 - `WithContext` 绑定请求上下文；`ChunkById` 主键游标遍历；`Paginate` 对 JOIN/GROUP/DISTINCT 统计正确的 total。
@@ -542,47 +627,46 @@ func NewUser(database *db.DB) *User {
 
 表命名规范：
 
-- `db.NewModelAuto(database, value)` 返回 `(*db.Model, error)`，只把具名结构体名转为 `snake_case`。
+- `db.NewModelAuto()` 只把结构体名转为 `snake_case`。
 - 不会自动复数化。
 - 表前缀由数据库配置统一追加。
 - 实际表名不匹配时必须使用 `db.NewModel(database, "actual_table")`。
+- 模型文件按表名命名并直接放在所属应用的 `app/<应用名>/model`，不在该目录下创建业务子目录；一张表只定义一个模型文件。
 
 ## 验证器用法
 
-验证器放在 `app/validate`，规则使用 ThinkPHP 风格的字符串组合。
+验证器放在 `app/<应用名>/validate`，规则使用 ThinkPHP 风格的字符串组合。
 
 ```go
-v := validate.NewValidator().SetRules(map[string]string{
-	"email|邮箱": "required|email",
-	"age|年龄":   "integer|min:1",
-}).SetMessages(map[string]string{
-	"email.required": "邮箱不能为空",
-})
-
-result, err := v.Validate(req.All())
-if err != nil {
-	return c.Error("验证配置错误", 500)
+v := validate.NewValidator()
+v.Rule = map[string]string{
+	"email": "required|email",
+	"age":   "integer|min:1",
 }
-if !result.Valid() {
-	return c.Error(result.FirstError(), 422)
+v.Message = map[string]string{
+	"email.required": "邮箱不能为空",
+}
+
+if !v.Check(req.All()) {
+	return c.Error(v.GetError(), 422)
 }
 ```
 
 支持场景：
 
 ```go
-v.SetScenes(map[string][]string{
+v.Scene = map[string][]string{
 	"create": {"email", "age"},
-})
+}
 
-result, err := v.Validate(data, validate.WithScene("create"), validate.CollectAllErrors())
+ok := v.SetScene("create").Check(data)
 ```
 
-`Validate` 返回独立结果和配置错误，同一验证器可并发复用。常用规则包括 `required`、`number`、`integer`、`float`、`boolean`、`email`、`array`、`accepted`、`date`、`alpha`、`alphaNum`、`alphaDash`、`chs`、`ip`、`url`、`in`、`between`、`length`、`max`、`min`、`eq`、`gt`、`lt`、`regex`、`confirm`、`different`、`mobile`、`dateFormat`、`after`、`before`、`requireIf`、`requireWith`、`idCard`。完整规则语义见[验证器](docs/验证/验证器.md)。
+常用规则包括 `required`、`number`、`integer`、`float`、`boolean`、`email`、`array`、`accepted`、`date`、`alpha`、`alphaNum`、`alphaDash`、`chs`、`ip`、`url`、`in`、`between`、`length`、`max`、`min`、`eq`、`gt`、`lt`、`regex`、`confirm`、`different`、`mobile`、`dateFormat`、`after`、`before`、`requireIf`、`requireWith`、`idCard`。
 
 ## 视图用法
 
-视图默认使用 Go 模板驱动。`config/view.json` 仅接受 `view_path`、`view_suffix` 和 `cache`；模板真实路径必须位于根目录内，单文件不超过 4 MiB。
+视图默认使用 Go 模板驱动。模板目录由 `config/view.json` 配置。
 
 ```go
 func (c *User) Page() string {
@@ -593,50 +677,74 @@ func (c *User) Page() string {
 
 模板中可使用框架注册的 `lang` 函数读取多语言内容。
 
-`SetDriver`、`SetFuncMap`、`Render`、`Fetch` 和 `Exists` 都会返回错误；`Exists` 的签名为 `(bool, error)`。多语言检测参数、Cookie、头名、允许列表和浏览器检测开关均由 `config/lang.json` 生效，`Accept-Language` 遵守 `q` 权重。
-
 ## 缓存用法
 
-缓存配置在 `config/cache.json`。`default` 必须引用已定义的 store；支持 `file`、`memory`、`redis`，未知字段、类型错误和非法范围会阻止启动，不会回退到文件驱动。
+缓存配置在 `config/cache.json`。
 
 ```go
-if err := app.Cache.Set("user:1", user, time.Minute); err != nil {
-	return err
-}
-value, found, err := app.Cache.Get("user:1")
+applicationCache, err := framework.ResolveServiceAs[*cache.Cache](app, framework.ServiceCache)
 if err != nil {
-	return err
-}
-if found {
-	// 命中的 value 允许为 nil。
-}
-
-tagged, err := app.Cache.Tag("user")
-if err != nil {
-	return err
-}
-if err := tagged.Set("user:1", user, time.Minute); err != nil {
 	return err
 }
 
-lock, err := app.Cache.Lock("sync:user", 10*time.Second)
+if err := applicationCache.Set("user:1", user, time.Minute); err != nil {
+	return err
+}
+value, found, err := applicationCache.Get("user:1")
+if err != nil || !found {
+	return err
+}
+_ = value
+if err := applicationCache.Forget("user:1"); err != nil {
+	return err
+}
+
+tagged, err := applicationCache.Tag("user")
 if err != nil {
 	return err
 }
+if err = tagged.Set("user:1", user, time.Minute); err != nil {
+	return err
+}
+if err = tagged.Flush(); err != nil {
+	return err
+}
+
+lock, err := applicationCache.Lock("sync:user", 10*time.Second)
+if err != nil {
+	return err
+}
+
 acquired, err := lock.Acquire()
 if err != nil {
 	return err
 }
 if acquired {
-	defer func() { _, _ = lock.Release() }()
+	defer lock.Release()
 }
+
+if err := applicationCache.SetMany(map[string]interface{}{
+	"user:1": user,
+	"user:2": map[string]interface{}{"name": "Grace"},
+}, time.Minute); err != nil {
+	return err
+}
+users, err := applicationCache.GetMany([]string{"user:1", "user:2", "user:missing"})
+if err != nil {
+	return err
+}
+_ = users
 ```
 
-`Set`、`Has`、`Forget`、`Forever`、`Flush` 均返回 `error`；`Get` 返回 `(value, found, error)`；`Inc/Dec` 返回 `(int64, error)`；`Store`、`Tag`、`Lock` 也必须先处理创建错误。`Remember` 的加载函数签名是 `func() (interface{}, error)`，同一进程内相同 store/key 的并发未命中会合并为一次加载。
+可用能力包括 `Get`、`GetMany`、`Set`、`SetMany`、`Has`、`Forget`、`Forever`、`Flush`、`Remember`、`Inc`、`Dec`、`Store`、`Tag` 和 `Lock`。`GetMany` 的结果只包含命中的键，并通过结果中是否存在键区分命中的 `nil`；没有批量能力的自定义驱动会退回逐键调用。`SetMany` 不承诺事务原子性，部分写入失败时应由业务重试或对账。
 
-Memory 保留 Go 动态类型；File、Redis、DB 使用 JSON，读取后的 JSON 数值为 `float64`。文件缓存使用哈希文件名、16 MiB 单项上限和原子替换；`Flush` 保留锁与非缓存文件。应用关闭时会等待活动缓存操作并关闭 Redis 等可关闭驱动。
+Redis 驱动会将 `GetMany` 映射为一次 `MGET`，将 `SetMany` 映射为一次 Pipeline；批量接口只减少网络往返，不改变单键 TTL 和 JSON 序列化语义。
 
-Redis store 应配置非空 `prefix`，使 `Flush()` 只清理本应用业务键并保留活动锁。空前缀默认拒绝清理；只有独占 DB 才可显式开启 `allow_flush_db`，此时 `Flush()` 会执行 `FLUSHDB`：
+进程内 `memory` store 可通过 `max_entries` 设置 FIFO 容量上限，避免请求派生缓存键长期占用无限内存；未设置或为 `0` 时保持现有无限容量兼容行为。生产环境应结合业务键来源和内存预算显式设置该值。
+
+驱动行为统一：`file` 与 `redis` 驱动都会把任意值 JSON 序列化后存储，因此 `map`、`struct`、`slice` 都可缓存（JSON 反序列化后数值统一为 `float64`）。
+
+Redis store 推荐配置 `prefix`，使 `Flush()` 只按前缀清理本应用键，避免误清同库其它业务数据；未配置 `prefix` 时 `Flush()` 退化为 `FLUSHDB`（仅影响所选 DB 索引）：
 
 ```json
 {
@@ -648,18 +756,15 @@ Redis store 应配置非空 `prefix`，使 `Flush()` 只清理本应用业务键
       "password": "",
       "select": 0,
       "prefix": "thinkgo:",
-      "timeout_ms": 3000,
-      "allow_flush_db": false
+      "timeout_ms": 3000
     }
   }
 }
 ```
 
-完整 API、标签一致性边界和驱动说明见[缓存文档](docs/缓存/缓存.md)。
-
 ## Cookie 与 Session
 
-Cookie 配置在 `config/cookie.json`，Session 配置在 `config/session.json`，CSRF 配置在 `config/csrf.json`。三个模块都会拒绝未知字段、错误类型和越界数值；配置错误会阻止应用启动。
+Cookie 配置在 `config/cookie.json`，Session 配置在 `config/session.json`。
 
 启用 Session：
 
@@ -669,42 +774,30 @@ Cookie 配置在 `config/cookie.json`，Session 配置在 `config/session.json`�
 }
 ```
 
-请求级 Session API 会显式返回错误：
-
-```go
-requestSession, ok := req.GetData("_session").(*session.Session)
-if !ok {
-    return context.NewResponse().Abort(500, "会话不可用")
-}
-if err := requestSession.Set("user_id", userID); err != nil {
-    return context.NewResponse().Abort(500, "会话写入失败")
-}
-value, found := requestSession.Get("user_id")
-```
-
-登录或提权后必须处理 `Regenerate()` 错误，退出登录必须处理 `Destroy()` 错误。文件 Session 使用 `storage_path`，Cookie 路径使用 `cookie_path`，不再支持含义歧义的旧 `path` 字段。控制器不要自行解析 Session 文件。
+控制器中优先通过请求上下文和框架 Session 管理器读写会话，不要自行解析会话文件。
 
 ## 事件用法
 
-事件调度器通过 `app.Event` 使用。
+事件调度器通过 `framework.ServiceEvent` 解析使用。
 
 ```go
 type UserCreatedListener struct{}
 
-func (l *UserCreatedListener) Handle(e event.Event) error {
+func (l *UserCreatedListener) Handle(e event.Event) {
 	// 处理用户创建事件。
-	return nil
 }
 
-if err := app.Event.Listen("user.created", &UserCreatedListener{}); err != nil {
+dispatcher, err := framework.ResolveServiceAs[*event.Dispatcher](app, framework.ServiceEvent)
+if err != nil {
 	return err
 }
-if err := app.Event.Dispatch(event.NewEvent("user.created", userID)); err != nil {
+if err := dispatcher.Listen("user.created", &UserCreatedListener{}); err != nil {
+	return err
+}
+if err := dispatcher.Dispatch(event.NewEvent("user.created", userID)); err != nil {
 	return err
 }
 ```
-
-事件名、监听器、订阅者和优先级会在注册时校验；监听器返回的业务错误与回调 panic 会由 `Dispatch` 返回，不会静默丢失或直接击穿进程。
 
 框架内置生命周期事件：
 
@@ -712,24 +805,30 @@ if err := app.Event.Dispatch(event.NewEvent("user.created", userID)); err != nil
 - `framework.HttpRun`
 - `framework.HttpEnd`
 - `framework.RouteLoaded`
+- `framework.LogWrite`
+- `framework.LogRecord`
 
 监听器可以设置优先级，数值越大越先执行。
 
 ## 日志用法
 
-日志配置在 `config/log.json`。默认日志器为 `app.Log`。
+日志配置在 `config/log.json`。日志器通过 `framework.ServiceLog` 解析。
 
 ```go
-app.Log.Info("服务启动")
-app.Log.ErrorCtx("创建用户失败", map[string]interface{}{
+logger, err := framework.ResolveServiceAs[*log.Log](app, framework.ServiceLog)
+if err != nil {
+	return err
+}
+logger.Info("服务启动")
+logger.ErrorCtx("创建用户失败", map[string]interface{}{
 	"user_id": userID,
 	"error":   err.Error(),
 })
 
-app.Log.Channel("sql").Info("查询完成")
+logger.Channel("sql").Info("查询完成")
 ```
 
-日志器支持多驱动、多通道、级别过滤、调用位置记录、异步批量写入和关闭时刷盘。需要完成屏障时调用 `Flush(ctx)`；绕过 `app.Run()` 时必须调用 `app.Close()` 并处理 Provider、缓存、数据库和日志的聚合关闭错误。文件日志默认限制保留天数、文件数和总容量，详细配置见[日志](docs/日志/日志.md)。
+日志器支持多驱动、多通道、级别过滤、调用位置记录、异步批量写入和关闭时刷盘。长期运行服务退出前必须调用 `Shutdown()`，`app.Run()` 已处理这一点。
 
 ## 命令行用法
 
@@ -753,11 +852,7 @@ make:subscribe
 make:service
 ```
 
-`run` 命令支持 `-p`/`--port` 指定监听端口（覆盖配置与 `.env`，详见[启动方式](#启动方式)）。应用启动检查通过后才写入环境和内存配置，失败不会污染端口状态。`clear` 先清理当前缓存后端；失败时停止，成功后安全清理 `runtime/cache` 中受管的缓存项，保留活动锁和非缓存文件，也不会删除日志、会话、证书或离线数据库文件。除 `run` 外，其余命令（`version`、`list`、`make:*` 等）不需要数据库，命令行入口对它们使用 `framework.NewConsoleApp()` 跳过连库，避免每次执行都尝试连接数据库并打印连接错误。
-
-参数解析会拒绝未知、重复、缺值和数量不匹配的输入。`config:dump` 对完整配置、直接敏感点路径、强类型映射和结构体统一脱敏。生成器在应用根目录内格式化并独占创建源码，不覆盖已有文件。命令注册、解析、执行、输出和应用关闭错误都会让入口以非零状态退出。
-
-本地缺少 TLS 证书时运行 `go run cmd/cert/main.go`。工具生成 ECDSA P-256 开发证书并拒绝覆盖任一已有文件；类 Unix 私钥权限为 `0600`，Windows 使用仅当前用户可访问的受保护 DACL。
+`run` 命令支持 `-p`/`--port` 指定监听端口（覆盖配置与 `.env`，详见[启动方式](#启动方式)）。除 `run` 外，其余命令（`version`、`list`、`make:*` 等）不需要数据库，命令行入口对它们使用严格的 `framework.BuildConsoleApp` 跳过连库；初始化失败直接返回错误，不会继续使用半初始化应用。
 
 新增命令应放在 `framework/console/command` 或应用自定义命令目录，并实现：
 
@@ -775,16 +870,15 @@ func (c *DemoCommand) Configure() {
 	c.AddBoolOption("force", "f", "强制覆盖")        // 布尔开关：--force/-f
 }
 
-func (c *DemoCommand) Execute(input *console.Input, output *console.Output) error {
+func (c *DemoCommand) Execute(input *console.Input, output *console.Output) {
 	name := input.GetArgument(0)      // 位置参数（已剔除选项）
 	dir := input.GetOption("output")  // 取值选项，未传时返回默认值 ./dist
 	force := input.GetOption("force") // 布尔开关出现时为 "true"
 	output.Writeln(name + " -> " + dir + " force=" + force)
-	return output.Err()
 }
 ```
 
-`ICommand.Execute`、`Console.Register` 和 `Console.Run` 都返回 `error`，调用方必须处理。选项写法支持 `--name value`、`--name=value`、短选项 `-n value`、`-n=value` 以及布尔开关 `--flag`；短选项会按声明解析为规范长名。错误状态写入 stderr；颜色仅在交互式终端启用，状态消息中的控制字符会被转义。
+选项写法支持 `--name value`、`--name=value`、短选项 `-n value`、`-n=value` 以及布尔开关 `--flag`；短选项会按声明解析为规范长名。
 
 ## 依赖管理
 
@@ -798,45 +892,15 @@ func (c *DemoCommand) Execute(input *console.Input, output *console.Output) erro
   ```
 
 - 跨大版本升级（如 `module/v2`）属破坏性变更，必须单独评估并配套改造代码与测试，不在常规升级内顺带进行。
-- 升级后若依赖抬高了 `go` 指令最低版本，需同步确认团队工具链可用；标准库安全公告要求更高补丁版本时不得继续锁定存在已知漏洞的旧工具链。
+- 升级后若有依赖抬高了 `go` 指令最低版本（例如 `microsoft/go-mssqldb` 要求 `go 1.25.7`），需同步确认团队工具链可用，或在权衡后锁定不抬高 Go 版本的依赖版本。
 - 国内网络可用镜像代理：`GOPROXY=https://goproxy.cn,https://goproxy.io`。
 - 提交前用 `go mod verify` 校验依赖完整性。
-- 提交前用 `go mod tidy -diff` 校验模块清单无漂移，并运行固定版本 `go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...`。仓库 CI 同时覆盖 Linux CGO/Race、Oracle 标签、Windows 平台行为和核心覆盖率。
 
-## 测试规范
-
-- 新功能、修复和重构必须先写有意义的测试。
-- 测试必须验证行为，不要只追求覆盖率。
-- 涉及文件、缓存、数据库、会话等 IO 的测试必须清理数据。
-- 框架核心逻辑测试放在对应 `framework` 子包。
-- 应用集成测试可放在项目根目录，验证入口、注册链路和实际 HTTP 行为。
-- 提交前必须运行 `go test ./...`。
-
-当前应用层集成测试验证：
-
-- `app/controller` 控制器注册。
-- `app/middleware` 全局中间件注册。
-- `route` 路由加载器注册。
-- HTTP 内核可以通过 `/api/users` 调度到 `User@Index`。
 
 ## 编码规范
 
-> 完整、可执行的强制约束见 [`docs/开发规范.md`](docs/开发规范.md)，下面是要点摘录。
+> 完整、可执行的强制约束见 [`docs/基础/开发规范.md`](docs/基础/开发规范.md)，下面是要点摘录。
 
-- 代码注释必须使用中文。
-- 不允许空实现、占位实现或只有注释没有行为的代码。
-- 不允许通过放宽类型检查、放宽规则或降低测试质量来规避问题。
-- 不允许把请求级状态写入全局变量。
-- 不允许新增无意义 demo 文件；示例必须能运行或由测试覆盖。
-- 不允许批量脚本式修改代码，修改必须逐文件进行。
-- 优先复用框架已有组件、配置、容器、日志、事件和中间件能力。
-- 数据库写操作必须显式处理错误，行集迭代后必须检查 `rows.Err()`。
-- 用户输入进入 SQL 时必须参数化；表名/字段名/操作符必须走白名单校验。
-- 读取配置用 `GetBool`/`GetInt`/`GetString`/`GetMap`，禁止对裸 `Get` 返回值做类型断言（会在配置异常时启动崩溃）。
-- 共享可变状态（map、单例、计数器）必须加锁；请求级状态用 `req.Set`/`req.GetData` 传递。
-- 控制器、路由、中间件、验证器、模型的文件命名使用小写蛇形。
-- Go 导出类型和方法使用 PascalCase，非导出标识使用 camelCase。
-- 业务错误应返回结构化响应，内部错误在生产环境不要暴露敏感细节。
 
 ## 当前应用入口
 

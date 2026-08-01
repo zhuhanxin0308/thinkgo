@@ -6,6 +6,8 @@ import (
 	"database/sql/driver"
 	"errors"
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -16,6 +18,122 @@ type rollbackFailureDriver struct{ rollbackErr error }
 
 func (d *rollbackFailureDriver) Open(string) (driver.Conn, error) {
 	return &rollbackFailureConnection{rollbackErr: d.rollbackErr}, nil
+}
+
+type finalizationCountingDriver struct {
+	commitCalls   atomic.Int64
+	rollbackCalls atomic.Int64
+}
+
+var finalizationDriverSequence atomic.Uint64
+
+func (driverState *finalizationCountingDriver) Open(string) (driver.Conn, error) {
+	return &finalizationCountingConnection{driverState: driverState}, nil
+}
+
+type finalizationCountingConnection struct {
+	driverState *finalizationCountingDriver
+}
+
+func (connection *finalizationCountingConnection) Prepare(string) (driver.Stmt, error) {
+	return nil, errors.New("test driver does not support prepared statements")
+}
+func (connection *finalizationCountingConnection) Close() error { return nil }
+func (connection *finalizationCountingConnection) Begin() (driver.Tx, error) {
+	return &finalizationCountingTransaction{driverState: connection.driverState}, nil
+}
+
+type finalizationCountingTransaction struct {
+	driverState *finalizationCountingDriver
+}
+
+func (transaction *finalizationCountingTransaction) Commit() error {
+	transaction.driverState.commitCalls.Add(1)
+	return nil
+}
+func (transaction *finalizationCountingTransaction) Rollback() error {
+	transaction.driverState.rollbackCalls.Add(1)
+	return nil
+}
+
+func newFinalizationCountingDatabase(t *testing.T) (*DB, *finalizationCountingDriver) {
+	t.Helper()
+	driverState := &finalizationCountingDriver{}
+	driverName := fmt.Sprintf("thinkgo_finalize_%d", finalizationDriverSequence.Add(1))
+	sql.Register(driverName, driverState)
+	handle, err := sql.Open(driverName, "")
+	if err != nil {
+		t.Fatalf("open finalization test driver: %v", err)
+	}
+	return NewDB(&SQLConnection{DB: handle, Builder: &builder.Sqlite{}}), driverState
+}
+
+func waitForFinalizationCount(t *testing.T, driverState *finalizationCountingDriver, before int64) int64 {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		after := driverState.commitCalls.Load() + driverState.rollbackCalls.Load()
+		if after != before {
+			return after - before
+		}
+		time.Sleep(time.Millisecond)
+	}
+	return driverState.commitCalls.Load() + driverState.rollbackCalls.Load() - before
+}
+
+func TestBeginTxContextCancellationReleasesLease(t *testing.T) {
+	database, driverState := newFinalizationCountingDatabase(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	transaction, err := database.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin transaction: %v", err)
+	}
+	cancel()
+	select {
+	case <-transaction.Done():
+	case <-time.After(time.Second):
+		t.Fatal("context cancellation did not finalize transaction wrapper")
+	}
+
+	closed := make(chan error, 1)
+	go func() { closed <- database.Close() }()
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatalf("close database: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("database close still waits for canceled transaction lease")
+	}
+	if finalized := waitForFinalizationCount(t, driverState, 0); finalized != 1 || driverState.rollbackCalls.Load() != 1 {
+		t.Fatalf("finalized=%d rollback calls=%d, want one rollback", finalized, driverState.rollbackCalls.Load())
+	}
+}
+
+func TestCommitAndCancellationFinalizeOnce(t *testing.T) {
+	database, driverState := newFinalizationCountingDatabase(t)
+	defer func() { _ = database.Close() }()
+	for iteration := 0; iteration < 100; iteration++ {
+		before := driverState.commitCalls.Load() + driverState.rollbackCalls.Load()
+		ctx, cancel := context.WithCancel(context.Background())
+		transaction, err := database.BeginTx(ctx, nil)
+		if err != nil {
+			t.Fatalf("iteration %d begin: %v", iteration, err)
+		}
+		var wait sync.WaitGroup
+		wait.Add(2)
+		go func() { defer wait.Done(); _ = transaction.Commit() }()
+		go func() { defer wait.Done(); cancel() }()
+		wait.Wait()
+		select {
+		case <-transaction.Done():
+		case <-time.After(time.Second):
+			t.Fatalf("iteration %d did not finalize", iteration)
+		}
+		if finalized := waitForFinalizationCount(t, driverState, before); finalized != 1 {
+			t.Fatalf("iteration %d finalized %d times", iteration, finalized)
+		}
+	}
 }
 
 // TestTransactionExecutesCompleteQuerySurface 验证事务内查询、插入、更新、表达式更新、
@@ -29,7 +147,8 @@ func TestTransactionExecutesCompleteQuerySurface(t *testing.T) {
 	if rows, err := transaction.Table("users").WhereField("id", "=", 1).Select(); err != nil || len(rows) != 1 {
 		t.Fatalf("事务查询失败: rows=%#v err=%v", rows, err)
 	}
-	if id, err := transaction.Table("users").Insert(map[string]interface{}{"name": "Ada"}); err != nil || id != 7 {
+	idValue, err := transaction.Table("users").InsertGetId(map[string]interface{}{"name": "Ada"})
+	if id, ok := idValue.(int64); err != nil || !ok || id != 7 {
 		t.Fatalf("事务插入失败: id=%d err=%v", id, err)
 	}
 	if affected, err := transaction.Table("users").WhereField("id", "=", 1).Update(map[string]interface{}{"name": "Grace"}); err != nil || affected != 2 {

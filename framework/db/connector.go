@@ -30,7 +30,7 @@ type Config struct {
 	AutoTimestamp          bool              // 是否自动维护时间戳
 	CreateTimeField        string            // 创建时间字段名
 	UpdateTimeField        string            // 更新时间字段名
-	TimestampValueType     string            // 自动时间戳落库值类型（datetime/unix）
+	TimestampValueType     string            // 自动时间戳落库值类型（unix/datetime/timestamp/date/native）
 }
 
 // Validate 在连接器接触配置前校验跨驱动通用约束。
@@ -55,10 +55,7 @@ func (config Config) Validate() error {
 		}
 	}
 	if config.TimestampValueType != "" {
-		normalized := strings.ToLower(strings.TrimSpace(config.TimestampValueType))
-		switch normalized {
-		case TimestampValueTypeUnix, "int", TimestampValueTypeDateTime, TimestampValueTypeTimestamp, TimestampValueTypeDate:
-		default:
+		if !isSupportedTimestampValueType(config.TimestampValueType) {
 			return fmt.Errorf("%w: 非法时间戳类型 %q", ErrInvalidDatabaseConfig, config.TimestampValueType)
 		}
 	}

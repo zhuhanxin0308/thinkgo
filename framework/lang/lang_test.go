@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -371,5 +372,110 @@ func TestLangLoadAllSupportsTrustedSymlinkRoot(t *testing.T) {
 	}
 	if !manager.HasLang("zh-cn") {
 		t.Fatal("符号链接根目录中的语言包未被加载")
+	}
+}
+
+func newDetectLanguageFixture(t *testing.T, config map[string]interface{}) *Lang {
+	t.Helper()
+	directory := t.TempDir()
+	for name, body := range map[string]string{
+		"zh-cn": `{"title":"中文"}`,
+		"en-gb": `{"title":"英国"}`,
+		"en-us": `{"title":"美国"}`,
+		"ja-jp": `{"title":"日本語"}`,
+	} {
+		if err := os.WriteFile(filepath.Join(directory, name+".json"), []byte(body), 0o600); err != nil {
+			t.Fatalf("写入检测语言包 %s 失败: %v", name, err)
+		}
+	}
+	manager := NewLang()
+	if err := manager.Init(config); err != nil {
+		t.Fatalf("初始化检测配置失败: %v", err)
+	}
+	if err := manager.LoadAll(directory); err != nil {
+		t.Fatalf("加载检测语言包失败: %v", err)
+	}
+	return manager
+}
+
+// TestDetectLanguage 验证一次性语言检测入口的来源优先级、前缀匹配和 qvalue 兼容语义。
+func TestDetectLanguage(t *testing.T) {
+	manager := newDetectLanguageFixture(t, map[string]interface{}{
+		"default_lang":        "zh-cn",
+		"auto_detect_browser": true,
+		"allow_lang_list":     []interface{}{"zh-cn", "en-gb", "en-us", "ja-jp"},
+		"use_cookie":          true,
+	})
+	tests := []struct {
+		name                                  string
+		query, cookie, header, acceptLanguage string
+		expected                              string
+	}{
+		{name: "query", query: "en", cookie: "ja-jp", header: "en-us", acceptLanguage: "ja-jp", expected: "en-gb"},
+		{name: "cookie", cookie: "en-us", header: "ja-jp", acceptLanguage: "ja-jp", expected: "en-us"},
+		{name: "header", header: "ja-jp", acceptLanguage: "en-us", expected: "ja-jp"},
+		{name: "accept-language", acceptLanguage: "en-US;q=0.4, ja-JP;q=1", expected: "ja-jp"},
+		{name: "default", query: "unsupported", cookie: "unsupported", header: "unsupported", acceptLanguage: "xx;q=1", expected: "zh-cn"},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := manager.DetectLanguage(testCase.query, testCase.cookie, testCase.header, testCase.acceptLanguage); got != testCase.expected {
+				t.Fatalf("语言检测结果错误: got=%q expected=%q", got, testCase.expected)
+			}
+		})
+	}
+
+	managerNoCookie := newDetectLanguageFixture(t, map[string]interface{}{
+		"default_lang": "zh-cn",
+		"use_cookie":   false,
+	})
+	if got := managerNoCookie.DetectLanguage("", "en-us", "ja-jp", ""); got != "ja-jp" {
+		t.Fatalf("关闭 Cookie 检测后应跳过 Cookie 来源，实际为 %q", got)
+	}
+}
+
+// TestDetectLanguageSnapshotConcurrency 验证检测配置并发发布和读取不会混用半套配置。
+func TestDetectLanguageSnapshotConcurrency(t *testing.T) {
+	manager := newDetectLanguageFixture(t, map[string]interface{}{"default_lang": "zh-cn", "use_cookie": true})
+	var wait sync.WaitGroup
+	for index := 0; index < 4; index++ {
+		wait.Add(1)
+		go func(index int) {
+			defer wait.Done()
+			for round := 0; round < 100; round++ {
+				if index%2 == 0 {
+					_ = manager.Init(map[string]interface{}{"default_lang": "zh-cn", "use_cookie": true})
+				} else {
+					_ = manager.Init(map[string]interface{}{"default_lang": "en-us", "use_cookie": false})
+				}
+				selected := manager.DetectLanguage("", "en-us", "ja-jp", "")
+				if selected != "zh-cn" && selected != "en-us" && selected != "ja-jp" {
+					t.Errorf("检测快照返回未知语言: %q", selected)
+					return
+				}
+			}
+		}(index)
+	}
+	wait.Wait()
+}
+
+// BenchmarkDetectLanguage 记录请求语言检测的时间和分配基线。
+func BenchmarkDetectLanguage(b *testing.B) {
+	manager := NewLang()
+	if err := manager.Init(map[string]interface{}{"default_lang": "zh-cn", "allow_lang_list": []interface{}{"zh-cn", "en-us", "ja-jp"}}); err != nil {
+		b.Fatal(err)
+	}
+	directory := b.TempDir()
+	for name := range map[string]bool{"zh-cn": true, "en-us": true, "ja-jp": true} {
+		if err := os.WriteFile(filepath.Join(directory, name+".json"), []byte(`{"title":"ok"}`), 0o600); err != nil {
+			b.Fatal(err)
+		}
+	}
+	if err := manager.LoadAll(directory); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	for index := 0; index < b.N; index++ {
+		_ = manager.DetectLanguage("", "", "", "en-US;q=0.8,ja-JP;q=1")
 	}
 }

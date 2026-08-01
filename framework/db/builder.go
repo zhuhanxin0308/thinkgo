@@ -1,11 +1,25 @@
 package db
 
+import "thinkgo/framework/db/internal/contract"
+
+type LockMode = contract.LockMode
+
+const (
+	LockNone      = contract.LockNone
+	LockForUpdate = contract.LockForUpdate
+	LockForShare  = contract.LockForShare
+)
+
+type LockSpec = contract.LockSpec
+
 // Builder interface for SQL generation
 //
 // 所有方言统一使用 ? 占位符构建 SQL，由 Rebind 在执行前转换为各驱动要求的占位符风格
 // （MySQL/SQLite 使用 ?，PostgreSQL 使用 $N，Oracle 使用 :N，SQL Server 使用 @pN）。
 // 这样可避免 WHERE 与 SET 子句占位符风格不一致导致驱动报错。
 type Builder interface {
+	// DialectName returns the stable SQL dialect identifier used by validation and redaction.
+	DialectName() string
 	Select(table string, fields string, where []string, order string, limit int, offset int) string
 	Insert(table string, data map[string]interface{}) (string, []interface{})
 	Update(table string, data map[string]interface{}, where []string) (string, []interface{})
@@ -22,9 +36,9 @@ type Builder interface {
 	// 复杂查询（JOIN/GROUP/...）的分页统一经此生成，避免硬编码 MySQL 的 LIMIT/OFFSET
 	// 在 SQL Server/Oracle 上产生非法 SQL。order 为已校验的排序字段串，可能为空。
 	Pagination(order string, limit int, offset int) (orderClause string, limitClause string)
-	// LockClause 把统一的悲观锁意图（"FOR UPDATE" / "LOCK IN SHARE MODE"）翻译为方言锁子句
-	// （含前导空格）。不支持行级锁的方言返回空串。
-	LockClause(mode string) string
+	// Lock 把类型化悲观锁意图翻译为方言锁规格或显式 capability error，
+	// 不支持的驱动不得静默忽略锁意图。
+	Lock(mode LockMode) (LockSpec, error)
 	// SupportsLastInsertId 表示驱动是否支持 sql.Result.LastInsertId()。
 	// PostgreSQL 等需改用 INSERT ... RETURNING，由连接层据此选择写入路径。
 	SupportsLastInsertId() bool
@@ -39,4 +53,12 @@ type Builder interface {
 // fields 已完成校验并按稳定顺序排列，rows 中每行具有完全相同的字段集合。
 type BatchInsertBuilder interface {
 	InsertBatch(table string, fields []string, rows []map[string]interface{}) (query string, values []interface{})
+}
+
+// BatchStatementSizer 为需要额外控制单条批量语句大小的方言提供可选能力。
+// 未实现该接口的方言继续只按 MaxBindParams 分批，避免把某个数据库的协议限制
+// 错误套用到其它数据库。
+type BatchStatementSizer interface {
+	// MaxBatchStatementBytes 返回批量语句的保守字节预算；返回不大于零表示不启用预算。
+	MaxBatchStatementBytes() int
 }

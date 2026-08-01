@@ -31,7 +31,7 @@ var (
 	decimalRegex     = regexp.MustCompile(`^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$`)
 )
 
-func evaluateRule(data map[string]interface{}, field string, value interface{}, exists bool, rule compiledRule) bool {
+func evaluateRule(data map[string]interface{}, field string, value interface{}, exists bool, rule compiledRule, location *time.Location, current time.Time) bool {
 	switch rule.name {
 	case "required":
 		return exists && !isEmptyValue(value)
@@ -54,7 +54,7 @@ func evaluateRule(data map[string]interface{}, field string, value interface{}, 
 		if !valid {
 			return false
 		}
-		_, err := parseRuleTime(text)
+		_, err := parseRuleTimeInLocation(text, location)
 		return err == nil
 	case "alpha":
 		return matchTextRule(value, alphaRegex)
@@ -126,9 +126,9 @@ func evaluateRule(data map[string]interface{}, field string, value interface{}, 
 		_, err := time.Parse(rule.param, text)
 		return err == nil
 	case "after":
-		return compareDateValue(data, value, rule.param, true)
+		return compareDateValue(data, value, rule.param, true, location)
 	case "before":
-		return compareDateValue(data, value, rule.param, false)
+		return compareDateValue(data, value, rule.param, false, location)
 	case "requireIf":
 		relatedValue, relatedExists := data[rule.parameters[0]]
 		if !relatedExists {
@@ -148,7 +148,7 @@ func evaluateRule(data map[string]interface{}, field string, value interface{}, 
 		return true
 	case "idCard":
 		text, valid := scalarText(value)
-		return valid && isValidIDCard(text)
+		return valid && isValidIDCardAt(text, location, current)
 	default:
 		return false
 	}
@@ -429,12 +429,12 @@ func compareNumeric(value interface{}, parameter string, allowedComparisons ...i
 	return false
 }
 
-func compareDateValue(data map[string]interface{}, value interface{}, parameter string, after bool) bool {
+func compareDateValue(data map[string]interface{}, value interface{}, parameter string, after bool, location *time.Location) bool {
 	text, valid := scalarText(value)
 	if !valid {
 		return false
 	}
-	current, err := parseRuleTime(text)
+	current, err := parseRuleTimeInLocation(text, location)
 	if err != nil {
 		return false
 	}
@@ -445,7 +445,7 @@ func compareDateValue(data map[string]interface{}, value interface{}, parameter 
 			return false
 		}
 	}
-	target, err := parseRuleTime(targetText)
+	target, err := parseRuleTimeInLocation(targetText, location)
 	if err != nil {
 		return false
 	}
@@ -455,7 +455,11 @@ func compareDateValue(data map[string]interface{}, value interface{}, parameter 
 	return current.Before(target)
 }
 
-func parseRuleTime(value string) (time.Time, error) {
+// parseRuleTimeInLocation 按应用时区解析不带偏移的业务日期时间。
+func parseRuleTimeInLocation(value string, location *time.Location) (time.Time, error) {
+	if location == nil {
+		location = time.Local
+	}
 	layouts := [...]string{
 		"2006-01-02 15:04:05",
 		"2006-01-02",
@@ -463,7 +467,13 @@ func parseRuleTime(value string) (time.Time, error) {
 	}
 	var lastError error
 	for _, layout := range layouts {
-		parsed, err := time.Parse(layout, value)
+		var parsed time.Time
+		var err error
+		if layout == time.RFC3339Nano {
+			parsed, err = time.Parse(layout, value)
+		} else {
+			parsed, err = time.ParseInLocation(layout, value, location)
+		}
 		if err == nil {
 			return parsed, nil
 		}
@@ -504,15 +514,19 @@ func isValidIP(value string) bool {
 	return parsed != nil && parsed.To4() != nil
 }
 
-func isValidIDCard(value string) bool {
+// isValidIDCardAt 按指定时区和当前时间校验身份证生日不能晚于当前日期。
+func isValidIDCardAt(value string, location *time.Location, current time.Time) bool {
 	if !idCardRegex.MatchString(value) {
 		return false
 	}
 	if value[:6] == "000000" || value[14:17] == "000" {
 		return false
 	}
-	birthday, err := time.Parse("20060102", value[6:14])
-	if err != nil || birthday.After(time.Now()) {
+	if location == nil {
+		location = time.Local
+	}
+	birthday, err := time.ParseInLocation("20060102", value[6:14], location)
+	if err != nil || birthday.After(current.In(location)) {
 		return false
 	}
 	weights := [...]int{7, 9, 10, 5, 8, 4, 2, 1, 6, 3, 7, 9, 10, 5, 8, 4, 2}

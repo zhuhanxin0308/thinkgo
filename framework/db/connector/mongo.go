@@ -124,7 +124,3 @@ func validateMongoDatabaseName(name string) error {
 	}
 	return nil
 }
-
-func init() {
-	mustRegisterConnector("mongo", &Mongo{})
-}

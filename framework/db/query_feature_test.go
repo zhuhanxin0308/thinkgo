@@ -37,6 +37,7 @@ func TestWhereSupportsStructuredInputs(t *testing.T) {
 
 func TestWhereSupportsClosureOrColumnTimeAndExpression(t *testing.T) {
 	database := NewDB(&mockConnection{})
+	database.timestampValueType = TimestampValueTypeDateTime
 
 	q := database.Table("users").
 		Where(func(group *ConditionGroup) {
@@ -66,7 +67,7 @@ func TestWhereSupportsClosureOrColumnTimeAndExpression(t *testing.T) {
 	if timeQuery.err != nil {
 		t.Fatalf("WhereTime(today) 不应报错，实际为 %v", timeQuery.err)
 	}
-	if len(timeQuery.where) != 1 || timeQuery.where[0] != "create_time BETWEEN ? AND ?" {
+	if len(timeQuery.where) != 1 || timeQuery.where[0] != "create_time >= ? AND create_time < ?" {
 		t.Fatalf("WhereTime(today) 编译结果不正确，实际为 %#v", timeQuery.where)
 	}
 	if len(timeQuery.args) != 2 {
@@ -81,7 +82,7 @@ func TestWhereSupportsClosureOrColumnTimeAndExpression(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WhereTime 结束时间格式不正确，错误为 %v", err)
 	}
-	if !start.Before(end) {
+	if !start.Before(end) || end.Format(DefaultTimeFormat) != timeQuery.args[1].(string) {
 		t.Fatalf("WhereTime 时间范围应为开始早于结束，实际 start=%s end=%s", start, end)
 	}
 }

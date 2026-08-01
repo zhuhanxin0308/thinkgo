@@ -160,6 +160,74 @@ func TestRouterExtensionParticipatesInMatchingAndURLGeneration(t *testing.T) {
 	}
 }
 
+// TestRouterThinkPHPStyleURLOptions 验证 route.json 的大小写、前缀匹配、后缀和斜杠规则真正参与运行时匹配。
+func TestRouterThinkPHPStyleURLOptions(t *testing.T) {
+	router := NewRouter()
+	if err := router.SetCaseSensitive(false); err != nil {
+		t.Fatalf("设置大小写规则失败: %v", err)
+	}
+	if err := router.SetCompleteMatch(false); err != nil {
+		t.Fatalf("设置前缀匹配规则失败: %v", err)
+	}
+	if err := router.SetRemoveSlash(false); err != nil {
+		t.Fatalf("设置末尾斜杠规则失败: %v", err)
+	}
+	if err := router.SetDefaultExtension("html"); err != nil {
+		t.Fatalf("设置默认后缀失败: %v", err)
+	}
+	registered, err := router.Get("/Users", "User@Index")
+	if err != nil {
+		t.Fatalf("注册配置路由失败: %v", err)
+	}
+	if err = registered.WithName("users.index"); err != nil {
+		t.Fatalf("设置配置路由名称失败: %v", err)
+	}
+
+	for _, path := range []string{"/users", "/users.html", "/users/42"} {
+		matched, _, matchErr := router.Match(fwcontext.MustNewRequest(httptest.NewRequest(http.MethodGet, "http://example.com"+path, nil)))
+		if matchErr != nil || matched == nil {
+			t.Fatalf("配置路由应匹配 %q，route=%#v err=%v", path, matched, matchErr)
+		}
+	}
+	trailing, _, err := router.Match(fwcontext.MustNewRequest(httptest.NewRequest(http.MethodGet, "http://example.com/users/", nil)))
+	if err != nil {
+		t.Fatalf("末尾斜杠匹配不应返回配置错误: %v", err)
+	}
+	if trailing != nil {
+		t.Fatal("remove_slash=false 时，未声明斜杠的路由不应匹配带斜杠请求")
+	}
+	if built, err := router.URL("users.index", nil); err != nil || built != "/Users.html" {
+		t.Fatalf("默认后缀应参与命名路由 URL 生成，url=%q err=%v", built, err)
+	}
+}
+
+// TestRouterCompleteMatchControlsDynamicRouteSuffix 验证完整匹配开关同时作用于动态路由索引和最终校验。
+func TestRouterCompleteMatchControlsDynamicRouteSuffix(t *testing.T) {
+	prefixRouter := NewRouter()
+	if err := prefixRouter.SetCompleteMatch(false); err != nil {
+		t.Fatalf("设置前缀匹配规则失败: %v", err)
+	}
+	if _, err := prefixRouter.Get("/users/:id", "User@Show"); err != nil {
+		t.Fatalf("注册动态路由失败: %v", err)
+	}
+	matched, params, err := prefixRouter.Match(fwcontext.MustNewRequest(httptest.NewRequest(http.MethodGet, "http://example.com/users/18/extra", nil)))
+	if err != nil || matched == nil || params["id"] != "18" {
+		t.Fatalf("非完整匹配应返回动态路由及参数，route=%#v params=%#v err=%v", matched, params, err)
+	}
+
+	completeRouter := NewRouter()
+	if _, err := completeRouter.Get("/users/:id", "User@Show"); err != nil {
+		t.Fatalf("注册完整匹配路由失败: %v", err)
+	}
+	matched, _, err = completeRouter.Match(fwcontext.MustNewRequest(httptest.NewRequest(http.MethodGet, "http://example.com/users/18/extra", nil)))
+	if err != nil {
+		t.Fatalf("完整匹配失败不应返回配置错误: %v", err)
+	}
+	if matched != nil {
+		t.Fatal("complete_match=true 时不应接受动态路由后的额外路径")
+	}
+}
+
 func TestRouterRejectsDuplicateAndInvalidDefinitions(t *testing.T) {
 	router := NewRouter()
 	first, err := router.Get("/users/:id", "User@Show")

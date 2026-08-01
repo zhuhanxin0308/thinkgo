@@ -12,7 +12,7 @@ import (
 type neo4jOperationExecutor interface {
 	Collect(context.Context, neo4j.AccessMode, string, map[string]interface{}) ([]*neo4j.Record, error)
 	Single(context.Context, neo4j.AccessMode, string, map[string]interface{}) (*neo4j.Record, error)
-	Execute(context.Context, neo4j.AccessMode, string, map[string]interface{}) (int64, error)
+	Execute(context.Context, neo4j.AccessMode, string, map[string]interface{}) (DeleteResult, error)
 	Close(context.Context) error
 }
 
@@ -48,20 +48,40 @@ func (executor *neo4jDriverExecutor) session(ctx context.Context, mode neo4j.Acc
 	return session, nil
 }
 
+func runNeoManaged(ctx context.Context, session neo4j.SessionWithContext, mode neo4j.AccessMode, work neo4j.ManagedTransactionWork) (interface{}, error) {
+	if session == nil || work == nil {
+		return nil, ErrDatabaseUnavailable
+	}
+	if mode == neo4j.AccessModeRead {
+		return session.ExecuteRead(ctx, work)
+	}
+	return session.ExecuteWrite(ctx, work)
+}
+
 func (executor *neo4jDriverExecutor) Collect(ctx context.Context, mode neo4j.AccessMode, cypher string, params map[string]interface{}) (records []*neo4j.Record, resultErr error) {
 	session, err := executor.session(ctx, mode)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { resultErr = errors.Join(resultErr, closeNeo4jSession(ctx, session)) }()
-	result, err := session.Run(ctx, cypher, params)
+	value, err := runNeoManaged(ctx, session, mode, func(transaction neo4j.ManagedTransaction) (interface{}, error) {
+		result, err := transaction.Run(ctx, cypher, cloneDatabaseMap(params))
+		if err != nil {
+			return nil, err
+		}
+		if result == nil {
+			return nil, fmt.Errorf("%w: Neo4j 驱动返回空结果", ErrInvalidDatabaseRow)
+		}
+		return result.Collect(ctx)
+	})
 	if err != nil {
 		return nil, err
 	}
-	if result == nil {
-		return nil, fmt.Errorf("%w: Neo4j 驱动返回空结果", ErrInvalidDatabaseRow)
+	records, ok := value.([]*neo4j.Record)
+	if !ok {
+		return nil, fmt.Errorf("%w: Neo4j managed Collect 结果类型为 %T", ErrInvalidDatabaseRow, value)
 	}
-	return result.Collect(ctx)
+	return records, nil
 }
 
 func (executor *neo4jDriverExecutor) Single(ctx context.Context, mode neo4j.AccessMode, cypher string, params map[string]interface{}) (record *neo4j.Record, resultErr error) {
@@ -70,41 +90,67 @@ func (executor *neo4jDriverExecutor) Single(ctx context.Context, mode neo4j.Acce
 		return nil, err
 	}
 	defer func() { resultErr = errors.Join(resultErr, closeNeo4jSession(ctx, session)) }()
-	result, err := session.Run(ctx, cypher, params)
+	value, err := runNeoManaged(ctx, session, mode, func(transaction neo4j.ManagedTransaction) (interface{}, error) {
+		result, err := transaction.Run(ctx, cypher, cloneDatabaseMap(params))
+		if err != nil {
+			return nil, err
+		}
+		if result == nil {
+			return nil, fmt.Errorf("%w: Neo4j 驱动返回空结果", ErrInvalidDatabaseRow)
+		}
+		return result.Single(ctx)
+	})
 	if err != nil {
 		return nil, err
 	}
-	if result == nil {
-		return nil, fmt.Errorf("%w: Neo4j 驱动返回空结果", ErrInvalidDatabaseRow)
+	record, ok := value.(*neo4j.Record)
+	if !ok {
+		return nil, fmt.Errorf("%w: Neo4j managed Single 结果类型为 %T", ErrInvalidDatabaseRow, value)
 	}
-	return result.Single(ctx)
+	return record, nil
 }
 
-func (executor *neo4jDriverExecutor) Execute(ctx context.Context, mode neo4j.AccessMode, cypher string, params map[string]interface{}) (affected int64, resultErr error) {
+func (executor *neo4jDriverExecutor) Execute(ctx context.Context, mode neo4j.AccessMode, cypher string, params map[string]interface{}) (operationResult DeleteResult, resultErr error) {
 	session, err := executor.session(ctx, mode)
 	if err != nil {
-		return 0, err
+		return DeleteResult{}, err
 	}
 	defer func() { resultErr = errors.Join(resultErr, closeNeo4jSession(ctx, session)) }()
-	result, err := session.Run(ctx, cypher, params)
+	value, err := runNeoManaged(ctx, session, mode, func(transaction neo4j.ManagedTransaction) (interface{}, error) {
+		result, err := transaction.Run(ctx, cypher, cloneDatabaseMap(params))
+		if err != nil {
+			return nil, err
+		}
+		if result == nil {
+			return nil, fmt.Errorf("%w: Neo4j 驱动返回空结果", ErrInvalidDatabaseRow)
+		}
+		summary, err := result.Consume(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if summary == nil || summary.Counters() == nil {
+			return nil, fmt.Errorf("%w: Neo4j 执行结果缺少统计信息", ErrInvalidDatabaseRow)
+		}
+		nodesDeleted := summary.Counters().NodesDeleted()
+		relationshipsDeleted := summary.Counters().RelationshipsDeleted()
+		if nodesDeleted < 0 || relationshipsDeleted < 0 {
+			return nil, fmt.Errorf("%w: Neo4j 删除数量非法", ErrInvalidAggregateValue)
+		}
+		deleteResult := DeleteResult{
+			Deleted:             int64(nodesDeleted),
+			RelatedDeleted:      int64(relationshipsDeleted),
+			RelatedDeletedKnown: true,
+		}
+		return deleteResult, deleteResult.Validate()
+	})
 	if err != nil {
-		return 0, err
+		return DeleteResult{}, err
 	}
-	if result == nil {
-		return 0, fmt.Errorf("%w: Neo4j 驱动返回空结果", ErrInvalidDatabaseRow)
+	operationResult, ok := value.(DeleteResult)
+	if !ok {
+		return DeleteResult{}, fmt.Errorf("%w: Neo4j managed Execute 结果类型为 %T", ErrInvalidDatabaseRow, value)
 	}
-	summary, err := result.Consume(ctx)
-	if err != nil {
-		return 0, err
-	}
-	if summary == nil || summary.Counters() == nil {
-		return 0, fmt.Errorf("%w: Neo4j 执行结果缺少统计信息", ErrInvalidDatabaseRow)
-	}
-	count := summary.Counters().NodesDeleted()
-	if count < 0 {
-		return 0, fmt.Errorf("%w: Neo4j 影响数量非法", ErrInvalidAggregateValue)
-	}
-	return int64(count), nil
+	return operationResult, nil
 }
 
 func (executor *neo4jDriverExecutor) Close(ctx context.Context) error {

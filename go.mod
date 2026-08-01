@@ -3,6 +3,8 @@ module thinkgo
 go 1.26.5
 
 require (
+	github.com/HdrHistogram/hdrhistogram-go v1.3.0
+	github.com/alicebob/miniredis/v2 v2.37.0
 	github.com/andybalholm/brotli v1.2.2
 	github.com/go-sql-driver/mysql v1.10.0
 	github.com/godror/godror v0.51.0
@@ -40,6 +42,7 @@ require (
 	github.com/xdg-go/stringprep v1.0.4 // indirect
 	github.com/xyproto/randomstring v1.2.0 // indirect
 	github.com/youmark/pkcs8 v0.0.0-20240726163527-a2c0da244d78 // indirect
+	github.com/yuin/gopher-lua v1.1.1 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
 	go.uber.org/mock v0.6.0 // indirect
 	golang.org/x/crypto v0.54.0 // indirect

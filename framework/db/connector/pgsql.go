@@ -24,7 +24,8 @@ func (p *Pgsql) Connect(config db.Config) (db.Connection, error) {
 // buildPgsqlDSN 使用 URL 结构构造连接串，避免账号密码中的特殊字符篡改参数。
 func buildPgsqlDSN(config db.Config) string {
 	query := url.Values{}
-	query.Set("sslmode", "require")
+	// verify-full 同时校验证书链和主机名，避免 lib/pq 的 require 模式退化为跳过主机名校验。
+	query.Set("sslmode", "verify-full")
 	for key, value := range config.Params {
 		query.Set(key, value)
 	}
@@ -37,8 +38,4 @@ func buildPgsqlDSN(config db.Config) string {
 		RawQuery: query.Encode(),
 	}
 	return dsn.String()
-}
-
-func init() {
-	mustRegisterConnector("pgsql", &Pgsql{})
 }

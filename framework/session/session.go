@@ -2,6 +2,7 @@ package session
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
@@ -41,11 +42,12 @@ type Session struct {
 	mu     sync.RWMutex
 	saveMu sync.Mutex
 
-	config Config
-	driver Driver
-	logger Logger
-	cookie *cookie.Cookie
-	now    func() time.Time
+	config         Config
+	driver         Driver
+	logger         Logger
+	cookie         *cookie.Cookie
+	now            func() time.Time
+	requestContext context.Context
 
 	requestState  bool
 	id            string
@@ -106,10 +108,11 @@ func NewSessionWithConfig(config Config, driver Driver, cookieFactory *cookie.Co
 		return nil, ErrInvalidSessionDependency
 	}
 	return &Session{
-		config: config,
-		driver: driver,
-		cookie: cookieFactory,
-		now:    time.Now,
+		config:         config,
+		driver:         driver,
+		cookie:         cookieFactory,
+		now:            time.Now,
+		requestContext: context.Background(),
 	}, nil
 }
 
@@ -131,8 +134,28 @@ func (s *Session) SetLogger(logger Logger) {
 	s.mu.Unlock()
 }
 
+// Close 关闭底层 Session 驱动；不支持关闭的进程内驱动保持幂等空操作。
+func (s *Session) Close() error {
+	if s == nil || isNilSessionDependency(s.driver) {
+		return nil
+	}
+	if closer, ok := s.driver.(interface{ Close() error }); ok {
+		return closer.Close()
+	}
+	return nil
+}
+
 // NewRequestSession 创建请求级 Session，并显式传播 Cookie、存储和解码错误。
 func (s *Session) NewRequestSession(req *http.Request, writer http.ResponseWriter) (*Session, error) {
+	return s.newRequestSession(req, writer, false, false)
+}
+
+// NewRequestSessionWithSecure 创建请求级 Session，并使用调用方已经完成可信代理校验的协议结论。
+func (s *Session) NewRequestSessionWithSecure(req *http.Request, writer http.ResponseWriter, secure bool) (*Session, error) {
+	return s.newRequestSession(req, writer, secure, true)
+}
+
+func (s *Session) newRequestSession(req *http.Request, writer http.ResponseWriter, secure, secureSet bool) (*Session, error) {
 	if s == nil || req == nil || isNilSessionDependency(s.driver) || s.cookie == nil {
 		return nil, ErrInvalidSessionDependency
 	}
@@ -143,20 +166,27 @@ func (s *Session) NewRequestSession(req *http.Request, writer http.ResponseWrite
 	if now == nil {
 		now = time.Now
 	}
-	requestCookie, err := s.cookie.ForRequest(req, writer)
+	var requestCookie *cookie.Cookie
+	var err error
+	if secureSet {
+		requestCookie, err = s.cookie.ForRequestWithSecure(req, writer, secure)
+	} else {
+		requestCookie, err = s.cookie.ForRequest(req, writer)
+	}
 	if err != nil {
 		return nil, errors.Join(ErrSessionCookie, err)
 	}
 	requestSession := &Session{
-		config:        s.config,
-		driver:        s.driver,
-		logger:        logger,
-		cookie:        requestCookie,
-		now:           now,
-		requestState:  true,
-		data:          make(map[string]json.RawMessage),
-		dataJSONBytes: 2,
-		mutations:     make(map[string]sessionMutation),
+		config:         s.config,
+		driver:         s.driver,
+		logger:         logger,
+		cookie:         requestCookie,
+		now:            now,
+		requestContext: requestContextForHTTP(req),
+		requestState:   true,
+		data:           make(map[string]json.RawMessage),
+		dataJSONBytes:  2,
+		mutations:      make(map[string]sessionMutation),
 	}
 	if err = requestSession.bootstrap(); err != nil {
 		return nil, err
@@ -199,6 +229,9 @@ func (s *Session) Set(name string, value interface{}) error {
 		return ErrSessionBusy
 	}
 	previous, existed := s.data[name]
+	if existed && bytes.Equal(previous, encoded) && s.config.Expire <= 0 {
+		return nil
+	}
 	nextDataBytes := s.dataJSONBytes
 	newEntryBytes := sessionJSONKeyBytes(name) + 1 + len(encoded)
 	if existed {
@@ -367,7 +400,7 @@ func (s *Session) Regenerate() error {
 	}
 	merged := s.snapshotData()
 	if snapshot.Persisted {
-		err = s.driver.Update(snapshot.ID, func(current string, found bool) (string, bool, error) {
+		err = s.updateDriver(snapshot.ID, func(current string, found bool) (string, bool, error) {
 			base := make(map[string]json.RawMessage)
 			if found {
 				envelope, decodeErr := decodeSessionEnvelope(current, s.config.MaxDataBytes)
@@ -424,7 +457,7 @@ func (s *Session) Destroy() error {
 	s.mu.Unlock()
 	snapshot := s.snapshotForSave()
 	if snapshot.Persisted {
-		err := s.driver.Update(snapshot.ID, func(current string, found bool) (string, bool, error) {
+		err := s.updateDriver(snapshot.ID, func(current string, found bool) (string, bool, error) {
 			if found {
 				envelope, decodeErr := decodeSessionEnvelope(current, s.config.MaxDataBytes)
 				if decodeErr != nil {
@@ -495,7 +528,8 @@ func (s *Session) StartGarbageCollector(interval time.Duration) (stop func()) {
 			select {
 			case <-ticker.C:
 				if _, err := s.GC(); err != nil {
-					s.reportError("Session 定时回收失败", err, nil)
+					// 后台回收没有调用方可返回错误，统一交给 Session 日志记录。
+					_ = s.reportError("Session 定时回收失败", err, nil)
 				}
 			case <-done:
 				return
@@ -525,7 +559,7 @@ func (s *Session) bootstrap() error {
 		s.invalidCookie = true
 		return s.assignFreshID()
 	}
-	content, stored, err := s.driver.Read(id)
+	content, stored, err := s.readDriver(id)
 	if err != nil {
 		return s.reportError("读取 Session 存储失败", err, map[string]interface{}{"session_id": id})
 	}
@@ -546,6 +580,35 @@ func (s *Session) bootstrap() error {
 	s.dataJSONBytes = sessionDataJSONSize(envelope.Data)
 	s.persisted = true
 	return nil
+}
+
+// requestContextForHTTP 读取请求上下文，并为非 HTTP 场景提供稳定后台上下文。
+func requestContextForHTTP(req *http.Request) context.Context {
+	if req == nil || req.Context() == nil {
+		return context.Background()
+	}
+	return req.Context()
+}
+
+func (s *Session) context() context.Context {
+	if s == nil || s.requestContext == nil {
+		return context.Background()
+	}
+	return s.requestContext
+}
+
+func (s *Session) readDriver(id string) (string, bool, error) {
+	if contextual, ok := s.driver.(ContextualReader); ok {
+		return contextual.ReadContext(s.context(), id)
+	}
+	return s.driver.Read(id)
+}
+
+func (s *Session) updateDriver(id string, update func(data string, found bool) (next string, remove bool, err error)) error {
+	if contextual, ok := s.driver.(ContextualUpdater); ok {
+		return contextual.UpdateContext(s.context(), id, update)
+	}
+	return s.driver.Update(id, update)
 }
 
 func (s *Session) assignFreshID() error {
@@ -574,7 +637,7 @@ func (s *Session) dirtySnapshot(snapshot saveSnapshot) bool {
 
 func (s *Session) persistSnapshot(snapshot saveSnapshot) (map[string]json.RawMessage, error) {
 	var merged map[string]json.RawMessage
-	err := s.driver.Update(snapshot.ID, func(current string, found bool) (string, bool, error) {
+	err := s.updateDriver(snapshot.ID, func(current string, found bool) (string, bool, error) {
 		if !snapshot.Persisted && found {
 			return "", false, ErrSessionIDCollision
 		}

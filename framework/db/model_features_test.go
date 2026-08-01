@@ -1,7 +1,9 @@
 package db
 
 import (
+	"reflect"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -132,6 +134,36 @@ func TestModelSetterTransformsOnUpdate(t *testing.T) {
 	}
 }
 
+// TestModelSetterSnapshotIsSortedAndConcurrentReadSafe 验证修改器快照按字段稳定排序且可并发读取。
+func TestModelSetterSnapshotIsSortedAndConcurrentReadSafe(t *testing.T) {
+	model := NewModel(NewDB(&mockConnection{}), "users")
+	for _, field := range []string{"zeta", "alpha", "middle"} {
+		field := field
+		if err := model.Setter(field, func(value interface{}, _ map[string]interface{}) interface{} {
+			return field + ":" + value.(string)
+		}); err != nil {
+			t.Fatalf("注册修改器 %q 失败: %v", field, err)
+		}
+	}
+	if got := []string{model.setterSnapshot[0].field, model.setterSnapshot[1].field, model.setterSnapshot[2].field}; !reflect.DeepEqual(got, []string{"alpha", "middle", "zeta"}) {
+		t.Fatalf("修改器快照排序不稳定: %v", got)
+	}
+
+	var group sync.WaitGroup
+	for range 16 {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			data := map[string]interface{}{"alpha": "a", "middle": "m", "zeta": "z"}
+			model.applySetters(data)
+			if data["alpha"] != "alpha:a" || data["middle"] != "middle:m" || data["zeta"] != "zeta:z" {
+				t.Errorf("并发读取修改器快照结果错误: %#v", data)
+			}
+		}()
+	}
+	group.Wait()
+}
+
 // ==================== 搜索器测试 ====================
 
 // TestModelSearcher 验证搜索器能正确应用查询条件。
@@ -140,11 +172,11 @@ func TestModelSearcher(t *testing.T) {
 	database := NewDB(conn)
 
 	model := NewModel(database, "users")
-	model.Searcher("name", func(q *Query, value interface{}, data map[string]interface{}) {
-		q.Where("name LIKE ?", "%"+value.(string)+"%")
+	model.Searcher("name", func(q *Query, value interface{}, data map[string]interface{}) *Query {
+		return q.Where("name LIKE ?", "%"+value.(string)+"%")
 	})
-	model.Searcher("status", func(q *Query, value interface{}, data map[string]interface{}) {
-		q.Where("status = ?", value)
+	model.Searcher("status", func(q *Query, value interface{}, data map[string]interface{}) *Query {
+		return q.Where("status = ?", value)
 	})
 
 	q := model.WithSearch(
@@ -167,8 +199,8 @@ func TestModelSearcherIgnoresUnregistered(t *testing.T) {
 	database := NewDB(conn)
 
 	model := NewModel(database, "users")
-	model.Searcher("name", func(q *Query, value interface{}, data map[string]interface{}) {
-		q.Where("name = ?", value)
+	model.Searcher("name", func(q *Query, value interface{}, data map[string]interface{}) *Query {
+		return q.Where("name = ?", value)
 	})
 
 	q := model.WithSearch(
@@ -191,8 +223,8 @@ func TestModelSearcherIgnoresMissingData(t *testing.T) {
 	database := NewDB(conn)
 
 	model := NewModel(database, "users")
-	model.Searcher("name", func(q *Query, value interface{}, data map[string]interface{}) {
-		q.Where("name = ?", value)
+	model.Searcher("name", func(q *Query, value interface{}, data map[string]interface{}) *Query {
+		return q.Where("name = ?", value)
 	})
 
 	q := model.WithSearch(

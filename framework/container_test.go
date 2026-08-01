@@ -11,6 +11,14 @@ import (
 	"time"
 )
 
+type containerConcreteError struct {
+	message string
+}
+
+func (err containerConcreteError) Error() string {
+	return err.message
+}
+
 // TestContainerBindAndMake 验证基本绑定和解析
 func TestContainerBindAndMake(t *testing.T) {
 	c := NewContainer()
@@ -480,6 +488,9 @@ func TestContainerFactoryReturnContract(t *testing.T) {
 		match   string
 	}{
 		{name: "returned_error", factory: func() (interface{}, error) { return nil, expected }, match: expected.Error()},
+		{name: "concrete_error", factory: func() (interface{}, containerConcreteError) {
+			return nil, containerConcreteError{message: "concrete dependency unavailable"}
+		}, match: "concrete dependency unavailable"},
 		{name: "second_value_not_error", factory: func() (interface{}, string) { return nil, "bad" }, match: "error"},
 		{name: "too_many_results", factory: func() (int, int, int) { return 1, 2, 3 }, match: "1 或 2"},
 	}

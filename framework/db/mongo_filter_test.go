@@ -2,12 +2,153 @@ package db
 
 import (
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
+
+func TestMongoPrimaryKeyObjectIDRoundTripOnly(t *testing.T) {
+	id := bson.NewObjectID()
+	connection := &MongoConnection{}
+	request := newSelectRequest(
+		"users",
+		"name",
+		mustTestPredicate(t, []string{"_id = ?"}, []interface{}{id.Hex()}),
+		"_id",
+		"",
+		0,
+		0,
+		nil,
+	)
+	filter, findOptions, err := connection.mongoFindParts(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filter["_id"] != id {
+		t.Fatalf("declared primary key was not converted to ObjectID: %#v", filter)
+	}
+	resolved := &options.FindOptions{}
+	for _, apply := range findOptions.List() {
+		if err := apply(resolved); err != nil {
+			t.Fatal(err)
+		}
+	}
+	projection, ok := resolved.Projection.(bson.M)
+	if !ok || projection["name"] != 1 || projection["_id"] != 0 {
+		t.Fatalf("explicit projection must exclude unselected _id: %#v", resolved.Projection)
+	}
+
+	plainRequest := newSelectRequest(
+		"users",
+		"*",
+		mustTestPredicate(t, []string{"external_code = ?"}, []interface{}{id.Hex()}),
+		"_id",
+		"",
+		0,
+		0,
+		nil,
+	)
+	plainFilter, _, err := connection.mongoFindParts(plainRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plainFilter["external_code"] != id.Hex() {
+		t.Fatalf("ordinary string field was incorrectly converted: %#v", plainFilter)
+	}
+
+	secondID := bson.NewObjectID()
+	inRequest := newSelectRequest(
+		"users",
+		"*",
+		mustTestPredicate(t, []string{"(_id = ? OR _id IN (?, ?))"}, []interface{}{id.Hex(), id.Hex(), secondID.Hex()}),
+		"_id",
+		"",
+		0,
+		0,
+		nil,
+	)
+	inFilter, _, err := connection.mongoFindParts(inRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	alternatives, ok := inFilter["$or"].([]bson.M)
+	if !ok || len(alternatives) != 2 || alternatives[0]["_id"] != id {
+		t.Fatalf("nested primary-key conditions were not converted: %#v", inFilter)
+	}
+	condition, ok := alternatives[1]["_id"].(bson.M)
+	values, valuesOK := condition["$in"].([]interface{})
+	if !ok || !valuesOK || len(values) != 2 || values[0] != id || values[1] != secondID {
+		t.Fatalf("primary-key IN values were not converted: %#v", inFilter)
+	}
+
+	invalidRequest := newSelectRequest(
+		"users", "*", mustTestPredicate(t, []string{"_id = ?"}, []interface{}{"not-an-object-id"}), "_id", "", 0, 0, nil,
+	)
+	if _, _, err := connection.mongoFindParts(invalidRequest); !errors.Is(err, ErrInvalidQuery) {
+		t.Fatalf("invalid primary-key text must return ErrInvalidQuery: %v", err)
+	}
+}
+
+func TestMongoIntrinsicIDRoundTripsWhenQueryUsesDefaultPrimaryKey(t *testing.T) {
+	id := bson.NewObjectID()
+	connection := &MongoConnection{}
+	filter, err := connection.buildFilterWithPrimaryKey(
+		[]string{"_id = ?"},
+		[]interface{}{id.Hex()},
+		"id",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filter["_id"] != id {
+		t.Fatalf("Mongo intrinsic _id was not restored to ObjectID: %#v", filter)
+	}
+	row := normalizeMongoDocument(bson.M{"_id": id, "owner_id": id}, "id")
+	if row["_id"] != id.Hex() || row["owner_id"] != id {
+		t.Fatalf("Mongo intrinsic _id normalization escaped its path: %#v", row)
+	}
+}
+
+func TestMongoNormalizationOnlyStringifiesPrimaryKey(t *testing.T) {
+	id := bson.NewObjectID()
+	ownerID := bson.NewObjectID()
+	nestedID := bson.NewObjectID()
+	row := normalizeMongoDocument(bson.M{
+		"_id":      id,
+		"owner_id": ownerID,
+		"profile":  bson.M{"avatar_id": nestedID},
+	}, "_id")
+	if row["_id"] != id.Hex() || row["owner_id"] != ownerID {
+		t.Fatalf("ObjectID normalization escaped the primary-key path: %#v", row)
+	}
+	profile, ok := row["profile"].(map[string]interface{})
+	if !ok || !reflect.DeepEqual(profile["avatar_id"], nestedID) {
+		t.Fatalf("nested ObjectID must retain its BSON type: %#v", row["profile"])
+	}
+}
+
+// TestMongoInPlaceNormalizationPreservesPublicShape 验证原地规范化不会改变对外字段语义。
+func TestMongoInPlaceNormalizationPreservesPublicShape(t *testing.T) {
+	id := bson.NewObjectID()
+	document := bson.M{
+		"_id":  id,
+		"name": "Ada",
+	}
+	row := normalizeMongoDocumentInPlaceWithAliasInLocation(document, "_id", "id", time.Local)
+	if row["id"] != id.Hex() || row["name"] != "Ada" {
+		t.Fatalf("原地规范化结果错误: %#v", row)
+	}
+	if _, exists := row["_id"]; exists {
+		t.Fatalf("逻辑主键结果不应泄露存储键: %#v", row)
+	}
+	if _, exists := document["_id"]; exists {
+		t.Fatalf("原地规范化后存储键应被移除: %#v", document)
+	}
+}
 
 // TestMongoBuildFilterRejectsUnparseable 验证无法解析的条件会返回错误，
 // 而非静默丢弃导致空 filter 引发全表更新/删除。

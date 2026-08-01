@@ -26,9 +26,131 @@ type Neo4jConnection struct {
 	closeOnce        sync.Once
 	closeErr         error
 	executor         neo4jOperationExecutor
+	locationMu       sync.RWMutex
+	location         *time.Location
+	identity         ConnectionID
+	identityOnce     sync.Once
 }
 
-var _ ContextualConnection = (*Neo4jConnection)(nil)
+func (c *Neo4jConnection) ConnectionID() ConnectionID {
+	if c == nil {
+		return ""
+	}
+	c.identityOnce.Do(func() { c.identity = NewConnectionID("neo4j") })
+	return c.identity
+}
+
+var (
+	_ Connection              = (*Neo4jConnection)(nil)
+	_ LocationAwareConnection = (*Neo4jConnection)(nil)
+	_ CapabilityProvider      = (*Neo4jConnection)(nil)
+)
+
+func (c *Neo4jConnection) Capabilities() DriverCapabilities {
+	return DriverCapabilities{
+		InsertIDKinds:      []InsertIDKind{InsertIDString, InsertIDInteger, InsertIDDynamic},
+		MatchedCountKnown:  true,
+		ModifiedCountKnown: false,
+	}
+}
+
+// SetLocation 设置 Neo4j 原生时间参数和查询结果使用的应用时区。
+func (c *Neo4jConnection) SetLocation(location *time.Location) {
+	if c == nil {
+		return
+	}
+	if location == nil {
+		location = time.Local
+	}
+	c.locationMu.Lock()
+	c.location = location
+	c.locationMu.Unlock()
+}
+
+// Location 返回 Neo4j 连接使用的应用时区。
+func (c *Neo4jConnection) Location() *time.Location {
+	if c == nil {
+		return time.Local
+	}
+	c.locationMu.RLock()
+	location := c.location
+	c.locationMu.RUnlock()
+	if location == nil {
+		return time.Local
+	}
+	return location
+}
+
+func (c *Neo4jConnection) Select(parent context.Context, request SelectRequest) ([]map[string]interface{}, error) {
+	where, args, err := request.Predicate().compileNonSQL()
+	if err != nil {
+		return nil, err
+	}
+	if request.Aggregate() != nil {
+		return nil, fmt.Errorf("%w: Neo4j aggregate expressions require an explicit Cypher projection", ErrInvalidQuery)
+	}
+	return c.selectRequest(parent, request.Table(), request.Fields(), where, args, request.Order(), request.Limit(), request.Offset())
+}
+
+func (c *Neo4jConnection) Insert(parent context.Context, request InsertRequest) (InsertResult, error) {
+	data := request.Data()
+	var id interface{}
+	if request.WantsID() {
+		var exists bool
+		id, exists = data[request.PrimaryKey()]
+		if !exists || isZeroDBValue(id) {
+			return InsertResult{}, ErrInsertIDUnavailable
+		}
+	}
+	affected, err := c.createNode(parent, request.Table(), data)
+	if err != nil {
+		return InsertResult{}, err
+	}
+	operationResult := InsertResult{Affected: affected, Data: data}
+	if request.WantsID() {
+		operationResult.ID = id
+		operationResult.IDKnown = true
+	}
+	return operationResult, operationResult.Validate()
+}
+
+func (c *Neo4jConnection) Update(parent context.Context, request UpdateRequest) (UpdateResult, error) {
+	where, args, err := request.Predicate().compileNonSQL()
+	if err != nil {
+		return UpdateResult{}, err
+	}
+	matched, err := c.updateNodes(parent, request.Table(), request.Data(), where, args)
+	if err != nil {
+		return UpdateResult{}, err
+	}
+	operationResult := UpdateResult{
+		Affected:     matched,
+		Matched:      matched,
+		MatchedKnown: true,
+		Data:         request.Data(),
+	}
+	return operationResult, operationResult.Validate()
+}
+
+func (c *Neo4jConnection) Delete(parent context.Context, request DeleteRequest) (DeleteResult, error) {
+	where, args, err := request.Predicate().compileNonSQL()
+	if err != nil {
+		return DeleteResult{}, err
+	}
+	result, err := c.deleteNodes(parent, request.Table(), where, args, request.DetachRelations())
+	if err != nil {
+		return DeleteResult{}, err
+	}
+	return result, result.Validate()
+}
+
+func (c *Neo4jConnection) Count(parent context.Context, request CountRequest) (int64, error) {
+	where, args, err := request.Predicate().compileNonSQL()
+	if err != nil {
+		return 0, err
+	}
+	return c.countNodes(parent, request.Table(), where, args)
+}
 
 func (c *Neo4jConnection) validate() error {
 	if c == nil || (c.Driver == nil && c.executor == nil) {
@@ -70,11 +192,16 @@ func cypherIdentifier(name string) (string, error) {
 	return "`" + name + "`", nil
 }
 
-func (c *Neo4jConnection) Select(table, fields string, where []string, args []interface{}, order string, limit, offset int) ([]map[string]interface{}, error) {
-	return c.SelectContext(context.Background(), table, fields, where, args, order, limit, offset)
+func validateNeo4jProperties(data map[string]interface{}) error {
+	for key := range data {
+		if _, err := cypherIdentifier(key); err != nil {
+			return fmt.Errorf("%w: 非法 Neo4j 属性 %q: %v", ErrInvalidQuery, key, err)
+		}
+	}
+	return nil
 }
 
-func (c *Neo4jConnection) SelectContext(parent context.Context, table, fields string, where []string, args []interface{}, order string, limit, offset int) ([]map[string]interface{}, error) {
+func (c *Neo4jConnection) selectRequest(parent context.Context, table, fields string, clauses []string, args []interface{}, order string, limit, offset int) ([]map[string]interface{}, error) {
 	ctx, cancel, err := c.operationContext(parent)
 	if err != nil {
 		return nil, err
@@ -88,7 +215,7 @@ func (c *Neo4jConnection) SelectContext(parent context.Context, table, fields st
 		return nil, err
 	}
 	cypher := fmt.Sprintf("MATCH (n:%s)", label)
-	whereClause, params, err := c.buildCypherWhere(where, args)
+	whereClause, params, err := c.buildCypherWhere(clauses, args)
 	if err != nil {
 		return nil, err
 	}
@@ -158,7 +285,7 @@ func (c *Neo4jConnection) SelectContext(parent context.Context, table, fields st
 				if !exists {
 					return nil, fmt.Errorf("%w: Neo4j 第 %d 行缺少字段 %q", ErrInvalidDatabaseRow, index, key)
 				}
-				row[key] = value
+				row[key] = normalizeNeo4jValueInLocation(value, c.Location())
 			}
 			rows = append(rows, row)
 			continue
@@ -170,9 +297,63 @@ func (c *Neo4jConnection) SelectContext(parent context.Context, table, fields st
 		if !ok {
 			return nil, fmt.Errorf("%w: Neo4j 返回值不是节点", ErrInvalidDatabaseRow)
 		}
-		rows = append(rows, cloneDatabaseMap(node.Props))
+		rows = append(rows, normalizeNeo4jMapInLocation(node.Props, c.Location()))
 	}
 	return rows, nil
+}
+
+// normalizeNeo4jMapInLocation 递归规范化节点属性中的时间值。
+func normalizeNeo4jMapInLocation(source map[string]interface{}, location *time.Location) map[string]interface{} {
+	if source == nil {
+		return nil
+	}
+	result := make(map[string]interface{}, len(source))
+	for key, value := range source {
+		result[key] = normalizeNeo4jValueInLocation(value, location)
+	}
+	return result
+}
+
+// normalizeNeo4jValueInLocation 将 Neo4j 的有时区和无时区时间统一暴露为应用时区下的 time.Time。
+func normalizeNeo4jValueInLocation(value interface{}, location *time.Location) interface{} {
+	if location == nil {
+		location = time.Local
+	}
+	switch typed := value.(type) {
+	case time.Time:
+		return typed.In(location)
+	case *time.Time:
+		if typed == nil {
+			return (*time.Time)(nil)
+		}
+		converted := typed.In(location)
+		return &converted
+	case neo4j.Date:
+		return neo4jWallClockTime(time.Time(typed), location)
+	case neo4j.LocalDateTime:
+		return neo4jWallClockTime(time.Time(typed), location)
+	case neo4j.Time:
+		return time.Time(typed).In(location)
+	case neo4j.LocalTime:
+		return neo4jWallClockTime(time.Time(typed), location)
+	case map[string]interface{}:
+		return normalizeNeo4jMapInLocation(typed, location)
+	case []interface{}:
+		result := make([]interface{}, len(typed))
+		for index, item := range typed {
+			result[index] = normalizeNeo4jValueInLocation(item, location)
+		}
+		return result
+	default:
+		return value
+	}
+}
+
+func neo4jWallClockTime(value time.Time, location *time.Location) time.Time {
+	return time.Date(
+		value.Year(), value.Month(), value.Day(),
+		value.Hour(), value.Minute(), value.Second(), value.Nanosecond(), location,
+	)
 }
 
 func parseCypherProjection(raw string) (field, alias string, err error) {
@@ -191,11 +372,7 @@ func parseCypherProjection(raw string) (field, alias string, err error) {
 	return field, alias, err
 }
 
-func (c *Neo4jConnection) Insert(table string, data map[string]interface{}) (int64, error) {
-	return c.InsertContext(context.Background(), table, data)
-}
-
-func (c *Neo4jConnection) InsertContext(parent context.Context, table string, data map[string]interface{}) (int64, error) {
+func (c *Neo4jConnection) createNode(parent context.Context, table string, data map[string]interface{}) (int64, error) {
 	ctx, cancel, err := c.operationContext(parent)
 	if err != nil {
 		return 0, err
@@ -204,7 +381,7 @@ func (c *Neo4jConnection) InsertContext(parent context.Context, table string, da
 	if len(data) == 0 {
 		return 0, fmt.Errorf("%w: Neo4j 插入数据不能为空", ErrInvalidQuery)
 	}
-	if err := validateDataKeys(data); err != nil {
+	if err := validateNeo4jProperties(data); err != nil {
 		return 0, fmt.Errorf("%w: 非法 Neo4j 属性: %w", ErrInvalidQuery, err)
 	}
 	label, err := cypherIdentifier(table)
@@ -218,12 +395,8 @@ func (c *Neo4jConnection) InsertContext(parent context.Context, table string, da
 	return cypherCount(record)
 }
 
-func (c *Neo4jConnection) Update(table string, data map[string]interface{}, where []string, args []interface{}) (int64, error) {
-	return c.UpdateContext(context.Background(), table, data, where, args)
-}
-
-func (c *Neo4jConnection) UpdateContext(parent context.Context, table string, data map[string]interface{}, where []string, args []interface{}) (int64, error) {
-	if len(where) == 0 {
+func (c *Neo4jConnection) updateNodes(parent context.Context, table string, data map[string]interface{}, clauses []string, args []interface{}) (int64, error) {
+	if len(clauses) == 0 {
 		return 0, ErrUnsafeFullTableMutation
 	}
 	ctx, cancel, err := c.operationContext(parent)
@@ -234,14 +407,14 @@ func (c *Neo4jConnection) UpdateContext(parent context.Context, table string, da
 	if len(data) == 0 {
 		return 0, fmt.Errorf("%w: Neo4j 更新数据不能为空", ErrInvalidQuery)
 	}
-	if err := validateDataKeys(data); err != nil {
+	if err := validateNeo4jProperties(data); err != nil {
 		return 0, fmt.Errorf("%w: 非法 Neo4j 属性: %w", ErrInvalidQuery, err)
 	}
 	label, err := cypherIdentifier(table)
 	if err != nil {
 		return 0, err
 	}
-	whereClause, params, err := c.buildCypherWhere(where, args)
+	whereClause, params, err := c.buildCypherWhere(clauses, args)
 	if err != nil {
 		return 0, err
 	}
@@ -254,36 +427,32 @@ func (c *Neo4jConnection) UpdateContext(parent context.Context, table string, da
 	return cypherCount(record)
 }
 
-func (c *Neo4jConnection) Delete(table string, where []string, args []interface{}) (int64, error) {
-	return c.DeleteContext(context.Background(), table, where, args)
-}
-
-func (c *Neo4jConnection) DeleteContext(parent context.Context, table string, where []string, args []interface{}) (int64, error) {
-	if len(where) == 0 {
-		return 0, ErrUnsafeFullTableMutation
+func (c *Neo4jConnection) deleteNodes(parent context.Context, table string, clauses []string, args []interface{}, detachRelations bool) (DeleteResult, error) {
+	if len(clauses) == 0 {
+		return DeleteResult{}, ErrUnsafeFullTableMutation
 	}
 	ctx, cancel, err := c.operationContext(parent)
 	if err != nil {
-		return 0, err
+		return DeleteResult{}, err
 	}
 	defer cancel()
 	label, err := cypherIdentifier(table)
 	if err != nil {
-		return 0, err
+		return DeleteResult{}, err
 	}
-	whereClause, params, err := c.buildCypherWhere(where, args)
+	whereClause, params, err := c.buildCypherWhere(clauses, args)
 	if err != nil {
-		return 0, err
+		return DeleteResult{}, err
 	}
-	cypher := fmt.Sprintf("MATCH (n:%s) WHERE %s DETACH DELETE n", label, whereClause)
+	deleteClause := "DELETE n"
+	if detachRelations {
+		deleteClause = "DETACH DELETE n"
+	}
+	cypher := fmt.Sprintf("MATCH (n:%s) WHERE %s %s", label, whereClause, deleteClause)
 	return c.operationExecutor().Execute(ctx, neo4j.AccessModeWrite, cypher, params)
 }
 
-func (c *Neo4jConnection) Count(table string, where []string, args []interface{}) (int64, error) {
-	return c.CountContext(context.Background(), table, where, args)
-}
-
-func (c *Neo4jConnection) CountContext(parent context.Context, table string, where []string, args []interface{}) (int64, error) {
+func (c *Neo4jConnection) countNodes(parent context.Context, table string, clauses []string, args []interface{}) (int64, error) {
 	ctx, cancel, err := c.operationContext(parent)
 	if err != nil {
 		return 0, err
@@ -293,7 +462,7 @@ func (c *Neo4jConnection) CountContext(parent context.Context, table string, whe
 	if err != nil {
 		return 0, err
 	}
-	whereClause, params, err := c.buildCypherWhere(where, args)
+	whereClause, params, err := c.buildCypherWhere(clauses, args)
 	if err != nil {
 		return 0, err
 	}

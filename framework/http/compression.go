@@ -135,6 +135,15 @@ type CompressionResponseWriter struct {
 
 // NewCompressionResponseWriter 创建新的压缩响应写入器。
 func NewCompressionResponseWriter(w http.ResponseWriter, r *http.Request, minSize int, levels map[string]int) *CompressionResponseWriter {
+	return newCompressionResponseWriter(w, r, minSize, levels, true)
+}
+
+// newConfiguredCompressionResponseWriter 使用启动阶段已经冻结的配置，避免每个请求重复复制压缩级别。
+func newConfiguredCompressionResponseWriter(w http.ResponseWriter, r *http.Request, minSize int, levels map[string]int) *CompressionResponseWriter {
+	return newCompressionResponseWriter(w, r, minSize, levels, false)
+}
+
+func newCompressionResponseWriter(w http.ResponseWriter, r *http.Request, minSize int, levels map[string]int, cloneLevels bool) *CompressionResponseWriter {
 	encoding := ""
 	if r != nil && r.Method != http.MethodHead {
 		encoding = negotiateContentEncoding(r.Header.Get("Accept-Encoding"))
@@ -146,20 +155,25 @@ func NewCompressionResponseWriter(w http.ResponseWriter, r *http.Request, minSiz
 	if minSize > 8<<20 {
 		minSize = 8 << 20
 	}
-	copiedLevels := make(map[string]int, len(levels))
-	duplicatedLevels := make(map[string]bool)
-	for algorithm, level := range levels {
-		normalized := strings.ToLower(strings.TrimSpace(algorithm))
-		if duplicatedLevels[normalized] {
-			continue
+	copiedLevels := levels
+	if cloneLevels {
+		copiedLevels = make(map[string]int, len(levels))
+	}
+	if cloneLevels {
+		duplicatedLevels := make(map[string]bool)
+		for algorithm, level := range levels {
+			normalized := strings.ToLower(strings.TrimSpace(algorithm))
+			if duplicatedLevels[normalized] {
+				continue
+			}
+			if _, exists := copiedLevels[normalized]; exists {
+				// 公共构造器无法返回配置错误，发生大小写冲突时回退算法默认等级以保持确定性。
+				delete(copiedLevels, normalized)
+				duplicatedLevels[normalized] = true
+				continue
+			}
+			copiedLevels[normalized] = level
 		}
-		if _, exists := copiedLevels[normalized]; exists {
-			// 公共构造器无法返回配置错误，发生大小写冲突时回退算法默认等级以保持确定性。
-			delete(copiedLevels, normalized)
-			duplicatedLevels[normalized] = true
-			continue
-		}
-		copiedLevels[normalized] = level
 	}
 	writer := &CompressionResponseWriter{
 		ResponseWriter: w,

@@ -29,6 +29,8 @@ func TestRedactConfigDumpDataMasksNestedSensitiveValues(t *testing.T) {
 		"database_url":  "postgres://root:url-secret@localhost/app",
 		"credential":    "credential-secret",
 		"passphrase":    "passphrase-secret",
+		"db_pass":       "db-pass-secret",
+		"signing-key":   "signing-secret",
 		"normal":        "visible",
 	}
 
@@ -45,6 +47,7 @@ func TestRedactConfigDumpDataMasksNestedSensitiveValues(t *testing.T) {
 	for _, secret := range []string{
 		"db-secret", "dsn-secret", "uri-secret", "token-secret", "Bearer secret",
 		"url-secret", "credential-secret", "passphrase-secret",
+		"db-pass-secret", "signing-secret",
 	} {
 		if strings.Contains(output, secret) {
 			t.Fatalf("配置导出不应包含敏感值 %q，实际为 %s", secret, output)
@@ -66,7 +69,7 @@ func TestRedactConfigDumpDataMasksNestedSensitiveValues(t *testing.T) {
 func TestConfigDumpRedactsDirectSensitiveKey(t *testing.T) {
 	appConfig := config.NewConfig()
 	appConfig.Set("database.password", "direct-secret")
-	cmd := &ConfigDump{Command: console.Command{App: &framework.App{Config: appConfig}}}
+	cmd := &ConfigDump{Command: console.Command{App: configDumpTestApp(t, appConfig)}}
 	cmd.Configure()
 	input := console.NewInput("database.password")
 	if err := input.Parse(cmd.GetArgumentDefinitions(), cmd.GetOptionDefinitions()); err != nil {
@@ -89,7 +92,7 @@ func TestConfigDumpRedactsTypedStringMaps(t *testing.T) {
 		"name":     "visible-service",
 		"password": "typed-secret",
 	})
-	cmd := &ConfigDump{Command: console.Command{App: &framework.App{Config: appConfig}}}
+	cmd := &ConfigDump{Command: console.Command{App: configDumpTestApp(t, appConfig)}}
 	stdout := &bytes.Buffer{}
 	if err := cmd.Execute(console.NewInput(), console.NewOutputWithWriters(stdout, &bytes.Buffer{}, false)); err != nil {
 		t.Fatalf("导出类型化配置失败: %v", err)
@@ -112,7 +115,7 @@ func TestConfigDumpPropagatesDependencyAndSerializationErrors(t *testing.T) {
 	appConfig := config.NewConfig()
 	appConfig.Set("unsupported", make(chan int))
 	stdout := &bytes.Buffer{}
-	command := &ConfigDump{Command: console.Command{App: &framework.App{Config: appConfig}}}
+	command := &ConfigDump{Command: console.Command{App: configDumpTestApp(t, appConfig)}}
 	if err := command.Execute(console.NewInput(), console.NewOutputWithWriters(stdout, &bytes.Buffer{}, false)); err == nil {
 		t.Fatal("不支持 JSON 序列化的配置应返回错误")
 	}
@@ -125,4 +128,14 @@ func TestConfigDumpPropagatesDependencyAndSerializationErrors(t *testing.T) {
 	if err := command.Execute(console.NewInput(), nil); !errors.Is(err, console.ErrInvalidOutput) {
 		t.Fatalf("空输出应返回 ErrInvalidOutput，实际为 %v", err)
 	}
+}
+
+// configDumpTestApp 将测试配置绑定到已初始化控制台应用的配置服务。
+func configDumpTestApp(t *testing.T, configuration *config.Config) *framework.App {
+	t.Helper()
+	return func() *framework.App {
+		app := buildConsoleTestApp(t, t.TempDir())
+		app.Instance(string(framework.ServiceConfig), configuration)
+		return app
+	}()
 }

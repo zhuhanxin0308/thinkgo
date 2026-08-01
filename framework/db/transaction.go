@@ -13,7 +13,18 @@ type transactionState uint8
 const (
 	transactionActive transactionState = iota
 	transactionCompleting
-	transactionDone
+	transactionCommitted
+	transactionRolledBack
+	transactionContextRolledBack
+	transactionFinalizationFailed
+)
+
+type transactionAction uint8
+
+const (
+	actionCommit transactionAction = iota
+	actionRollback
+	actionContextRollback
 )
 
 // Tx 表示持有数据库生命周期租约的 SQL 事务。
@@ -24,6 +35,7 @@ type Tx struct {
 	ctx         context.Context
 	mu          sync.Mutex
 	state       transactionState
+	done        chan struct{}
 	release     func()
 	releaseOnce sync.Once
 }
@@ -55,14 +67,17 @@ func (db *DB) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) {
 		release()
 		return nil, err
 	}
-	return &Tx{
+	transaction := &Tx{
 		db:         db,
 		tx:         handle,
 		connection: sqlConnection,
 		ctx:        ctx,
 		state:      transactionActive,
+		done:       make(chan struct{}),
 		release:    release,
-	}, nil
+	}
+	go transaction.watchContext()
+	return transaction, nil
 }
 
 func (db *DB) Transaction(fn func(tx *Tx) error) error {
@@ -95,14 +110,30 @@ func (db *DB) TransactionContext(ctx context.Context, fn func(tx *Tx) error) err
 }
 
 func (t *Tx) Commit() error {
-	return t.complete(true)
+	return t.finalize(actionCommit)
 }
 
 func (t *Tx) Rollback() error {
-	return t.complete(false)
+	return t.finalize(actionRollback)
 }
 
-func (t *Tx) complete(commit bool) error {
+// Done closes exactly once when the transaction wrapper reaches a terminal state.
+func (t *Tx) Done() <-chan struct{} {
+	if t == nil {
+		return nil
+	}
+	return t.done
+}
+
+func (t *Tx) watchContext() {
+	select {
+	case <-t.ctx.Done():
+		_ = t.finalize(actionContextRollback)
+	case <-t.done:
+	}
+}
+
+func (t *Tx) finalize(action transactionAction) error {
 	if t == nil {
 		return fmt.Errorf("%w: 事务不能为空", ErrInvalidTransaction)
 	}
@@ -116,20 +147,37 @@ func (t *Tx) complete(commit bool) error {
 	t.mu.Unlock()
 
 	var err error
-	if commit {
+	if action == actionCommit {
 		err = handle.Commit()
 	} else {
 		err = handle.Rollback()
 	}
 
 	t.mu.Lock()
-	t.state = transactionDone
+	switch {
+	case action == actionContextRollback:
+		t.state = transactionContextRolledBack
+	case action == actionCommit && err == nil:
+		t.state = transactionCommitted
+	case action == actionCommit && t.ctx.Err() != nil:
+		t.state = transactionContextRolledBack
+	case action == actionRollback && err == nil:
+		t.state = transactionRolledBack
+	default:
+		t.state = transactionFinalizationFailed
+	}
+	if t.done != nil {
+		close(t.done)
+	}
 	t.mu.Unlock()
 	t.releaseOnce.Do(func() {
 		if t.release != nil {
 			t.release()
 		}
 	})
+	if action == actionContextRollback && errors.Is(err, sql.ErrTxDone) {
+		return t.ctx.Err()
+	}
 	return err
 }
 

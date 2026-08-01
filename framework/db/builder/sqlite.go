@@ -3,10 +3,14 @@ package builder
 import (
 	"fmt"
 	"strings"
+
+	"thinkgo/framework/db/internal/contract"
 )
 
 // Sqlite builder（SQLite 方言，使用 ? 占位符与双引号标识符）
 type Sqlite struct{}
+
+func (s *Sqlite) DialectName() string { return "sqlite" }
 
 func sqliteQuote(name string) string {
 	return quoteWith(name, `"`, `"`)
@@ -56,7 +60,18 @@ func (s *Sqlite) Pagination(order string, limit int, offset int) (string, string
 	return orderClause, limitClause
 }
 
-// LockClause SQLite 不支持行级悲观锁，忽略。
+func (s *Sqlite) Lock(mode contract.LockMode) (contract.LockSpec, error) {
+	switch mode {
+	case contract.LockNone:
+		return contract.LockSpec{}, nil
+	case contract.LockForUpdate, contract.LockForShare:
+		return contract.LockSpec{}, contract.ErrUnsupportedFeature
+	default:
+		return contract.LockSpec{}, contract.ErrUnsupportedLockMode
+	}
+}
+
+// LockClause 保留旧版字符串锁子句兼容入口；SQLite 不输出行锁子句。
 func (s *Sqlite) LockClause(string) string { return "" }
 
 // SupportsLastInsertId SQLite 支持 LastInsertId。

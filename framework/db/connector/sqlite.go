@@ -22,12 +22,9 @@ func (s *Sqlite) Connect(config db.Config) (db.Connection, error) {
 	if err != nil {
 		return nil, err
 	}
-	if validated.Database == ":memory:" {
-		if validated.MaxOpenConns > 1 || validated.MaxIdleConns > 1 {
-			return nil, fmt.Errorf("%w: :memory: SQLite 只能使用一个池连接", db.ErrInvalidDatabaseConfig)
-		}
-		validated.MaxOpenConns = 1
-		validated.MaxIdleConns = 1
+	settings, err := sqlitePoolConfig(validated)
+	if err != nil {
+		return nil, err
 	}
 	dsn, err := buildSqliteDSN(validated)
 	if err != nil {
@@ -37,13 +34,28 @@ func (s *Sqlite) Connect(config db.Config) (db.Connection, error) {
 	if err != nil {
 		return nil, err
 	}
-	connection, err := openSQLConnection("sqlite3", dsn, &builder.Sqlite{}, validated)
+	connection, err := openSQLConnectionWithPool("sqlite3", dsn, &builder.Sqlite{}, settings)
 	if err != nil && created {
 		if removeErr := os.Remove(validated.Database); removeErr != nil && !os.IsNotExist(removeErr) {
 			return nil, fmt.Errorf("%w；清理新建 SQLite 文件失败: %v", err, removeErr)
 		}
 	}
 	return connection, err
+}
+
+func sqlitePoolConfig(config db.Config) (sqlConnectionPoolConfig, error) {
+	if config.Database == ":memory:" {
+		if config.MaxOpenConns > 1 || config.MaxIdleConns > 1 {
+			return sqlConnectionPoolConfig{}, fmt.Errorf("%w: :memory: SQLite 只能使用一个池连接", db.ErrInvalidDatabaseConfig)
+		}
+		return sqlConnectionPoolConfig{
+			MaxOpenConns:    1,
+			MaxIdleConns:    1,
+			ConnMaxLifetime: 0,
+			ConnMaxIdleTime: 0,
+		}, nil
+	}
+	return resolveSQLConnectionPoolConfig(config)
 }
 
 func buildSqliteDSN(config db.Config) (string, error) {
@@ -96,8 +108,4 @@ func prepareSqliteFile(path string) (bool, error) {
 		return false, err
 	}
 	return true, nil
-}
-
-func init() {
-	mustRegisterConnector("sqlite", &Sqlite{})
 }

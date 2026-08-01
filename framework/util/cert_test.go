@@ -26,7 +26,7 @@ func TestGenerateCertInRootCreatesValidMatchingPair(t *testing.T) {
 	certificate := readTestCertificate(t, filepath.Join(basePath, "runtime", "cert.pem"))
 	privateKey := readTestPrivateKey(t, filepath.Join(basePath, "runtime", "key.pem"))
 	publicKey, ok := certificate.PublicKey.(*ecdsa.PublicKey)
-	if !ok || publicKey.X.Cmp(privateKey.PublicKey.X) != 0 || publicKey.Y.Cmp(privateKey.PublicKey.Y) != 0 {
+	if !ok || !publicKey.Equal(privateKey.Public()) {
 		t.Fatal("证书公钥与私钥不匹配")
 	}
 	if certificate.SerialNumber == nil || certificate.SerialNumber.Sign() <= 0 {
@@ -157,7 +157,7 @@ func TestGenerateCertSupportsSeparatedAbsoluteTargets(t *testing.T) {
 	certificate := readTestCertificate(t, certPath)
 	privateKey := readTestPrivateKey(t, keyPath)
 	publicKey, ok := certificate.PublicKey.(*ecdsa.PublicKey)
-	if !ok || publicKey.X.Cmp(privateKey.PublicKey.X) != 0 || publicKey.Y.Cmp(privateKey.PublicKey.Y) != 0 {
+	if !ok || !publicKey.Equal(privateKey.Public()) {
 		t.Fatal("兼容入口生成了不匹配的证书和私钥")
 	}
 }

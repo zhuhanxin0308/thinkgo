@@ -48,7 +48,12 @@ func (q *Query) builder() Builder {
 	if q.txOwner != nil && q.txOwner.connection != nil {
 		return q.txOwner.connection.Builder
 	}
-	if sqlConn, ok := q.db.connection.(*SQLConnection); ok {
+	q.db.mu.RLock()
+	defer q.db.mu.RUnlock()
+	if q.db.connection == nil {
+		return nil
+	}
+	if sqlConn, ok := q.db.connection.connection.(*SQLConnection); ok {
 		if sqlConn == nil {
 			return nil
 		}
@@ -117,9 +122,13 @@ func (q *Query) ensureValid() error {
 		return ErrDatabaseUnavailable
 	}
 	if q.txOwner != nil {
-		return q.txOwner.active()
+		if err := q.txOwner.active(); err != nil {
+			return err
+		}
+	} else if err := q.db.WithConnection(func(Connection) error { return nil }); err != nil {
+		return err
 	}
-	if _, err := q.db.connectionSnapshot(); err != nil {
+	if err := q.validateQueryArgumentAppend(0); err != nil {
 		return err
 	}
 	return nil
@@ -129,9 +138,13 @@ func (q *Query) ensureValid() error {
 // 注意：where 片段为参数化 SQL（如 "id = ?"），不含值；绑定参数仅记录数量，
 // 不记录具体值，避免敏感数据（密码/令牌/PII）通过错误日志泄露。
 func (q *Query) logContext() map[string]interface{} {
+	dialect := ""
+	if currentBuilder := q.builder(); currentBuilder != nil {
+		dialect = currentBuilder.DialectName()
+	}
 	where := make([]string, 0, len(q.where))
 	for _, condition := range q.where {
-		where = append(where, redactSQLText(condition))
+		where = append(where, redactSQLText(condition, dialect))
 	}
 	return map[string]interface{}{
 		"table":     q.table,
@@ -167,6 +180,12 @@ func (q *Query) BuildSelectSQL() (string, []interface{}, error) {
 
 	tableName := q.resolveTable()
 	fields := q.fields
+	if q.aggregateExpression != nil {
+		if err := q.aggregateExpression.validate(); err != nil {
+			return "", nil, q.reportError("build_sql", err, nil)
+		}
+		fields = fmt.Sprintf("%s(%s) AS %s", strings.ToUpper(strings.TrimSpace(q.aggregateExpression.Function)), q.aggregateExpression.Field, q.aggregateExpression.Alias)
+	}
 	group := q.group
 	// JOIN 默认只返回主表列，避免不同表的同名列在 map 结果中静默覆盖。
 	// 关联表字段必须通过 Field 显式选择并使用唯一别名。
@@ -174,11 +193,30 @@ func (q *Query) BuildSelectSQL() (string, []interface{}, error) {
 		fields = tableName + ".*"
 	}
 	builder := q.builder()
+	lockSpec := LockSpec{}
 	if builder != nil {
 		tableName = builder.QuoteIdentifier(tableName)
 		fields = builder.QuoteFields(fields)
 		if group != "" {
 			group = builder.QuoteFields(group)
+		}
+		var err error
+		lockSpec, err = builder.Lock(q.lockMode)
+		if err != nil {
+			return "", nil, q.reportError("build_sql", err, nil)
+		}
+		if builder.DialectName() == "oracle" && q.lockMode != LockNone && (q.limit > 0 || q.offset > 0) {
+			return "", nil, q.reportError("build_sql", fmt.Errorf("%w: Oracle 不支持分页与悲观锁组合", ErrUnsupportedFeature), nil)
+		}
+	} else {
+		switch q.lockMode {
+		case LockNone:
+		case LockForUpdate:
+			lockSpec.Tail = " FOR UPDATE"
+		case LockForShare:
+			lockSpec.Tail = " LOCK IN SHARE MODE"
+		default:
+			return "", nil, q.reportError("build_sql", ErrUnsupportedLockMode, nil)
 		}
 	}
 	var sqlBuilder strings.Builder
@@ -192,6 +230,7 @@ func (q *Query) BuildSelectSQL() (string, []interface{}, error) {
 
 	sqlBuilder.WriteString(" FROM ")
 	sqlBuilder.WriteString(tableName)
+	sqlBuilder.WriteString(lockSpec.TableHint)
 
 	for _, join := range q.joins {
 		joinTable := q.resolveJoinTable(join)
@@ -224,9 +263,7 @@ func (q *Query) BuildSelectSQL() (string, []interface{}, error) {
 		orderClause, limitClause := builder.Pagination(q.order, q.limit, q.offset)
 		sqlBuilder.WriteString(orderClause)
 		sqlBuilder.WriteString(limitClause)
-		if q.lockMode != "" {
-			sqlBuilder.WriteString(builder.LockClause(q.lockMode))
-		}
+		sqlBuilder.WriteString(lockSpec.Tail)
 	} else {
 		if q.order != "" {
 			sqlBuilder.WriteString(" ORDER BY ")
@@ -238,10 +275,7 @@ func (q *Query) BuildSelectSQL() (string, []interface{}, error) {
 		if q.offset > 0 {
 			sqlBuilder.WriteString(fmt.Sprintf(" OFFSET %d", q.offset))
 		}
-		if q.lockMode != "" {
-			sqlBuilder.WriteString(" ")
-			sqlBuilder.WriteString(q.lockMode)
-		}
+		sqlBuilder.WriteString(lockSpec.Tail)
 	}
 
 	return sqlBuilder.String(), allArgs, nil
@@ -250,16 +284,68 @@ func (q *Query) BuildSelectSQL() (string, []interface{}, error) {
 // needsRawSelect 判断查询是否必须走 RawQueryable 完整 SQL 通道
 // （JOIN/GROUP/HAVING/DISTINCT/悲观锁均无法通过简单 Builder.Select 表达）。
 func (q *Query) needsRawSelect() bool {
-	return len(q.joins) > 0 || q.group != "" || q.having != "" || q.distinct || q.lockMode != ""
+	return len(q.joins) > 0 || q.group != "" || q.having != "" || q.distinct || q.lockMode != LockNone
 }
 
 // clone 克隆一个全新的 Query 实例，用于保证链式调用状态完全隔离和安全。
 func (q *Query) clone() *Query {
+	return q.cloneWithCapacity(0, 0)
+}
+
+// cloneWithCapacity 为批量条件派生查询预留 where 与参数容量。
+func (q *Query) cloneWithCapacity(whereExtra, argsExtra int) *Query {
+	if q == nil {
+		return nil
+	}
 	cloned := *q
-	cloned.where = append([]string(nil), q.where...)
-	cloned.args = append([]interface{}(nil), q.args...)
+	if q.where == nil && whereExtra <= 0 {
+		cloned.where = nil
+	} else {
+		whereCapacity := len(q.where)
+		if whereExtra > 0 {
+			whereCapacity += whereExtra
+			if whereCapacity < len(q.where) {
+				whereCapacity = len(q.where)
+			}
+		}
+		cloned.where = make([]string, len(q.where), whereCapacity)
+		copy(cloned.where, q.where)
+	}
+	cloned.args = cloneDatabaseValuesWithExtraCapacity(q.args, argsExtra)
 	cloned.joins = append([]joinClause(nil), q.joins...)
-	cloned.havingArgs = append([]interface{}(nil), q.havingArgs...)
+	cloned.havingArgs = cloneDatabaseValues(q.havingArgs)
 	cloned.setExprs = append([]setExpression(nil), q.setExprs...)
+	if q.aggregateExpression != nil {
+		aggregate := *q.aggregateExpression
+		cloned.aggregateExpression = &aggregate
+	}
 	return &cloned
+}
+
+func (q *Query) operationPredicate() (Predicate, error) {
+	if q == nil || len(q.where) == 0 {
+		return newPredicate(), nil
+	}
+	if len(q.where) == 1 {
+		// 单个条件片段的参数全部属于该片段，避免重复扫描 SQL 统计占位符。
+		predicate := newPredicate().appendWithConnector("AND", q.where[0], q.args, q.hasRawPredicate)
+		return predicate, nil
+	}
+	predicate := newPredicate()
+	argumentOffset := 0
+	for _, clause := range q.where {
+		count, err := countSQLPlaceholders(clause)
+		if err != nil {
+			return Predicate{}, err
+		}
+		if count < 0 || argumentOffset+count > len(q.args) {
+			return Predicate{}, fmt.Errorf("%w: 条件参数数量不匹配", ErrInvalidQuery)
+		}
+		predicate = predicate.appendWithConnector("AND", clause, q.args[argumentOffset:argumentOffset+count], q.hasRawPredicate)
+		argumentOffset += count
+	}
+	if argumentOffset != len(q.args) {
+		return Predicate{}, fmt.Errorf("%w: 条件参数数量不匹配", ErrInvalidQuery)
+	}
+	return predicate, nil
 }

@@ -938,3 +938,39 @@ func TestLogAsyncSettingsRejectInvalidOrLateChanges(t *testing.T) {
 		t.Fatalf("关闭后修改缓冲区应返回 ErrLogClosed，实际为 %v", err)
 	}
 }
+
+// TestLogLevelSnapshot 验证级别集合会规范化、快照读取稳定且空集合保持放行兼容语义。
+func TestLogLevelSnapshot(t *testing.T) {
+	logger := NewLog()
+	logger.SetLevels([]string{" ERROR ", "Warning"})
+	if !logger.IsLevelEnabled("error") || !logger.IsLevelEnabled("WARNING") {
+		t.Fatal("规范化后的日志级别应允许大小写不同的查询")
+	}
+	if logger.IsLevelEnabled("info") || logger.IsLevelEnabled("unknown") {
+		t.Fatal("未配置的日志级别不应被放行")
+	}
+	logger.SetLevels(nil)
+	if !logger.IsLevelEnabled("unknown") {
+		t.Fatal("空日志级别列表应保持现有的全部放行语义")
+	}
+
+	var wait sync.WaitGroup
+	for index := 0; index < 8; index++ {
+		wait.Add(1)
+		go func(index int) {
+			defer wait.Done()
+			for round := 0; round < 100; round++ {
+				if index%2 == 0 {
+					logger.SetLevels([]string{"error", "warning"})
+				} else {
+					logger.SetLevels(nil)
+				}
+				_ = logger.IsLevelEnabled("info")
+			}
+		}(index)
+	}
+	wait.Wait()
+	if err := logger.Close(); err != nil {
+		t.Fatalf("关闭级别测试日志器失败: %v", err)
+	}
+}

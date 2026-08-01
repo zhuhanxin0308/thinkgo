@@ -3,11 +3,26 @@ package builder
 import (
 	"fmt"
 	"strings"
+
+	"thinkgo/framework/db/internal/contract"
 )
 
 // Mysql SQL 构建器（MySQL 方言）
 // 对应 ThinkPHP 8 的 think\db\builder\Mysql
-type Mysql struct{}
+type Mysql struct {
+	maxBatchStatementBytes int
+}
+
+// NewMysql 创建带批量语句字节预算的 MySQL 构建器。
+// maxBatchStatementBytes 为零时不启用框架层预算，由 MySQL 驱动按连接实际配置负责校验。
+func NewMysql(maxBatchStatementBytes int) *Mysql {
+	if maxBatchStatementBytes < 0 {
+		maxBatchStatementBytes = 0
+	}
+	return &Mysql{maxBatchStatementBytes: maxBatchStatementBytes}
+}
+
+func (m *Mysql) DialectName() string { return "mysql" }
 
 // quoteIdentifier 用反引号包裹标识符，防止与 SQL 关键字冲突及注入风险
 func quoteIdentifier(name string) string {
@@ -59,7 +74,20 @@ func (m *Mysql) Pagination(order string, limit int, offset int) (string, string)
 	return orderClause, limitClause
 }
 
-// LockClause MySQL 直接使用 FOR UPDATE / LOCK IN SHARE MODE。
+func (m *Mysql) Lock(mode contract.LockMode) (contract.LockSpec, error) {
+	switch mode {
+	case contract.LockNone:
+		return contract.LockSpec{}, nil
+	case contract.LockForUpdate:
+		return contract.LockSpec{Tail: " FOR UPDATE"}, nil
+	case contract.LockForShare:
+		return contract.LockSpec{Tail: " LOCK IN SHARE MODE"}, nil
+	default:
+		return contract.LockSpec{}, contract.ErrUnsupportedLockMode
+	}
+}
+
+// LockClause 保留旧版字符串锁子句兼容入口。
 func (m *Mysql) LockClause(mode string) string {
 	if mode == "" {
 		return ""
@@ -72,6 +100,14 @@ func (m *Mysql) SupportsLastInsertId() bool { return true }
 
 // MaxBindParams 返回 MySQL 单语句占位符上限。
 func (m *Mysql) MaxBindParams() int { return 65535 }
+
+// MaxBatchStatementBytes 返回连接器传入的 MySQL 批量语句字节预算。
+func (m *Mysql) MaxBatchStatementBytes() int {
+	if m == nil {
+		return 0
+	}
+	return m.maxBatchStatementBytes
+}
 
 // InsertReturning MySQL 无需 RETURNING 写法。
 func (m *Mysql) InsertReturning(string, map[string]interface{}, string) (string, []interface{}, bool) {

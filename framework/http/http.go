@@ -1,18 +1,21 @@
 package http
 
 import (
+	stdcontext "context"
 	"errors"
 	"fmt"
 	"net/http"
-	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"thinkgo/framework"
 	"thinkgo/framework/context"
 	"thinkgo/framework/event"
 	"thinkgo/framework/exception"
+	frameworkLog "thinkgo/framework/log"
+	"thinkgo/framework/metrics"
 	"thinkgo/framework/middleware"
 	"thinkgo/framework/route"
 )
@@ -20,18 +23,32 @@ import (
 // Http 是框架 HTTP 内核，启动后配置和路由均保持只读。
 type Http struct {
 	app          *framework.App
+	route        *route.Router
+	middleware   *middleware.Pipeline
+	log          *frameworkLog.Log
+	metrics      *metrics.Registry
+	event        *event.Dispatcher
 	srvConf      serverConf
 	compressConf compressionConf
 
-	dispatchPlanMu sync.RWMutex
-	dispatchPlans  map[string]*controllerDispatchPlan
-	spaIndexMu     sync.RWMutex
-	spaIndexCache  []byte
-	spaIndexCached bool
-	spaIndexAt     time.Time
-	staticMissMu   sync.RWMutex
-	staticMisses   map[string]time.Time
+	dispatchPlanMu   sync.RWMutex
+	dispatchPlans    map[string]*controllerDispatchPlan
+	routeFreezeMu    sync.Mutex
+	routeFreezeState atomic.Uint32
+	routeFreezeErr   error
+	spaIndexMu       sync.RWMutex
+	spaIndexCache    []byte
+	spaIndexCached   bool
+	spaIndexAt       time.Time
+	staticMissMu     sync.RWMutex
+	staticMisses     map[string]time.Time
 }
+
+const (
+	routeFreezePending uint32 = iota
+	routeFreezeReady
+	routeFreezeFailed
+)
 
 type requestServeState struct {
 	raw               *http.Request
@@ -41,6 +58,8 @@ type requestServeState struct {
 	writer            http.ResponseWriter
 	compressionWriter *CompressionResponseWriter
 	startedAt         time.Time
+	metricsRegistry   *metrics.Registry
+	metricsActive     bool
 }
 
 // NewHttp 严格解析配置并创建 HTTP 内核，任何非法安全边界都会直接返回错误。
@@ -49,8 +68,33 @@ func NewHttp(app *framework.App) (*Http, error) {
 	if err != nil {
 		return nil, err
 	}
+	router, err := framework.ResolveServiceAs[*route.Router](app, framework.ServiceRoute)
+	if err != nil {
+		return nil, fmt.Errorf("解析 HTTP 路由服务失败: %w", err)
+	}
+	pipeline, err := framework.ResolveServiceAs[*middleware.Pipeline](app, framework.ServiceMiddleware)
+	if err != nil {
+		return nil, fmt.Errorf("解析 HTTP 中间件服务失败: %w", err)
+	}
+	logger, err := framework.ResolveServiceAs[*frameworkLog.Log](app, framework.ServiceLog)
+	if err != nil {
+		return nil, fmt.Errorf("解析 HTTP 日志服务失败: %w", err)
+	}
+	metricsRegistry, err := framework.ResolveServiceAs[*metrics.Registry](app, framework.ServiceMetrics)
+	if err != nil {
+		return nil, fmt.Errorf("解析 HTTP 指标服务失败: %w", err)
+	}
+	dispatcher, err := framework.ResolveServiceAs[*event.Dispatcher](app, framework.ServiceEvent)
+	if err != nil {
+		return nil, fmt.Errorf("解析 HTTP 事件服务失败: %w", err)
+	}
 	return &Http{
 		app:           app,
+		route:         router,
+		middleware:    pipeline,
+		log:           logger,
+		metrics:       metricsRegistry,
+		event:         dispatcher,
 		srvConf:       serverConfig,
 		compressConf:  compressionConfig,
 		dispatchPlans: make(map[string]*controllerDispatchPlan),
@@ -60,12 +104,23 @@ func NewHttp(app *framework.App) (*Http, error) {
 
 // ServeHTTP 依次执行入口校验、结构化输入解析、静态资源、路由与中间件流水线。
 func (h *Http) ServeHTTP(originalWriter http.ResponseWriter, raw *http.Request) {
+	h.serveHTTP(originalWriter, raw, nil)
+}
+
+func (h *Http) serveHTTP(originalWriter http.ResponseWriter, raw *http.Request, applicationContext *context.ApplicationContext) {
+	if isNilHTTPResponseWriter(originalWriter) {
+		return
+	}
 	statusWriter := newStatusTrackingResponseWriter(originalWriter)
 	state := &requestServeState{
 		raw:          raw,
 		statusWriter: statusWriter,
 		writer:       statusWriter,
 		startedAt:    time.Now(),
+	}
+	if h != nil && h.metrics != nil {
+		state.metricsRegistry = h.metrics
+		state.metricsActive = state.metricsRegistry.Begin()
 	}
 	defer func() {
 		h.finishRequest(state, recover())
@@ -83,15 +138,14 @@ func (h *Http) ServeHTTP(originalWriter http.ResponseWriter, raw *http.Request) 
 		http.Error(state.writer, http.StatusText(http.StatusMisdirectedRequest), http.StatusMisdirectedRequest)
 		return
 	}
-	if err := h.app.Route.Freeze(); err != nil {
+	if err := h.ensureRouteFrozen(); err != nil {
 		h.logHTTPError("冻结路由失败", err)
 		http.Error(state.writer, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
-
 	req, err := context.NewRequest(
 		raw,
-		context.WithTrustedProxies(h.srvConf.TrustedProxies),
+		context.WithTrustedProxySet(h.srvConf.TrustedProxySet),
 		context.WithMultipartMemoryLimit(h.srvConf.MultipartMemory),
 		context.WithMaxBodyBytes(h.srvConf.MaxBodyBytes),
 	)
@@ -101,13 +155,11 @@ func (h *Http) ServeHTTP(originalWriter http.ResponseWriter, raw *http.Request) 
 		return
 	}
 	state.req = req
-	if err = req.Parse(); err != nil {
-		h.writeRequestParseError(state.writer, err)
-		return
+	if applicationContext != nil {
+		req.SetApplicationContext(*applicationContext)
 	}
-
-	if h.app.Event != nil {
-		if err = h.app.Event.Dispatch(event.NewHttpRunEvent()); err != nil {
+	if h.event != nil && h.event.HasListeners(event.EventHttpRun) {
+		if err = h.event.DispatchContext(requestEventContext(raw, false), event.NewHttpRunEvent()); err != nil {
 			panic(err)
 		}
 	}
@@ -115,7 +167,7 @@ func (h *Http) ServeHTTP(originalWriter http.ResponseWriter, raw *http.Request) 
 		state.writer.Header().Set("Alt-Svc", fmt.Sprintf(`h3=":%d"; ma=2592000`, h.srvConf.Port))
 	}
 	if h.compressConf.Enable && raw.Method != http.MethodHead {
-		state.compressionWriter = NewCompressionResponseWriter(
+		state.compressionWriter = newConfiguredCompressionResponseWriter(
 			state.writer,
 			raw,
 			h.compressConf.MinSize,
@@ -124,19 +176,29 @@ func (h *Http) ServeHTTP(originalWriter http.ResponseWriter, raw *http.Request) 
 		state.writer = state.compressionWriter
 	}
 
-	if raw.Method == http.MethodGet || raw.Method == http.MethodHead {
-		staticPath := raw.URL.Path
-		if staticPath == "/" {
-			staticPath = "/index.html"
+	staticServed := false
+	response := h.middleware.Then(req, func(current *context.Request) *context.Response {
+		// 先执行全局认证等中间件，再解析业务请求体，避免未授权请求提前消耗 CPU、内存和临时文件资源。
+		if parseErr := current.Parse(); parseErr != nil {
+			return responseForRequestParseError(parseErr)
 		}
-		if h.servePublicFile(state.writer, raw, staticPath) {
-			return
+		// 静态资源也必须经过全局中间件，避免绕过认证、审计和安全响应头。
+		if raw.Method == http.MethodGet || raw.Method == http.MethodHead {
+			staticPath := raw.URL.Path
+			if staticPath == "/" {
+				staticPath = "/index.html"
+			}
+			if h.servePublicFile(state.writer, raw, staticPath) {
+				staticServed = true
+				return context.NewResponse().Code(state.statusWriter.Status())
+			}
 		}
-	}
-
-	response := h.app.Middleware.Then(req, func(current *context.Request) *context.Response {
 		return h.routeRequest(current)
 	})
+	if staticServed {
+		state.response = response
+		return
+	}
 	if response == nil {
 		response = context.NewResponse().
 			Code(http.StatusInternalServerError).
@@ -178,12 +240,12 @@ func (h *Http) replaceUncommittedSendFailure(state *requestServeState) {
 }
 
 func (h *Http) routeRequest(req *context.Request) *context.Response {
-	matched, params, err := h.app.Route.Match(req)
+	matched, params, err := h.route.Match(req)
 	if err != nil {
 		return h.responseForRouteError(err)
 	}
 	for key, value := range params {
-		req.Set(key, value)
+		req.SetRoute(key, value)
 	}
 	if matched == nil {
 		if (req.Method() == http.MethodGet || req.Method() == http.MethodHead) && !isAPIPath(req.Path()) {
@@ -196,15 +258,10 @@ func (h *Http) routeRequest(req *context.Request) *context.Response {
 		return context.NewResponse().Code(http.StatusNotFound).Content("404 Not Found")
 	}
 
-	handlers := matched.Middlewares()
-	if len(handlers) == 0 {
+	if !matched.HasMiddleware() {
 		return h.dispatch(matched, req)
 	}
-	routePipeline := middleware.NewPipeline()
-	for _, handler := range handlers {
-		routePipeline.Pipe(handler)
-	}
-	return routePipeline.Then(req, func(current *context.Request) *context.Response {
+	return matched.ExecuteMiddleware(req, func(current *context.Request) *context.Response {
 		return h.dispatch(matched, current)
 	})
 }
@@ -278,11 +335,51 @@ func (h *Http) finishRequest(state *requestServeState, recovered interface{}) {
 		}
 	}
 	h.writeAccessLog(state)
-	if h != nil && h.app != nil && h.app.Event != nil {
-		if err := h.app.Event.Dispatch(event.NewHttpEndEvent(state.statusWriter.Status())); err != nil {
+	if h != nil && h.event != nil && h.event.HasListeners(event.EventHttpEnd) {
+		if err := h.event.DispatchContext(requestEventContext(state.raw, true), event.NewHttpEndEvent(state.statusWriter.Status())); err != nil {
 			h.logHTTPError("HTTP 结束事件分发失败", err)
 		}
 	}
+	if state.metricsRegistry != nil {
+		state.metricsRegistry.End(state.metricsActive, state.statusWriter.Status(), time.Since(state.startedAt))
+	}
+}
+
+// ensureRouteFrozen 在启动阶段或直接 ServeHTTP 的首个请求中冻结路由，成功后仅执行原子读。
+// requestEventContext 为 HTTP 生命周期事件提取请求上下文；结束事件忽略取消以确保清理监听器仍会执行。
+func requestEventContext(raw *http.Request, terminal bool) stdcontext.Context {
+	requestContext := stdcontext.Background()
+	if raw != nil && raw.Context() != nil {
+		requestContext = raw.Context()
+	}
+	if terminal {
+		return stdcontext.WithoutCancel(requestContext)
+	}
+	return requestContext
+}
+
+func (h *Http) ensureRouteFrozen() error {
+	if h == nil || h.route == nil {
+		return errors.New("HTTP 路由器不能为空")
+	}
+	if h.routeFreezeState.Load() == routeFreezeReady {
+		return nil
+	}
+	h.routeFreezeMu.Lock()
+	defer h.routeFreezeMu.Unlock()
+	switch h.routeFreezeState.Load() {
+	case routeFreezeReady:
+		return nil
+	case routeFreezeFailed:
+		return h.routeFreezeErr
+	}
+	h.routeFreezeErr = h.route.Freeze()
+	if h.routeFreezeErr != nil {
+		h.routeFreezeState.Store(routeFreezeFailed)
+		return h.routeFreezeErr
+	}
+	h.routeFreezeState.Store(routeFreezeReady)
+	return nil
 }
 
 func (h *Http) renderRecoveredException(writer http.ResponseWriter, raw *http.Request, recovered interface{}) (err error) {
@@ -293,8 +390,8 @@ func (h *Http) renderRecoveredException(writer http.ResponseWriter, raw *http.Re
 	}()
 	handler := &exception.Handle{
 		App:    h.app,
-		Log:    h.app.Log,
-		TplDir: filepath.Join(h.app.BasePath, "framework", "exception", "tpl"),
+		Log:    h.log,
+		TplDir: h.app.ExceptionTemplatePath(),
 	}
 	return handler.Render(writer, raw, recovered)
 }
@@ -309,7 +406,10 @@ func safeCloseCompressionWriter(writer *CompressionResponseWriter) (err error) {
 }
 
 func (h *Http) writeAccessLog(state *requestServeState) {
-	if h == nil || h.app == nil || h.app.Log == nil || state.raw == nil {
+	if h == nil || h.log == nil || !h.log.IsLevelEnabled(frameworkLog.LevelInfo) {
+		return
+	}
+	if state == nil || state.raw == nil {
 		return
 	}
 	path := ""
@@ -319,7 +419,7 @@ func (h *Http) writeAccessLog(state *requestServeState) {
 		ip = state.req.Ip()
 	}
 	duration := time.Since(state.startedAt)
-	h.app.Log.InfoCtx(
+	h.log.InfoCtx(
 		fmt.Sprintf("%s %s %d %.3fms", state.raw.Method, path, state.statusWriter.Status(), float64(duration.Microseconds())/1000),
 		map[string]interface{}{
 			"method":      state.raw.Method,
@@ -343,8 +443,8 @@ func requestLogPath(raw *http.Request) string {
 }
 
 func (h *Http) logHTTPError(message string, err error) {
-	if h != nil && h.app != nil && h.app.Log != nil && err != nil {
-		h.app.Log.ErrorCtx(message, map[string]interface{}{"error": err.Error()})
+	if h != nil && h.log != nil && err != nil {
+		h.log.ErrorCtx(message, map[string]interface{}{"error": frameworkLog.SanitizeErrorText(err.Error())})
 	}
 }
 

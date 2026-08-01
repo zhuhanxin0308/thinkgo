@@ -1,9 +1,12 @@
 package builder
 
 import (
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
+
+	"thinkgo/framework/db"
 )
 
 type deterministicWriteBuilder interface {
@@ -140,9 +143,22 @@ func TestBuildersExposeBindParameterBudgets(t *testing.T) {
 	}
 }
 
+// TestMysqlBuilderCarriesBatchStatementBudget 验证连接器读取的 MySQL 包预算可以传入方言构建器。
+func TestMysqlBuilderCarriesBatchStatementBudget(t *testing.T) {
+	if got := (&Mysql{}).MaxBatchStatementBytes(); got != 0 {
+		t.Fatalf("未配置包预算的 MySQL 构建器应返回 0，实际为 %d", got)
+	}
+	if got := NewMysql(4096).MaxBatchStatementBytes(); got != 4096 {
+		t.Fatalf("MySQL 包预算传递错误，实际为 %d", got)
+	}
+	if got := NewMysql(-1).MaxBatchStatementBytes(); got != 0 {
+		t.Fatalf("负数包预算应被归一化为 0，实际为 %d", got)
+	}
+}
+
 // TestPgsqlRejectsUnknownLockMode 验证未知锁模式不会原样拼入 SQL。
 func TestPgsqlRejectsUnknownLockMode(t *testing.T) {
-	if got := (&Pgsql{}).LockClause("FOR UPDATE; DROP TABLE users"); got != "" {
-		t.Fatalf("未知锁模式必须被忽略，实际为 %q", got)
+	if _, err := (&Pgsql{}).Lock(db.LockMode(255)); !errors.Is(err, db.ErrUnsupportedLockMode) {
+		t.Fatalf("未知锁模式必须明确拒绝，实际为 %v", err)
 	}
 }

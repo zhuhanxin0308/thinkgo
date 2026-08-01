@@ -1,6 +1,7 @@
 package framework
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -35,28 +36,36 @@ func (d *appRunLogDriver) Close() error {
 }
 
 type appRunConnection struct {
+	identity db.ConnectionID
 	closed   bool
 	closes   int
 	closeErr error
 }
 
-func (c *appRunConnection) Select(table string, fields string, where []string, args []interface{}, order string, limit int, offset int) ([]map[string]interface{}, error) {
+func (c *appRunConnection) ConnectionID() db.ConnectionID {
+	if c.identity == "" {
+		c.identity = db.NewConnectionID("app-run-test")
+	}
+	return c.identity
+}
+
+func (c *appRunConnection) Select(context.Context, db.SelectRequest) ([]map[string]interface{}, error) {
 	return nil, nil
 }
 
-func (c *appRunConnection) Insert(table string, data map[string]interface{}) (int64, error) {
-	return 0, nil
+func (c *appRunConnection) Insert(context.Context, db.InsertRequest) (db.InsertResult, error) {
+	return db.InsertResult{}, nil
 }
 
-func (c *appRunConnection) Update(table string, data map[string]interface{}, where []string, args []interface{}) (int64, error) {
-	return 0, nil
+func (c *appRunConnection) Update(context.Context, db.UpdateRequest) (db.UpdateResult, error) {
+	return db.UpdateResult{}, nil
 }
 
-func (c *appRunConnection) Delete(table string, where []string, args []interface{}) (int64, error) {
-	return 0, nil
+func (c *appRunConnection) Delete(context.Context, db.DeleteRequest) (db.DeleteResult, error) {
+	return db.DeleteResult{}, nil
 }
 
-func (c *appRunConnection) Count(table string, where []string, args []interface{}) (int64, error) {
+func (c *appRunConnection) Count(context.Context, db.CountRequest) (int64, error) {
 	return 0, nil
 }
 
@@ -106,15 +115,26 @@ func (d *appRunCacheDriver) Close() error {
 	return d.closeErr
 }
 
+// registerAppShutdownProviders 为手工构造的测试应用显式安装资源释放 Provider。
+func registerAppShutdownProviders(t *testing.T, app *App, providers ...ServiceProvider) {
+	t.Helper()
+	for _, provider := range providers {
+		if err := app.RegisterProvider(provider); err != nil {
+			t.Fatalf("注册资源释放 Provider 失败: %v", err)
+		}
+	}
+}
+
 // TestAppRunShutsDownLogAndDatabase 验证应用退出时会关闭日志与数据库资源。
 func TestAppRunShutsDownLogAndDatabase(t *testing.T) {
 	driver := &appRunLogDriver{}
 	conn := &appRunConnection{}
 	app := &App{
-		Log:    log.NewLog(driver),
-		DB:     db.NewDB(conn),
+		log:    log.NewLog(driver),
+		db:     db.NewDB(conn),
 		Kernel: &appRunKernel{},
 	}
+	registerAppShutdownProviders(t, app, &appLogProvider{}, &appDatabaseProvider{})
 
 	if err := app.Run(); err != nil {
 		t.Fatalf("应用运行失败: %v", err)
@@ -133,9 +153,10 @@ func TestAppRunReturnsStartupError(t *testing.T) {
 	driver := &appRunLogDriver{}
 	startupErr := errors.New("startup failed")
 	app := &App{
-		Log:        log.NewLog(driver),
+		log:        log.NewLog(driver),
 		startupErr: startupErr,
 	}
+	registerAppShutdownProviders(t, app, &appLogProvider{})
 
 	if err := app.Run(); !errors.Is(err, startupErr) {
 		t.Fatalf("Run 应返回启动错误，实际为 %v", err)
@@ -151,7 +172,8 @@ func TestAppCloseAggregatesErrorsAndIsIdempotent(t *testing.T) {
 	dbErr := errors.New("database close failed")
 	driver := &appRunLogDriver{closeErr: logErr}
 	connection := &appRunConnection{closeErr: dbErr}
-	app := &App{Log: log.NewLog(driver), DB: db.NewDB(connection)}
+	app := &App{log: log.NewLog(driver), db: db.NewDB(connection)}
+	registerAppShutdownProviders(t, app, &appLogProvider{}, &appDatabaseProvider{})
 
 	first := app.Close()
 	second := app.Close()
@@ -167,9 +189,10 @@ func TestAppCloseAggregatesErrorsAndIsIdempotent(t *testing.T) {
 
 	panicDriver := &appRunLogDriver{}
 	panicApp := &App{
-		Log: log.NewLog(panicDriver),
-		DB:  db.NewDB(&panickingAppRunConnection{}),
+		log: log.NewLog(panicDriver),
+		db:  db.NewDB(&panickingAppRunConnection{}),
 	}
+	registerAppShutdownProviders(t, panicApp, &appLogProvider{}, &appDatabaseProvider{})
 	if err := panicApp.Close(); !errors.Is(err, ErrResourceClosePanic) {
 		t.Fatalf("数据库 Close panic 应转换为 ErrResourceClosePanic，实际为 %v", err)
 	}
@@ -182,7 +205,8 @@ func TestAppCloseAggregatesErrorsAndIsIdempotent(t *testing.T) {
 func TestAppCloseIncludesCacheLifecycle(t *testing.T) {
 	cacheErr := errors.New("cache close failed")
 	driver := &appRunCacheDriver{Memory: cacheDriver.NewMemory(), closeErr: cacheErr}
-	app := &App{Cache: cache.NewCache(nil, driver)}
+	app := &App{cache: cache.NewCache(nil, driver)}
+	registerAppShutdownProviders(t, app, &appCacheProvider{})
 	first := app.Close()
 	second := app.Close()
 	if !errors.Is(first, cacheErr) || !errors.Is(second, cacheErr) {
@@ -190,6 +214,28 @@ func TestAppCloseIncludesCacheLifecycle(t *testing.T) {
 	}
 	if driver.closes != 1 {
 		t.Fatalf("缓存驱动应只关闭一次，实际为 %d", driver.closes)
+	}
+}
+
+// TestAppCloseClosesReplacedCache 验证容器替换资源后，原资源和当前资源都能被安全释放。
+func TestAppCloseClosesReplacedCache(t *testing.T) {
+	originalDriver := &appRunCacheDriver{Memory: cacheDriver.NewMemory()}
+	replacementDriver := &appRunCacheDriver{Memory: cacheDriver.NewMemory()}
+	original := cache.NewCache(nil, originalDriver)
+	replacement := cache.NewCache(nil, replacementDriver)
+	app := &App{container: NewContainer(), cache: original}
+	provider := &appCacheProvider{owned: original}
+	registerAppShutdownProviders(t, app, provider)
+	app.Instance(serviceKeyCache, replacement)
+
+	if app.cache != replacement {
+		t.Fatal("显式替换缓存服务后，应用内部快照应同步到当前实例")
+	}
+	if err := app.Close(); err != nil {
+		t.Fatalf("关闭替换缓存后的应用失败: %v", err)
+	}
+	if originalDriver.closes != 1 || replacementDriver.closes != 1 {
+		t.Fatalf("原缓存和替换缓存都应各关闭一次，original=%d replacement=%d", originalDriver.closes, replacementDriver.closes)
 	}
 }
 
@@ -239,6 +285,25 @@ func TestAppRunRejectsConcurrentAndPostCloseRestarts(t *testing.T) {
 	}
 }
 
+// TestAppServiceMutationIsFrozenAfterRunning 验证应用进入运行态后不会再替换容器服务，避免请求线程观察到半更新快照。
+func TestAppServiceMutationIsFrozenAfterRunning(t *testing.T) {
+	kernel := &blockingAppRunKernel{started: make(chan struct{}), release: make(chan struct{})}
+	app := &App{container: NewContainer(), Kernel: kernel}
+	app.Instance("runtime.value", "before")
+
+	runDone := make(chan error, 1)
+	go func() { runDone <- app.Run() }()
+	<-kernel.started
+	app.Instance("runtime.value", "after")
+	if got, err := app.Make("runtime.value"); err != nil || got != "before" {
+		t.Fatalf("运行态不应接受服务替换，value=%#v err=%v", got, err)
+	}
+	close(kernel.release)
+	if err := <-runDone; err != nil {
+		t.Fatalf("应用运行失败: %v", err)
+	}
+}
+
 // TestApplicationLifecycleRejectsNilReceiverAndRecoversGCStopPanic 验证 nil 接收者与后台停止回调异常均可观测。
 func TestApplicationLifecycleRejectsNilReceiverAndRecoversGCStopPanic(t *testing.T) {
 	var nilApp *App
@@ -262,7 +327,10 @@ func TestApplicationLifecycleRejectsNilReceiverAndRecoversGCStopPanic(t *testing
 	if err := safeStopSessionGarbageCollector(func() { panic("gc stop panic") }); err == nil {
 		t.Fatal("停止回调 panic 应转换为错误")
 	}
-	app := &App{sessionGCStop: func() { panic("gc stop panic") }}
+	app := &App{}
+	registerAppShutdownProviders(t, app, &appSessionProvider{
+		stopGarbageCollector: func() { panic("gc stop panic") },
+	})
 	if err := app.Close(); err == nil {
 		t.Fatal("App.Close 应返回会话回收停止错误")
 	}

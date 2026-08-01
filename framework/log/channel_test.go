@@ -103,6 +103,29 @@ func TestRegisterChannelRejectsClosedLogger(t *testing.T) {
 	}
 }
 
+// TestRegisterChannelEnforcesSingleParent 验证子通道不能被多个父日志器共同拥有。
+func TestRegisterChannelEnforcesSingleParent(t *testing.T) {
+	firstParent := NewLog()
+	secondParent := NewLog()
+	child := NewLog()
+
+	if err := firstParent.RegisterChannel("child", child); err != nil {
+		t.Fatalf("首次注册子通道失败: %v", err)
+	}
+	if err := secondParent.RegisterChannel("child", child); !errors.Is(err, ErrLogChannelOwned) {
+		t.Fatalf("共享子通道应返回所有权错误，实际为 %v", err)
+	}
+	if got := secondParent.Channel("child"); got != secondParent {
+		t.Fatalf("拒绝共享子通道后，第二个父日志器不应暴露该通道")
+	}
+	if err := firstParent.Close(); err != nil {
+		t.Fatalf("关闭第一个父日志器失败: %v", err)
+	}
+	if err := secondParent.Close(); err != nil {
+		t.Fatalf("关闭第二个父日志器失败: %v", err)
+	}
+}
+
 // TestRegisterChannelConcurrentOppositeEdgesStayAcyclic 验证并发反向注册最多成功一条边。
 func TestRegisterChannelConcurrentOppositeEdgesStayAcyclic(t *testing.T) {
 	left := NewLog()

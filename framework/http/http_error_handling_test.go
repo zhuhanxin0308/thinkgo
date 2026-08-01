@@ -20,9 +20,10 @@ import (
 // TestServeHTTPTurnsHttpRunListenerErrorInto500 验证请求开始事件错误进入统一异常处理而非继续执行业务路由。
 func TestServeHTTPTurnsHttpRunListenerErrorInto500(t *testing.T) {
 	app := newTestHTTPApp(t, t.TempDir(), map[string]interface{}{"enable": false})
-	app.Event = event.NewDispatcher()
+	dispatcher := event.NewDispatcher()
+	app.Instance(string(framework.ServiceEvent), dispatcher)
 	listenerErr := errors.New("private listener failure")
-	if err := app.Event.Listen(event.EventHttpRun, &event.SimpleListener{Handler: func(event.Event) error {
+	if err := dispatcher.Listen(event.EventHttpRun, &event.SimpleListener{Handler: func(event.Event) error {
 		return listenerErr
 	}}); err != nil {
 		t.Fatalf("注册请求事件监听器失败: %v", err)
@@ -76,8 +77,9 @@ func TestServeHTTPLogsActualStatusAfterRecoveredException(t *testing.T) {
 	basePath := t.TempDir()
 	app := newTestHTTPApp(t, basePath, map[string]interface{}{"enable": false})
 	driver := &accessLogDriver{}
-	app.Log = log.NewLog(driver)
-	app.Route.Get("/panic", func(req *fwcontext.Request) *fwcontext.Response {
+	logger := log.NewLog(driver)
+	app.Instance(string(framework.ServiceLog), logger)
+	mustHTTPRoute(t, app).Get("/panic", func(req *fwcontext.Request) *fwcontext.Response {
 		panic(exception.NewHttpException(http.StatusForbidden, "forbidden"))
 	})
 
@@ -87,7 +89,7 @@ func TestServeHTTPLogsActualStatusAfterRecoveredException(t *testing.T) {
 	recorder := httptest.NewRecorder()
 
 	handler.ServeHTTP(recorder, req)
-	_ = app.Log.Close()
+	_ = logger.Close()
 
 	if recorder.Code != http.StatusForbidden {
 		t.Fatalf("恢复后的最终响应状态码应为 403，实际为 %d", recorder.Code)
@@ -119,7 +121,7 @@ func TestServeHTTPDiscardsUncommittedCompressedBodyOnPanic(t *testing.T) {
 		"min_size": 1024,
 		"levels":   map[string]interface{}{"gzip": 1},
 	})
-	if _, err := app.Route.Get("/stream-panic", func(req *fwcontext.Request) *fwcontext.Response {
+	if _, err := mustHTTPRoute(t, app).Get("/stream-panic", func(req *fwcontext.Request) *fwcontext.Response {
 		return fwcontext.NewResponse().Stream(func(writer io.Writer) error {
 			_, _ = writer.Write([]byte("private-partial-body"))
 			panic(exception.NewHttpException(http.StatusInternalServerError, "failed"))
@@ -148,7 +150,7 @@ func TestServeHTTPDiscardsUncommittedBodyOnStreamError(t *testing.T) {
 		"levels":   map[string]interface{}{"gzip": 1},
 	})
 	streamErr := errors.New("private stream error")
-	if _, err := app.Route.Get("/stream-error", func(req *fwcontext.Request) *fwcontext.Response {
+	if _, err := mustHTTPRoute(t, app).Get("/stream-error", func(req *fwcontext.Request) *fwcontext.Response {
 		return fwcontext.NewResponse().Stream(func(writer io.Writer) error {
 			_, _ = writer.Write([]byte("private-partial-body"))
 			return streamErr
@@ -171,7 +173,7 @@ func TestServeHTTPDiscardsUncommittedBodyOnStreamError(t *testing.T) {
 // TestServeHTTPCanReplaceEmptyUncompressedStreamError 验证流在写出前失败时，即使未启用压缩也仍可返回 500。
 func TestServeHTTPCanReplaceEmptyUncompressedStreamError(t *testing.T) {
 	app := newTestHTTPApp(t, t.TempDir(), map[string]interface{}{"enable": false})
-	if _, err := app.Route.Get("/empty-stream-error", func(req *fwcontext.Request) *fwcontext.Response {
+	if _, err := mustHTTPRoute(t, app).Get("/empty-stream-error", func(req *fwcontext.Request) *fwcontext.Response {
 		return fwcontext.NewResponse().Stream(func(io.Writer) error {
 			return errors.New("stream failed before write")
 		})
@@ -193,7 +195,7 @@ func TestServeHTTPPreservesIntentionalResponseBuildErrors(t *testing.T) {
 		"levels":   map[string]interface{}{"gzip": 1},
 	})
 	downloadRoot := t.TempDir()
-	if _, err := app.Route.Get("/unsafe-download", func(req *fwcontext.Request) *fwcontext.Response {
+	if _, err := mustHTTPRoute(t, app).Get("/unsafe-download", func(req *fwcontext.Request) *fwcontext.Response {
 		return fwcontext.NewResponse().DownloadSafe(downloadRoot, "../secret.txt", "")
 	}); err != nil {
 		t.Fatalf("注册路由失败: %v", err)
@@ -210,7 +212,6 @@ func TestServeHTTPPreservesIntentionalResponseBuildErrors(t *testing.T) {
 // TestDispatchMasksInternalErrorsOutsideDebug 验证生产模式下 dispatch 不会把内部容器错误明文返回给客户端。
 func TestDispatchMasksInternalErrorsOutsideDebug(t *testing.T) {
 	app := newTestHTTPApp(t, t.TempDir(), map[string]interface{}{"enable": false})
-	app.Container = framework.NewContainer()
 	app.DebugMode = false
 
 	handler := newTestHTTPHandler(t, app)
@@ -228,7 +229,6 @@ func TestDispatchMasksInternalErrorsOutsideDebug(t *testing.T) {
 // TestDispatchShowsDetailedErrorsInDebug 验证调试模式下仍然会返回详细错误，便于定位问题。
 func TestDispatchShowsDetailedErrorsInDebug(t *testing.T) {
 	app := newTestHTTPApp(t, t.TempDir(), map[string]interface{}{"enable": false})
-	app.Container = framework.NewContainer()
 	app.DebugMode = true
 
 	handler := newTestHTTPHandler(t, app)
@@ -246,7 +246,6 @@ func TestDispatchShowsDetailedErrorsInDebug(t *testing.T) {
 // TestDispatchMasksMethodResolutionErrorsOutsideDebug 验证控制器方法解析失败时，生产模式同样不暴露内部细节。
 func TestDispatchMasksMethodResolutionErrorsOutsideDebug(t *testing.T) {
 	app := newTestHTTPApp(t, t.TempDir(), map[string]interface{}{"enable": false})
-	app.Container = framework.NewContainer()
 	app.DebugMode = false
 	app.BindFactory("BrokenController", func() interface{} {
 		return &testDispatchController{}

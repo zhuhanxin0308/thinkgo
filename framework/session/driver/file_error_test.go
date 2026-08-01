@@ -2,6 +2,7 @@ package driver
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -187,6 +188,167 @@ func TestFileCrossProcessLockWaitsRecoversAndChecksOwner(t *testing.T) {
 	}
 	if err = driver.releaseCrossProcessLock("corrupt", "recovered", recoveredInfo); err != nil {
 		t.Fatalf("释放恢复锁失败: %v", err)
+	}
+}
+
+// TestFileLockErrorsPreservePathAndCause 验证锁文件底层错误保留路径、操作和 errors.Is 语义。
+func TestFileLockErrorsPreservePathAndCause(t *testing.T) {
+	_, directory := newTestFileDriver(t)
+	existingPath := filepath.Join(directory, "existing.lock")
+	if err := os.WriteFile(existingPath, []byte("existing"), 0o600); err != nil {
+		t.Fatalf("创建已有锁文件失败: %v", err)
+	}
+	if _, err := createLockFile(existingPath); err == nil {
+		t.Fatal("重复创建锁文件应失败")
+	} else {
+		var pathErr *os.PathError
+		if !errors.As(err, &pathErr) {
+			t.Fatalf("创建错误应包装为 *os.PathError，实际为 %T: %v", err, err)
+		}
+		if pathErr.Op == "" || pathErr.Path != existingPath || !errors.Is(err, os.ErrExist) {
+			t.Fatalf("创建错误未保留操作、路径或原因: %#v", pathErr)
+		}
+	}
+
+	missingPath := filepath.Join(directory, "missing.lock")
+	if _, err := openLockFile(missingPath); err == nil {
+		t.Fatal("打开缺失锁文件应失败")
+	} else {
+		var pathErr *os.PathError
+		if !errors.As(err, &pathErr) {
+			t.Fatalf("打开错误应包装为 *os.PathError，实际为 %T: %v", err, err)
+		}
+		if pathErr.Op == "" || pathErr.Path != missingPath || !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("打开错误未保留操作、路径或原因: %#v", pathErr)
+		}
+	}
+}
+
+// TestReadManagedFileReportsCurrentReplacementType 验证二次路径校验必须报告当前替换对象，而不是已打开的旧文件。
+func TestReadManagedFileReportsCurrentReplacementType(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "managed.lock")
+	backup := filepath.Join(directory, "managed.lock.old")
+	if err := os.WriteFile(path, []byte("old"), 0o600); err != nil {
+		t.Fatalf("创建旧锁文件失败: %v", err)
+	}
+
+	openAndReplace := func(currentPath string) (*os.File, error) {
+		handle, err := openLockFile(currentPath)
+		if err != nil {
+			return nil, err
+		}
+		if err = os.Rename(currentPath, backup); err != nil {
+			_ = handle.Close()
+			return nil, err
+		}
+		if err = os.Mkdir(currentPath, 0o700); err != nil {
+			_ = handle.Close()
+			return nil, err
+		}
+		return handle, nil
+	}
+
+	_, info, found, err := readManagedFileWithOpen(path, maxFileSessionLockBytes, openAndReplace)
+	if !errors.Is(err, ErrUnsafeSessionFile) || found {
+		t.Fatalf("路径被目录替换后必须立即拒绝: found=%t err=%v", found, err)
+	}
+	if info == nil || !info.IsDir() {
+		t.Fatalf("错误分类必须携带当前目录身份，实际为 %#v", info)
+	}
+}
+
+// TestReadManagedFileReportsCurrentRegularReplacementIdentity 验证普通文件替换也返回二次校验看到的当前身份。
+func TestReadManagedFileReportsCurrentRegularReplacementIdentity(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "managed.lock")
+	backup := filepath.Join(directory, "managed.lock.old")
+	if err := os.WriteFile(path, []byte("old"), 0o600); err != nil {
+		t.Fatalf("创建旧锁文件失败: %v", err)
+	}
+	openAndReplace := func(currentPath string) (*os.File, error) {
+		handle, err := openLockFile(currentPath)
+		if err != nil {
+			return nil, err
+		}
+		if err = os.Rename(currentPath, backup); err != nil {
+			_ = handle.Close()
+			return nil, err
+		}
+		if err = os.WriteFile(currentPath, []byte("new"), 0o600); err != nil {
+			_ = handle.Close()
+			return nil, err
+		}
+		return handle, nil
+	}
+
+	_, info, found, err := readManagedFileWithOpen(path, maxFileSessionLockBytes, openAndReplace)
+	if !errors.Is(err, ErrUnsafeSessionFile) || found {
+		t.Fatalf("普通文件身份被替换后必须拒绝: found=%t err=%v", found, err)
+	}
+	current, currentErr := os.Lstat(path)
+	if currentErr != nil || info == nil || !os.SameFile(info, current) {
+		t.Fatalf("错误分类必须携带当前普通文件身份: info=%#v current=%#v err=%v", info, current, currentErr)
+	}
+}
+
+// TestFileSessionLockRetrySeedProducesBoundedSchedule 验证 owner 哈希只需预计算一次，后续退避保持有界确定性。
+func TestFileSessionLockRetrySeedProducesBoundedSchedule(t *testing.T) {
+	seed := fileSessionLockRetrySeed("stable-owner")
+	first := fileSessionLockRetryDelay(seed, 0)
+	second := fileSessionLockRetryDelay(seed, 1)
+	maximum := fileSessionLockRetry + time.Duration(fileSessionLockRetrySlots-1)*time.Millisecond
+	if first < fileSessionLockRetry || first > maximum || second < fileSessionLockRetry || second > maximum {
+		t.Fatalf("锁重试退避越界: first=%v second=%v range=[%v,%v]", first, second, fileSessionLockRetry, maximum)
+	}
+	if first == second {
+		t.Fatalf("相邻重试不应持续落入同一槽位: first=%v second=%v", first, second)
+	}
+	if repeated := fileSessionLockRetryDelay(seed, 0); repeated != first {
+		t.Fatalf("相同 seed 与 attempt 必须稳定: first=%v repeated=%v", first, repeated)
+	}
+}
+
+// TestFileSessionLockRetryDesynchronizesEqualInitialSlots 验证初始槽相同但 seed 不同的等待者不会永久同步。
+func TestFileSessionLockRetryDesynchronizesEqualInitialSlots(t *testing.T) {
+	firstSeed := fileSessionLockRetrySeed("first-owner")
+	secondSeed := uint32(0)
+	found := false
+	for candidate := 0; candidate < fileSessionLockRetrySlots*4; candidate++ {
+		seed := fileSessionLockRetrySeed(fmt.Sprintf("candidate-%d", candidate))
+		if seed != firstSeed && fileSessionLockRetryDelay(seed, 0) == fileSessionLockRetryDelay(firstSeed, 0) {
+			secondSeed = seed
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("未找到用于验证同初始槽的第二个 seed")
+	}
+	for attempt := uint32(1); attempt < fileSessionLockRetrySlots; attempt++ {
+		if fileSessionLockRetryDelay(firstSeed, attempt) != fileSessionLockRetryDelay(secondSeed, attempt) {
+			return
+		}
+	}
+	t.Fatal("同初始槽的不同 seed 在完整退避周期内仍永久同步")
+}
+
+// TestFileSessionLockDeadlineGraceAllowsOneMissingLockRetry 验证截止瞬间确认锁缺失时仅允许一次最终获取。
+func TestFileSessionLockDeadlineGraceAllowsOneMissingLockRetry(t *testing.T) {
+	start := time.Unix(0, 0)
+	deadline := start.Add(fileSessionLockWait)
+	used := false
+	if fileSessionLockCanRetryMissingAtDeadline(start, deadline, true, &used) {
+		t.Fatal("截止前不应提前消耗锁缺失宽限")
+	}
+	if fileSessionLockCanRetryMissingAtDeadline(deadline, deadline, false, &used) {
+		t.Fatal("非锁缺失错误不应触发宽限")
+	}
+	if !fileSessionLockCanRetryMissingAtDeadline(deadline, deadline, true, &used) {
+		t.Fatal("截止瞬间确认锁缺失时应允许一次最终获取")
+	}
+	if fileSessionLockCanRetryMissingAtDeadline(deadline, deadline, true, &used) {
+		t.Fatal("锁缺失宽限不得形成第二次重试")
 	}
 }
 

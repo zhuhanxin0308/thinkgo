@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"reflect"
 	"strings"
@@ -15,6 +16,7 @@ import (
 
 // queryHardeningConnection 记录查询层传给驱动的数据，验证框架不会污染调用方输入。
 type queryHardeningConnection struct {
+	connectionIdentityState
 	selectRows  []map[string]interface{}
 	insertData  map[string]interface{}
 	updateData  map[string]interface{}
@@ -22,6 +24,22 @@ type queryHardeningConnection struct {
 	updateArg   []interface{}
 	executeSQL  string
 	executeArg  []interface{}
+}
+
+func TestSQLServerLockHintIsAttachedToTable(t *testing.T) {
+	sqlServer := &builder.Sqlsrv{}
+	database := NewDB(&SQLConnection{Builder: sqlServer})
+	query, _, err := database.Table("users").WhereField("id", "=", 7).Lock().BuildSelectSQL()
+	if err != nil {
+		t.Fatalf("build SQL Server locked query: %v", err)
+	}
+	query = sqlServer.Rebind(query)
+	if !strings.Contains(query, "FROM [users] WITH (UPDLOCK, ROWLOCK) WHERE [id] = @p1") {
+		t.Fatalf("SQL Server lock hint is in the wrong position: %s", query)
+	}
+	if strings.HasSuffix(query, "WITH (UPDLOCK, ROWLOCK)") {
+		t.Fatalf("SQL Server lock hint must not be emitted as a tail clause: %s", query)
+	}
 }
 
 // TestAggregateParsesDriverNumericRepresentations 验证聚合值兼容各 SQL 驱动常见数字表示，
@@ -78,27 +96,31 @@ func TestValueAndColumnSupportQualifiedFields(t *testing.T) {
 	}
 }
 
-func (c *queryHardeningConnection) Select(string, string, []string, []interface{}, string, int, int) ([]map[string]interface{}, error) {
+func (c *queryHardeningConnection) Select(context.Context, SelectRequest) ([]map[string]interface{}, error) {
 	return c.selectRows, nil
 }
 
-func (c *queryHardeningConnection) Insert(_ string, data map[string]interface{}) (int64, error) {
-	c.insertData = cloneHardeningMap(data)
-	return 1, nil
+func (c *queryHardeningConnection) Insert(_ context.Context, request InsertRequest) (InsertResult, error) {
+	c.insertData = cloneHardeningMap(request.Data())
+	return InsertResult{Affected: 1, ID: int64(1), IDKnown: request.WantsID(), Data: request.Data()}, nil
 }
 
-func (c *queryHardeningConnection) Update(_ string, data map[string]interface{}, where []string, args []interface{}) (int64, error) {
-	c.updateData = cloneHardeningMap(data)
+func (c *queryHardeningConnection) Update(_ context.Context, request UpdateRequest) (UpdateResult, error) {
+	where, args, err := request.Predicate().compileSQL()
+	if err != nil {
+		return UpdateResult{}, err
+	}
+	c.updateData = cloneHardeningMap(request.Data())
 	c.updateWhere = append([]string(nil), where...)
 	c.updateArg = append([]interface{}(nil), args...)
-	return 1, nil
+	return UpdateResult{Affected: 1, Data: request.Data()}, nil
 }
 
-func (c *queryHardeningConnection) Delete(string, []string, []interface{}) (int64, error) {
-	return 1, nil
+func (c *queryHardeningConnection) Delete(context.Context, DeleteRequest) (DeleteResult, error) {
+	return DeleteResult{Deleted: 1}, nil
 }
 
-func (c *queryHardeningConnection) Count(string, []string, []interface{}) (int64, error) {
+func (c *queryHardeningConnection) Count(context.Context, CountRequest) (int64, error) {
 	return 0, nil
 }
 
@@ -120,6 +142,101 @@ func cloneHardeningMap(source map[string]interface{}) map[string]interface{} {
 		cloned[key] = value
 	}
 	return cloned
+}
+
+// TestQueryEachStreamsRowsAndHonorsEarlyStop 验证 SQL 查询逐行回调、二进制值复制和提前停止语义。
+func TestQueryEachStreamsRowsAndHonorsEarlyStop(t *testing.T) {
+	connection := newHardeningSQLConnection(t)
+	database := NewDB(connection)
+	var seen []int64
+	if err := database.Table("multiple").Field("id, payload").Each(func(row map[string]interface{}) bool {
+		seen = append(seen, row["id"].(int64))
+		payload, ok := row["payload"].([]byte)
+		if !ok || len(payload) != 2 {
+			t.Fatalf("流式行的二进制字段类型错误: %#v", row["payload"])
+		}
+		return true
+	}); err != nil {
+		t.Fatalf("流式查询不应返回错误: %v", err)
+	}
+	if !reflect.DeepEqual(seen, []int64{1, 2}) {
+		t.Fatalf("流式行顺序错误: %#v", seen)
+	}
+
+	seen = nil
+	if err := database.Table("multiple").Field("id, payload").Each(func(row map[string]interface{}) bool {
+		seen = append(seen, row["id"].(int64))
+		return false
+	}); err != nil {
+		t.Fatalf("提前停止的流式查询不应返回错误: %v", err)
+	}
+	if !reflect.DeepEqual(seen, []int64{1}) {
+		t.Fatalf("回调返回 false 后仍继续读取: %#v", seen)
+	}
+
+	seen = nil
+	if err := database.Table("multiple").Join("users", "multiple.id = users.id").Field("multiple.id, multiple.payload").Each(func(row map[string]interface{}) bool {
+		seen = append(seen, row["id"].(int64))
+		return true
+	}); err != nil {
+		t.Fatalf("高级 SQL 流式查询不应返回错误: %v", err)
+	}
+	if !reflect.DeepEqual(seen, []int64{1, 2}) {
+		t.Fatalf("高级 SQL 流式行错误: %#v", seen)
+	}
+}
+
+// TestQueryEachUsesTransactionExecutor 验证事务内流式查询不会错误租用事务外连接。
+func TestQueryEachUsesTransactionExecutor(t *testing.T) {
+	database := NewDB(newHardeningSQLConnection(t))
+	var seen int
+	err := database.Transaction(func(tx *Tx) error {
+		return tx.Table("multiple").Each(func(map[string]interface{}) bool {
+			seen++
+			return true
+		})
+	})
+	if err != nil {
+		t.Fatalf("事务内流式查询失败: %v", err)
+	}
+	if seen != 2 {
+		t.Fatalf("事务内应读取两行，实际为 %d", seen)
+	}
+}
+
+// TestQuerySeekPageUsesTransactionExecutor 验证事务内游标分页沿用同一个事务执行器。
+func TestQuerySeekPageUsesTransactionExecutor(t *testing.T) {
+	database := NewDB(newHardeningSQLConnection(t))
+	err := database.Transaction(func(tx *Tx) error {
+		page, err := tx.Table("multiple").Field("id,payload").SeekPage(1, "id", nil)
+		if err != nil {
+			return err
+		}
+		if len(page.List) != 1 || page.List[0]["id"] != int64(1) || page.NextCursor != int64(1) || !page.HasMore {
+			return fmt.Errorf("事务内游标分页结果错误: %#v", page)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("事务内游标分页失败: %v", err)
+	}
+}
+
+// TestQueryEachRejectsUnsupportedConnection 验证非 SQL 连接不会把物化 Select 冒充成流式能力。
+func TestQueryEachRejectsUnsupportedConnection(t *testing.T) {
+	database := NewDB(&batchRecorderConn{})
+	err := database.Table("users").Each(func(map[string]interface{}) bool { return true })
+	if !errors.Is(err, ErrUnsupportedFeature) {
+		t.Fatalf("非 SQL 连接应返回 ErrUnsupportedFeature，实际为 %v", err)
+	}
+}
+
+// TestQueryEachRejectsNilCallback 验证空回调在获取连接前就明确失败。
+func TestQueryEachRejectsNilCallback(t *testing.T) {
+	database := NewDB(newHardeningSQLConnection(t))
+	if err := database.Table("users").Each(nil); !errors.Is(err, ErrInvalidQuery) {
+		t.Fatalf("空流式回调应返回 ErrInvalidQuery，实际为 %v", err)
+	}
 }
 
 // TestQueryWriteOperationsDoNotMutateCallerData 验证自动时间戳只写入内部副本。
@@ -206,6 +323,15 @@ func TestWhereSupportsSafeThinkPHPTriplet(t *testing.T) {
 	}
 }
 
+// TestWhereFieldsQuotesValidatedIdentifiers 验证批量字段条件仍按当前 SQL 方言引用字段。
+func TestWhereFieldsQuotesValidatedIdentifiers(t *testing.T) {
+	database := NewDB(newHardeningSQLConnection(t))
+	query := database.Table("users").WhereFields([][]interface{}{{"users.status", "=", 1}})
+	if len(query.where) != 1 || query.where[0] != `"users"."status" = ?` {
+		t.Fatalf("WhereFields 字段引用错误: where=%v", query.where)
+	}
+}
+
 // TestJoinDefaultsToMainTableProjection 验证 JOIN 未显式指定字段时只投影主表列，
 // 防止多个表的同名列在 map 结果中发生覆盖或触发重复列错误。
 func TestJoinDefaultsToMainTableProjection(t *testing.T) {
@@ -233,6 +359,19 @@ func TestQueryRejectsInvalidPagination(t *testing.T) {
 	for index, query := range cases {
 		if _, err := query.Select(); !errors.Is(err, ErrInvalidPagination) {
 			t.Fatalf("第 %d 个非法分页应返回 ErrInvalidPagination，实际为 %v", index, err)
+		}
+	}
+}
+
+// TestQueryRejectsResourceExhaustingPagination 验证超大单页不会进入数据库驱动。
+func TestQueryRejectsResourceExhaustingPagination(t *testing.T) {
+	database := NewDB(&queryHardeningConnection{})
+	for _, query := range []*Query{
+		database.Table("users").Limit(maxQueryResultRows + 1),
+		database.Table("users").Page(1, maxQueryResultRows+1),
+	} {
+		if _, err := query.Select(); !errors.Is(err, ErrInvalidPagination) {
+			t.Fatalf("超大分页应返回 ErrInvalidPagination，实际为 %v", err)
 		}
 	}
 }

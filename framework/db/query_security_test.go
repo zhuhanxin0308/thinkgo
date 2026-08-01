@@ -6,6 +6,42 @@ import (
 	"testing"
 )
 
+// TestValidateIdentifierPreservesPartRules 验证标识符快速校验仍遵守分段和字符边界。
+func TestValidateIdentifierPreservesPartRules(t *testing.T) {
+	valid := []string{"id", "_private", "users.user_id", "a1.b2"}
+	for _, value := range valid {
+		if err := validateIdentifier(value); err != nil {
+			t.Fatalf("合法标识符被拒绝: value=%q err=%v", value, err)
+		}
+	}
+	longPart := strings.Repeat("a", maxIdentifierPartLength+1)
+	invalid := []string{"", "1id", "users..id", ".id", "id.", "user-name", "user name", longPart}
+	for _, value := range invalid {
+		if err := validateIdentifier(value); err == nil {
+			t.Fatalf("非法标识符未被拒绝: value=%q", value)
+		}
+	}
+}
+
+// TestNormalizeOperatorPreservesCanonicalForms 验证操作符大小写和多余空白仍按原契约规范化。
+func TestNormalizeOperatorPreservesCanonicalForms(t *testing.T) {
+	cases := []struct {
+		input string
+		want  string
+	}{
+		{input: "=", want: "="},
+		{input: "LIKE", want: "LIKE"},
+		{input: " not   like ", want: "NOT LIKE"},
+		{input: " is   not ", want: "IS NOT"},
+	}
+	for _, testCase := range cases {
+		got, err := normalizeOperator(testCase.input)
+		if err != nil || got != testCase.want {
+			t.Fatalf("操作符规范化错误: input=%q got=%q want=%q err=%v", testCase.input, got, testCase.want, err)
+		}
+	}
+}
+
 // TestQueryRejectsUnsafeTableName 验证查询构建器不会接受带有注入片段的表名。
 func TestQueryRejectsUnsafeTableName(t *testing.T) {
 	db := NewDB(&mockConnection{})

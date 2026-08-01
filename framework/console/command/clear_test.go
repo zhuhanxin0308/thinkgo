@@ -9,6 +9,7 @@ import (
 
 	"thinkgo/framework"
 	"thinkgo/framework/cache"
+	cacheDriver "thinkgo/framework/cache/driver"
 	"thinkgo/framework/console"
 )
 
@@ -37,9 +38,15 @@ func TestClearOnlyRemovesCacheDirectory(t *testing.T) {
 			t.Fatalf("创建测试目录失败: %v", err)
 		}
 	}
+	fileCache, err := cacheDriver.NewFile(cachePath)
+	if err != nil {
+		t.Fatalf("创建文件缓存驱动失败: %v", err)
+	}
+	if err = fileCache.Set("old", "cache", 0); err != nil {
+		t.Fatalf("写入受管缓存失败: %v", err)
+	}
 
 	files := map[string]string{
-		filepath.Join(cachePath, "old.cache"):       "cache",
 		filepath.Join(cachePath, "active.lock"):     "lock",
 		filepath.Join(cachePath, "keep.txt"):        "unmanaged",
 		filepath.Join(logPath, "app.log"):           "log",
@@ -53,13 +60,14 @@ func TestClearOnlyRemovesCacheDirectory(t *testing.T) {
 		}
 	}
 
-	cmd := &Clear{Command: console.Command{App: &framework.App{BasePath: basePath}}}
+	app := buildConsoleTestApp(t, basePath)
+	cmd := &Clear{Command: console.Command{App: app}}
 	if err := cmd.Execute(console.NewInput(), console.NewOutput()); err != nil {
 		t.Fatalf("清理缓存失败: %v", err)
 	}
 
-	if _, err := os.Stat(filepath.Join(cachePath, "old.cache")); !os.IsNotExist(err) {
-		t.Fatalf("clear 应删除旧缓存文件，实际错误: %v", err)
+	if _, found, err := fileCache.Get("old"); err != nil || found {
+		t.Fatalf("clear 应删除受管缓存文件: found=%t err=%v", found, err)
 	}
 	if _, err := os.Stat(cachePath); err != nil {
 		t.Fatalf("clear 后缓存目录应被重建: %v", err)
@@ -90,10 +98,8 @@ func TestClearReportsCacheBackendFailure(t *testing.T) {
 		t.Fatalf("写入缓存标记失败: %v", err)
 	}
 	backendErr := errors.New("backend unavailable")
-	app := &framework.App{
-		BasePath: basePath,
-		Cache:    cache.NewCache(nil, &clearFailingCacheDriver{err: backendErr}),
-	}
+	app := buildConsoleTestApp(t, basePath)
+	app.Instance(string(framework.ServiceCache), cache.NewCache(nil, &clearFailingCacheDriver{err: backendErr}))
 	cmd := &Clear{Command: console.Command{App: app}}
 	if err := cmd.Execute(console.NewInput(), console.NewOutput()); !errors.Is(err, backendErr) {
 		t.Fatalf("命令应返回缓存后端错误，实际为 %v", err)
@@ -126,7 +132,10 @@ func TestClearRejectsMissingDependenciesAndInvalidLocalPath(t *testing.T) {
 	if err := os.WriteFile(cachePath, []byte("path-conflict"), 0o600); err != nil {
 		t.Fatalf("创建缓存路径冲突文件失败: %v", err)
 	}
-	command := &Clear{Command: console.Command{App: &framework.App{BasePath: basePath}}}
+	app := buildConsoleTestApp(t, t.TempDir())
+	app.BasePath = basePath
+	app.RuntimePath = runtimePath
+	command := &Clear{Command: console.Command{App: app}}
 	if err := command.Execute(console.NewInput(), output); err == nil {
 		t.Fatal("缓存目录被文件占用时应返回错误")
 	}

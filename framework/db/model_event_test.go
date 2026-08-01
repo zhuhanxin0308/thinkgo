@@ -1,9 +1,124 @@
 package db
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
+
+type modelEventResultConnection struct {
+	timestampCaptureConnection
+}
+
+func (c *modelEventResultConnection) Insert(ctx context.Context, request InsertRequest) (InsertResult, error) {
+	result, err := c.timestampCaptureConnection.Insert(ctx, request)
+	result.Data = map[string]interface{}{
+		"name": "stale",
+		"meta": map[string]interface{}{"role": "stale"},
+	}
+	return result, err
+}
+
+func TestModelEventsOwnDeepPayloadsAndSeeFinalData(t *testing.T) {
+	connection := &modelEventResultConnection{}
+	model := NewModel(NewDB(connection), "users").AutoTimestamp(true)
+
+	var firstBefore map[string]interface{}
+	if err := model.On(ModelBeforeInsert, func(data map[string]interface{}) bool {
+		firstBefore = data
+		data["meta"].(map[string]interface{})["role"] = "writer"
+		return true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var secondSawRole interface{}
+	if err := model.On(ModelBeforeInsert, func(data map[string]interface{}) bool {
+		secondSawRole = data["meta"].(map[string]interface{})["role"]
+		data["name"] = "Grace"
+		return true
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var firstAfter, secondAfter map[string]interface{}
+	if err := model.On(ModelAfterInsert, func(data map[string]interface{}) bool {
+		firstAfter = data
+		data["meta"].(map[string]interface{})["role"] = "after-mutated"
+		return true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.On(ModelAfterInsert, func(data map[string]interface{}) bool {
+		secondAfter = data
+		return true
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	input := map[string]interface{}{
+		"name": "Ada",
+		"meta": map[string]interface{}{"role": "reader"},
+	}
+	if _, err := model.InsertGetId(input); err != nil {
+		t.Fatal(err)
+	}
+
+	if firstBefore["name"] != "Ada" {
+		t.Fatalf("later before callback polluted historical payload: %#v", firstBefore)
+	}
+	if secondSawRole != "writer" {
+		t.Fatalf("ordered before callbacks did not receive prior changes: %#v", secondSawRole)
+	}
+	if secondAfter["id"] == nil || secondAfter["create_time"] == nil || secondAfter["update_time"] == nil || secondAfter["name"] != "Grace" {
+		t.Fatalf("after callback did not receive final persisted data: %#v", secondAfter)
+	}
+	if secondAfter["meta"].(map[string]interface{})["role"] != "writer" || firstAfter["meta"].(map[string]interface{})["role"] != "after-mutated" {
+		t.Fatalf("after callbacks shared mutable payloads: first=%#v second=%#v", firstAfter, secondAfter)
+	}
+	if input["meta"].(map[string]interface{})["role"] != "reader" {
+		t.Fatalf("model hooks mutated caller-owned nested data: %#v", input)
+	}
+}
+
+func TestModelWriteEventsSeeTimestampAndTypedResultSummaries(t *testing.T) {
+	connection := &timestampCaptureConnection{}
+	model := NewModel(NewDB(connection), "users").AutoTimestamp(true).SoftDelete()
+
+	var updateAfter map[string]interface{}
+	if err := model.On(ModelAfterUpdate, func(data map[string]interface{}) bool {
+		updateAfter = data
+		return true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := model.newModelQuery().WhereField("id", "=", 1).Update(map[string]interface{}{"name": "Grace"}); err != nil {
+		t.Fatal(err)
+	}
+	if updateAfter["name"] != "Grace" || updateAfter["update_time"] == nil {
+		t.Fatalf("after_update did not receive final persisted data: %#v", updateAfter)
+	}
+
+	var deleteAfter map[string]interface{}
+	if err := model.On(ModelAfterDelete, func(data map[string]interface{}) bool {
+		deleteAfter = data
+		return true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := model.newModelQuery().WhereField("id", "=", 1).Delete(); err != nil {
+		t.Fatal(err)
+	}
+	if deleteAfter["delete_time"] == nil || deleteAfter["update_time"] == nil || deleteAfter["affected"] != int64(1) {
+		t.Fatalf("soft-delete event did not receive persisted timestamps: %#v", deleteAfter)
+	}
+
+	if _, err := model.newModelQuery().WhereField("id", "=", 1).ForceDelete(); err != nil {
+		t.Fatal(err)
+	}
+	if deleteAfter["deleted"] != int64(1) {
+		t.Fatalf("physical-delete event did not receive typed delete summary: %#v", deleteAfter)
+	}
+}
 
 // TestModelBeforeInsertPreventsInsert 验证 before_insert 事件返回 false 可阻止插入。
 func TestModelBeforeInsertPreventsInsert(t *testing.T) {
@@ -34,9 +149,9 @@ func TestModelAfterInsertReceivesId(t *testing.T) {
 		return true
 	})
 
-	id, err := model.Insert(map[string]interface{}{"name": "test"})
+	id, err := model.InsertGetId(map[string]interface{}{"name": "test"})
 	if err != nil {
-		t.Fatalf("Insert 不应返回错误，实际为 %v", err)
+		t.Fatalf("InsertGetId 不应返回错误，实际为 %v", err)
 	}
 	if receivedId != id {
 		t.Fatalf("after_insert 应收到插入 ID，期望 %v，实际 %v", id, receivedId)

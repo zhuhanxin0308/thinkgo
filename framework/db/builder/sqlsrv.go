@@ -3,11 +3,15 @@ package builder
 import (
 	"fmt"
 	"strings"
+
+	"thinkgo/framework/db/internal/contract"
 )
 
 // Sqlsrv builder（SQL Server 方言）
 // 统一使用 ? 占位符构建，执行前由 Rebind 转换为 @pN 风格。
 type Sqlsrv struct{}
+
+func (s *Sqlsrv) DialectName() string { return "sqlserver" }
 
 func sqlsrvQuote(name string) string {
 	return quoteWith(name, "[", "]")
@@ -60,7 +64,20 @@ func (s *Sqlsrv) Pagination(order string, limit int, offset int) (string, string
 	return orderClause, limitClause
 }
 
-// LockClause SQL Server 用表提示实现行锁，简单查询难以安全表达，这里不输出尾子句。
+func (s *Sqlsrv) Lock(mode contract.LockMode) (contract.LockSpec, error) {
+	switch mode {
+	case contract.LockNone:
+		return contract.LockSpec{}, nil
+	case contract.LockForUpdate:
+		return contract.LockSpec{TableHint: " WITH (UPDLOCK, ROWLOCK)"}, nil
+	case contract.LockForShare:
+		return contract.LockSpec{TableHint: " WITH (HOLDLOCK, ROWLOCK)"}, nil
+	default:
+		return contract.LockSpec{}, contract.ErrUnsupportedLockMode
+	}
+}
+
+// LockClause 保留旧版字符串锁子句兼容入口；SQL Server 锁提示由类型化接口处理。
 func (s *Sqlsrv) LockClause(string) string { return "" }
 
 // SupportsLastInsertId SQL Server 驱动不可靠支持 LastInsertId，需走 OUTPUT INSERTED。

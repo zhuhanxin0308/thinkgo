@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"unicode/utf8"
 )
 
@@ -25,6 +26,8 @@ const (
 	maxLanguageKeyBytes      = 512
 	maxLanguageTagBytes      = 35
 	maxLanguageVariableBytes = 64
+	maxAcceptLanguageBytes   = 8192
+	maxAcceptLanguageEntries = 32
 )
 
 var (
@@ -54,19 +57,38 @@ type DetectionConfig struct {
 	HeaderVariable    string
 }
 
+// RequestDetectionConfig 是请求热路径使用的标量检测配置，不携带需要复制的语言列表。
+type RequestDetectionConfig struct {
+	AutoDetectBrowser bool
+	DetectVariable    string
+	UseCookie         bool
+	CookieVariable    string
+	HeaderVariable    string
+}
+
+type languageDetectionSnapshot struct {
+	config      DetectionConfig
+	defaultLang string
+	loaded      map[string]struct{}
+	allowed     map[string]struct{}
+	prefixes    map[string][]string
+	ordered     []string
+}
+
 // Lang 管理原子加载的扁平翻译表和无请求共享状态的检测配置。
 type Lang struct {
-	data        map[string]map[string]string
-	currentLang string
-	defaultLang string
-	detection   DetectionConfig
-	allowedSet  map[string]bool
-	lock        sync.RWMutex
+	data              map[string]map[string]string
+	currentLang       string
+	defaultLang       string
+	detection         DetectionConfig
+	allowedSet        map[string]bool
+	detectionSnapshot atomic.Pointer[languageDetectionSnapshot]
+	lock              sync.RWMutex
 }
 
 // NewLang 创建使用安全默认检测配置的语言管理器。
 func NewLang() *Lang {
-	return &Lang{
+	manager := &Lang{
 		data:        make(map[string]map[string]string),
 		currentLang: defaultLanguage,
 		defaultLang: defaultLanguage,
@@ -79,6 +101,150 @@ func NewLang() *Lang {
 		},
 		allowedSet: make(map[string]bool),
 	}
+	manager.lock.Lock()
+	manager.publishDetectionSnapshotLocked()
+	manager.lock.Unlock()
+	return manager
+}
+
+// publishDetectionSnapshotLocked 在持有语言状态锁时发布完整、不可变的请求检测快照。
+func (l *Lang) publishDetectionSnapshotLocked() {
+	config := l.detection
+	config.AllowedLanguages = append([]string(nil), l.detection.AllowedLanguages...)
+	loaded := make(map[string]struct{}, len(l.data))
+	for language := range l.data {
+		loaded[language] = struct{}{}
+	}
+	allowed := make(map[string]struct{}, len(l.allowedSet))
+	for language, enabled := range l.allowedSet {
+		if enabled {
+			allowed[language] = struct{}{}
+		}
+	}
+	ordered := make([]string, 0, len(loaded))
+	if len(config.AllowedLanguages) > 0 {
+		for _, language := range config.AllowedLanguages {
+			if _, exists := loaded[language]; exists {
+				ordered = append(ordered, language)
+			}
+		}
+	} else {
+		for language := range loaded {
+			ordered = append(ordered, language)
+		}
+		sort.Strings(ordered)
+	}
+	prefixes := make(map[string][]string, len(ordered))
+	for _, language := range ordered {
+		prefix := strings.SplitN(language, "-", 2)[0]
+		prefixes[prefix] = append(prefixes[prefix], language)
+	}
+	l.detectionSnapshot.Store(&languageDetectionSnapshot{
+		config:      config,
+		defaultLang: l.defaultLang,
+		loaded:      loaded,
+		allowed:     allowed,
+		prefixes:    prefixes,
+		ordered:     ordered,
+	})
+}
+
+func (l *Lang) loadDetectionSnapshot() *languageDetectionSnapshot {
+	if l == nil {
+		return nil
+	}
+	if snapshot := l.detectionSnapshot.Load(); snapshot != nil {
+		return snapshot
+	}
+	return &languageDetectionSnapshot{
+		config:      DetectionConfig{},
+		defaultLang: "",
+		loaded:      map[string]struct{}{},
+		allowed:     map[string]struct{}{},
+		prefixes:    map[string][]string{},
+	}
+}
+
+func matchLanguageSnapshot(snapshot *languageDetectionSnapshot, candidate string) string {
+	if snapshot == nil || strings.TrimSpace(candidate) == "" {
+		return ""
+	}
+	normalized, err := normalizeLanguageTag(candidate)
+	if err != nil {
+		return ""
+	}
+	if _, loaded := snapshot.loaded[normalized]; loaded {
+		if len(snapshot.allowed) == 0 {
+			return normalized
+		}
+		if _, allowed := snapshot.allowed[normalized]; allowed {
+			return normalized
+		}
+	}
+	prefix := strings.SplitN(normalized, "-", 2)[0]
+	for _, language := range snapshot.prefixes[prefix] {
+		return language
+	}
+	return ""
+}
+
+type weightedLanguage struct {
+	tag      string
+	quality  float64
+	position int
+}
+
+func parseAcceptLanguage(header string) []weightedLanguage {
+	if len(header) == 0 || len(header) > maxAcceptLanguageBytes {
+		return nil
+	}
+	parts := strings.Split(header, ",")
+	if len(parts) > maxAcceptLanguageEntries {
+		return nil
+	}
+
+	languages := make([]weightedLanguage, 0, len(parts))
+	for position, part := range parts {
+		segments := strings.Split(part, ";")
+		tag := strings.TrimSpace(segments[0])
+		if tag == "" {
+			continue
+		}
+		quality, valid := parseLanguageQuality(segments[1:])
+		if !valid || quality <= 0 {
+			continue
+		}
+		languages = append(languages, weightedLanguage{tag: tag, quality: quality, position: position})
+	}
+
+	sort.SliceStable(languages, func(left, right int) bool {
+		if languages[left].quality == languages[right].quality {
+			return languages[left].position < languages[right].position
+		}
+		return languages[left].quality > languages[right].quality
+	})
+	return languages
+}
+
+func parseLanguageQuality(parameters []string) (float64, bool) {
+	quality := 1.0
+	found := false
+	for _, parameter := range parameters {
+		name, raw, exists := strings.Cut(strings.TrimSpace(parameter), "=")
+		if !exists || !strings.EqualFold(strings.TrimSpace(name), "q") {
+			continue
+		}
+		if found {
+			return 0, false
+		}
+		found = true
+		value, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
+		if err != nil || math.IsNaN(value) || math.IsInf(value, 0) || value < 0 || value > 1 {
+			return 0, false
+		}
+		quality = value
+	}
+	return quality, true
 }
 
 // Init 严格解析检测配置，并在全部字段通过校验后一次性提交。
@@ -158,6 +324,7 @@ func (l *Lang) Init(config map[string]interface{}) error {
 	l.currentLang = defaultLang
 	l.detection = detection
 	l.allowedSet = allowedSet
+	l.publishDetectionSnapshotLocked()
 	l.lock.Unlock()
 	return nil
 }
@@ -167,11 +334,25 @@ func (l *Lang) DetectionConfig() DetectionConfig {
 	if l == nil {
 		return DetectionConfig{}
 	}
-	l.lock.RLock()
-	defer l.lock.RUnlock()
-	config := l.detection
-	config.AllowedLanguages = append([]string(nil), l.detection.AllowedLanguages...)
+	snapshot := l.loadDetectionSnapshot()
+	config := snapshot.config
+	config.AllowedLanguages = append([]string(nil), snapshot.config.AllowedLanguages...)
 	return config
+}
+
+// RequestDetectionConfig 返回请求检测所需的不可变标量配置，避免每个请求复制 AllowedLanguages。
+func (l *Lang) RequestDetectionConfig() RequestDetectionConfig {
+	if l == nil {
+		return RequestDetectionConfig{}
+	}
+	snapshot := l.loadDetectionSnapshot()
+	return RequestDetectionConfig{
+		AutoDetectBrowser: snapshot.config.AutoDetectBrowser,
+		DetectVariable:    snapshot.config.DetectVariable,
+		UseCookie:         snapshot.config.UseCookie,
+		CookieVariable:    snapshot.config.CookieVariable,
+		HeaderVariable:    snapshot.config.HeaderVariable,
+	}
 }
 
 // GetDefaultLang 获取默认语言。
@@ -228,22 +409,41 @@ func (l *Lang) MatchLanguage(candidate string) string {
 	if l == nil {
 		return ""
 	}
-	normalized, err := normalizeLanguageTag(candidate)
-	if err != nil {
+	return matchLanguageSnapshot(l.loadDetectionSnapshot(), candidate)
+}
+
+// DetectLanguage 按 query、cookie、header、Accept-Language、default 的顺序检测请求语言。
+// 整个请求只读取一次不可变快照，避免同一请求混用不同版本的语言配置。
+func (l *Lang) DetectLanguage(queryValue, cookieValue, headerValue, acceptLanguage string) string {
+	if l == nil {
 		return ""
 	}
-	l.lock.RLock()
-	defer l.lock.RUnlock()
-	if _, exists := l.data[normalized]; exists && l.languageAllowedLocked(normalized) {
-		return normalized
+	snapshot := l.loadDetectionSnapshot()
+	if selected := matchLanguageSnapshot(snapshot, queryValue); selected != "" {
+		return selected
 	}
-	mainLanguage := strings.Split(normalized, "-")[0]
-	for _, language := range l.orderedLanguagesLocked() {
-		if strings.Split(language, "-")[0] == mainLanguage && l.languageAllowedLocked(language) {
-			return language
+	if snapshot.config.UseCookie {
+		if selected := matchLanguageSnapshot(snapshot, cookieValue); selected != "" {
+			return selected
 		}
 	}
-	return ""
+	if selected := matchLanguageSnapshot(snapshot, headerValue); selected != "" {
+		return selected
+	}
+	if snapshot.config.AutoDetectBrowser && strings.TrimSpace(acceptLanguage) != "" {
+		for _, candidate := range parseAcceptLanguage(acceptLanguage) {
+			if candidate.tag == "*" {
+				if selected := matchLanguageSnapshot(snapshot, snapshot.defaultLang); selected != "" {
+					return selected
+				}
+				continue
+			}
+			if selected := matchLanguageSnapshot(snapshot, candidate.tag); selected != "" {
+				return selected
+			}
+		}
+	}
+	return snapshot.defaultLang
 }
 
 // Load 解析一个语言文件，并在成功后原子合并到对应语言包。
@@ -271,6 +471,7 @@ func (l *Lang) Load(file, language string) error {
 		merged[key] = value
 	}
 	l.data[normalized] = merged
+	l.publishDetectionSnapshotLocked()
 	l.lock.Unlock()
 	return nil
 }
@@ -415,6 +616,7 @@ func (l *Lang) LoadAll(directory string) error {
 	if _, exists := replacement[l.currentLang]; !exists || !l.languageAllowedLocked(l.currentLang) {
 		l.currentLang = l.defaultLang
 	}
+	l.publishDetectionSnapshotLocked()
 	l.lock.Unlock()
 	return nil
 }
@@ -517,6 +719,7 @@ func readLanguageObject(decoder *json.Decoder, prefix string, depth int, transla
 }
 
 func readLanguageFile(filePath string) (content []byte, err error) {
+	// #nosec G304 -- filePath 由应用语言目录解析器生成，加载前已完成应用根目录边界校验。
 	file, err := os.Open(filePath)
 	if err != nil {
 		return nil, err
@@ -546,24 +749,6 @@ func readLanguageFile(filePath string) (content []byte, err error) {
 
 func (l *Lang) languageAllowedLocked(language string) bool {
 	return len(l.allowedSet) == 0 || l.allowedSet[language]
-}
-
-func (l *Lang) orderedLanguagesLocked() []string {
-	if len(l.detection.AllowedLanguages) > 0 {
-		result := make([]string, 0, len(l.detection.AllowedLanguages))
-		for _, language := range l.detection.AllowedLanguages {
-			if _, loaded := l.data[language]; loaded {
-				result = append(result, language)
-			}
-		}
-		return result
-	}
-	result := make([]string, 0, len(l.data))
-	for language := range l.data {
-		result = append(result, language)
-	}
-	sort.Strings(result)
-	return result
 }
 
 func normalizeLanguageTag(language string) (string, error) {

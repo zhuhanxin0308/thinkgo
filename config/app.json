@@ -3,17 +3,19 @@
     "app_env": "development",
     "app_debug": false,
     "app_trace": false,
+    "metrics_enable": false,
+    "operational_routes_enable": true,
     "session_enable": false,
     "default_timezone": "Asia/Shanghai",
     "default_lang": "zh-cn",
     "server": {
-        "host": "0.0.0.0",
+        "host": "127.0.0.1",
         "port": 8081,
-        "http3": true,
-        "allowed_hosts": [],
+        "http3": false,
+        "allowed_hosts": ["127.0.0.1", "localhost"],
         "trusted_proxies": [],
         "tls": {
-            "enable": true,
+            "enable": false,
             "cert_file": "./runtime/cert.pem",
             "key_file": "./runtime/key.pem"
         }

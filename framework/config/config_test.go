@@ -1,11 +1,46 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
 )
+
+// TestConfigCachesRemainBounded 验证动态点路径查询不会让配置缓存无限增长。
+func TestConfigCachesRemainBounded(t *testing.T) {
+	cfg := NewConfig()
+	values := make(map[string]interface{}, maxConfigCacheEntries+32)
+	for index := 0; index < maxConfigCacheEntries+32; index++ {
+		values[fmt.Sprintf("value_%d", index)] = index
+	}
+	cfg.Set("service", values)
+
+	for index := 0; index < maxConfigCacheEntries+32; index++ {
+		name := fmt.Sprintf("service.value_%d", index)
+		if got := cfg.Get(name); got != index {
+			t.Fatalf("动态配置路径读取错误: name=%s got=%v want=%d", name, got, index)
+		}
+	}
+
+	if len(cfg.lookupCache) != maxConfigCacheEntries || len(cfg.lookupKeys) != maxConfigCacheEntries {
+		t.Fatalf("点路径结果缓存应保持有界: entries=%d keys=%d limit=%d", len(cfg.lookupCache), len(cfg.lookupKeys), maxConfigCacheEntries)
+	}
+	if len(cfg.pathCache) != maxConfigCacheEntries || len(cfg.pathKeys) != maxConfigCacheEntries {
+		t.Fatalf("点路径切分缓存应保持有界: entries=%d keys=%d limit=%d", len(cfg.pathCache), len(cfg.pathKeys), maxConfigCacheEntries)
+	}
+	if _, exists := cfg.lookupCache["service.value_0"]; exists {
+		t.Fatal("最早的点路径结果应被淘汰")
+	}
+	if _, exists := cfg.pathCache["service.value_0"]; exists {
+		t.Fatal("最早的点路径切分结果应被淘汰")
+	}
+	latest := fmt.Sprintf("service.value_%d", maxConfigCacheEntries+31)
+	if _, exists := cfg.lookupCache[latest]; !exists {
+		t.Fatalf("最新的点路径结果应保留: %s", latest)
+	}
+}
 
 // TestConfigGetCachesResolvedDotLookup 验证点路径查询会写入缓存，避免每次重复拆分和逐层遍历。
 func TestConfigGetCachesResolvedDotLookup(t *testing.T) {

@@ -19,23 +19,23 @@ func TestBuiltInCommandDefinitions(t *testing.T) {
 		signature    string
 		argumentName string
 		required     bool
-		optionName   string
+		optionNames  []string
 	}{
-		{command: &Clear{}, signature: "clear"},
-		{command: &ConfigDump{}, signature: "config:dump", argumentName: "name"},
+		{command: &Clear{}, signature: "clear", optionNames: []string{"app"}},
+		{command: &ConfigDump{}, signature: "config:dump", argumentName: "name", optionNames: []string{"app"}},
 		{command: &List{}, signature: "list"},
-		{command: &RouteList{}, signature: "route:list"},
-		{command: &Run{}, signature: "run", optionName: "port"},
+		{command: &RouteList{}, signature: "route:list", optionNames: []string{"app"}},
+		{command: &Run{}, signature: "run", optionNames: []string{"port", "app"}},
 		{command: &Version{}, signature: "version"},
-		{command: &MakeCommand{}, signature: "make:command", argumentName: "name", required: true},
-		{command: &MakeController{}, signature: "make:controller", argumentName: "name", required: true},
-		{command: &MakeEvent{}, signature: "make:event", argumentName: "name", required: true},
-		{command: &MakeListener{}, signature: "make:listener", argumentName: "name", required: true},
-		{command: &MakeMiddleware{}, signature: "make:middleware", argumentName: "name", required: true},
-		{command: &MakeModel{}, signature: "make:model", argumentName: "name", required: true},
-		{command: &MakeService{}, signature: "make:service", argumentName: "name", required: true},
-		{command: &MakeSubscribe{}, signature: "make:subscribe", argumentName: "name", required: true},
-		{command: &MakeValidate{}, signature: "make:validate", argumentName: "name", required: true},
+		{command: &MakeCommand{}, signature: "make:command", argumentName: "name", required: true, optionNames: []string{"app"}},
+		{command: &MakeController{}, signature: "make:controller", argumentName: "name", required: true, optionNames: []string{"app"}},
+		{command: &MakeEvent{}, signature: "make:event", argumentName: "name", required: true, optionNames: []string{"app"}},
+		{command: &MakeListener{}, signature: "make:listener", argumentName: "name", required: true, optionNames: []string{"app"}},
+		{command: &MakeMiddleware{}, signature: "make:middleware", argumentName: "name", required: true, optionNames: []string{"app"}},
+		{command: &MakeModel{}, signature: "make:model", argumentName: "name", required: true, optionNames: []string{"app"}},
+		{command: &MakeService{}, signature: "make:service", argumentName: "name", required: true, optionNames: []string{"app"}},
+		{command: &MakeSubscribe{}, signature: "make:subscribe", argumentName: "name", required: true, optionNames: []string{"app"}},
+		{command: &MakeValidate{}, signature: "make:validate", argumentName: "name", required: true, optionNames: []string{"app"}},
 	}
 
 	for _, testCase := range testCases {
@@ -54,12 +54,13 @@ func TestBuiltInCommandDefinitions(t *testing.T) {
 				t.Fatalf("位置参数声明错误: %v", arguments)
 			}
 			options := testCase.command.GetOptionDefinitions()
-			if testCase.optionName == "" {
-				if len(options) != 0 {
-					t.Fatalf("命令不应声明选项: %v", options)
+			if len(options) != len(testCase.optionNames) {
+				t.Fatalf("选项声明数量错误: want=%v got=%v", testCase.optionNames, options)
+			}
+			for index, optionName := range testCase.optionNames {
+				if options[index].Name != optionName {
+					t.Fatalf("选项声明错误: want=%v got=%v", testCase.optionNames, options)
 				}
-			} else if len(options) != 1 || options[0].Name != testCase.optionName {
-				t.Fatalf("选项声明错误: %v", options)
 			}
 		})
 	}
@@ -113,7 +114,9 @@ func TestRouteListCommandPrintsStableRouteSnapshot(t *testing.T) {
 	}
 	stdout := &bytes.Buffer{}
 	output := console.NewOutputWithWriters(stdout, &bytes.Buffer{}, false)
-	command := &RouteList{Command: console.Command{App: &framework.App{Route: router}}}
+	app := buildConsoleTestApp(t, t.TempDir())
+	app.Instance(string(framework.ServiceRoute), router)
+	command := &RouteList{Command: console.Command{App: app}}
 	if err := command.Execute(console.NewInput(), output); err != nil {
 		t.Fatalf("执行路由列表失败: %v", err)
 	}

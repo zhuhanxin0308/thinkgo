@@ -7,6 +7,8 @@ import (
 	"net/url"
 	"sort"
 	"strconv"
+
+	fwcontext "thinkgo/framework/context"
 )
 
 // URL 根据命名路由生成路径，并严格拒绝复杂对象和非有限数值。
@@ -50,7 +52,7 @@ func (r *Router) URL(name string, params map[string]interface{}) (string, error)
 		pathParts = append(pathParts, url.PathEscape(text))
 	}
 
-	if registered.ext != "" {
+	if registered.ext != "" && len(pathParts) > 0 {
 		if len(pathParts) == 0 {
 			pathParts = append(pathParts, "."+registered.ext)
 		} else {
@@ -93,6 +95,16 @@ func (r *Router) URL(name string, params map[string]interface{}) (string, error)
 		return builtPath, nil
 	}
 	return builtPath + "?" + encodedQuery, nil
+}
+
+// URLForRequest 为当前请求生成带应用路径前缀的站内 URL。
+// 路由器只负责应用内路由，应用边界由请求上下文负责拼接。
+func (r *Router) URLForRequest(request *fwcontext.Request, name string, params map[string]interface{}) (string, error) {
+	path, err := r.URL(name, params)
+	if err != nil || request == nil {
+		return path, err
+	}
+	return request.ApplicationPath(path)
 }
 
 func joinEscapedPathParts(parts []string) string {

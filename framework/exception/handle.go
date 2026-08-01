@@ -1,7 +1,6 @@
 package exception
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
@@ -22,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 
+	frameworkContext "thinkgo/framework/context"
 	frameworkVersion "thinkgo/framework/version"
 )
 
@@ -43,7 +43,7 @@ var (
 	ErrInvalidExceptionStatus = errors.New("异常 HTTP 状态码无效")
 )
 
-var sensitiveTextPattern = regexp.MustCompile(`(?i)((?:password|passwd|token|secret|authorization|cookie|session|api[_-]?key|refresh[_-]?token)\s*[:=]\s*)([^&\s,"']+)`)
+var sensitiveTextPattern = regexp.MustCompile(`(?i)((?:"?)(?:password|passwd|token|secret|authorization|cookie|session|api[_-]?key|refresh[_-]?token)(?:"?)\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^&\s,"']+)`)
 
 // AppContract 抽象应用运行时能力，避免异常处理层和框架主对象形成循环依赖。
 type AppContract interface {
@@ -270,6 +270,12 @@ func safeExceptionText(value interface{}) (text string) {
 }
 
 func sanitizeExceptionText(text string) string {
+	text = sensitiveTextPattern.ReplaceAllString(text, `${1}`+redactedPlaceholder)
+	return normalizeExceptionText(text)
+}
+
+// normalizeExceptionText 统一处理异常文本的长度、编码和控制字符，避免结构化脱敏后的占位符再次被改写。
+func normalizeExceptionText(text string) string {
 	if len(text) > maxExceptionLogTextBytes {
 		text = strings.ToValidUTF8(text[:maxExceptionLogTextBytes], "�") + "…"
 	} else {
@@ -537,7 +543,7 @@ func marshalExceptionJSON(payload interface{}) (body []byte, err error) {
 			err = fmt.Errorf("序列化异常 JSON 时发生 panic: %s", safeExceptionText(recovered))
 		}
 	}()
-	return json.Marshal(payload)
+	return json.Marshal(frameworkContext.NormalizeJSONTimes(payload))
 }
 
 func writeTextResponse(w http.ResponseWriter, code int, message string) error {
@@ -841,13 +847,19 @@ func sanitizeRequestURL(r *http.Request) string {
 		return ""
 	}
 	cloned := *r.URL
+	cloned.Path = sanitizeExceptionText(cloned.Path)
+	cloned.RawPath = ""
+	cloned.Opaque = sanitizeExceptionText(cloned.Opaque)
+	cloned.Fragment = sanitizeExceptionText(cloned.Fragment)
+	cloned.RawFragment = ""
 	query := cloned.Query()
 	for key, values := range query {
-		if !isSensitiveKey(key) {
-			continue
-		}
 		for index := range values {
-			values[index] = redactedPlaceholder
+			if isSensitiveKey(key) {
+				values[index] = redactedPlaceholder
+				continue
+			}
+			values[index] = sanitizeExceptionText(values[index])
 		}
 		query[key] = values
 	}
@@ -855,7 +867,7 @@ func sanitizeRequestURL(r *http.Request) string {
 	if cloned.User != nil {
 		cloned.User = url.User(redactedPlaceholder)
 	}
-	return sanitizeExceptionText(cloned.String())
+	return normalizeExceptionText(cloned.String())
 }
 
 func sanitizeHeaders(headers http.Header) map[string][]string {
@@ -910,110 +922,4 @@ func sanitizeRequestBody(body string, contentType string) string {
 	}
 
 	return strings.ToValidUTF8(sensitiveTextPattern.ReplaceAllString(body, "${1}"+redactedPlaceholder), "�")
-}
-
-// parseGoStack 把 Go 堆栈解析为结构化帧信息。
-func parseGoStack(stack string) []StackFrame {
-	lines := strings.Split(stack, "\n")
-	frames := make([]StackFrame, 0)
-
-	for index := 0; index < len(lines); index++ {
-		line := strings.TrimSpace(lines[index])
-		if line == "" || strings.HasPrefix(line, "goroutine ") {
-			continue
-		}
-
-		functionName := line
-		if left := strings.Index(functionName, "("); left > 0 {
-			functionName = functionName[:left]
-		}
-
-		if index+1 >= len(lines) {
-			continue
-		}
-
-		file, lineNumber := parseFileLine(strings.TrimSpace(lines[index+1]))
-		if file == "" {
-			continue
-		}
-
-		frame := StackFrame{
-			Function:  functionName,
-			File:      file,
-			ShortFile: filepath.Base(file),
-			Line:      lineNumber,
-			Source:    loadSourceContext(file, lineNumber, 8),
-		}
-		frames = append(frames, frame)
-		index++
-	}
-
-	return frames
-}
-
-// parseFileLine 解析堆栈中的文件位置信息。
-func parseFileLine(value string) (string, int) {
-	value = strings.TrimSpace(value)
-	if index := strings.LastIndex(value, " +0x"); index > 0 {
-		value = value[:index]
-	}
-
-	for index := len(value) - 1; index >= 0; index-- {
-		if value[index] != ':' {
-			continue
-		}
-		lineValue := value[index+1:]
-		lineNumber, err := strconv.Atoi(lineValue)
-		if err == nil {
-			return value[:index], lineNumber
-		}
-	}
-
-	return value, 0
-}
-
-// loadSourceContext 加载错误位置附近的源码上下文。
-func loadSourceContext(filePath string, targetLine int, contextLines int) []SourceLine {
-	file, err := os.Open(filePath)
-	if err != nil {
-		return nil
-	}
-	defer file.Close()
-
-	startLine := targetLine - contextLines
-	if startLine < 1 {
-		startLine = 1
-	}
-	endLine := targetLine + contextLines
-
-	lines := make([]SourceLine, 0, endLine-startLine+1)
-	scanner := bufio.NewScanner(file)
-	lineNumber := 0
-
-	for scanner.Scan() {
-		lineNumber++
-		if lineNumber < startLine {
-			continue
-		}
-		if lineNumber > endLine {
-			break
-		}
-
-		lines = append(lines, SourceLine{
-			Number:    lineNumber,
-			Content:   scanner.Text(),
-			IsCurrent: lineNumber == targetLine,
-			IsNear:    lineNumber >= targetLine-2 && lineNumber <= targetLine+2,
-		})
-	}
-
-	return lines
-}
-
-// isRuntimeFrame 判断该帧是否属于运行时或框架内部噪声。
-func isRuntimeFrame(functionName string) bool {
-	return strings.HasPrefix(functionName, "runtime.") ||
-		strings.HasPrefix(functionName, "runtime/debug.") ||
-		strings.Contains(functionName, "exception.") ||
-		strings.Contains(functionName, "middleware.")
 }

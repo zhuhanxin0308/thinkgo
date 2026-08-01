@@ -1,7 +1,6 @@
 {
     "name": "THINKGO_SESSID",
-    "type": "file",
-    "storage_path": "./runtime/session",
+    "type": "memory",
     "cookie_path": "/",
     "expire": 1440,
     "domain": "",

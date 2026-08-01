@@ -4,7 +4,22 @@ import (
 	"bufio"
 	"net"
 	"net/http"
+	"reflect"
 )
+
+// isNilHTTPResponseWriter 同时识别 nil 接口和携带 typed nil 的响应写入器。
+func isNilHTTPResponseWriter(writer http.ResponseWriter) bool {
+	if writer == nil {
+		return true
+	}
+	value := reflect.ValueOf(writer)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
+}
 
 // statusTrackingResponseWriter 包装标准 ResponseWriter，并记录最终写出的状态码。
 type statusTrackingResponseWriter struct {

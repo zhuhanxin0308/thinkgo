@@ -58,19 +58,23 @@ func (e *MethodNotAllowedError) Unwrap() error {
 
 // Route 是注册完成后的路由对象；字段封闭以防冻结后被绕过修改。
 type Route struct {
-	router      *Router
-	method      string
-	path        string
-	handler     HandlerFunc
-	middlewares []middleware.Handler
-	auto        bool
-	name        string
-	patterns    map[string]string
-	compiled    map[string]*regexp.Regexp
-	domain      string
-	ext         string
-	pathParts   []routePart
-	order       int
+	router             *Router
+	method             string
+	path               string
+	handler            HandlerFunc
+	middlewares        []middleware.Handler
+	middlewarePipeline *middleware.Pipeline
+	auto               bool
+	name               string
+	patterns           map[string]string
+	compiled           map[string]*regexp.Regexp
+	domain             string
+	ext                string
+	extensionRequired  bool
+	pathParts          []routePart
+	trailingSlash      bool
+	controllerLayer    string
+	order              int
 }
 
 type routePart struct {
@@ -98,6 +102,7 @@ type Router struct {
 	routes        []*Route
 	staticRoutes  map[string]map[string][]*Route
 	dynamicRoutes map[string][]*Route
+	dynamicIndex  *routeIndex
 	namedRoutes   map[string]*Route
 	missRoute     *Route
 	frozen        bool
@@ -106,6 +111,11 @@ type Router struct {
 	autoRoute         bool
 	defaultController string
 	defaultAction     string
+	caseSensitive     bool
+	completeMatch     bool
+	removeSlash       bool
+	defaultExtension  string
+	controllerLayer   string
 }
 
 // Group 是不可变的路由注册作用域，可安全嵌套且不会污染其他协程的注册上下文。
@@ -116,33 +126,12 @@ type Group struct {
 	middlewares []middleware.Handler
 }
 
-// ResourceRoute 表示一组可原子裁剪的 RESTful 资源路由。
-type ResourceRoute struct {
-	router *Router
-	routes map[string]*Route
-}
-
 type routeDefinition struct {
 	method      string
 	path        string
 	handler     HandlerFunc
 	middlewares []middleware.Handler
 	domain      string
-}
-
-var resourceDefinitions = []struct {
-	action     string
-	method     string
-	pathSuffix string
-	handler    string
-}{
-	{action: "index", method: http.MethodGet, pathSuffix: "", handler: "@Index"},
-	{action: "create", method: http.MethodGet, pathSuffix: "/create", handler: "@Create"},
-	{action: "save", method: http.MethodPost, pathSuffix: "", handler: "@Save"},
-	{action: "read", method: http.MethodGet, pathSuffix: "/:id", handler: "@Read"},
-	{action: "edit", method: http.MethodGet, pathSuffix: "/:id/edit", handler: "@Edit"},
-	{action: "update", method: http.MethodPut, pathSuffix: "/:id", handler: "@Update"},
-	{action: "delete", method: http.MethodDelete, pathSuffix: "/:id", handler: "@Delete"},
 }
 
 // NewRouter 创建处于注册状态的路由器。
@@ -154,6 +143,9 @@ func NewRouter() *Router {
 		namedRoutes:       make(map[string]*Route),
 		defaultController: "Index",
 		defaultAction:     "index",
+		caseSensitive:     true,
+		completeMatch:     true,
+		removeSlash:       true,
 	}
 }
 
@@ -193,6 +185,69 @@ func (r *Router) SetDefaultAction(name string) error {
 		return ErrRouterFrozen
 	}
 	r.defaultAction = name
+	return nil
+}
+
+// SetCaseSensitive 设置静态路由和字面量段是否区分大小写。
+func (r *Router) SetCaseSensitive(caseSensitive bool) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.frozen {
+		return ErrRouterFrozen
+	}
+	r.caseSensitive = caseSensitive
+	return nil
+}
+
+// SetCompleteMatch 设置路由是否必须完整消费请求路径。
+func (r *Router) SetCompleteMatch(completeMatch bool) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.frozen {
+		return ErrRouterFrozen
+	}
+	r.completeMatch = completeMatch
+	return nil
+}
+
+// SetRemoveSlash 设置是否忽略请求和路由末尾的斜杠差异。
+func (r *Router) SetRemoveSlash(removeSlash bool) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.frozen {
+		return ErrRouterFrozen
+	}
+	r.removeSlash = removeSlash
+	return nil
+}
+
+// SetDefaultExtension 设置全局 URL 后缀；全局后缀可选，显式 WithExtension 仍为强制约束。
+func (r *Router) SetDefaultExtension(extension string) error {
+	normalized, err := normalizeOptionalRouteExtension(extension)
+	if err != nil {
+		return err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.frozen {
+		return ErrRouterFrozen
+	}
+	r.defaultExtension = normalized
+	return nil
+}
+
+// SetControllerLayer 设置自动路由的控制器层查找前缀。
+func (r *Router) SetControllerLayer(layer string) error {
+	layer = strings.TrimSpace(layer)
+	if layer != "" && !isValidAutoControllerName(layer) {
+		return fmt.Errorf("%w: 控制器层 %q 非法", ErrInvalidRouteHandler, layer)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.frozen {
+		return ErrRouterFrozen
+	}
+	r.controllerLayer = layer
 	return nil
 }
 
@@ -245,10 +300,6 @@ func (r *Router) Domain(domain string, fn func(*Group) error, handlers ...middle
 // DomainGroup 创建域名与前缀同时隔离的注册作用域。
 func (r *Router) DomainGroup(domain, prefix string, fn func(*Group) error, handlers ...middleware.Handler) error {
 	return r.rootGroup().DomainGroup(domain, prefix, fn, handlers...)
-}
-
-func (r *Router) Resource(path, controller string) (*ResourceRoute, error) {
-	return r.rootGroup().Resource(path, controller)
 }
 
 func (r *Router) Rule(path string, handler HandlerFunc, methods string, handlers ...middleware.Handler) ([]*Route, error) {
@@ -381,31 +432,6 @@ func (g *Group) scoped(domain, prefix string, fn func(*Group) error, handlers ..
 	return fn(next)
 }
 
-func (g *Group) Resource(path, controller string) (*ResourceRoute, error) {
-	if !isValidAutoControllerName(controller) {
-		return nil, fmt.Errorf("%w: 资源控制器 %q 非法", ErrInvalidRouteHandler, controller)
-	}
-	definitions := make([]routeDefinition, 0, len(resourceDefinitions))
-	for _, definition := range resourceDefinitions {
-		definitions = append(definitions, routeDefinition{
-			method:      definition.method,
-			path:        joinRoutePath(g.prefix, path+definition.pathSuffix),
-			handler:     controller + definition.handler,
-			middlewares: append([]middleware.Handler(nil), g.middlewares...),
-			domain:      g.domain,
-		})
-	}
-	routes, err := g.router.registerDefinitions(definitions)
-	if err != nil {
-		return nil, err
-	}
-	resource := &ResourceRoute{router: g.router, routes: make(map[string]*Route, len(routes))}
-	for index, definition := range resourceDefinitions {
-		resource.routes[definition.action] = routes[index]
-	}
-	return resource, nil
-}
-
 func (g *Group) Rule(path string, handler HandlerFunc, methods string, handlers ...middleware.Handler) ([]*Route, error) {
 	parts := strings.Split(methods, "|")
 	if len(parts) == 0 {
@@ -492,12 +518,19 @@ func (r *Router) Freeze() error {
 			return r.freezeErr
 		}
 		registered.pathParts = parts
+		if registered.ext == "" && r.defaultExtension != "" {
+			registered.ext = r.defaultExtension
+		}
 		if isStaticRouteParts(parts) {
 			if _, ok := staticRoutes[registered.method]; !ok {
 				staticRoutes[registered.method] = make(map[string][]*Route)
 			}
-			key := pathPartsKey(routePartsWithExtension(parts, registered.ext))
+			key := r.pathPartsKey(routePartsWithExtension(parts, registered.ext))
 			staticRoutes[registered.method][key] = append(staticRoutes[registered.method][key], registered)
+			if !registered.extensionRequired && registered.ext != "" {
+				baseKey := r.pathPartsKey(routePartsWithExtension(parts, ""))
+				staticRoutes[registered.method][baseKey] = append(staticRoutes[registered.method][baseKey], registered)
+			}
 			continue
 		}
 		dynamicRoutes[registered.method] = append(dynamicRoutes[registered.method], registered)
@@ -509,6 +542,7 @@ func (r *Router) Freeze() error {
 	}
 	r.staticRoutes = staticRoutes
 	r.dynamicRoutes = dynamicRoutes
+	r.dynamicIndex = buildRouteIndex(dynamicRoutes)
 	r.freezeErr = nil
 	r.frozen = true
 	return nil
@@ -559,14 +593,16 @@ func (r *Router) registerDefinitions(definitions []routeDefinition) ([]*Route, e
 			return nil, err
 		}
 		prepared = append(prepared, &Route{
-			router:      r,
-			method:      method,
-			path:        path,
-			handler:     definition.handler,
-			middlewares: append([]middleware.Handler(nil), definition.middlewares...),
-			patterns:    make(map[string]string),
-			compiled:    make(map[string]*regexp.Regexp),
-			domain:      domain,
+			router:             r,
+			method:             method,
+			path:               path,
+			handler:            definition.handler,
+			middlewares:        append([]middleware.Handler(nil), definition.middlewares...),
+			middlewarePipeline: buildMiddlewarePipeline(definition.middlewares),
+			patterns:           make(map[string]string),
+			compiled:           make(map[string]*regexp.Regexp),
+			domain:             domain,
+			trailingSlash:      routeHasTrailingSlash(definition.path),
 		})
 	}
 
@@ -714,6 +750,7 @@ func (r *Route) WithExtension(extension string) error {
 		return fmt.Errorf("%w: %s %s extension=%q", ErrDuplicateRoute, r.method, r.path, normalized)
 	}
 	r.ext = normalized
+	r.extensionRequired = true
 	return nil
 }
 
@@ -753,6 +790,7 @@ func (r *Route) WithoutMiddleware(targets ...middleware.Handler) error {
 		working = append(working[:matchedIndex], working[matchedIndex+1:]...)
 	}
 	r.middlewares = working
+	r.middlewarePipeline = buildMiddlewarePipeline(working)
 	return nil
 }
 
@@ -800,6 +838,18 @@ func (r *Route) IsAuto() bool {
 	return r.auto
 }
 
+// ControllerLayer 返回自动路由使用的控制器层前缀。
+func (r *Route) ControllerLayer() string {
+	if r == nil {
+		return ""
+	}
+	if r.router != nil {
+		r.router.mu.RLock()
+		defer r.router.mu.RUnlock()
+	}
+	return r.controllerLayer
+}
+
 // Middlewares 返回防御性副本。
 func (r *Route) Middlewares() []middleware.Handler {
 	if r == nil {
@@ -812,42 +862,46 @@ func (r *Route) Middlewares() []middleware.Handler {
 	return append([]middleware.Handler(nil), r.middlewares...)
 }
 
-func (r *ResourceRoute) Only(actions ...string) error {
-	if len(actions) == 0 {
-		return fmt.Errorf("%w: Only 至少需要一个动作", ErrInvalidResourceAction)
+// HasMiddleware 判断路由是否配置中间件，避免热路径为确认空管道复制中间件切片。
+func (r *Route) HasMiddleware() bool {
+	if r == nil {
+		return false
 	}
-	selected, err := validateResourceActions(actions)
-	if err != nil {
-		return err
+	if r.router != nil {
+		r.router.mu.RLock()
+		hasMiddleware := r.middlewarePipeline != nil
+		r.router.mu.RUnlock()
+		return hasMiddleware
 	}
-	return r.filter(func(action string) bool { return selected[action] })
+	return len(r.middlewares) > 0
 }
 
-func (r *ResourceRoute) Except(actions ...string) error {
-	selected, err := validateResourceActions(actions)
-	if err != nil {
-		return err
+// ExecuteMiddleware 使用路由注册阶段构建的不可变管道执行中间件，避免每个请求重复复制和装配管道。
+func (r *Route) ExecuteMiddleware(request *context.Request, destination func(*context.Request) *context.Response) *context.Response {
+	if r == nil {
+		return destination(request)
 	}
-	return r.filter(func(action string) bool { return !selected[action] })
-}
-
-func (r *ResourceRoute) filter(keep func(string) bool) error {
-	if r == nil || r.router == nil {
-		return ErrInvalidRoute
-	}
-	r.router.mu.Lock()
-	defer r.router.mu.Unlock()
-	if r.router.frozen {
-		return ErrRouterFrozen
-	}
-	for action, registered := range r.routes {
-		if keep(action) {
-			continue
+	if r.router != nil {
+		r.router.mu.RLock()
+		pipeline := r.middlewarePipeline
+		r.router.mu.RUnlock()
+		if pipeline != nil {
+			return pipeline.Then(request, destination)
 		}
-		r.router.removeRouteLocked(registered)
-		delete(r.routes, action)
 	}
-	return nil
+	return destination(request)
+}
+
+// buildMiddlewarePipeline 在路由注册或修改时一次性装配管道，运行期间只读共享。
+func buildMiddlewarePipeline(handlers []middleware.Handler) *middleware.Pipeline {
+	if len(handlers) == 0 {
+		return nil
+	}
+	pipeline := middleware.NewPipeline()
+	for _, handler := range handlers {
+		pipeline.Pipe(handler)
+	}
+	return pipeline
 }
 
 func (r *Router) removeRouteLocked(target *Route) {
@@ -860,22 +914,6 @@ func (r *Router) removeRouteLocked(target *Route) {
 	if target.name != "" && r.namedRoutes[target.name] == target {
 		delete(r.namedRoutes, target.name)
 	}
-}
-
-func validateResourceActions(actions []string) (map[string]bool, error) {
-	valid := make(map[string]bool, len(resourceDefinitions))
-	for _, definition := range resourceDefinitions {
-		valid[definition.action] = true
-	}
-	selected := make(map[string]bool, len(actions))
-	for _, action := range actions {
-		action = strings.ToLower(strings.TrimSpace(action))
-		if !valid[action] {
-			return nil, fmt.Errorf("%w: %q", ErrInvalidResourceAction, action)
-		}
-		selected[action] = true
-	}
-	return selected, nil
 }
 
 func validateRouteHandler(handler HandlerFunc) error {

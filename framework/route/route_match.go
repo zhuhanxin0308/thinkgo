@@ -21,7 +21,7 @@ func (r *Router) Match(req *context.Request) (*Route, map[string]string, error) 
 	if err := r.Freeze(); err != nil {
 		return nil, nil, err
 	}
-	requestParts, normalizedPath, err := requestPathParts(req)
+	requestParts, normalizedPath, trailingSlash, err := requestPathPartsWithOptions(req, r.removeSlash)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -37,15 +37,15 @@ func (r *Router) Match(req *context.Request) (*Route, map[string]string, error) 
 	}
 	methods = append(methods, anyMethod)
 	for _, candidateMethod := range methods {
-		if matched := r.matchStatic(candidateMethod, requestParts, host); matched != nil {
+		if matched := r.matchStatic(candidateMethod, requestParts, trailingSlash, host); matched != nil {
 			return matched, nil, nil
 		}
-		if matched, params := r.matchDynamic(candidateMethod, requestParts, host); matched != nil {
+		if matched, params := r.matchDynamic(candidateMethod, requestParts, trailingSlash, host); matched != nil {
 			return matched, params, nil
 		}
 	}
 
-	allowed := r.allowedMethods(requestParts, host)
+	allowed := r.allowedMethods(requestParts, trailingSlash, host)
 	if len(allowed) > 0 {
 		if method == http.MethodOptions {
 			return automaticOptionsRoute(allowed), nil, nil
@@ -72,37 +72,45 @@ func (r *Router) Match(req *context.Request) (*Route, map[string]string, error) 
 	return nil, nil, nil
 }
 
-func (r *Router) matchStatic(method string, requestParts []string, host string) *Route {
+func (r *Router) matchStatic(method string, requestParts []string, trailingSlash bool, host string) *Route {
 	methodRoutes := r.staticRoutes[method]
 	if len(methodRoutes) == 0 {
 		return nil
 	}
-	candidates := methodRoutes[pathPartsKey(requestParts)]
+	candidates := methodRoutes[r.pathPartsKey(requestParts)]
+	if !r.completeMatch {
+		candidates = append(candidates, r.staticPrefixCandidates(method, requestParts)...)
+	}
 	for _, candidate := range candidates {
-		if candidate.domain != "" && candidate.domain == host {
+		if matched, _ := candidate.matchRequestPartsWithOptions(requestParts, trailingSlash); candidate.domain != "" && candidate.domain == host && matched {
 			return candidate
 		}
 	}
 	for _, candidate := range candidates {
-		if candidate.domain == "" {
+		if matched, _ := candidate.matchRequestPartsWithOptions(requestParts, trailingSlash); candidate.domain == "" && matched {
 			return candidate
 		}
 	}
 	return nil
 }
 
-func (r *Router) matchDynamic(method string, requestParts []string, host string) (*Route, map[string]string) {
-	candidates := r.dynamicRoutes[method]
+func (r *Router) matchDynamic(method string, requestParts []string, trailingSlash bool, host string) (*Route, map[string]string) {
 	for _, exactDomain := range []bool{true, false} {
+		candidates := r.dynamicRoutes[method]
+		if r.dynamicIndex != nil {
+			candidates = r.dynamicIndex.candidates(method, host, requestParts, exactDomain)
+		}
 		for _, candidate := range candidates {
-			if exactDomain {
-				if candidate.domain == "" || candidate.domain != host {
+			if r.dynamicIndex == nil {
+				if exactDomain {
+					if candidate.domain == "" || candidate.domain != host {
+						continue
+					}
+				} else if candidate.domain != "" {
 					continue
 				}
-			} else if candidate.domain != "" {
-				continue
 			}
-			if matched, params := candidate.matchRequestParts(requestParts); matched {
+			if matched, params := candidate.matchRequestPartsWithOptions(requestParts, trailingSlash); matched {
 				return candidate, params
 			}
 		}
@@ -110,11 +118,15 @@ func (r *Router) matchDynamic(method string, requestParts []string, host string)
 	return nil, nil
 }
 
-func (r *Router) allowedMethods(requestParts []string, host string) []string {
+func (r *Router) allowedMethods(requestParts []string, trailingSlash bool, host string) []string {
 	methods := make(map[string]bool)
-	staticKey := pathPartsKey(requestParts)
+	staticKey := r.pathPartsKey(requestParts)
 	for method, indexedPaths := range r.staticRoutes {
-		if !hasMatchingRouteDomain(indexedPaths[staticKey], host) {
+		candidates := indexedPaths[staticKey]
+		if !r.completeMatch {
+			candidates = append(candidates, r.staticPrefixCandidates(method, requestParts)...)
+		}
+		if !hasMatchingRouteDomainAndPath(candidates, host, requestParts, trailingSlash) {
 			continue
 		}
 		if method == anyMethod {
@@ -124,11 +136,32 @@ func (r *Router) allowedMethods(requestParts []string, host string) []string {
 	}
 	for method, candidates := range r.dynamicRoutes {
 		matchedMethod := false
+		if r.dynamicIndex != nil {
+			for _, exactDomain := range []bool{true, false} {
+				for _, candidate := range r.dynamicIndex.candidates(method, host, requestParts, exactDomain) {
+					if matched, _ := candidate.matchRequestPartsWithOptions(requestParts, trailingSlash); matched {
+						matchedMethod = true
+						break
+					}
+				}
+				if matchedMethod {
+					break
+				}
+			}
+			if !matchedMethod {
+				continue
+			}
+			if method == anyMethod {
+				return nil
+			}
+			methods[method] = true
+			continue
+		}
 		for _, candidate := range candidates {
 			if candidate.domain != "" && candidate.domain != host {
 				continue
 			}
-			if matched, _ := candidate.matchRequestParts(requestParts); matched {
+			if matched, _ := candidate.matchRequestPartsWithOptions(requestParts, trailingSlash); matched {
 				matchedMethod = true
 				break
 			}
@@ -159,6 +192,37 @@ func hasMatchingRouteDomain(candidates []*Route, host string) bool {
 		}
 	}
 	return false
+}
+
+// hasMatchingRouteDomainAndPath 同时校验域名、后缀、斜杠和完整匹配条件。
+func hasMatchingRouteDomainAndPath(candidates []*Route, host string, requestParts []string, trailingSlash bool) bool {
+	for _, candidate := range candidates {
+		matched, _ := candidate.matchRequestPartsWithOptions(requestParts, trailingSlash)
+		if (candidate.domain == "" || candidate.domain == host) && matched {
+			return true
+		}
+	}
+	return false
+}
+
+// staticPrefixCandidates 在非完整匹配模式下收集可能匹配请求前缀的静态路由。
+func (r *Router) staticPrefixCandidates(method string, requestParts []string) []*Route {
+	result := make([]*Route, 0)
+	seen := make(map[*Route]struct{})
+	for _, candidate := range r.routes {
+		if candidate == nil || candidate.method != method || !isStaticRouteParts(candidate.pathParts) {
+			continue
+		}
+		if _, exists := seen[candidate]; exists {
+			continue
+		}
+		if len(candidate.pathParts) > len(requestParts) {
+			continue
+		}
+		seen[candidate] = struct{}{}
+		result = append(result, candidate)
+	}
+	return result
 }
 
 func automaticOptionsRoute(allowed []string) *Route {
@@ -206,16 +270,28 @@ func sortHTTPMethods(methods map[string]bool) []string {
 }
 
 func (r *Route) matchRequestParts(requestParts []string) (bool, map[string]string) {
-	parts, ok := stripRouteExtension(requestParts, r.ext)
+	return r.matchRequestPartsWithOptions(requestParts, false)
+}
+
+// matchRequestPartsWithOptions 按路由器配置匹配请求路径，并保留参数原始大小写。
+func (r *Route) matchRequestPartsWithOptions(requestParts []string, trailingSlash bool) (bool, map[string]string) {
+	parts, ok := stripRouteExtension(requestParts, r.ext, r.extensionRequired)
 	if !ok {
 		return false, nil
 	}
+	if r.router != nil && !r.router.removeSlash && r.trailingSlash != trailingSlash {
+		return false, nil
+	}
 	if isStaticRouteParts(r.pathParts) {
-		if len(parts) != len(r.pathParts) {
+		if r.router == nil || r.router.completeMatch {
+			if len(parts) != len(r.pathParts) {
+				return false, nil
+			}
+		} else if len(parts) < len(r.pathParts) {
 			return false, nil
 		}
 		for index, part := range r.pathParts {
-			if part.literal != parts[index] {
+			if !routeLiteralEqual(r.router, part.literal, parts[index]) {
 				return false, nil
 			}
 		}
@@ -231,7 +307,8 @@ func (r *Route) matchRequestParts(requestParts []string) (bool, map[string]strin
 			return nil, false
 		}
 		if routeIndex == len(r.pathParts) {
-			if requestIndex == len(parts) {
+			completeMatch := r.router == nil || r.router.completeMatch
+			if !completeMatch || requestIndex == len(parts) {
 				return make(map[string]string), true
 			}
 			failed[current] = true
@@ -240,7 +317,7 @@ func (r *Route) matchRequestParts(requestParts []string) (bool, map[string]strin
 
 		part := r.pathParts[routeIndex]
 		if part.param == "" {
-			if requestIndex < len(parts) && part.literal == parts[requestIndex] {
+			if requestIndex < len(parts) && routeLiteralEqual(r.router, part.literal, parts[requestIndex]) {
 				if params, matched := visit(routeIndex+1, requestIndex+1); matched {
 					return params, true
 				}
@@ -314,6 +391,50 @@ func requestPathParts(req *context.Request) ([]string, string, error) {
 		parts = append(parts, part)
 	}
 	return parts, "/" + strings.Join(parts, "/"), nil
+}
+
+// requestPathPartsWithOptions 解析请求路径，并按 removeSlash 决定是否保留末尾斜杠信息。
+func requestPathPartsWithOptions(req *context.Request, removeSlash bool) ([]string, string, bool, error) {
+	if removeSlash {
+		parts, normalized, err := requestPathParts(req)
+		return parts, normalized, false, err
+	}
+	raw := req.Raw()
+	if raw == nil || raw.URL == nil {
+		return nil, "", false, fmt.Errorf("%w: URL 为空", ErrInvalidRequestPath)
+	}
+	escapedPath := raw.URL.EscapedPath()
+	if escapedPath == "" {
+		escapedPath = "/"
+	}
+	if len(escapedPath) > maxRoutePathLength || !strings.HasPrefix(escapedPath, "/") || strings.Contains(escapedPath, "\\") {
+		return nil, "", false, fmt.Errorf("%w: %q", ErrInvalidRequestPath, escapedPath)
+	}
+	if strings.Contains(escapedPath, "//") {
+		return nil, "", false, fmt.Errorf("%w: 路径包含空段", ErrInvalidRequestPath)
+	}
+	trailingSlash := len(escapedPath) > 1 && strings.HasSuffix(escapedPath, "/")
+	trimmed := strings.Trim(escapedPath, "/")
+	if trimmed == "" {
+		return []string{}, "/", false, nil
+	}
+	escapedParts := strings.Split(trimmed, "/")
+	if len(escapedParts) > maxRouteSegments {
+		return nil, "", false, fmt.Errorf("%w: %v", ErrRouteTooComplex, escapedPath)
+	}
+	parts := make([]string, 0, len(escapedParts))
+	for _, escapedPart := range escapedParts {
+		part, err := url.PathUnescape(escapedPart)
+		if err != nil || part == "" || part == "." || part == ".." || strings.ContainsAny(part, "\\\x00\r\n") {
+			return nil, "", false, fmt.Errorf("%w: 路径段 %q 非法", ErrInvalidRequestPath, escapedPart)
+		}
+		parts = append(parts, part)
+	}
+	normalized := "/" + strings.Join(parts, "/")
+	if trailingSlash {
+		normalized += "/"
+	}
+	return parts, normalized, trailingSlash, nil
 }
 
 func canonicalRoutePath(rawPath string) (string, int, error) {
@@ -411,13 +532,13 @@ func routePartsWithExtension(parts []routePart, extension string) []string {
 		return result
 	}
 	if len(result) == 0 {
-		return []string{"." + extension}
+		return result
 	}
 	result[len(result)-1] += "." + extension
 	return result
 }
 
-func stripRouteExtension(parts []string, extension string) ([]string, bool) {
+func stripRouteExtension(parts []string, extension string, required bool) ([]string, bool) {
 	if extension == "" {
 		return parts, true
 	}
@@ -427,6 +548,9 @@ func stripRouteExtension(parts []string, extension string) ([]string, bool) {
 	suffix := "." + extension
 	last := parts[len(parts)-1]
 	if !strings.HasSuffix(last, suffix) {
+		if !required {
+			return parts, true
+		}
 		return nil, false
 	}
 	result := append([]string(nil), parts...)
@@ -441,6 +565,32 @@ func stripRouteExtension(parts []string, extension string) ([]string, bool) {
 
 func pathPartsKey(parts []string) string {
 	return strings.Join(parts, "\x00")
+}
+
+// pathPartsKey 按路由器大小写配置生成索引键。
+func (r *Router) pathPartsKey(parts []string) string {
+	if r == nil || r.caseSensitive {
+		return pathPartsKey(parts)
+	}
+	normalized := make([]string, len(parts))
+	for index, part := range parts {
+		normalized[index] = strings.ToLower(part)
+	}
+	return pathPartsKey(normalized)
+}
+
+// routeLiteralEqual 按路由器大小写配置比较静态路径段。
+func routeLiteralEqual(router *Router, expected, actual string) bool {
+	if router == nil || router.caseSensitive {
+		return expected == actual
+	}
+	return strings.EqualFold(expected, actual)
+}
+
+// routeHasTrailingSlash 判断路由定义是否显式保留末尾斜杠。
+func routeHasTrailingSlash(path string) bool {
+	trimmed := strings.TrimSpace(path)
+	return len(trimmed) > 1 && strings.HasSuffix(trimmed, "/")
 }
 
 func routeSpecificity(route *Route) int {
@@ -472,6 +622,14 @@ func normalizeRouteExtension(extension string) (string, error) {
 		}
 	}
 	return extension, nil
+}
+
+// normalizeOptionalRouteExtension 校验允许为空的全局 URL 后缀。
+func normalizeOptionalRouteExtension(extension string) (string, error) {
+	if strings.TrimSpace(extension) == "" {
+		return "", nil
+	}
+	return normalizeRouteExtension(extension)
 }
 
 func normalizeAndValidateRouteDomain(rawDomain string) (string, error) {
@@ -536,13 +694,14 @@ func (r *Router) resolveAutoRoute(path string, parts []string) *Route {
 		return nil
 	}
 	return &Route{
-		method:      http.MethodGet,
-		path:        path,
-		handler:     controller + "@" + ucfirst(action),
-		auto:        true,
-		middlewares: []middleware.Handler{},
-		patterns:    make(map[string]string),
-		compiled:    make(map[string]*regexp.Regexp),
+		method:          http.MethodGet,
+		path:            path,
+		handler:         controller + "@" + ucfirst(action),
+		auto:            true,
+		controllerLayer: r.controllerLayer,
+		middlewares:     []middleware.Handler{},
+		patterns:        make(map[string]string),
+		compiled:        make(map[string]*regexp.Regexp),
 	}
 }
 

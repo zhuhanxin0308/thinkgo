@@ -7,70 +7,33 @@ import (
 
 const sqlRedactionMarker = "[REDACTED]"
 
-// redactSQLLiteralsAndComments 隐去 SQL 字符串、dollar quote 与注释内容，
-// 同时保留语句结构、引用标识符和换行，便于在不泄露数据的前提下排障。
-func redactSQLLiteralsAndComments(sqlText string) string {
+// redactSQLLiteralsAndComments 隐去 SQL 字符串、dollar quote 与注释内容。
+// 只有当前方言明确支持的标识符引用才会原样保留；未知方言采用保守脱敏。
+func redactSQLLiteralsAndComments(sqlText string, dialect string) string {
+	dialect = strings.ToLower(strings.TrimSpace(dialect))
 	var result strings.Builder
 	result.Grow(len(sqlText))
 	for index := 0; index < len(sqlText); {
 		switch sqlText[index] {
 		case '\'':
-			result.WriteByte('\'')
-			result.WriteString(sqlRedactionMarker)
-			result.WriteByte('\'')
-			index++
-			for index < len(sqlText) {
-				if sqlText[index] == '\\' && index+1 < len(sqlText) {
-					index += 2
-					continue
-				}
-				if sqlText[index] == '\'' {
-					if index+1 < len(sqlText) && sqlText[index+1] == '\'' {
-						index += 2
-						continue
-					}
-					index++
-					break
-				}
-				index++
+			index = redactSQLQuotedToken(&result, sqlText, index, '\'')
+		case '"':
+			if doubleQuoteIsIdentifier(dialect) {
+				index = copySQLQuotedToken(&result, sqlText, index, '"')
+			} else {
+				index = redactSQLQuotedToken(&result, sqlText, index, '"')
 			}
-		case '"', '`':
-			closing := sqlText[index]
-			result.WriteByte(sqlText[index])
-			index++
-			for index < len(sqlText) {
-				current := sqlText[index]
-				result.WriteByte(current)
-				index++
-				if current == '\\' && index < len(sqlText) {
-					result.WriteByte(sqlText[index])
-					index++
-					continue
-				}
-				if current == closing {
-					if index < len(sqlText) && sqlText[index] == closing {
-						result.WriteByte(sqlText[index])
-						index++
-						continue
-					}
-					break
-				}
+		case '`':
+			if dialect == "mysql" {
+				index = copySQLQuotedToken(&result, sqlText, index, '`')
+			} else {
+				index = redactSQLQuotedToken(&result, sqlText, index, '`')
 			}
 		case '[':
-			result.WriteByte('[')
-			index++
-			for index < len(sqlText) {
-				current := sqlText[index]
-				result.WriteByte(current)
-				index++
-				if current == ']' {
-					if index < len(sqlText) && sqlText[index] == ']' {
-						result.WriteByte(']')
-						index++
-						continue
-					}
-					break
-				}
+			if dialect == "sqlserver" {
+				index = copySQLQuotedToken(&result, sqlText, index, ']')
+			} else {
+				index = redactSQLQuotedToken(&result, sqlText, index, ']')
 			}
 		case '-':
 			if index+1 < len(sqlText) && sqlText[index+1] == '-' {
@@ -121,6 +84,62 @@ func redactSQLLiteralsAndComments(sqlText string) string {
 		}
 	}
 	return result.String()
+}
+
+func doubleQuoteIsIdentifier(dialect string) bool {
+	switch dialect {
+	case "postgres", "sqlserver", "oracle":
+		return true
+	default:
+		return false
+	}
+}
+
+func redactSQLQuotedToken(result *strings.Builder, sqlText string, index int, closing byte) int {
+	result.WriteByte(sqlText[index])
+	result.WriteString(sqlRedactionMarker)
+	index++
+	for index < len(sqlText) {
+		current := sqlText[index]
+		if current == '\\' && index+1 < len(sqlText) {
+			index += 2
+			continue
+		}
+		if current == closing {
+			if index+1 < len(sqlText) && sqlText[index+1] == closing {
+				index += 2
+				continue
+			}
+			result.WriteByte(closing)
+			return index + 1
+		}
+		index++
+	}
+	return index
+}
+
+func copySQLQuotedToken(result *strings.Builder, sqlText string, index int, closing byte) int {
+	result.WriteByte(sqlText[index])
+	index++
+	for index < len(sqlText) {
+		current := sqlText[index]
+		result.WriteByte(current)
+		index++
+		if current == '\\' && index < len(sqlText) {
+			result.WriteByte(sqlText[index])
+			index++
+			continue
+		}
+		if current == closing {
+			if index < len(sqlText) && sqlText[index] == closing {
+				result.WriteByte(sqlText[index])
+				index++
+				continue
+			}
+			break
+		}
+	}
+	return index
 }
 
 // validateRawClause 校验显式原始条件的基本完整性和绑定参数数量。

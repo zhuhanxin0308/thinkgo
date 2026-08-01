@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"net/http"
 	"testing"
 
 	fwcontext "thinkgo/framework/context"
@@ -114,5 +115,30 @@ func TestPipelineTerminatorsOnlyForExecutedMiddleware(t *testing.T) {
 		if order[index] != value {
 			t.Fatalf("短路执行顺序不正确，期望 %#v，实际为 %#v", expected, order)
 		}
+	}
+}
+
+// TestPipelineSingleLifecycleHandlerPreservesTerminators 验证单中间件快路径仍收集真实执行的 terminate 回调。
+func TestPipelineSingleLifecycleHandlerPreservesTerminators(t *testing.T) {
+	request := fwcontext.MustNewRequest(nil)
+	called := false
+	pipeline := NewPipeline().PipeLifecycle(
+		func(req *fwcontext.Request, next func(*fwcontext.Request) *fwcontext.Response) *fwcontext.Response {
+			return next(req)
+		},
+		func(*fwcontext.Request, *fwcontext.Response) { called = true },
+	)
+	response, terminators := pipeline.ThenWithTerminators(request, func(*fwcontext.Request) *fwcontext.Response {
+		return fwcontext.NewResponse().Code(http.StatusCreated)
+	})
+	if response == nil || response.GetStatus() != http.StatusCreated {
+		t.Fatalf("单中间件快路径响应错误: %#v", response)
+	}
+	if len(terminators) != 1 {
+		t.Fatalf("单中间件应返回一个 terminate，实际为 %d", len(terminators))
+	}
+	terminators[0](request, response)
+	if !called {
+		t.Fatal("单中间件 terminate 未执行")
 	}
 }

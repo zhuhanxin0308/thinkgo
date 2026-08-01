@@ -19,7 +19,7 @@ const (
 
 var timeType = reflect.TypeOf(time.Time{})
 
-var sensitiveDriverErrorPattern = regexp.MustCompile(`(?i)(authorization|cookie|password|passwd|secret|session|token|api[-_]?key|refresh[-_]?token)(\s*[:=]\s*)([^\s,;&]+)`)
+var sensitiveDriverErrorPattern = regexp.MustCompile(`(?i)(authorization|cookie|password|passwd|secret|session|token|api[-_]?key|refresh[-_]?token|private[-_]?key|signing[-_]?key|encryption[-_]?key|access[-_]?key|credential|client[-_]?secret)(\s*[:=]\s*)([^\s,;&]+)`)
 
 var logLineEscaper = strings.NewReplacer("\r", `\r`, "\n", `\n`, "\t", `\t`)
 
@@ -36,6 +36,17 @@ var sensitiveLogKeyParts = [...]string{
 	"api_key",
 	"apikey",
 	"refresh_token",
+	"private_key",
+	"privatekey",
+	"signing_key",
+	"signingkey",
+	"encryption_key",
+	"encryptionkey",
+	"access_key",
+	"accesskey",
+	"credential_value",
+	"client_secret",
+	"clientsecret",
 }
 
 type logReference struct {
@@ -303,6 +314,11 @@ func isSensitiveLogKey(key string) bool {
 		}
 	}
 	return false
+}
+
+// SanitizeErrorText 脱敏错误文本中的常见凭据键值，供跨包错误日志复用。
+func SanitizeErrorText(message string) string {
+	return sanitizeDriverErrorText(message)
 }
 
 // sanitizeDriverErrorText 防止驱动错误通过兜底通道注入换行或泄露常见凭据。

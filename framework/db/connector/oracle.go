@@ -56,6 +56,6 @@ func buildOracleConnectionParams(config db.Config) (godror.ConnectionParams, err
 	return params, nil
 }
 
-func init() {
+func registerOracle() {
 	mustRegisterConnector("oracle", &Oracle{})
 }

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"thinkgo/framework/context"
@@ -124,6 +125,41 @@ func TestSessionMiddlewareCommitsSetCookieToResponse(t *testing.T) {
 	)
 	if values := response.Headers().Values("Set-Cookie"); len(values) != 1 {
 		t.Fatalf("Session Cookie 未提交到真实响应头: %#v", values)
+	}
+}
+
+// TestSessionMiddlewarePropagatesTrustedSecureDecision 验证 Session 中间件只使用 Request 的可信协议结论。
+func TestSessionMiddlewarePropagatesTrustedSecureDecision(t *testing.T) {
+	manager := newMiddlewareSessionManager(t, driver.NewMemory())
+	spoofed := httptest.NewRequest(http.MethodPost, "http://example.com/login", nil)
+	spoofed.RemoteAddr = "198.51.100.8:4321"
+	spoofed.Header.Set("X-Forwarded-Proto", "https")
+	unsafeRequest := context.MustNewRequest(spoofed)
+	unsafeResponse := (&Session{Manager: manager}).Handle(unsafeRequest, func(req *context.Request) *context.Response {
+		if err := req.GetData("_session").(*session.Session).Set("uid", 1); err != nil {
+			t.Fatalf("设置非安全 Session 失败: %v", err)
+		}
+		return context.NewResponse().Content("ok")
+	})
+	if unsafeResponse == nil || len(unsafeResponse.Headers().Values("Set-Cookie")) != 1 {
+		t.Fatalf("非安全 Session 响应 Cookie 缺失: %#v", unsafeResponse)
+	}
+	if cookieValue := unsafeResponse.Headers().Get("Set-Cookie"); strings.Contains(cookieValue, "; Secure") {
+		t.Fatalf("非可信请求头不应被 Session 中间件提升为 Secure: %s", cookieValue)
+	}
+
+	trustedRaw := httptest.NewRequest(http.MethodPost, "http://example.com/login", nil)
+	trustedRaw.RemoteAddr = "127.0.0.1:4321"
+	trustedRaw.Header.Set("X-Forwarded-Proto", "https")
+	trustedRequest := context.MustNewRequest(trustedRaw, context.WithTrustedProxies([]string{"127.0.0.1/32"}))
+	trustedResponse := (&Session{Manager: manager}).Handle(trustedRequest, func(req *context.Request) *context.Response {
+		if err := req.GetData("_session").(*session.Session).Set("uid", 2); err != nil {
+			t.Fatalf("设置可信 Session 失败: %v", err)
+		}
+		return context.NewResponse().Content("ok")
+	})
+	if trustedResponse == nil || !strings.Contains(trustedResponse.Headers().Get("Set-Cookie"), "; Secure") {
+		t.Fatalf("可信代理 HTTPS 请求应写入 Secure Session Cookie: %#v", trustedResponse)
 	}
 }
 

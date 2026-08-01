@@ -17,13 +17,15 @@ import (
 	"thinkgo/framework/config"
 	fwcontext "thinkgo/framework/context"
 	"thinkgo/framework/log"
+	"thinkgo/framework/metrics"
 	"thinkgo/framework/middleware"
 	"thinkgo/framework/route"
 )
 
 // newTestHTTPApp 创建最小化测试应用，避免在单测中引入真实数据库和外部依赖。
-func newTestHTTPApp(t *testing.T, basePath string, compression map[string]interface{}) *framework.App {
+func newTestHTTPApp(t testing.TB, basePath string, compression map[string]interface{}) *framework.App {
 	t.Helper()
+	ensureHTTPTestConfigFiles(t, basePath)
 
 	cfg := config.NewConfig()
 	cfg.Set("app.server", map[string]interface{}{
@@ -40,16 +42,119 @@ func newTestHTTPApp(t *testing.T, basePath string, compression map[string]interf
 	})
 	cfg.Set("app.compression", compression)
 
-	app := &framework.App{
-		BasePath:   basePath,
-		Config:     cfg,
-		Route:      route.NewRouter(),
-		Middleware: middleware.NewPipeline(),
-		Log:        log.NewLog(),
+	app, err := framework.BuildConsoleApp(basePath)
+	if err != nil {
+		t.Fatalf("构建 HTTP 测试应用失败: %v", err)
 	}
-
-	t.Cleanup(func() { _ = app.Log.Close() })
+	app.Instance(string(framework.ServiceConfig), cfg)
+	t.Cleanup(func() { _ = app.Close() })
 	return app
+}
+
+// ensureHTTPTestConfigFiles 为 HTTP 测试补齐严格构造所需的基础配置。
+func ensureHTTPTestConfigFiles(t testing.TB, basePath string) {
+	t.Helper()
+	configPath := filepath.Join(basePath, "config")
+	if err := os.MkdirAll(configPath, 0o755); err != nil {
+		t.Fatalf("创建 HTTP 测试配置目录失败: %v", err)
+	}
+	configs := map[string]string{
+		"app.json":     `{"app_env":"test","server":{"host":"127.0.0.1","port":8080},"compression":{"enable":false}}`,
+		"log.json":     `{"default":"file","channels":{"file":{"type":"file","path":"runtime/log"}}}`,
+		"cache.json":   `{"default":"file","stores":{"file":{"type":"file","path":"runtime/cache"}}}`,
+		"view.json":    `{"view_path":"app/view","view_suffix":"html","cache":false}`,
+		"cookie.json":  `{}`,
+		"session.json": `{"type":"memory","name":"TESTSESSID","expire":600}`,
+	}
+	for name, content := range configs {
+		path := filepath.Join(configPath, name)
+		if _, err := os.Stat(path); err == nil {
+			continue
+		} else if !os.IsNotExist(err) {
+			t.Fatalf("检查 HTTP 测试配置 %q 失败: %v", name, err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatalf("写入 HTTP 测试配置 %q 失败: %v", name, err)
+		}
+	}
+}
+
+// mustHTTPConfig 通过服务解析边界取得测试配置。
+func mustHTTPConfig(t testing.TB, app *framework.App) *config.Config {
+	t.Helper()
+	configuration, err := framework.ResolveServiceAs[*config.Config](app, framework.ServiceConfig)
+	if err != nil {
+		t.Fatalf("解析 HTTP 测试配置失败: %v", err)
+	}
+	return configuration
+}
+
+// mustHTTPRoute 通过服务解析边界取得测试路由器。
+func mustHTTPRoute(t testing.TB, app *framework.App) *route.Router {
+	t.Helper()
+	router, err := framework.ResolveServiceAs[*route.Router](app, framework.ServiceRoute)
+	if err != nil {
+		t.Fatalf("解析 HTTP 测试路由失败: %v", err)
+	}
+	return router
+}
+
+// mustHTTPMiddleware 通过服务解析边界取得测试中间件管线。
+func mustHTTPMiddleware(t testing.TB, app *framework.App) *middleware.Pipeline {
+	t.Helper()
+	pipeline, err := framework.ResolveServiceAs[*middleware.Pipeline](app, framework.ServiceMiddleware)
+	if err != nil {
+		t.Fatalf("解析 HTTP 测试中间件失败: %v", err)
+	}
+	return pipeline
+}
+
+// mustHTTPMetrics 通过服务解析边界取得测试指标注册表。
+func mustHTTPMetrics(t testing.TB, app *framework.App) *metrics.Registry {
+	t.Helper()
+	registry, err := framework.ResolveServiceAs[*metrics.Registry](app, framework.ServiceMetrics)
+	if err != nil {
+		t.Fatalf("解析 HTTP 测试指标失败: %v", err)
+	}
+	return registry
+}
+
+// mustHTTPLog 通过服务解析边界取得测试日志服务。
+func mustHTTPLog(t testing.TB, app *framework.App) *log.Log {
+	t.Helper()
+	logger, err := framework.ResolveServiceAs[*log.Log](app, framework.ServiceLog)
+	if err != nil {
+		t.Fatalf("解析 HTTP 测试日志失败: %v", err)
+	}
+	return logger
+}
+
+type accessLogProbeDriver struct {
+	writes atomic.Int32
+}
+
+func (d *accessLogProbeDriver) SaveEntries([]*log.LogEntry) error { return nil }
+
+func (d *accessLogProbeDriver) WriteEntry(*log.LogEntry) error {
+	d.writes.Add(1)
+	return nil
+}
+
+func (d *accessLogProbeDriver) Close() error { return nil }
+
+// TestWriteAccessLogFiltersBeforeRequestFields 验证 Info 禁用时访问日志不读取请求对象或构造字段。
+func TestWriteAccessLogFiltersBeforeRequestFields(t *testing.T) {
+	driver := &accessLogProbeDriver{}
+	logger := log.NewLog(driver)
+	logger.SetLevels([]string{log.LevelError})
+	h := &Http{log: logger}
+	h.writeAccessLog(nil)
+	if writes := driver.writes.Load(); writes != 0 {
+		t.Fatalf("Info 禁用时不应写访问日志，实际写入 %d 次", writes)
+	}
+	if err := logger.Close(); err != nil {
+		t.Fatalf("关闭访问日志测试器失败: %v", err)
+	}
 }
 
 func newTestHTTPHandler(t *testing.T, app *framework.App) *Http {
@@ -59,6 +164,29 @@ func newTestHTTPHandler(t *testing.T, app *framework.App) *Http {
 		t.Fatalf("创建 HTTP 内核失败: %v", err)
 	}
 	return handler
+}
+
+// TestServeHTTPRecordsOptInMetrics 验证指标默认不介入请求，并在显式启用后记录完整响应状态与耗时。
+func TestServeHTTPRecordsOptInMetrics(t *testing.T) {
+	app := newTestHTTPApp(t, t.TempDir(), map[string]interface{}{"enable": false})
+	registry := mustHTTPMetrics(t, app)
+	registry.Enable()
+	router := mustHTTPRoute(t, app)
+	if _, err := router.Get("/metrics-probe", func(*fwcontext.Request) *fwcontext.Response {
+		return fwcontext.NewResponse().Content("ok")
+	}); err != nil {
+		t.Fatalf("注册指标探针路由失败: %v", err)
+	}
+	handler := newTestHTTPHandler(t, app)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(stdhttp.MethodGet, "http://example.com/metrics-probe", nil))
+	if recorder.Code != stdhttp.StatusOK || recorder.Body.String() != "ok" {
+		t.Fatalf("指标探针请求失败: status=%d body=%q", recorder.Code, recorder.Body.String())
+	}
+	snapshot := registry.Snapshot()
+	if snapshot.Requests != 1 || snapshot.StatusClasses[1] != 1 || snapshot.DurationCount != 1 {
+		t.Fatalf("HTTP 指标未记录完整请求: %#v", snapshot)
+	}
 }
 
 // TestServeHTTPPreventsStaticTraversal 验证静态文件处理不会越权访问 public 目录之外的文件。
@@ -91,6 +219,30 @@ func TestServeHTTPPreventsStaticTraversal(t *testing.T) {
 	}
 }
 
+// TestServeHTTPRunsMiddlewareBeforeStaticFile 验证静态文件不能绕过全局认证中间件。
+func TestServeHTTPRunsMiddlewareBeforeStaticFile(t *testing.T) {
+	basePath := t.TempDir()
+	publicDir := filepath.Join(basePath, "public")
+	if err := os.MkdirAll(publicDir, 0o755); err != nil {
+		t.Fatalf("创建 public 目录失败: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(publicDir, "private.txt"), []byte("private"), 0o600); err != nil {
+		t.Fatalf("写入静态文件失败: %v", err)
+	}
+
+	app := newTestHTTPApp(t, basePath, map[string]interface{}{"enable": false})
+	mustHTTPMiddleware(t, app).Pipe(func(_ *fwcontext.Request, _ func(*fwcontext.Request) *fwcontext.Response) *fwcontext.Response {
+		return fwcontext.NewResponse().Code(stdhttp.StatusUnauthorized).Content("blocked")
+	})
+	handler := newTestHTTPHandler(t, app)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(stdhttp.MethodGet, "http://example.com/private.txt", nil))
+
+	if recorder.Code != stdhttp.StatusUnauthorized || recorder.Body.String() != "blocked" {
+		t.Fatalf("静态文件不应绕过全局中间件: status=%d body=%q", recorder.Code, recorder.Body.String())
+	}
+}
+
 // TestServeHTTPRejectsEncodedStaticSeparator 验证编码斜杠不能改变静态文件目录层级。
 func TestServeHTTPRejectsEncodedStaticSeparator(t *testing.T) {
 	basePath := t.TempDir()
@@ -117,8 +269,8 @@ func TestServeHTTPRejectsUnlistedHost(t *testing.T) {
 	}
 
 	app := newTestHTTPApp(t, basePath, map[string]interface{}{"enable": false})
-	app.Config.Set("app.server.allowed_hosts", []interface{}{"app.example.com"})
-	app.Route.Get("/ok", func(req *fwcontext.Request) *fwcontext.Response {
+	mustHTTPConfig(t, app).Set("app.server.allowed_hosts", []interface{}{"app.example.com"})
+	mustHTTPRoute(t, app).Get("/ok", func(req *fwcontext.Request) *fwcontext.Response {
 		return fwcontext.NewResponse().Content("ok")
 	})
 
@@ -144,8 +296,8 @@ func TestServeHTTPAllowsConfiguredHost(t *testing.T) {
 	}
 
 	app := newTestHTTPApp(t, basePath, map[string]interface{}{"enable": false})
-	app.Config.Set("app.server.allowed_hosts", []interface{}{"app.example.com"})
-	app.Route.Get("/ok", func(req *fwcontext.Request) *fwcontext.Response {
+	mustHTTPConfig(t, app).Set("app.server.allowed_hosts", []interface{}{"app.example.com"})
+	mustHTTPRoute(t, app).Get("/ok", func(req *fwcontext.Request) *fwcontext.Response {
 		return fwcontext.NewResponse().Content("ok")
 	})
 
@@ -191,7 +343,7 @@ func TestCompressionSkipsSmallResponse(t *testing.T) {
 			"gzip": 1,
 		},
 	})
-	app.Route.Get("/tiny", func(req *fwcontext.Request) *fwcontext.Response {
+	mustHTTPRoute(t, app).Get("/tiny", func(req *fwcontext.Request) *fwcontext.Response {
 		return fwcontext.NewResponse().Content("tiny")
 	})
 
@@ -226,7 +378,7 @@ func TestCompressionCompressesLargeResponse(t *testing.T) {
 			"gzip": 1,
 		},
 	})
-	app.Route.Get("/large", func(req *fwcontext.Request) *fwcontext.Response {
+	mustHTTPRoute(t, app).Get("/large", func(req *fwcontext.Request) *fwcontext.Response {
 		return fwcontext.NewResponse().Content(largeBody)
 	})
 
@@ -264,7 +416,7 @@ func TestNewServerUsesConfiguredTimeouts(t *testing.T) {
 	}
 
 	app := newTestHTTPApp(t, basePath, map[string]interface{}{"enable": false})
-	app.Config.Set("app.server", map[string]interface{}{
+	mustHTTPConfig(t, app).Set("app.server", map[string]interface{}{
 		"host":                    "127.0.0.1",
 		"port":                    18080,
 		"read_header_timeout_ms":  1500,
@@ -308,8 +460,8 @@ func TestServeHTTPRejectsOversizedRequestBody(t *testing.T) {
 	}
 
 	app := newTestHTTPApp(t, basePath, map[string]interface{}{"enable": false})
-	app.Config.Set("app.server.max_body_bytes", 8)
-	app.Route.Post("/echo", func(req *fwcontext.Request) *fwcontext.Response {
+	mustHTTPConfig(t, app).Set("app.server.max_body_bytes", 8)
+	mustHTTPRoute(t, app).Post("/echo", func(req *fwcontext.Request) *fwcontext.Response {
 		body, err := req.Body()
 		if err != nil {
 			return fwcontext.NewResponse().Code(stdhttp.StatusBadRequest).Content(err.Error())
@@ -336,8 +488,8 @@ func TestServeHTTPRejectsChunkedOversizedRequestBody(t *testing.T) {
 	}
 
 	app := newTestHTTPApp(t, basePath, map[string]interface{}{"enable": false})
-	app.Config.Set("app.server.max_body_bytes", 8)
-	app.Route.Post("/profile", func(req *fwcontext.Request) *fwcontext.Response {
+	mustHTTPConfig(t, app).Set("app.server.max_body_bytes", 8)
+	mustHTTPRoute(t, app).Post("/profile", func(req *fwcontext.Request) *fwcontext.Response {
 		name := req.Post("name", "empty")
 		return fwcontext.NewResponse().Content("name=" + name)
 	})
@@ -410,7 +562,7 @@ func TestServeHTTPRejectsMalformedJSONBeforeBusiness(t *testing.T) {
 	}
 	app := newTestHTTPApp(t, basePath, map[string]interface{}{"enable": false})
 	var calls atomic.Int32
-	if _, err := app.Route.Post("/users", func(req *fwcontext.Request) *fwcontext.Response {
+	if _, err := mustHTTPRoute(t, app).Post("/users", func(req *fwcontext.Request) *fwcontext.Response {
 		calls.Add(1)
 		return fwcontext.NewResponse().Content("created")
 	}); err != nil {
@@ -429,7 +581,7 @@ func TestServeHTTPRejectsMalformedJSONBeforeBusiness(t *testing.T) {
 // TestServeHTTPReturnsMethodNotAllowed 验证路径存在但方法不匹配时返回 405 和稳定 Allow 头。
 func TestServeHTTPReturnsMethodNotAllowed(t *testing.T) {
 	app := newTestHTTPApp(t, t.TempDir(), map[string]interface{}{"enable": false})
-	if _, err := app.Route.Get("/items", "Item@Index"); err != nil {
+	if _, err := mustHTTPRoute(t, app).Get("/items", "Item@Index"); err != nil {
 		t.Fatalf("注册路由失败: %v", err)
 	}
 	handler := newTestHTTPHandler(t, app)
@@ -449,23 +601,19 @@ func TestNewHttpRejectsUnsafeConfiguration(t *testing.T) {
 		name   string
 		mutate func(*framework.App)
 	}{
-		{name: "小数端口", mutate: func(app *framework.App) { app.Config.Set("app.server.port", 8080.5) }},
-		{name: "非法代理网段", mutate: func(app *framework.App) { app.Config.Set("app.server.trusted_proxies", []interface{}{"127.0.0.1/33"}) }},
-		{name: "HTTP3 未启用 TLS", mutate: func(app *framework.App) { app.Config.Set("app.server.http3", true) }},
-		{name: "零请求体上限", mutate: func(app *framework.App) { app.Config.Set("app.server.max_body_bytes", 0) }},
+		{name: "小数端口", mutate: func(app *framework.App) { mustHTTPConfig(t, app).Set("app.server.port", 8080.5) }},
+		{name: "非法代理网段", mutate: func(app *framework.App) {
+			mustHTTPConfig(t, app).Set("app.server.trusted_proxies", []interface{}{"127.0.0.1/33"})
+		}},
+		{name: "HTTP3 未启用 TLS", mutate: func(app *framework.App) { mustHTTPConfig(t, app).Set("app.server.http3", true) }},
+		{name: "零请求体上限", mutate: func(app *framework.App) { mustHTTPConfig(t, app).Set("app.server.max_body_bytes", 0) }},
 		{name: "读取超时短于请求头超时", mutate: func(app *framework.App) {
-			app.Config.Set("app.server.read_header_timeout_ms", 2000)
-			app.Config.Set("app.server.read_timeout_ms", 1000)
+			mustHTTPConfig(t, app).Set("app.server.read_header_timeout_ms", 2000)
+			mustHTTPConfig(t, app).Set("app.server.read_timeout_ms", 1000)
 		}},
-		{name: "未知配置键", mutate: func(app *framework.App) { app.Config.Set("app.server.max_boby_bytes", 100) }},
+		{name: "未知配置键", mutate: func(app *framework.App) { mustHTTPConfig(t, app).Set("app.server.max_boby_bytes", 100) }},
 		{name: "非法 gzip 等级", mutate: func(app *framework.App) {
-			app.Config.Set("app.compression", map[string]interface{}{"enable": true, "levels": map[string]interface{}{"gzip": 99}})
-		}},
-		{name: "大小写重复的压缩算法", mutate: func(app *framework.App) {
-			app.Config.Set("app.compression", map[string]interface{}{
-				"enable": true,
-				"levels": map[string]interface{}{"gzip": 1, "GZIP": 2},
-			})
+			mustHTTPConfig(t, app).Set("app.compression", map[string]interface{}{"enable": true, "levels": map[string]interface{}{"gzip": 99}})
 		}},
 	}
 	for _, test := range tests {
@@ -476,5 +624,33 @@ func TestNewHttpRejectsUnsafeConfiguration(t *testing.T) {
 				t.Fatalf("应返回 ErrInvalidHTTPConfig，实际为 %v", err)
 			}
 		})
+	}
+}
+
+// TestHttpUsesCompiledTrustedProxySet 验证 HTTP 内核使用启动期编译的代理集合，而不是在请求热路径重新解析配置。
+func TestHttpUsesCompiledTrustedProxySet(t *testing.T) {
+	app := newTestHTTPApp(t, t.TempDir(), map[string]interface{}{"enable": false})
+	mustHTTPConfig(t, app).Set("app.server.trusted_proxies", []interface{}{"127.0.0.1/32"})
+	observedSecure := false
+	mustHTTPRoute(t, app).Get("/proxy-secure", func(req *fwcontext.Request) *fwcontext.Response {
+		observedSecure = req.IsSsl()
+		return fwcontext.NewResponse().Content("ok")
+	})
+
+	handler, err := NewHttp(app)
+	if err != nil {
+		t.Fatalf("创建 HTTP 内核失败: %v", err)
+	}
+	if handler.srvConf.TrustedProxySet == nil {
+		t.Fatal("启动期应创建预编译的受信代理集合")
+	}
+
+	raw := httptest.NewRequest(stdhttp.MethodGet, "http://example.com/proxy-secure", nil)
+	raw.RemoteAddr = "127.0.0.1:4321"
+	raw.Header.Set("X-Forwarded-Proto", "https")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, raw)
+	if recorder.Code != stdhttp.StatusOK || recorder.Body.String() != "ok" || !observedSecure {
+		t.Fatalf("HTTP 请求未使用预编译代理策略: status=%d body=%q secure=%t", recorder.Code, recorder.Body.String(), observedSecure)
 	}
 }

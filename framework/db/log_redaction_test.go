@@ -104,7 +104,7 @@ func TestWhereRawErrorLogRedactsLiteralSecrets(t *testing.T) {
 // TestSQLRedactionCoversDollarQuotesAndComments 验证 PostgreSQL dollar quote
 // 以及 SQL 注释中的敏感文本不会进入错误日志。
 func TestSQLRedactionCoversDollarQuotesAndComments(t *testing.T) {
-	redacted := redactSQLText("SELECT $tag$dollar-secret$tag$ /* block-secret */ -- line-secret\nFROM users")
+	redacted := redactSQLText("SELECT $tag$dollar-secret$tag$ /* block-secret */ -- line-secret\nFROM users", "postgres")
 	for _, secret := range []string{"dollar-secret", "block-secret", "line-secret"} {
 		if strings.Contains(redacted, secret) {
 			t.Fatalf("SQL 脱敏结果仍包含 %q: %s", secret, redacted)
@@ -112,5 +112,18 @@ func TestSQLRedactionCoversDollarQuotesAndComments(t *testing.T) {
 	}
 	if strings.Count(redacted, "[REDACTED]") < 3 {
 		t.Fatalf("dollar quote 和两类注释都应包含脱敏标记: %s", redacted)
+	}
+}
+
+func TestSQLRedactionTreatsDoubleQuotesByDialect(t *testing.T) {
+	const secret = "double-quoted-secret"
+	if got := redactSQLText(`SELECT "double-quoted-secret"`, "mysql"); strings.Contains(got, secret) {
+		t.Fatalf("MySQL double-quoted literal leaked: %s", got)
+	}
+	if got := redactSQLText(`SELECT "double-quoted-secret"`, ""); strings.Contains(got, secret) {
+		t.Fatalf("unknown dialect must redact conservatively: %s", got)
+	}
+	if got := redactSQLText(`SELECT "account_id" FROM "users"`, "postgres"); !strings.Contains(got, `"account_id"`) {
+		t.Fatalf("PostgreSQL quoted identifier was corrupted: %s", got)
 	}
 }

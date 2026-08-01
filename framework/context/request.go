@@ -2,6 +2,7 @@ package context
 
 import (
 	"bytes"
+	stdcontext "context"
 	"errors"
 	"fmt"
 	"io"
@@ -42,8 +43,14 @@ var (
 type Request struct {
 	raw *http.Request
 
-	dataMu sync.RWMutex
-	data   map[string]interface{}
+	applicationMu sync.RWMutex
+	application   *ApplicationContext
+
+	dataMu      sync.RWMutex
+	data        map[string]interface{}
+	routeParams map[string]interface{}
+
+	routeMu sync.RWMutex
 
 	bodyOnce  sync.Once
 	bodyCache []byte
@@ -55,8 +62,10 @@ type Request struct {
 	mediaType       string
 	contentTypeErr  error
 
-	jsonOnce sync.Once
-	jsonBody map[string]interface{}
+	jsonOnce      sync.Once
+	jsonBody      map[string]interface{}
+	jsonStateMu   sync.RWMutex
+	jsonValidated bool
 
 	formOnce   sync.Once
 	formMu     sync.Mutex
@@ -68,7 +77,7 @@ type Request struct {
 	jsonErr error
 	formErr error
 
-	trustedProxies       []*net.IPNet
+	trustedProxies       *TrustedProxySet
 	multipartMemoryLimit int64
 	maxBodyBytes         int64
 }
@@ -77,7 +86,6 @@ type Request struct {
 func NewRequest(raw *http.Request, options ...RequestOption) (*Request, error) {
 	req := &Request{
 		raw:                  raw,
-		data:                 make(map[string]interface{}),
 		multipartMemoryLimit: DefaultMultipartMemoryLimit,
 		maxBodyBytes:         DefaultMaxBodyBytes,
 	}
@@ -193,9 +201,14 @@ func (r *Request) Route(key string, defaults ...string) string {
 	if r == nil {
 		return firstDefault(defaults)
 	}
-	r.dataMu.RLock()
-	value, ok := r.data[key]
-	r.dataMu.RUnlock()
+	r.routeMu.RLock()
+	value, ok := r.routeParams[key]
+	r.routeMu.RUnlock()
+	if !ok {
+		r.dataMu.RLock()
+		value, ok = r.data[key]
+		r.dataMu.RUnlock()
+	}
 	if ok {
 		if text, valid := stringifyRequestValue(value); valid {
 			return text
@@ -233,6 +246,11 @@ func (r *Request) All() map[string]interface{} {
 			result[key] = deepCloneRequestValue(value)
 		}
 		r.dataMu.RUnlock()
+		r.routeMu.RLock()
+		for key, value := range r.routeParams {
+			result[key] = deepCloneRequestValue(value)
+		}
+		r.routeMu.RUnlock()
 	}
 	return result
 }
@@ -325,6 +343,15 @@ func (r *Request) Parse() error {
 	if err != nil {
 		return err
 	}
+	// 没有请求体时不触发 io.ReadAll 和 ParseForm；查询参数仍由 Get/All 惰性读取。
+	// JSON 空体仍需进入严格解析流程，保持空 JSON 请求被拒绝的既有语义。
+	if !requestHasBody(r.raw) {
+		if isJSONMediaType(mediaType) {
+			r.parseJSONBody()
+			return r.JSONError()
+		}
+		return nil
+	}
 	switch {
 	case isJSONMediaType(mediaType):
 		r.parseJSONBody()
@@ -370,8 +397,14 @@ func (r *Request) Json(target interface{}) error {
 	if err != nil {
 		return err
 	}
-	if err := decodeStrictJSONTarget(body, target); err != nil {
-		return fmt.Errorf("%w: %v", ErrInvalidJSONBody, err)
+	var decodeErr error
+	if r.isJSONValidated() {
+		decodeErr = decodeJSONTarget(body, target)
+	} else {
+		decodeErr = decodeStrictJSONTarget(body, target)
+	}
+	if decodeErr != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidJSONBody, decodeErr)
 	}
 	return nil
 }
@@ -394,6 +427,53 @@ func (r *Request) Raw() *http.Request {
 		return nil
 	}
 	return r.raw
+}
+
+// Context 返回原生请求上下文；空请求也返回可安全使用的后台上下文。
+func (r *Request) Context() stdcontext.Context {
+	if r == nil || r.raw == nil || r.raw.Context() == nil {
+		return stdcontext.Background()
+	}
+	return r.raw.Context()
+}
+
+// SetApplicationContext 写入当前请求的应用上下文。
+// 上下文只在请求分发前设置一次，读取方始终拿到值拷贝。
+func (r *Request) SetApplicationContext(application ApplicationContext) {
+	if r == nil {
+		return
+	}
+	applicationCopy := application
+	r.applicationMu.Lock()
+	r.application = &applicationCopy
+	r.applicationMu.Unlock()
+}
+
+// ApplicationContext 返回当前请求的应用上下文快照。
+func (r *Request) ApplicationContext() (ApplicationContext, bool) {
+	if r == nil {
+		return ApplicationContext{}, false
+	}
+	r.applicationMu.RLock()
+	if r.application == nil {
+		r.applicationMu.RUnlock()
+		return ApplicationContext{}, false
+	}
+	application := *r.application
+	r.applicationMu.RUnlock()
+	return application, true
+}
+
+// ApplicationPath 为当前请求生成带应用前缀的站内路径。
+func (r *Request) ApplicationPath(path string) (string, error) {
+	if r == nil {
+		return "", fmt.Errorf("%w: 请求为空", ErrInvalidApplicationPath)
+	}
+	application, exists := r.ApplicationContext()
+	if !exists {
+		return BuildApplicationPath("", path)
+	}
+	return BuildApplicationPath(application.PathPrefix(), path)
 }
 
 func (r *Request) IsGet() bool    { return r.Method() == http.MethodGet }
@@ -606,6 +686,19 @@ func (r *Request) Set(key string, value interface{}) {
 	r.dataMu.Unlock()
 }
 
+// SetRoute 写入路由参数独立命名空间，避免用户参数覆盖 Session、调试和终止器等内部数据。
+func (r *Request) SetRoute(key string, value interface{}) {
+	if r == nil {
+		return
+	}
+	r.routeMu.Lock()
+	if r.routeParams == nil {
+		r.routeParams = make(map[string]interface{})
+	}
+	r.routeParams[key] = value
+	r.routeMu.Unlock()
+}
+
 // GetData 获取透传数据。
 func (r *Request) GetData(key string) interface{} {
 	if r == nil {
@@ -698,7 +791,20 @@ func (r *Request) parseJSONBody() {
 			return
 		}
 		r.jsonBody = payload
+		r.jsonStateMu.Lock()
+		r.jsonValidated = true
+		r.jsonStateMu.Unlock()
 	})
+}
+
+func (r *Request) isJSONValidated() bool {
+	if r == nil {
+		return false
+	}
+	r.jsonStateMu.RLock()
+	validated := r.jsonValidated
+	r.jsonStateMu.RUnlock()
+	return validated
 }
 
 func (r *Request) ensureFormParsed() error {
@@ -757,8 +863,14 @@ func (r *Request) paramValue(key string) (interface{}, bool) {
 	if r == nil {
 		return nil, false
 	}
+	r.routeMu.RLock()
+	value, ok := r.routeParams[key]
+	r.routeMu.RUnlock()
+	if ok {
+		return value, true
+	}
 	r.dataMu.RLock()
-	value, ok := r.data[key]
+	value, ok = r.data[key]
 	r.dataMu.RUnlock()
 	if ok {
 		return value, true
@@ -808,6 +920,14 @@ func isJSONMediaType(mediaType string) bool {
 
 func isFormMediaType(mediaType string) bool {
 	return mediaType == "application/x-www-form-urlencoded" || mediaType == "multipart/form-data"
+}
+
+// requestHasBody 判断请求是否存在需要框架读取的实体；ContentLength=0 的请求遵循 net/http 语义视为空体。
+func requestHasBody(raw *http.Request) bool {
+	if raw == nil || raw.Body == nil || raw.Body == http.NoBody {
+		return false
+	}
+	return raw.ContentLength != 0
 }
 
 func normalizeBodyReadError(err error, limit int64) error {

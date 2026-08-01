@@ -19,12 +19,15 @@ import (
 // TestNewRedisStrictConfig 验证 Redis 地址、索引、超时、前缀和未知字段都在创建阶段严格校验。
 func TestNewRedisStrictConfig(t *testing.T) {
 	driver, err := NewRedis(map[string]interface{}{
-		"host":       "::1",
-		"port":       float64(6380),
-		"password":   "secret",
-		"select":     float64(2),
-		"timeout_ms": float64(1500),
-		"prefix":     "thinkgo:test:",
+		"host":                     "::1",
+		"port":                     float64(6380),
+		"password":                 "secret",
+		"select":                   float64(2),
+		"timeout_ms":               float64(1500),
+		"prefix":                   "thinkgo:test:",
+		"tls_enable":               true,
+		"tls_server_name":          "cache.example.com",
+		"tls_insecure_skip_verify": true,
 	})
 	if err != nil {
 		t.Fatalf("创建 Redis 驱动失败: %v", err)
@@ -35,6 +38,12 @@ func TestNewRedisStrictConfig(t *testing.T) {
 	}
 	if driver.opTimeout != 1500*time.Millisecond || driver.prefix != "thinkgo:test:" {
 		t.Fatalf("Redis 超时或前缀解析错误: timeout=%v prefix=%q", driver.opTimeout, driver.prefix)
+	}
+	if identity := driver.CacheResourceIdentity(); identity == "" {
+		t.Fatal("Redis 驱动资源标识不应为空")
+	}
+	if tlsConfig := driver.client.Options().TLSConfig; tlsConfig == nil || tlsConfig.ServerName != "cache.example.com" || !tlsConfig.InsecureSkipVerify {
+		t.Fatalf("Redis TLS 配置解析错误: config=%#v", driver.client.Options().TLSConfig)
 	}
 	validPorts := []interface{}{
 		int(6380), int16(6380), int32(6380), int64(6380),
@@ -62,6 +71,10 @@ func TestNewRedisStrictConfig(t *testing.T) {
 		{"host": "localhost", "port": float64(6379), "password": true},
 		{"host": "localhost", "port": float64(6379), "allow_flush_db": "yes"},
 		{"host": "localhost", "port": float64(6379), "prefix": strings.Repeat("x", maxRedisPrefixBytes+1)},
+		{"host": "localhost", "port": float64(6379), "tls_enable": "yes"},
+		{"host": "localhost", "port": float64(6379), "tls_server_name": "cache.example.com"},
+		{"host": "localhost", "port": float64(6379), "tls_enable": true, "tls_insecure_skip_verify": "yes"},
+		{"host": "localhost", "port": float64(6379), "tls_enable": true, "tls_server_name": "bad name"},
 	}
 	for _, config := range invalidConfigs {
 		if instance, err := NewRedis(config); !errors.Is(err, ErrInvalidRedisConfig) || instance != nil {
@@ -221,6 +234,23 @@ func (s *redisTestServer) execute(writer *bufio.Writer, command []string) error 
 			return writeRedisTestNil(writer)
 		}
 		return writeRedisTestBulk(writer, value.value)
+	case "MGET":
+		if _, err := fmt.Fprintf(writer, "*%d\r\n", len(command)-1); err != nil {
+			return err
+		}
+		for _, key := range command[1:] {
+			value, found := s.get(key)
+			if !found {
+				if err := writeRedisTestNil(writer); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := writeRedisTestBulk(writer, value.value); err != nil {
+				return err
+			}
+		}
+		return nil
 	case "SET":
 		return s.executeSet(writer, command)
 	case "EXISTS":
@@ -238,6 +268,9 @@ func (s *redisTestServer) execute(writer *bufio.Writer, command []string) error 
 	case "SCAN":
 		return s.executeScan(writer, command)
 	case "EVAL":
+		if len(command) > 1 && strings.Contains(strings.ToUpper(command[1]), "PEXPIRE") {
+			return s.executeRenewLock(writer, command)
+		}
 		return s.executeReleaseLock(writer, command)
 	case "FLUSHDB":
 		s.lock.Lock()
@@ -383,6 +416,29 @@ func (s *redisTestServer) executeReleaseLock(writer *bufio.Writer, command []str
 	return writeRedisTestInteger(writer, removed)
 }
 
+func (s *redisTestServer) executeRenewLock(writer *bufio.Writer, command []string) error {
+	if len(command) < 6 {
+		return writeRedisTestError(writer, "ERR invalid EVAL")
+	}
+	milliseconds, err := strconv.ParseInt(command[5], 10, 64)
+	if err != nil || milliseconds <= 0 {
+		return writeRedisTestError(writer, "ERR invalid expire time")
+	}
+	key := command[3]
+	owner := command[4]
+	s.lock.Lock()
+	s.purgeExpiredLocked(key)
+	stored, exists := s.values[key]
+	renewed := int64(0)
+	if exists && stored.value == owner {
+		stored.expiry = time.Now().Add(time.Duration(milliseconds) * time.Millisecond)
+		s.values[key] = stored
+		renewed = 1
+	}
+	s.lock.Unlock()
+	return writeRedisTestInteger(writer, renewed)
+}
+
 func (s *redisTestServer) get(key string) (redisTestValue, bool) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
@@ -459,6 +515,45 @@ func writeRedisTestInteger(writer io.Writer, value int64) error {
 	return err
 }
 
+// TestRedisBatchRoundTrip 验证批量读写使用 Redis MGET/Pipeline，并保留 nil 命中与未命中的区别。
+func TestRedisBatchRoundTrip(t *testing.T) {
+	server := newRedisTestServer(t)
+	host, port := server.address(t)
+	driver, err := NewRedis(map[string]interface{}{
+		"host": host, "port": port, "prefix": "batch:", "timeout_ms": 500,
+	})
+	if err != nil {
+		t.Fatalf("创建 Redis 驱动失败: %v", err)
+	}
+	t.Cleanup(func() { _ = driver.Close() })
+	if err := driver.SetMany(map[string]interface{}{
+		"profile": map[string]interface{}{"name": "Ada", "age": 7},
+		"nil":     nil,
+	}, time.Minute); err != nil {
+		t.Fatalf("Redis 批量写入失败: %v", err)
+	}
+	values, err := driver.GetMany([]string{"profile", "missing", "profile", "nil"})
+	if err != nil {
+		t.Fatalf("Redis 批量读取失败: %v", err)
+	}
+	profile, ok := values["profile"].(map[string]interface{})
+	if !ok || profile["name"] != "Ada" || profile["age"] != float64(7) {
+		t.Fatalf("Redis 批量读取 profile 错误: %#v", values["profile"])
+	}
+	if value, exists := values["nil"]; !exists || value != nil {
+		t.Fatalf("Redis 批量读取 nil 命中错误: value=%#v exists=%t", value, exists)
+	}
+	if _, exists := values["missing"]; exists || len(values) != 2 {
+		t.Fatalf("Redis 批量读取未命中语义错误: %#v", values)
+	}
+	if values, err := driver.GetMany(nil); err != nil || len(values) != 0 {
+		t.Fatalf("Redis 空批量读取错误: values=%#v err=%v", values, err)
+	}
+	if err := driver.SetMany(map[string]interface{}{"bad": make(chan int)}, 0); err == nil {
+		t.Fatal("Redis 批量写入不可 JSON 序列化的值必须失败")
+	}
+}
+
 // TestRedisDriverRoundTripCounterLocksAndClear 验证真实 RESP 流程、TTL、计数、锁和按前缀清理语义。
 func TestRedisDriverRoundTripCounterLocksAndClear(t *testing.T) {
 	server := newRedisTestServer(t)
@@ -516,6 +611,12 @@ func TestRedisDriverRoundTripCounterLocksAndClear(t *testing.T) {
 	if acquired, lockErr := driver.AcquireLock(lockKey, "owner-b", time.Minute); lockErr != nil || acquired {
 		t.Fatalf("锁持有期间其他 owner 不应获取: acquired=%t err=%v", acquired, lockErr)
 	}
+	if renewed, lockErr := driver.RenewLock(lockKey, "owner-a", time.Minute); lockErr != nil || !renewed {
+		t.Fatalf("Redis 锁续租失败: renewed=%t err=%v", renewed, lockErr)
+	}
+	if renewed, lockErr := driver.RenewLock(lockKey, "owner-b", time.Minute); lockErr != nil || renewed {
+		t.Fatalf("错误 owner 不得续租 Redis 锁: renewed=%t err=%v", renewed, lockErr)
+	}
 	if released, lockErr := driver.ReleaseLock(lockKey, "owner-b"); lockErr != nil || released {
 		t.Fatalf("错误 owner 不得释放 Redis 锁: released=%t err=%v", released, lockErr)
 	}
@@ -549,11 +650,17 @@ func TestRedisUnprefixedExplicitFlushAndClosedErrors(t *testing.T) {
 	if err = driver.Set("key", "value", 0); err != nil {
 		t.Fatalf("写入无前缀 Redis 失败: %v", err)
 	}
+	if acquired, lockErr := driver.AcquireLock("__thinkgo_lock__:clear", "owner-a", time.Minute); lockErr != nil || !acquired {
+		t.Fatalf("获取无前缀 Redis 锁失败: acquired=%t err=%v", acquired, lockErr)
+	}
 	if err = driver.Clear(); err != nil {
 		t.Fatalf("显式授权 FLUSHDB 后清理失败: %v", err)
 	}
 	if _, found, getErr := driver.Get("key"); getErr != nil || found {
 		t.Fatalf("FLUSHDB 后键仍存在: found=%t err=%v", found, getErr)
+	}
+	if released, lockErr := driver.ReleaseLock("__thinkgo_lock__:clear", "owner-a"); lockErr != nil || !released {
+		t.Fatalf("无前缀清理不得删除活动锁: released=%t err=%v", released, lockErr)
 	}
 	if err = driver.Close(); err != nil {
 		t.Fatalf("关闭 Redis 驱动失败: %v", err)

@@ -1,27 +1,33 @@
 package db
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
 
 // recordingRawConn 记录最后一次执行的原生 SQL，用于断言高级 COUNT 的子查询包裹。
 type recordingRawConn struct {
+	connectionIdentityState
 	lastQuery string
 	lastArgs  []interface{}
 	countVal  int64
 }
 
-func (c *recordingRawConn) Select(table, fields string, where []string, args []interface{}, order string, limit, offset int) ([]map[string]interface{}, error) {
+func (c *recordingRawConn) Select(context.Context, SelectRequest) ([]map[string]interface{}, error) {
 	return []map[string]interface{}{}, nil
 }
-func (c *recordingRawConn) Insert(string, map[string]interface{}) (int64, error) { return 1, nil }
-func (c *recordingRawConn) Update(string, map[string]interface{}, []string, []interface{}) (int64, error) {
-	return 1, nil
+func (c *recordingRawConn) Insert(_ context.Context, request InsertRequest) (InsertResult, error) {
+	return InsertResult{Affected: 1, ID: int64(1), IDKnown: request.WantsID()}, nil
 }
-func (c *recordingRawConn) Delete(string, []string, []interface{}) (int64, error) { return 1, nil }
-func (c *recordingRawConn) Count(string, []string, []interface{}) (int64, error)  { return 0, nil }
-func (c *recordingRawConn) Close() error                                          { return nil }
+func (c *recordingRawConn) Update(context.Context, UpdateRequest) (UpdateResult, error) {
+	return UpdateResult{Affected: 1}, nil
+}
+func (c *recordingRawConn) Delete(context.Context, DeleteRequest) (DeleteResult, error) {
+	return DeleteResult{Deleted: 1}, nil
+}
+func (c *recordingRawConn) Count(context.Context, CountRequest) (int64, error) { return 0, nil }
+func (c *recordingRawConn) Close() error                                       { return nil }
 
 func (c *recordingRawConn) Query(sql string, args ...interface{}) ([]map[string]interface{}, error) {
 	c.lastQuery = sql

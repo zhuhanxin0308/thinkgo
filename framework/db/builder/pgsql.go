@@ -3,11 +3,15 @@ package builder
 import (
 	"fmt"
 	"strings"
+
+	"thinkgo/framework/db/internal/contract"
 )
 
 // Pgsql builder（PostgreSQL 方言）
 // 统一使用 ? 占位符构建，执行前由 Rebind 转换为 $N 风格。
 type Pgsql struct{}
+
+func (p *Pgsql) DialectName() string { return "postgres" }
 
 func pgQuote(name string) string {
 	return quoteWith(name, `"`, `"`)
@@ -55,15 +59,26 @@ func (p *Pgsql) Pagination(order string, limit int, offset int) (string, string)
 	return orderClause, limitClause
 }
 
-// LockClause PostgreSQL 用 FOR UPDATE / FOR SHARE。
+func (p *Pgsql) Lock(mode contract.LockMode) (contract.LockSpec, error) {
+	switch mode {
+	case contract.LockNone:
+		return contract.LockSpec{}, nil
+	case contract.LockForUpdate:
+		return contract.LockSpec{Tail: " FOR UPDATE"}, nil
+	case contract.LockForShare:
+		return contract.LockSpec{Tail: " FOR SHARE"}, nil
+	default:
+		return contract.LockSpec{}, contract.ErrUnsupportedLockMode
+	}
+}
+
+// LockClause 保留旧版字符串锁子句兼容入口。
 func (p *Pgsql) LockClause(mode string) string {
 	switch mode {
 	case "FOR UPDATE":
 		return " FOR UPDATE"
 	case "LOCK IN SHARE MODE":
 		return " FOR SHARE"
-	case "":
-		return ""
 	default:
 		return ""
 	}

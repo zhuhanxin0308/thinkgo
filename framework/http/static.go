@@ -97,7 +97,7 @@ func (h *Http) openPublicFile(urlPath string) (*os.File, os.FileInfo, bool) {
 		return nil, nil, false
 	}
 
-	publicPath := filepath.Join(h.app.BasePath, "public")
+	publicPath := h.app.ProjectPublicPath()
 	publicAbsolute, err := filepath.Abs(publicPath)
 	if err != nil {
 		return nil, nil, false
@@ -106,6 +106,7 @@ func (h *Http) openPublicFile(urlPath string) (*os.File, os.FileInfo, bool) {
 	// 绝大多数 API 路径并不对应静态文件。先尝试打开候选路径，缺失时无需
 	// 解析 public 根目录和目标路径的符号链接；成功打开后仍执行完整校验，
 	// 并在返回前确认句柄与已校验目标是同一文件，避免降低防穿越保护。
+	// #nosec G304 -- targetCandidate 由 public 根目录、规范化 URL 和符号链接复核共同生成。
 	file, err := os.Open(targetCandidate)
 	if err != nil {
 		if os.IsNotExist(err) {

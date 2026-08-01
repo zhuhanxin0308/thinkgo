@@ -18,7 +18,7 @@ func (s *Session) Handle(req *context.Request, next func(*context.Request) *cont
 	if s == nil || s.Manager == nil || req == nil || req.Raw() == nil || next == nil {
 		return sessionErrorResponse(http.StatusInternalServerError, "会话服务不可用")
 	}
-	requestSession, err := s.Manager.NewRequestSession(req.Raw(), nil)
+	requestSession, err := s.Manager.NewRequestSessionWithSecure(req.Raw(), nil, req.IsSsl())
 	if err != nil {
 		status := http.StatusInternalServerError
 		message := "会话初始化失败"

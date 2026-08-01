@@ -21,7 +21,7 @@ func TestApplyDatabaseEnvOverridesReadsPoolSettings(t *testing.T) {
 	t.Setenv("DB_CONN_MAX_IDLE_TIME_SECONDS", "45")
 	t.Setenv("DB_TIMESTAMP_VALUE_TYPE", "unix")
 
-	app := &App{Env: env.NewEnv()}
+	app := &App{env: env.NewEnv()}
 	config := db.Config{}
 	if err := applyDatabaseEnvOverrides(app, &config); err != nil {
 		t.Fatalf("应用数据库环境变量失败: %v", err)
@@ -42,7 +42,7 @@ func TestApplyDatabaseEnvOverridesReadsPoolSettings(t *testing.T) {
 func TestApplyDatabaseEnvOverridesAllowsEmptyPassword(t *testing.T) {
 	t.Setenv("DB_PASS", "")
 
-	app := &App{Env: env.NewEnv()}
+	app := &App{env: env.NewEnv()}
 	config := db.Config{Password: "from-config"}
 	if err := applyDatabaseEnvOverrides(app, &config); err != nil {
 		t.Fatalf("应用空密码环境变量失败: %v", err)

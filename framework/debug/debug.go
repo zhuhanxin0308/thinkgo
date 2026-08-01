@@ -4,9 +4,52 @@ import (
 	"runtime"
 	"sync"
 	"time"
+
+	"thinkgo/framework/context"
 )
 
-const defaultMemStatsSampleInterval = 5 * time.Second
+const (
+	defaultMemStatsSampleInterval = 5 * time.Second
+
+	// RequestKey 是请求上下文中存放调试 collector 的统一键。
+	RequestKey = "_debug"
+	// MaxLogEntries 是单个请求保留的最大日志条数。
+	MaxLogEntries = 200
+	// MaxSQLEntries 是单个请求保留的最大 SQL 条数。
+	MaxSQLEntries = 100
+	// MaxCacheEntries 是单个请求保留的最大缓存操作条数。
+	MaxCacheEntries = 200
+	// MaxVarEntries 是单个请求保留的最大调试变量键数。
+	MaxVarEntries = 100
+	// MaxFileEntries 是单个请求保留的最大文件记录数。
+	MaxFileEntries = 200
+)
+
+// Kind 表示一类请求调试数据。
+type Kind string
+
+const (
+	// KindLog 表示日志记录。
+	KindLog Kind = "log"
+	// KindSQL 表示 SQL 记录。
+	KindSQL Kind = "sql"
+	// KindCache 表示缓存操作记录。
+	KindCache Kind = "cache"
+	// KindVar 表示调试变量。
+	KindVar Kind = "var"
+	// KindFile 表示文件或模板记录。
+	KindFile Kind = "file"
+)
+
+type truncationFlags uint8
+
+const (
+	truncationLog truncationFlags = 1 << iota
+	truncationSQL
+	truncationCache
+	truncationVar
+	truncationFile
+)
 
 var defaultMemSampler = newMemStatsSampler(defaultMemStatsSampleInterval, runtime.ReadMemStats)
 
@@ -67,133 +110,278 @@ type Debug struct {
 	cache      []map[string]interface{} // 缓存操作记录
 	vars       map[string]interface{}   // 调试变量
 	files      []string                 // 加载的文件
+	fileSet    map[string]struct{}      // 文件去重集合
+	truncated  truncationFlags          // 各类别截断位图
 	start      time.Time                // 请求开始时间
 	lock       sync.RWMutex             // 读写锁
 	memSampler *memStatsSampler         // 内存采样器
-	Enabled    bool                     // 是否启用调试
+	location   *time.Location           // 调试信息显示时区
+	now        func() time.Time         // 可替换的当前时间来源
+	Enabled    bool                     // 是否启用调试；发布给并发请求后应按不可变配置读取
 }
 
 // NewDebug 创建调试管理器（全局配置级别，保持向后兼容）
 func NewDebug() *Debug {
-	return &Debug{
-		logs:       make([]map[string]interface{}, 0),
-		sqls:       make([]map[string]interface{}, 0),
-		cache:      make([]map[string]interface{}, 0),
-		vars:       make(map[string]interface{}),
-		files:      make([]string, 0),
-		start:      time.Now(),
-		memSampler: defaultMemSampler,
-		Enabled:    false,
-	}
+	return newDebug(false)
 }
 
-// NewRequestDebug 创建请求级调试实例（并发安全）
-// 每个请求独立的 Debug 实例，不与其他请求共享数据
+// NewRequestDebug 创建请求级调试实例（并发安全）。
+// 每个请求独立的 Debug 实例，不与其他请求共享数据。
 func NewRequestDebug(enabled bool) *Debug {
+	return newDebug(enabled)
+}
+
+func newDebug(enabled bool) *Debug {
 	return &Debug{
 		logs:       make([]map[string]interface{}, 0),
 		sqls:       make([]map[string]interface{}, 0),
 		cache:      make([]map[string]interface{}, 0),
 		vars:       make(map[string]interface{}),
 		files:      make([]string, 0),
-		start:      time.Now(),
+		fileSet:    make(map[string]struct{}),
+		start:      time.Now().In(time.Local),
 		memSampler: defaultMemSampler,
+		location:   time.Local,
+		now:        time.Now,
 		Enabled:    enabled,
 	}
 }
 
-// Clear 清除所有调试数据
-func (d *Debug) Clear() {
+// SetLocation 设置调试面板时间使用的应用时区。
+func (d *Debug) SetLocation(location *time.Location) {
+	if d == nil {
+		return
+	}
+	if location == nil {
+		location = time.Local
+	}
 	d.lock.Lock()
-	defer d.lock.Unlock()
-	d.logs = make([]map[string]interface{}, 0)
-	d.sqls = make([]map[string]interface{}, 0)
-	d.cache = make([]map[string]interface{}, 0)
-	d.vars = make(map[string]interface{})
-	d.files = make([]string, 0)
-	d.start = time.Now()
+	d.location = location
+	d.lock.Unlock()
 }
 
-// AddLog 添加日志条目
-func (d *Debug) AddLog(level, msg string) {
-	if !d.Enabled {
+// nowLocked 返回持锁状态下按应用时区转换后的当前时间。
+func (d *Debug) nowLocked() time.Time {
+	location := d.location
+	if location == nil {
+		location = time.Local
+	}
+	now := d.now
+	if now == nil {
+		now = time.Now
+	}
+	return now().In(location)
+}
+
+// FromRequest 返回请求私有的调试 collector；请求为空、未挂载或类型错误时返回 nil。
+func FromRequest(request *context.Request) *Debug {
+	if request == nil {
+		return nil
+	}
+	collector, _ := request.GetData(RequestKey).(*Debug)
+	return collector
+}
+
+// Clear 清除所有调试数据
+func (d *Debug) Clear() {
+	if d == nil {
 		return
 	}
 	d.lock.Lock()
 	defer d.lock.Unlock()
+	clear(d.logs)
+	d.logs = d.logs[:0]
+	clear(d.sqls)
+	d.sqls = d.sqls[:0]
+	clear(d.cache)
+	d.cache = d.cache[:0]
+	if d.vars == nil {
+		d.vars = make(map[string]interface{})
+	} else {
+		clear(d.vars)
+	}
+	clear(d.files)
+	d.files = d.files[:0]
+	if d.fileSet == nil {
+		d.fileSet = make(map[string]struct{})
+	} else {
+		clear(d.fileSet)
+	}
+	d.truncated = 0
+	d.start = d.nowLocked()
+}
+
+// AddLog 添加日志条目
+func (d *Debug) AddLog(level, msg string) {
+	if d == nil || !d.Enabled {
+		return
+	}
+	d.lock.Lock()
+	defer d.lock.Unlock()
+	if len(d.logs) >= MaxLogEntries {
+		d.truncated |= truncationLog
+		return
+	}
 	d.logs = append(d.logs, map[string]interface{}{
 		"level": level,
 		"msg":   msg,
-		"time":  time.Now().Format("15:04:05.000"),
+		"time":  d.nowLocked().Format("15:04:05.000"),
 	})
 }
 
 // AddSql 添加 SQL 查询记录
 func (d *Debug) AddSql(sql string, duration time.Duration) {
-	if !d.Enabled {
+	if d == nil || !d.Enabled {
 		return
 	}
 	d.lock.Lock()
 	defer d.lock.Unlock()
+	if len(d.sqls) >= MaxSQLEntries {
+		d.truncated |= truncationSQL
+		return
+	}
 	d.sqls = append(d.sqls, map[string]interface{}{
 		"sql":      sql,
 		"duration": duration.Seconds(),
-		"time":     time.Now().Format("15:04:05.000"),
+		"time":     d.nowLocked().Format("15:04:05.000"),
 	})
 }
 
 // AddCache 添加缓存操作记录
 func (d *Debug) AddCache(op, key string) {
-	if !d.Enabled {
+	if d == nil || !d.Enabled {
 		return
 	}
 	d.lock.Lock()
 	defer d.lock.Unlock()
+	if len(d.cache) >= MaxCacheEntries {
+		d.truncated |= truncationCache
+		return
+	}
 	d.cache = append(d.cache, map[string]interface{}{
 		"op":   op,
 		"key":  key,
-		"time": time.Now().Format("15:04:05.000"),
+		"time": d.nowLocked().Format("15:04:05.000"),
 	})
 }
 
 // AddVar 添加调试变量
 func (d *Debug) AddVar(key string, val interface{}) {
-	if !d.Enabled {
+	if d == nil || !d.Enabled {
 		return
 	}
 	d.lock.Lock()
 	defer d.lock.Unlock()
+	if d.vars == nil {
+		d.vars = make(map[string]interface{})
+	}
+	if _, exists := d.vars[key]; !exists && len(d.vars) >= MaxVarEntries {
+		d.truncated |= truncationVar
+		return
+	}
 	d.vars[key] = val
 }
 
 // AddFile 添加文件加载记录（自动去重）
 func (d *Debug) AddFile(file string) {
-	if !d.Enabled {
+	if d == nil || !d.Enabled {
 		return
 	}
 	d.lock.Lock()
 	defer d.lock.Unlock()
-	for _, f := range d.files {
-		if f == file {
-			return
-		}
+	if d.fileSet == nil {
+		d.fileSet = make(map[string]struct{})
 	}
+	if _, exists := d.fileSet[file]; exists {
+		return
+	}
+	if len(d.files) >= MaxFileEntries {
+		d.truncated |= truncationFile
+		return
+	}
+	d.fileSet[file] = struct{}{}
 	d.files = append(d.files, file)
+}
+
+// Truncated 报告指定类别是否因达到请求上限而丢弃了后续记录。
+func (d *Debug) Truncated(kind Kind) bool {
+	if d == nil {
+		return false
+	}
+	flag := truncationFlag(kind)
+	if flag == 0 {
+		return false
+	}
+	d.lock.RLock()
+	truncated := d.truncated&flag != 0
+	d.lock.RUnlock()
+	return truncated
 }
 
 // GetInfo 获取所有调试信息
 func (d *Debug) GetInfo() map[string]interface{} {
+	if d == nil {
+		return emptyDebugInfo()
+	}
 	d.lock.RLock()
-	defer d.lock.RUnlock()
-
-	return map[string]interface{}{
+	info := map[string]interface{}{
 		"logs":  cloneDebugEntries(d.logs),
 		"sqls":  cloneDebugEntries(d.sqls),
 		"cache": cloneDebugEntries(d.cache),
 		"vars":  cloneDebugVars(d.vars),
 		"files": append([]string(nil), d.files...),
 		"time":  time.Since(d.start).Seconds(),
-		"mem":   d.memSampler.CurrentAlloc(),
+		"truncated": map[string]bool{
+			string(KindLog):   d.truncated&truncationLog != 0,
+			string(KindSQL):   d.truncated&truncationSQL != 0,
+			string(KindCache): d.truncated&truncationCache != 0,
+			string(KindVar):   d.truncated&truncationVar != 0,
+			string(KindFile):  d.truncated&truncationFile != 0,
+		},
+	}
+	sampler := d.memSampler
+	d.lock.RUnlock()
+	if sampler != nil {
+		info["mem"] = sampler.CurrentAlloc()
+	} else {
+		info["mem"] = uint64(0)
+	}
+	return info
+}
+
+func truncationFlag(kind Kind) truncationFlags {
+	switch kind {
+	case KindLog:
+		return truncationLog
+	case KindSQL:
+		return truncationSQL
+	case KindCache:
+		return truncationCache
+	case KindVar:
+		return truncationVar
+	case KindFile:
+		return truncationFile
+	default:
+		return 0
+	}
+}
+
+func emptyDebugInfo() map[string]interface{} {
+	return map[string]interface{}{
+		"logs":  []map[string]interface{}{},
+		"sqls":  []map[string]interface{}{},
+		"cache": []map[string]interface{}{},
+		"vars":  map[string]interface{}{},
+		"files": []string{},
+		"time":  float64(0),
+		"mem":   uint64(0),
+		"truncated": map[string]bool{
+			string(KindLog):   false,
+			string(KindSQL):   false,
+			string(KindCache): false,
+			string(KindVar):   false,
+			string(KindFile):  false,
+		},
 	}
 }
 

@@ -26,7 +26,7 @@ type View struct {
 	drvMu  sync.RWMutex
 }
 
-// NewView 创建视图管理器
+// NewView 创建视图管理器；debug 仅供旧 Render/Fetch 兼容入口使用。
 func NewView(debug *debug.Debug, config map[string]interface{}) *View {
 	v := &View{
 		debug:  debug,
@@ -91,6 +91,16 @@ func (v *View) Get(key string) interface{} {
 
 // Render 渲染模板并写入 writer
 func (v *View) Render(w io.Writer, name string, data map[string]interface{}) error {
+	var collector *debug.Debug
+	if v != nil {
+		collector = v.debug
+	}
+	return v.RenderWithDebug(collector, w, name, data)
+}
+
+// RenderWithDebug 使用显式请求 collector 渲染模板并写入 writer。
+// collector 只接收本次成功渲染的模板记录，不会写回 View 的构造时配置。
+func (v *View) RenderWithDebug(collector *debug.Debug, w io.Writer, name string, data map[string]interface{}) error {
 	if isNilViewWriter(w) {
 		return ErrInvalidViewWriter
 	}
@@ -101,14 +111,24 @@ func (v *View) Render(w io.Writer, name string, data map[string]interface{}) err
 	if err = driver.Display(w, name, v.mergeData(data)); err != nil {
 		return err
 	}
-	if v.debug != nil {
-		v.debug.AddFile(name)
+	if collector != nil {
+		collector.AddFile(name)
 	}
 	return nil
 }
 
 // Fetch 渲染模板并返回内容字符串
 func (v *View) Fetch(name string, data map[string]interface{}) (string, error) {
+	var collector *debug.Debug
+	if v != nil {
+		collector = v.debug
+	}
+	return v.FetchWithDebug(collector, name, data)
+}
+
+// FetchWithDebug 使用显式请求 collector 渲染模板并返回内容字符串。
+// collector 只接收本次成功渲染的模板记录，不会改变后续请求的采集目标。
+func (v *View) FetchWithDebug(collector *debug.Debug, name string, data map[string]interface{}) (string, error) {
 	driver, err := v.currentDriver()
 	if err != nil {
 		return "", err
@@ -117,8 +137,8 @@ func (v *View) Fetch(name string, data map[string]interface{}) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if v.debug != nil {
-		v.debug.AddFile(name)
+	if collector != nil {
+		collector.AddFile(name)
 	}
 	return content, nil
 }

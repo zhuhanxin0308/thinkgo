@@ -15,4 +15,6 @@ var (
 	ErrInvalidInput = errors.New("命令行输入非法")
 	// ErrInvalidOutput 表示命令输出器或其目标写入器不可用。
 	ErrInvalidOutput = errors.New("命令输出不可用")
+	// ErrInvalidConfig 表示控制台配置无法应用。
+	ErrInvalidConfig = errors.New("控制台配置非法")
 )

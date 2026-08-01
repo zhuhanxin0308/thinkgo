@@ -7,6 +7,99 @@ import (
 	"time"
 )
 
+// TestMemoryCacheCopiesMutableValues 验证 Set 和 Get 都不会把可变对象的内部引用暴露给调用方。
+func TestMemoryCacheCopiesMutableValues(t *testing.T) {
+	driver := NewMemory()
+	input := map[string]interface{}{
+		"name":  "origin",
+		"items": []string{"first"},
+	}
+	if err := driver.Set("mutable", input, 0); err != nil {
+		t.Fatalf("写入可变缓存失败: %v", err)
+	}
+	input["name"] = "changed-before-get"
+	input["items"].([]string)[0] = "changed-before-get"
+
+	value, found, err := driver.Get("mutable")
+	if err != nil || !found {
+		t.Fatalf("读取可变缓存失败: value=%#v found=%t err=%v", value, found, err)
+	}
+	got := value.(map[string]interface{})
+	if got["name"] != "origin" || got["items"].([]string)[0] != "first" {
+		t.Fatalf("Set 不应保存调用方后续修改: %#v", got)
+	}
+	got["name"] = "changed-after-get"
+	got["items"].([]string)[0] = "changed-after-get"
+
+	value, found, err = driver.Get("mutable")
+	if err != nil || !found {
+		t.Fatalf("再次读取可变缓存失败: value=%#v found=%t err=%v", value, found, err)
+	}
+	got = value.(map[string]interface{})
+	if got["name"] != "origin" || got["items"].([]string)[0] != "first" {
+		t.Fatalf("Get 不应暴露缓存内部引用: %#v", got)
+	}
+}
+
+type memoryCloneNode struct {
+	Name string
+	Next *memoryCloneNode
+}
+
+// TestMemoryCacheCopiesNestedAndCyclicValues 验证深层 slice、指针、数组和循环 map 的复制边界。
+func TestMemoryCacheCopiesNestedAndCyclicValues(t *testing.T) {
+	driver := NewMemory()
+	node := &memoryCloneNode{Name: "origin"}
+	node.Next = node
+	cyclic := map[string]interface{}{}
+	cyclic["self"] = cyclic
+	input := map[string]interface{}{
+		"node":   node,
+		"array":  [2][]int{{1}, {2}},
+		"bytes":  []byte("origin"),
+		"cyclic": cyclic,
+	}
+	if err := driver.Set("nested", input, 0); err != nil {
+		t.Fatalf("写入嵌套可变缓存失败: %v", err)
+	}
+	value, found, err := driver.Get("nested")
+	if err != nil || !found {
+		t.Fatalf("读取嵌套可变缓存失败: value=%#v found=%t err=%v", value, found, err)
+	}
+	got := value.(map[string]interface{})
+	gotNode := got["node"].(*memoryCloneNode)
+	if gotNode == node || gotNode.Next != gotNode {
+		t.Fatalf("指针和循环引用未被正确复制: got=%#v original=%#v", gotNode, node)
+	}
+	gotArray := got["array"].([2][]int)
+	gotArray[0][0] = 99
+	got["bytes"].([]byte)[0] = 'x'
+	gotNode.Name = "changed"
+
+	value, found, err = driver.Get("nested")
+	if err != nil || !found {
+		t.Fatalf("再次读取嵌套缓存失败: value=%#v found=%t err=%v", value, found, err)
+	}
+	got = value.(map[string]interface{})
+	if got["node"].(*memoryCloneNode).Name != "origin" || got["array"].([2][]int)[0][0] != 1 || string(got["bytes"].([]byte)) != "origin" {
+		t.Fatalf("嵌套可变值仍然暴露内部引用: %#v", got)
+	}
+}
+
+// TestMemoryCacheLockRenewal 验证内存驱动续租只接受当前 owner。
+func TestMemoryCacheLockRenewal(t *testing.T) {
+	driver := NewMemory()
+	if acquired, err := driver.AcquireLock("lease", "owner-a", time.Second); err != nil || !acquired {
+		t.Fatalf("获取内存租约锁失败: acquired=%t err=%v", acquired, err)
+	}
+	if renewed, err := driver.RenewLock("lease", "owner-a", time.Minute); err != nil || !renewed {
+		t.Fatalf("续租内存锁失败: renewed=%t err=%v", renewed, err)
+	}
+	if renewed, err := driver.RenewLock("lease", "owner-b", time.Minute); err != nil || renewed {
+		t.Fatalf("错误 owner 不得续租内存锁: renewed=%t err=%v", renewed, err)
+	}
+}
+
 // TestMemoryCacheNilExpiryAndZeroValue 验证零值驱动、nil 命中和过期清理语义。
 func TestMemoryCacheNilExpiryAndZeroValue(t *testing.T) {
 	driver := &Memory{}
@@ -113,5 +206,80 @@ func TestMemoryCRUDAndLockOwnership(t *testing.T) {
 	}
 	if acquired, err := driver.AcquireLock("short", "owner-b", time.Second); err != nil || !acquired {
 		t.Fatalf("过期后新 owner 应获取成功: acquired=%t err=%v", acquired, err)
+	}
+}
+
+// TestMemoryCacheCapacityEvictsOldestEntry 验证有界内存缓存按 FIFO 淘汰最早写入项。
+func TestMemoryCacheCapacityEvictsOldestEntry(t *testing.T) {
+	driver, err := NewMemoryWithMaxEntries(2)
+	if err != nil {
+		t.Fatalf("创建有界内存缓存失败: %v", err)
+	}
+	for _, entry := range []struct{ key, value string }{
+		{key: "first", value: "1"},
+		{key: "second", value: "2"},
+		{key: "third", value: "3"},
+	} {
+		if err := driver.Set(entry.key, entry.value, 0); err != nil {
+			t.Fatalf("写入有界内存缓存失败: key=%s err=%v", entry.key, err)
+		}
+	}
+	if _, found, err := driver.Get("first"); err != nil || found {
+		t.Fatalf("超过容量后最早条目应被淘汰: found=%t err=%v", found, err)
+	}
+	for _, key := range []string{"second", "third"} {
+		if value, found, err := driver.Get(key); err != nil || !found || value == nil {
+			t.Fatalf("有界内存缓存应保留较新条目: key=%s value=%#v found=%t err=%v", key, value, found, err)
+		}
+	}
+}
+
+// TestMemoryMetadataDoesNotEvictBusinessEntries 验证有界缓存写入内部元数据时不会淘汰业务项。
+func TestMemoryMetadataDoesNotEvictBusinessEntries(t *testing.T) {
+	driver, err := NewMemoryWithMaxEntries(2)
+	if err != nil {
+		t.Fatalf("创建有界内存缓存失败: %v", err)
+	}
+	if err = driver.Set("business", "value", 0); err != nil {
+		t.Fatalf("写入业务项失败: %v", err)
+	}
+	if err = driver.Set("__thinkgo_tag__:metadata", []string{"business"}, 0); err != nil {
+		t.Fatalf("写入内部元数据失败: %v", err)
+	}
+	if err = driver.Set("__thinkgo_tag__:metadata-2", []string{"business"}, 0); !errors.Is(err, ErrMemoryCapacityExhausted) {
+		t.Fatalf("容量不足时应拒绝新增元数据，实际错误为 %v", err)
+	}
+	if value, found, getErr := driver.Get("business"); getErr != nil || !found || value != "value" {
+		t.Fatalf("元数据容量不足不得淘汰业务项: value=%#v found=%t err=%v", value, found, getErr)
+	}
+}
+
+// TestMemoryBusinessWritePreservesMetadata 验证业务项淘汰只选择普通项，不会破坏已写入的元数据。
+func TestMemoryBusinessWritePreservesMetadata(t *testing.T) {
+	driver, err := NewMemoryWithMaxEntries(2)
+	if err != nil {
+		t.Fatalf("创建有界内存缓存失败: %v", err)
+	}
+	if err = driver.Set("__thinkgo_tag__:metadata", []string{"business"}, 0); err != nil {
+		t.Fatalf("写入内部元数据失败: %v", err)
+	}
+	if err = driver.Set("business-1", "one", 0); err != nil {
+		t.Fatalf("写入第一个业务项失败: %v", err)
+	}
+	if err = driver.Set("business-2", "two", 0); err != nil {
+		t.Fatalf("写入第二个业务项失败: %v", err)
+	}
+	if _, found, getErr := driver.Get("__thinkgo_tag__:metadata"); getErr != nil || !found {
+		t.Fatalf("普通项淘汰不得删除内部元数据: found=%t err=%v", found, getErr)
+	}
+}
+
+// TestNewMemoryWithMaxEntriesRejectsNegativeCapacity 验证容量配置不会接受负数。
+func TestNewMemoryWithMaxEntriesRejectsNegativeCapacity(t *testing.T) {
+	if _, err := NewMemoryWithMaxEntries(-1); !errors.Is(err, ErrInvalidMemoryCapacity) {
+		t.Fatalf("负容量应返回 ErrInvalidMemoryCapacity，实际为 %v", err)
+	}
+	if driver := NewMemory(); driver == nil {
+		t.Fatal("兼容构造函数 NewMemory 不应返回 nil")
 	}
 }

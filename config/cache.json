@@ -7,7 +7,7 @@
         },
         "redis": {
             "type": "redis",
-            "host": "192.168.3.100",
+            "host": "127.0.0.1",
             "port": 6379,
             "password": "",
             "select": 0,

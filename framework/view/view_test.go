@@ -169,3 +169,45 @@ func TestViewPublicAccessorsAndRenderBoundaries(t *testing.T) {
 		t.Fatalf("视图渲染或数据合并错误，输出=%q，数据=%#v", output.String(), driver.data)
 	}
 }
+
+// TestViewDebugIsolationAndLegacyCompatibility 验证显式请求 collector 相互隔离，旧入口仍使用构造时 collector。
+func TestViewDebugIsolationAndLegacyCompatibility(t *testing.T) {
+	legacyCollector := debug.NewRequestDebug(true)
+	collectorA := debug.NewRequestDebug(true)
+	collectorB := debug.NewRequestDebug(true)
+	manager := NewView(legacyCollector, nil)
+	driver := &recordingViewDriver{}
+	if err := manager.SetDriver(driver); err != nil {
+		t.Fatalf("安装测试驱动失败: %v", err)
+	}
+
+	if err := manager.RenderWithDebug(collectorA, &strings.Builder{}, "request-a", nil); err != nil {
+		t.Fatalf("请求 A 渲染失败: %v", err)
+	}
+	if _, err := manager.FetchWithDebug(collectorB, "request-b", nil); err != nil {
+		t.Fatalf("请求 B 渲染失败: %v", err)
+	}
+	if err := manager.Render(&strings.Builder{}, "legacy-render", nil); err != nil {
+		t.Fatalf("旧 Render 渲染失败: %v", err)
+	}
+	if _, err := manager.Fetch("legacy-fetch", nil); err != nil {
+		t.Fatalf("旧 Fetch 渲染失败: %v", err)
+	}
+	if err := manager.RenderWithDebug(nil, &strings.Builder{}, "untracked", nil); err != nil {
+		t.Fatalf("不采集的显式渲染失败: %v", err)
+	}
+
+	if files := debugFiles(collectorA); !reflect.DeepEqual(files, []string{"request-a"}) {
+		t.Fatalf("请求 A 模板记录隔离错误: %#v", files)
+	}
+	if files := debugFiles(collectorB); !reflect.DeepEqual(files, []string{"request-b"}) {
+		t.Fatalf("请求 B 模板记录隔离错误: %#v", files)
+	}
+	if files := debugFiles(legacyCollector); !reflect.DeepEqual(files, []string{"legacy-render", "legacy-fetch"}) {
+		t.Fatalf("旧 Render/Fetch 应继续使用构造时 collector，实际为 %#v", files)
+	}
+}
+
+func debugFiles(collector *debug.Debug) []string {
+	return collector.GetInfo()["files"].([]string)
+}

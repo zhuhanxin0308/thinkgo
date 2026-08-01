@@ -152,7 +152,7 @@ func TestMakeValidateGeneratesCompilableValidator(t *testing.T) {
 		t.Fatalf("生成验证器失败: %v", err)
 	}
 
-	content := readGeneratedFile(t, basePath, "app", "validate", "userprofile.go")
+	content := readGeneratedFile(t, basePath, "app", "index", "validate", "userprofile.go")
 	if !strings.Contains(content, "validate.Validator") {
 		t.Fatalf("验证器模板应嵌入 validate.Validator，实际为:\n%s", content)
 	}
@@ -171,9 +171,9 @@ func TestMakeControllerUsesFailFastRegistration(t *testing.T) {
 		t.Fatalf("生成控制器失败: %v", err)
 	}
 
-	content := readGeneratedFile(t, basePath, "app", "controller", "accountcontroller.go")
-	if !strings.Contains(content, `framework.MustRegisterController("AccountController", &AccountController{})`) {
-		t.Fatalf("控制器模板必须使用失败即停止的注册 API，实际为:\n%s", content)
+	content := readGeneratedFile(t, basePath, "app", "index", "controller", "accountcontroller.go")
+	if !strings.Contains(content, "framework.Controller") || strings.Contains(content, "MustRegisterController") {
+		t.Fatalf("控制器模板应使用应用注册入口而不是包初始化时注册:\n%s", content)
 	}
 }
 
@@ -192,12 +192,12 @@ func TestMakeEventAndListenerImplementFrameworkInterfaces(t *testing.T) {
 		t.Fatalf("生成监听器失败: %v", err)
 	}
 
-	eventContent := readGeneratedFile(t, basePath, "app", "event", "userregistered.go")
+	eventContent := readGeneratedFile(t, basePath, "app", "index", "event", "userregistered.go")
 	if !strings.Contains(eventContent, "func (e *UserRegistered) Name() string") {
 		t.Fatalf("事件模板应实现 Name() string，实际为:\n%s", eventContent)
 	}
 
-	listenerContent := readGeneratedFile(t, basePath, "app", "listener", "sendwelcomemail.go")
+	listenerContent := readGeneratedFile(t, basePath, "app", "index", "listener", "sendwelcomemail.go")
 	if !strings.Contains(listenerContent, `"thinkgo/framework/event"`) ||
 		!strings.Contains(listenerContent, "Handle(currentEvent event.Event) error") {
 		t.Fatalf("监听器模板应使用 event.Event 接口，实际为:\n%s", listenerContent)
@@ -214,7 +214,7 @@ func TestMakeCommandGeneratesNonPlaceholderImplementation(t *testing.T) {
 		t.Fatalf("生成命令失败: %v", err)
 	}
 
-	content := readGeneratedFile(t, basePath, "app", "command", "reportdaily.go")
+	content := readGeneratedFile(t, basePath, "app", "index", "command", "reportdaily.go")
 	if strings.Contains(content, "Command description") || strings.Contains(content, "executed") {
 		t.Fatalf("命令模板不应包含占位描述或伪执行文案，实际为:\n%s", content)
 	}
@@ -233,7 +233,7 @@ func TestMakeServiceDoesNotEmitCommentOnlyLifecycle(t *testing.T) {
 		t.Fatalf("生成服务失败: %v", err)
 	}
 
-	content := readGeneratedFile(t, basePath, "app", "service", "billing.go")
+	content := readGeneratedFile(t, basePath, "app", "index", "service", "billing.go")
 	if strings.Contains(content, "Register service") || strings.Contains(content, "Boot service") {
 		t.Fatalf("服务模板不应包含注释型生命周期占位，实际为:\n%s", content)
 	}
@@ -256,7 +256,7 @@ func TestMakeSubscriberGeneratesConcreteListener(t *testing.T) {
 		t.Fatalf("生成订阅者失败: %v", err)
 	}
 
-	content := readGeneratedFile(t, basePath, "app", "subscribe", "audit.go")
+	content := readGeneratedFile(t, basePath, "app", "index", "subscribe", "audit.go")
 	if strings.Contains(content, `// dispatcher.Listen`) {
 		t.Fatalf("订阅者模板不应包含注释型监听占位，实际为:\n%s", content)
 	}
@@ -278,7 +278,7 @@ func TestMakeMiddlewareGeneratesNilSafeMiddleware(t *testing.T) {
 		t.Fatalf("生成中间件失败: %v", err)
 	}
 
-	content := readGeneratedFile(t, basePath, "app", "middleware", "audit.go")
+	content := readGeneratedFile(t, basePath, "app", "index", "middleware", "audit.go")
 	if strings.Contains(content, "Before request") || strings.Contains(content, "After request") {
 		t.Fatalf("中间件模板不应包含注释型占位，实际为:\n%s", content)
 	}

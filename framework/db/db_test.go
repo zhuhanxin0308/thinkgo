@@ -58,3 +58,15 @@ func TestDatabaseRawExecutionUsesContextualAndFallbackDrivers(t *testing.T) {
 		t.Fatal("不支持原生执行的连接必须返回错误")
 	}
 }
+
+// TestDatabaseRawOperationsHaveDefaultTimeout 验证便捷原生 API 不会把无界 Background 直接传给驱动。
+func TestDatabaseRawOperationsHaveDefaultTimeout(t *testing.T) {
+	connection := &modelBusinessConnection{updateCount: 1, rows: []map[string]interface{}{{"value": int64(1)}}}
+	database := NewDB(connection)
+	if _, err := database.Query("SELECT value FROM users"); err != nil {
+		t.Fatalf("原生查询失败: %v", err)
+	}
+	if _, ok := connection.lastContext.Deadline(); !ok {
+		t.Fatal("便捷原生查询必须携带默认截止时间")
+	}
+}

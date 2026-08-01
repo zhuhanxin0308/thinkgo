@@ -97,6 +97,10 @@ func (g *ConditionGroup) WhereExp(field string, op string, expression string, ar
 		g.err = err
 		return g
 	}
+	if err := validateArgumentBudget(len(g.args), len(args), maxQueryArguments); err != nil {
+		g.err = err
+		return g
+	}
 	g.clauses = appendConditionClause(g.clauses, "AND", clause)
 	g.args = append(g.args, args...)
 	return g
@@ -108,6 +112,10 @@ func (g *ConditionGroup) append(connector string, condition interface{}, args ..
 	}
 	clause, compiledArgs, err := compileWhereExpression(condition, args)
 	if err != nil {
+		g.err = err
+		return g
+	}
+	if err := validateArgumentBudget(len(g.args), len(compiledArgs), maxQueryArguments); err != nil {
 		g.err = err
 		return g
 	}
@@ -133,6 +141,9 @@ func (g *ConditionGroup) compile() (string, []interface{}, error) {
 func compileWhereExpression(condition interface{}, args []interface{}) (string, []interface{}, error) {
 	switch typed := condition.(type) {
 	case string:
+		if err := validateArgumentBudget(0, len(args), maxQueryArguments); err != nil {
+			return "", nil, err
+		}
 		// 兼容 Where("field", "op", value) 三元组写法；操作符仍使用统一白名单，
 		// 只把实际值加入绑定参数，不能借操作符位置注入 SQL。
 		if len(args) == 2 && validateIdentifier(typed) == nil {
@@ -168,6 +179,9 @@ func compileMapConditions(conditions map[string]interface{}) (string, []interfac
 	if len(conditions) == 0 {
 		return "", nil, fmt.Errorf("where map is empty")
 	}
+	if err := validateArgumentBudget(0, len(conditions), maxQueryArguments); err != nil {
+		return "", nil, err
+	}
 
 	keys := make([]string, 0, len(conditions))
 	for key := range conditions {
@@ -190,6 +204,9 @@ func compileMapConditions(conditions map[string]interface{}) (string, []interfac
 func compileTupleConditions(conditions [][]interface{}) (string, []interface{}, error) {
 	if len(conditions) == 0 {
 		return "", nil, fmt.Errorf("where tuples are empty")
+	}
+	if err := validateArgumentBudget(0, len(conditions), maxQueryArguments); err != nil {
+		return "", nil, err
 	}
 
 	clauses := make([]string, 0, len(conditions))
@@ -316,44 +333,78 @@ func validateExpressionClause(expression string) error {
 	return nil
 }
 
-func buildTimeRange(kind string, now time.Time) (time.Time, time.Time, error) {
+const (
+	calendarDaysPerWeek = 7
+)
+
+// buildTimeWindow 返回按应用时区计算的半开时间窗口 [start, endExclusive)。
+// 半开区间可以覆盖数据库支持的全部小数秒精度，也能正确处理 DST 跨日。
+func buildTimeWindow(kind string, now time.Time) (time.Time, time.Time, error) {
 	switch strings.ToLower(strings.TrimSpace(kind)) {
 	case "today":
 		start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-		end := start.AddDate(0, 0, 1).Add(-time.Second)
-		return start, end, nil
+		return start, start.AddDate(0, 0, 1), nil
 	case "yesterday":
-		end := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).Add(-time.Second)
-		start := time.Date(end.Year(), end.Month(), end.Day(), 0, 0, 0, 0, end.Location())
-		return start, end, nil
+		end := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+		return end.AddDate(0, 0, -1), end, nil
 	case "week":
 		weekday := int(now.Weekday())
 		if weekday == 0 {
 			weekday = 7
 		}
 		start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).AddDate(0, 0, -(weekday - 1))
-		end := start.AddDate(0, 0, 7).Add(-time.Second)
-		return start, end, nil
+		return start, start.AddDate(0, 0, calendarDaysPerWeek), nil
 	case "month":
 		start := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
-		end := start.AddDate(0, 1, 0).Add(-time.Second)
-		return start, end, nil
+		return start, start.AddDate(0, 1, 0), nil
 	case "year":
 		start := time.Date(now.Year(), 1, 1, 0, 0, 0, 0, now.Location())
-		end := start.AddDate(1, 0, 0).Add(-time.Second)
-		return start, end, nil
+		return start, start.AddDate(1, 0, 0), nil
 	default:
 		return time.Time{}, time.Time{}, fmt.Errorf("unsupported time range %q", kind)
 	}
 }
 
+// buildTimeRange 保留旧的闭区间辅助函数，外部查询统一使用 buildTimeWindow。
+func buildTimeRange(kind string, now time.Time) (time.Time, time.Time, error) {
+	start, endExclusive, err := buildTimeWindow(kind, now)
+	if err != nil {
+		return time.Time{}, time.Time{}, err
+	}
+	return start, endExclusive.Add(-time.Second), nil
+}
+
 func normalizeTimeValue(value interface{}) (interface{}, error) {
+	return normalizeTimeValueInLocation(value, time.Local)
+}
+
+// normalizeTimeValueInLocation 按指定应用时区格式化显式时间条件，避免丢失业务日期语义。
+func normalizeTimeValueInLocation(value interface{}, location *time.Location) (interface{}, error) {
+	return normalizeTimeValueInStorage(value, location, TimestampValueTypeDateTime)
+}
+
+// normalizeTimeValueInStorage 按存储契约转换显式时间参数，保证 SQL 与 NoSQL 使用同一语义。
+func normalizeTimeValueInStorage(value interface{}, location *time.Location, valueType string) (interface{}, error) {
+	if location == nil {
+		location = time.Local
+	}
+	valueType = normalizeTimestampValueType(valueType)
 	switch typed := value.(type) {
 	case time.Time:
 		if typed.IsZero() {
 			return nil, fmt.Errorf("时间条件不能使用零值 time.Time")
 		}
-		return typed.Format(DefaultTimeFormat), nil
+		converted := typed.In(location)
+		switch valueType {
+		case TimestampValueTypeUnix:
+			return converted.Unix(), nil
+		case TimestampValueTypeDate:
+			return converted.Format(DefaultDateFormat), nil
+		case TimestampValueTypeNative:
+			return converted, nil
+		default:
+			return converted.Format(DefaultTimeFormat), nil
+		}
 	case string, []byte,
 		int, int8, int16, int32, int64,
 		uint, uint8, uint16, uint32, uint64:

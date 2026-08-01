@@ -7,18 +7,22 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+
+	"thinkgo/framework/db/internal/contract"
 )
 
 // Oracle builder（Oracle 方言）
 // 统一使用 ? 占位符构建，执行前由 Rebind 转换为 :N 风格。
 type Oracle struct{}
 
+func (o *Oracle) DialectName() string { return "oracle" }
+
 func oracleQuote(name string) string {
-	return quoteWith(name, `"`, `"`)
+	return quoteWith(strings.ToUpper(strings.TrimSpace(name)), `"`, `"`)
 }
 
 func oracleQuoteFields(fields string) string {
-	return quoteFieldsWith(fields, `"`, `"`)
+	return quoteFieldsWith(strings.ToUpper(fields), `"`, `"`)
 }
 
 // Rebind 将 ? 占位符转换为 Oracle 的 :1、:2... 风格。
@@ -47,7 +51,7 @@ func (o *Oracle) Select(table string, fields string, where []string, order strin
 func (o *Oracle) Pagination(order string, limit int, offset int) (string, string) {
 	orderClause := ""
 	if order != "" {
-		orderClause = " ORDER BY " + quoteOrderWith(order, `"`, `"`)
+		orderClause = " ORDER BY " + quoteOrderWith(strings.ToUpper(order), `"`, `"`)
 	}
 	limitClause := ""
 	if limit > 0 || offset > 0 {
@@ -59,14 +63,25 @@ func (o *Oracle) Pagination(order string, limit int, offset int) (string, string
 	return orderClause, limitClause
 }
 
-// LockClause Oracle 支持 FOR UPDATE。
-func (o *Oracle) LockClause(mode string) string {
+func (o *Oracle) Lock(mode contract.LockMode) (contract.LockSpec, error) {
 	switch mode {
-	case "FOR UPDATE", "LOCK IN SHARE MODE":
-		return " FOR UPDATE"
+	case contract.LockNone:
+		return contract.LockSpec{}, nil
+	case contract.LockForUpdate:
+		return contract.LockSpec{Tail: " FOR UPDATE"}, nil
+	case contract.LockForShare:
+		return contract.LockSpec{}, contract.ErrUnsupportedFeature
 	default:
-		return ""
+		return contract.LockSpec{}, contract.ErrUnsupportedLockMode
 	}
+}
+
+// LockClause 保留旧版字符串锁子句兼容入口。
+func (o *Oracle) LockClause(mode string) string {
+	if mode == "FOR UPDATE" || mode == "LOCK IN SHARE MODE" {
+		return " FOR UPDATE"
+	}
+	return ""
 }
 
 // SupportsLastInsertId Oracle 不支持 LastInsertId，需走 RETURNING INTO（此处保守标记，交由上层处理）。

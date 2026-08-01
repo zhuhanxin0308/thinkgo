@@ -12,7 +12,9 @@ import (
 	"io"
 	"math"
 	"mime"
+	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -46,6 +48,8 @@ var (
 	ErrDuplicateCSRFCookie = errors.New("请求包含重复 CSRF Cookie")
 	// ErrCSRFTokenGeneration 表示密码学随机源不可用。
 	ErrCSRFTokenGeneration = errors.New("生成 CSRF token 失败")
+	// ErrCSRFOriginMismatch 表示状态变更请求的来源不是当前站点。
+	ErrCSRFOriginMismatch = errors.New("CSRF 请求来源不匹配")
 )
 
 // CSRFConfig 是启动期校验后按值复制的签名双重提交配置。
@@ -232,6 +236,9 @@ func (m *csrfMiddleware) handle(req *context.Request, next func(*context.Request
 		}
 		return response
 	}
+	if err := validateCSRFOrigin(req.Raw(), req.Scheme()); err != nil {
+		return csrfErrorResponse(http.StatusForbidden, "CSRF 请求来源校验失败")
+	}
 
 	if cookieErr != nil || !found {
 		return csrfErrorResponse(http.StatusForbidden, "CSRF token 校验失败")
@@ -241,12 +248,98 @@ func (m *csrfMiddleware) handle(req *context.Request, next func(*context.Request
 	); err != nil {
 		return csrfErrorResponse(http.StatusForbidden, "CSRF token 校验失败")
 	}
-	submitted, err := submittedCSRFToken(req.Raw(), m.config)
+	submitted, err := submittedCSRFToken(req, m.config)
 	if err != nil || submitted == "" || len(submitted) > maxCSRFTokenBytes ||
 		subtle.ConstantTimeCompare([]byte(cookieToken), []byte(submitted)) != 1 {
 		return csrfErrorResponse(http.StatusForbidden, "CSRF token 校验失败")
 	}
 	return next(req)
+}
+
+// validateCSRFOrigin 校验浏览器发送的 Origin/Referer，阻止同名 Cookie 被跨站提交；协议覆盖值来自可信代理判定时优先使用。
+func validateCSRFOrigin(request *http.Request, schemeOverride ...string) error {
+	if request == nil || request.URL == nil {
+		return ErrCSRFOriginMismatch
+	}
+	origin := strings.TrimSpace(request.Header.Get("Origin"))
+	fromReferer := false
+	if origin == "null" {
+		return ErrCSRFOriginMismatch
+	}
+	if origin == "" {
+		referer := strings.TrimSpace(request.Header.Get("Referer"))
+		if referer == "" {
+			return nil
+		}
+		origin = referer
+		fromReferer = true
+	}
+	parsed, err := url.Parse(origin)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" || parsed.User != nil ||
+		!fromReferer && (parsed.Path != "" && parsed.Path != "/" || parsed.RawQuery != "" || parsed.Fragment != "") {
+		return ErrCSRFOriginMismatch
+	}
+	expectedScheme, expectedHost := csrfRequestOrigin(request, schemeOverride...)
+	if !strings.EqualFold(parsed.Scheme, expectedScheme) || !sameCSRFOriginHost(parsed.Scheme, parsed.Host, expectedHost) {
+		return ErrCSRFOriginMismatch
+	}
+	return nil
+}
+
+// csrfRequestOrigin 从真实 HTTP 服务端请求中提取当前来源；服务端收到的 URL 通常没有 Scheme/Host，必须使用可信协议、TLS 和 Request.Host 补全。
+func csrfRequestOrigin(request *http.Request, schemeOverride ...string) (string, string) {
+	if request == nil {
+		return "", ""
+	}
+	scheme := ""
+	if len(schemeOverride) > 0 {
+		scheme = strings.ToLower(strings.TrimSpace(schemeOverride[0]))
+	}
+	if scheme == "" {
+		scheme = strings.ToLower(strings.TrimSpace(request.URL.Scheme))
+	}
+	if scheme == "" {
+		scheme = "http"
+		if request.TLS != nil {
+			scheme = "https"
+		}
+	}
+	host := strings.TrimSpace(request.Host)
+	if host == "" {
+		host = strings.TrimSpace(request.URL.Host)
+	}
+	return scheme, host
+}
+
+// sameCSRFOriginHost 规范化默认端口，避免浏览器 Origin 省略 80/443 时被合法请求误拒绝。
+func sameCSRFOriginHost(scheme, left, right string) bool {
+	left = strings.TrimSpace(left)
+	right = strings.TrimSpace(right)
+	if left == "" || right == "" {
+		return false
+	}
+	leftHost, leftPort := splitCSRFOriginHost(left)
+	rightHost, rightPort := splitCSRFOriginHost(right)
+	if !strings.EqualFold(leftHost, rightHost) {
+		return false
+	}
+	if leftPort == rightPort {
+		return true
+	}
+	defaultPort := ""
+	if strings.EqualFold(scheme, "http") {
+		defaultPort = "80"
+	} else if strings.EqualFold(scheme, "https") {
+		defaultPort = "443"
+	}
+	return (leftPort == "" && rightPort == defaultPort) || (rightPort == "" && leftPort == defaultPort)
+}
+
+func splitCSRFOriginHost(host string) (string, string) {
+	if hostname, port, err := net.SplitHostPort(host); err == nil {
+		return hostname, port
+	}
+	return strings.Trim(host, "[]"), ""
 }
 
 func (m *csrfMiddleware) newSignedToken() (string, error) {
@@ -347,7 +440,11 @@ func readCSRFCookie(raw *http.Request, name string) (string, bool, error) {
 	return value, found, nil
 }
 
-func submittedCSRFToken(raw *http.Request, config CSRFConfig) (string, error) {
+func submittedCSRFToken(request *context.Request, config CSRFConfig) (string, error) {
+	if request == nil || request.Raw() == nil {
+		return "", ErrInvalidCSRFToken
+	}
+	raw := request.Raw()
 	values := raw.Header.Values(config.HeaderName)
 	if len(values) > 1 || len(values) == 1 && strings.Contains(values[0], ",") {
 		return "", ErrInvalidCSRFToken
@@ -361,12 +458,13 @@ func submittedCSRFToken(raw *http.Request, config CSRFConfig) (string, error) {
 	}
 	switch strings.ToLower(mediaType) {
 	case "application/x-www-form-urlencoded":
-		if err = raw.ParseForm(); err != nil {
+		// 通过框架请求对象解析表单，复用 body 缓存并保留控制器后续读取原始请求体的能力。
+		if err = request.Parse(); err != nil {
 			return "", err
 		}
 		return singleCSRFFormValue(raw.PostForm[config.FieldName])
 	case "multipart/form-data":
-		if err = raw.ParseMultipartForm(context.DefaultMultipartMemoryLimit); err != nil {
+		if err = request.Parse(); err != nil {
 			return "", err
 		}
 		if raw.MultipartForm == nil {
@@ -398,6 +496,7 @@ func setCSRFCookie(response *context.Response, req *context.Request, config CSRF
 	} else if config.SameSite == "None" {
 		sameSite = http.SameSiteNoneMode
 	}
+	// #nosec G124 -- CSRF 双重提交模式必须允许前端读取 token；Secure 与 SameSite 仍按请求和配置强制设置。
 	written := &http.Cookie{
 		Name: config.CookieName, Value: token, Path: config.CookiePath, Domain: config.CookieDomain,
 		MaxAge: config.MaxAge, Expires: now.Add(time.Duration(config.MaxAge) * time.Second),
@@ -435,6 +534,7 @@ func validateCSRFConfig(config CSRFConfig) error {
 	if err != nil || normalized != config.SameSite {
 		return invalidCSRFConfig("samesite", "必须是规范形式 Lax、Strict 或 None")
 	}
+	// #nosec G124 -- 该 Cookie 只用于校验名称、路径和域名语法，不会写入响应。
 	probe := &http.Cookie{
 		Name: config.CookieName, Value: "x", Path: config.CookiePath, Domain: config.CookieDomain,
 	}

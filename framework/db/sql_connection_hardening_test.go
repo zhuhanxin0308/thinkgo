@@ -19,14 +19,28 @@ import (
 var hardeningSQLDriverSequence atomic.Uint64
 
 type hardeningSQLRecorder struct {
-	mu    sync.Mutex
-	query string
+	mu         sync.Mutex
+	query      string
+	execCount  int
+	beginCount int
 }
 
 func (r *hardeningSQLRecorder) recordedQuery() string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.query
+}
+
+func (r *hardeningSQLRecorder) recordedExecCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.execCount
+}
+
+func (r *hardeningSQLRecorder) recordedBeginCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.beginCount
 }
 
 type hardeningSQLDriver struct{ recorder *hardeningSQLRecorder }
@@ -41,10 +55,16 @@ func (*hardeningSQLDriverConnection) Prepare(string) (driver.Stmt, error) {
 	return nil, errors.New("测试驱动不支持预编译语句")
 }
 func (*hardeningSQLDriverConnection) Close() error { return nil }
-func (*hardeningSQLDriverConnection) Begin() (driver.Tx, error) {
+func (c *hardeningSQLDriverConnection) Begin() (driver.Tx, error) {
+	c.recorder.mu.Lock()
+	c.recorder.beginCount++
+	c.recorder.mu.Unlock()
 	return &hardeningSQLDriverTransaction{}, nil
 }
-func (*hardeningSQLDriverConnection) BeginTx(context.Context, driver.TxOptions) (driver.Tx, error) {
+func (c *hardeningSQLDriverConnection) BeginTx(context.Context, driver.TxOptions) (driver.Tx, error) {
+	c.recorder.mu.Lock()
+	c.recorder.beginCount++
+	c.recorder.mu.Unlock()
 	return &hardeningSQLDriverTransaction{}, nil
 }
 func (c *hardeningSQLDriverConnection) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
@@ -56,7 +76,19 @@ func (c *hardeningSQLDriverConnection) QueryContext(_ context.Context, query str
 	if strings.Contains(query, "duplicated") {
 		return &hardeningSQLRows{columns: []string{"duplicated", "duplicated"}, values: []driver.Value{int64(1), int64(2)}}, nil
 	}
+	if strings.Contains(query, "multiple") {
+		return &hardeningSQLRows{
+			columns: []string{"id", "payload"},
+			rows: [][]driver.Value{
+				{int64(1), []byte{0x00, 0xff}},
+				{int64(2), []byte{0x01, 0xfe}},
+			},
+		}, nil
+	}
 	if strings.Contains(query, "payload") {
+		if strings.Contains(query, "reused_payloads") {
+			return &reusingBinaryRows{values: [][]byte{[]byte("first"), []byte("second")}, buffer: make([]byte, 6)}, nil
+		}
 		return &hardeningSQLRows{columns: []string{"payload"}, values: []driver.Value{[]byte{0x00, 0xff}}}, nil
 	}
 	return &hardeningSQLRows{columns: []string{"value"}, values: []driver.Value{int64(1)}}, nil
@@ -66,6 +98,7 @@ func (c *hardeningSQLDriverConnection) ExecContext(_ context.Context, query stri
 	if c.recorder != nil {
 		c.recorder.mu.Lock()
 		c.recorder.query = query
+		c.recorder.execCount++
 		c.recorder.mu.Unlock()
 	}
 	return hardeningSQLResult{lastInsertID: 7, rowsAffected: 2}, nil
@@ -87,12 +120,41 @@ func (*hardeningSQLDriverTransaction) Rollback() error { return nil }
 type hardeningSQLRows struct {
 	columns []string
 	values  []driver.Value
+	rows    [][]driver.Value
 	read    bool
+	index   int
+}
+
+type reusingBinaryRows struct {
+	values [][]byte
+	buffer []byte
+	index  int
+}
+
+func (*reusingBinaryRows) Columns() []string { return []string{"payload"} }
+func (*reusingBinaryRows) Close() error      { return nil }
+func (r *reusingBinaryRows) Next(destination []driver.Value) error {
+	if r.index >= len(r.values) {
+		return io.EOF
+	}
+	value := r.values[r.index]
+	copy(r.buffer, value)
+	destination[0] = r.buffer[:len(value)]
+	r.index++
+	return nil
 }
 
 func (r *hardeningSQLRows) Columns() []string { return r.columns }
 func (*hardeningSQLRows) Close() error        { return nil }
 func (r *hardeningSQLRows) Next(destination []driver.Value) error {
+	if r.rows != nil {
+		if r.index >= len(r.rows) {
+			return io.EOF
+		}
+		copy(destination, r.rows[r.index])
+		r.index++
+		return nil
+	}
 	if r.read {
 		return io.EOF
 	}
@@ -153,6 +215,41 @@ func TestSQLConnectionPreservesBinaryColumns(t *testing.T) {
 	}
 }
 
+// TestSQLConnectionPreservesMultipleRows 验证复用扫描缓冲时仍保留每行的独立结果和二进制类型。
+func TestSQLConnectionPreservesMultipleRows(t *testing.T) {
+	connection := newHardeningSQLConnection(t)
+	rows, err := connection.Query("SELECT id, payload FROM multiple")
+	if err != nil {
+		t.Fatalf("多行查询失败: %v", err)
+	}
+	if len(rows) != 2 || rows[0]["id"] != int64(1) || rows[1]["id"] != int64(2) {
+		t.Fatalf("多行结果错误: %#v", rows)
+	}
+	first, ok := rows[0]["payload"].([]byte)
+	if !ok || !bytes.Equal(first, []byte{0x00, 0xff}) {
+		t.Fatalf("第一行二进制结果错误: %#v", rows[0]["payload"])
+	}
+	second, ok := rows[1]["payload"].([]byte)
+	if !ok || !bytes.Equal(second, []byte{0x01, 0xfe}) {
+		t.Fatalf("第二行二进制结果错误: %#v", rows[1]["payload"])
+	}
+}
+
+func TestScanRowsDoesNotShareReusedBuffers(t *testing.T) {
+	connection := newHardeningSQLConnection(t)
+	rows, err := connection.Query("SELECT payload FROM reused_payloads")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 || string(rows[0]["payload"].([]byte)) != "first" || string(rows[1]["payload"].([]byte)) != "second" {
+		t.Fatalf("unexpected binary rows: %#v", rows)
+	}
+	rows[0]["payload"].([]byte)[0] = 'X'
+	if string(rows[1]["payload"].([]byte)) != "second" {
+		t.Fatalf("result rows share a driver buffer: %#v", rows)
+	}
+}
+
 // TestSQLConnectionSupportsPostgreSQLJSONBQuestionOperators 验证原生 SQL 从参数计数到
 // PostgreSQL 重绑定的完整路径都能区分 JSONB 操作符与绑定占位符。
 func TestSQLConnectionSupportsPostgreSQLJSONBQuestionOperators(t *testing.T) {
@@ -182,27 +279,98 @@ func TestSQLConnectionRejectsDuplicateColumnNames(t *testing.T) {
 // 都经过方言构建器并返回驱动提供的真实结果。
 func TestSQLConnectionCRUDAndRawExecution(t *testing.T) {
 	connection, recorder := newRecordingHardeningSQLConnection(t)
-	rows, err := connection.Select("users", "value", []string{"id = ?"}, []interface{}{1}, "id DESC", 1, 0)
+	rows, err := connection.Select(context.Background(), newSelectRequest(
+		"users", "value", mustTestPredicate(t, []string{"id = ?"}, []interface{}{1}), "id", "id DESC", 1, 0, nil,
+	))
 	if err != nil || len(rows) != 1 || rows[0]["value"] != int64(1) {
 		t.Fatalf("SQL Select 结果错误: rows=%#v err=%v", rows, err)
 	}
 	if !strings.Contains(recorder.recordedQuery(), `SELECT "value" FROM "users" WHERE id = ? ORDER BY "id" DESC LIMIT 1`) {
 		t.Fatalf("SQL Select 构造错误: %q", recorder.recordedQuery())
 	}
-	if id, err := connection.Insert("users", map[string]interface{}{"name": "Ada"}); err != nil || id != 7 {
+	if result, err := connection.Insert(context.Background(), newInsertRequest("users", map[string]interface{}{"name": "Ada"}, "id", true)); err != nil || result.ID != int64(7) {
+		id, _ := result.ID.(int64)
 		t.Fatalf("SQL Insert 结果错误: id=%d err=%v", id, err)
 	}
-	if affected, err := connection.Update("users", map[string]interface{}{"name": "Grace"}, []string{"id = ?"}, []interface{}{1}); err != nil || affected != 2 {
+	if result, err := connection.Update(context.Background(), newUpdateRequest("users", map[string]interface{}{"name": "Grace"}, mustTestPredicate(t, []string{"id = ?"}, []interface{}{1}), "id")); err != nil || result.Count() != 2 {
+		affected := result.Count()
 		t.Fatalf("SQL Update 结果错误: affected=%d err=%v", affected, err)
 	}
-	if affected, err := connection.Delete("users", []string{"id = ?"}, []interface{}{1}); err != nil || affected != 2 {
+	if result, err := connection.Delete(context.Background(), newDeleteRequest("users", mustTestPredicate(t, []string{"id = ?"}, []interface{}{1}), "id", false)); err != nil || result.Deleted != 2 {
+		affected := result.Deleted
 		t.Fatalf("SQL Delete 结果错误: affected=%d err=%v", affected, err)
 	}
-	if count, err := connection.Count("users", []string{"active = ?"}, []interface{}{true}); err != nil || count != 1 {
+	if count, err := connection.Count(context.Background(), newCountRequest("users", mustTestPredicate(t, []string{"active = ?"}, []interface{}{true}), "id")); err != nil || count != 1 {
 		t.Fatalf("SQL Count 结果错误: count=%d err=%v", count, err)
 	}
 	if affected, err := connection.Execute("UPDATE users SET active = ? WHERE id = ?", true, 1); err != nil || affected != 2 {
 		t.Fatalf("SQL Execute 结果错误: affected=%d err=%v", affected, err)
+	}
+}
+
+func TestSQLConnectionExecutesTypedOperations(t *testing.T) {
+	connection, recorder := newRecordingHardeningSQLConnection(t)
+	predicate := newPredicate().appendValidated("id = ?", []interface{}{7})
+
+	updated, err := connection.Update(context.Background(), newUpdateRequest(
+		"users",
+		map[string]interface{}{"name": "Ada"},
+		predicate,
+		"id",
+	))
+	if err != nil || updated.Affected != 2 || updated.ModifiedKnown || updated.MatchedKnown {
+		t.Fatalf("typed update 结果错误: %#v, %v", updated, err)
+	}
+	if got := recorder.recordedQuery(); !strings.Contains(got, `UPDATE "users" SET "name" = ? WHERE id = ?`) {
+		t.Fatalf("typed update SQL 错误: %q", got)
+	}
+
+	deleted, err := connection.Delete(context.Background(), newDeleteRequest("users", predicate, "id", false))
+	if err != nil || deleted.Deleted != 2 {
+		t.Fatalf("typed delete 结果错误: %#v, %v", deleted, err)
+	}
+}
+
+func TestSQLConnectionSeparatesInsertCountAndID(t *testing.T) {
+	connection := newHardeningSQLConnection(t)
+	countResult, err := connection.Insert(context.Background(), newInsertRequest(
+		"users",
+		map[string]interface{}{"name": "Ada"},
+		"id",
+		false,
+	))
+	if err != nil || countResult.Affected != 2 || countResult.IDKnown {
+		t.Fatalf("普通 Insert 应只返回数量: %#v, %v", countResult, err)
+	}
+
+	idResult, err := connection.Insert(context.Background(), newInsertRequest(
+		"users",
+		map[string]interface{}{"name": "Grace"},
+		"id",
+		true,
+	))
+	if err != nil || idResult.Affected != 2 || !idResult.IDKnown || idResult.ID != int64(7) {
+		t.Fatalf("InsertGetId 路径应同时保留数量和真实 ID: %#v, %v", idResult, err)
+	}
+}
+
+func TestSQLConnectionCompilesTypedAggregate(t *testing.T) {
+	connection, recorder := newRecordingHardeningSQLConnection(t)
+	request := newSelectRequest(
+		"orders",
+		"*",
+		newPredicate(),
+		"id",
+		"",
+		0,
+		0,
+		&AggregateExpression{Function: "SUM", Field: "amount", Alias: "tp_aggregate"},
+	)
+	if _, err := connection.Select(context.Background(), request); err != nil {
+		t.Fatalf("typed aggregate 不应被普通字段校验拒绝: %v", err)
+	}
+	if got := recorder.recordedQuery(); got != `SELECT SUM("amount") AS "tp_aggregate" FROM "orders"` {
+		t.Fatalf("typed aggregate SQL 错误: %q", got)
 	}
 }
 
@@ -229,29 +397,33 @@ func TestSQLConnectionRejectsInvalidStructuredArguments(t *testing.T) {
 	}
 	for _, testCase := range selectCases {
 		t.Run(testCase.name, func(t *testing.T) {
-			_, err := connection.Select(testCase.table, testCase.fields, testCase.where, testCase.args, testCase.order, testCase.limit, testCase.offset)
+			predicate := newPredicate()
+			for _, clause := range testCase.where {
+				predicate = predicate.appendValidated(clause, testCase.args)
+			}
+			_, err := connection.Select(context.Background(), newSelectRequest(testCase.table, testCase.fields, predicate, "id", testCase.order, testCase.limit, testCase.offset, nil))
 			if !errors.Is(err, testCase.want) {
 				t.Fatalf("应返回 %v，实际为 %v", testCase.want, err)
 			}
 		})
 	}
 
-	if _, err := connection.Insert("users", nil); !errors.Is(err, ErrInvalidQuery) {
+	if _, err := connection.Insert(context.Background(), newInsertRequest("users", nil, "id", false)); !errors.Is(err, ErrInvalidQuery) {
 		t.Fatalf("空写入应返回 ErrInvalidQuery，实际为 %v", err)
 	}
-	if _, err := connection.InsertContextWithPrimaryKey(context.Background(), "users", map[string]interface{}{"name": "Ada"}, "bad key"); !errors.Is(err, ErrInvalidQuery) {
+	if _, err := connection.Insert(context.Background(), newInsertRequest("users", map[string]interface{}{"name": "Ada"}, "bad key", true)); !errors.Is(err, ErrInvalidQuery) {
 		t.Fatalf("非法回传主键应返回 ErrInvalidQuery，实际为 %v", err)
 	}
-	if _, err := connection.Update("users", map[string]interface{}{"name": "Ada"}, nil, nil); !errors.Is(err, ErrUnsafeFullTableMutation) {
+	if _, err := connection.Update(context.Background(), newUpdateRequest("users", map[string]interface{}{"name": "Ada"}, newPredicate(), "id")); !errors.Is(err, ErrUnsafeFullTableMutation) {
 		t.Fatalf("无条件更新应返回 ErrUnsafeFullTableMutation，实际为 %v", err)
 	}
-	if _, err := connection.Delete("users", nil, nil); !errors.Is(err, ErrUnsafeFullTableMutation) {
+	if _, err := connection.Delete(context.Background(), newDeleteRequest("users", newPredicate(), "id", false)); !errors.Is(err, ErrUnsafeFullTableMutation) {
 		t.Fatalf("无条件删除应返回 ErrUnsafeFullTableMutation，实际为 %v", err)
 	}
-	if _, err := connection.Delete("bad table", []string{"id = ?"}, []interface{}{1}); !errors.Is(err, ErrInvalidQuery) {
+	if _, err := connection.Delete(context.Background(), newDeleteRequest("bad table", mustTestPredicate(t, []string{"id = ?"}, []interface{}{1}), "id", false)); !errors.Is(err, ErrInvalidQuery) {
 		t.Fatalf("非法删除表应返回 ErrInvalidQuery，实际为 %v", err)
 	}
-	if _, err := connection.Count("users", []string{"id = ?"}, nil); !errors.Is(err, ErrInvalidQuery) {
+	if _, err := connection.Count(context.Background(), newCountRequest("users", newPredicate().appendValidated("id = ?", nil), "id")); !errors.Is(err, ErrInvalidQuery) {
 		t.Fatalf("计数占位符错配应返回 ErrInvalidQuery，实际为 %v", err)
 	}
 	if _, err := connection.Execute("UPDATE users SET active = ?", true, false); !errors.Is(err, ErrInvalidQuery) {

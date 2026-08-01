@@ -1,32 +1,34 @@
 package db
 
 import (
+	"context"
 	"errors"
 	"testing"
 )
 
 type paginateMockConnection struct {
+	connectionIdentityState
 	rows  []map[string]interface{}
 	count int64
 }
 
-func (m *paginateMockConnection) Select(table string, fields string, where []string, args []interface{}, order string, limit int, offset int) ([]map[string]interface{}, error) {
+func (m *paginateMockConnection) Select(context.Context, SelectRequest) ([]map[string]interface{}, error) {
 	return m.rows, nil
 }
 
-func (m *paginateMockConnection) Insert(table string, data map[string]interface{}) (int64, error) {
-	return 0, nil
+func (m *paginateMockConnection) Insert(context.Context, InsertRequest) (InsertResult, error) {
+	return InsertResult{}, nil
 }
 
-func (m *paginateMockConnection) Update(table string, data map[string]interface{}, where []string, args []interface{}) (int64, error) {
-	return 0, nil
+func (m *paginateMockConnection) Update(context.Context, UpdateRequest) (UpdateResult, error) {
+	return UpdateResult{}, nil
 }
 
-func (m *paginateMockConnection) Delete(table string, where []string, args []interface{}) (int64, error) {
-	return 0, nil
+func (m *paginateMockConnection) Delete(context.Context, DeleteRequest) (DeleteResult, error) {
+	return DeleteResult{}, nil
 }
 
-func (m *paginateMockConnection) Count(table string, where []string, args []interface{}) (int64, error) {
+func (m *paginateMockConnection) Count(context.Context, CountRequest) (int64, error) {
 	return m.count, nil
 }
 
@@ -69,6 +71,19 @@ func TestQueryPaginate(t *testing.T) {
 	}
 	if paginator.ToMap()["total"] != int64(35) {
 		t.Fatalf("ToMap 应输出 total 字段，实际为 %#v", paginator.ToMap())
+	}
+}
+
+// TestQueryPaginateKeepsSourceQueryImmutable 验证分页执行不会把页码和偏移量写回调用方查询。
+func TestQueryPaginateKeepsSourceQueryImmutable(t *testing.T) {
+	mock := &paginateMockConnection{rows: []map[string]interface{}{{"id": int64(1)}}, count: 1}
+	database := NewDB(mock)
+	base := database.Table("users").Order("id asc")
+	if _, err := base.Paginate(3, 10); err != nil {
+		t.Fatalf("Paginate 不应返回错误: %v", err)
+	}
+	if base.limit != 0 || base.offset != 0 {
+		t.Fatalf("Paginate 不得修改源查询分页状态: limit=%d offset=%d", base.limit, base.offset)
 	}
 }
 

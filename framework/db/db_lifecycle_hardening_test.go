@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"runtime"
@@ -49,7 +50,7 @@ type blockingLifecycleConnection struct {
 	closeOnce sync.Once
 }
 
-func (c *blockingLifecycleConnection) Select(string, string, []string, []interface{}, string, int, int) ([]map[string]interface{}, error) {
+func (c *blockingLifecycleConnection) Select(context.Context, SelectRequest) ([]map[string]interface{}, error) {
 	c.startOnce.Do(func() { close(c.started) })
 	<-c.release
 	return nil, c.selectErr
@@ -128,8 +129,8 @@ func TestDatabaseRejectsNilConnectionAndClosesOnce(t *testing.T) {
 	if _, err := database.Query("SELECT 1"); !errors.Is(err, ErrDatabaseUnavailable) {
 		t.Fatalf("nil 连接原生查询应失败，实际为 %v", err)
 	}
-	if _, err := database.GetConnection(); !errors.Is(err, ErrDatabaseUnavailable) {
-		t.Fatalf("GetConnection 应显式返回依赖错误，实际为 %v", err)
+	if err := database.WithConnection(func(Connection) error { return nil }); !errors.Is(err, ErrDatabaseUnavailable) {
+		t.Fatalf("WithConnection 应显式返回依赖错误，实际为 %v", err)
 	}
 
 	backendErr := errors.New("close failed")
@@ -157,6 +158,106 @@ func TestDatabaseRejectsNilConnectionAndClosesOnce(t *testing.T) {
 	}
 	if _, err := database.Table("users").Select(); !errors.Is(err, ErrDatabaseClosed) {
 		t.Fatalf("关闭后查询应返回 ErrDatabaseClosed，实际为 %v", err)
+	}
+}
+
+func TestWithConnectionHoldsLeaseUntilCallbackReturns(t *testing.T) {
+	database := NewDB(&lifecycleConnection{})
+	entered := make(chan struct{})
+	releaseCallback := make(chan struct{})
+	callbackDone := make(chan error, 1)
+	go func() {
+		callbackDone <- database.WithConnection(func(Connection) error {
+			close(entered)
+			<-releaseCallback
+			return nil
+		})
+	}()
+	<-entered
+
+	closed := make(chan error, 1)
+	go func() { closed <- database.Close() }()
+	select {
+	case err := <-closed:
+		t.Fatalf("Close returned before borrowed callback completed: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(releaseCallback)
+	if err := <-callbackDone; err != nil {
+		t.Fatalf("connection callback failed: %v", err)
+	}
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatalf("Close failed after callback: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("callback lease was not released")
+	}
+}
+
+// TestDatabaseCloseContextCanCancelLeaseWait 验证数据库关闭等待租约时可由上下文取消，并支持后续重试关闭。
+func TestDatabaseCloseContextCanCancelLeaseWait(t *testing.T) {
+	connection := &lifecycleConnection{}
+	database := NewDB(connection)
+	entered := make(chan struct{})
+	releaseCallback := make(chan struct{})
+	callbackDone := make(chan error, 1)
+	go func() {
+		callbackDone <- database.WithConnection(func(Connection) error {
+			close(entered)
+			<-releaseCallback
+			return nil
+		})
+	}()
+	<-entered
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := database.CloseContext(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("关闭上下文超时应返回 DeadlineExceeded，实际为 %v", err)
+	}
+	if connection.closedTimes() != 0 {
+		t.Fatal("关闭等待超时期间不得关闭仍有在途租约的物理连接")
+	}
+	close(releaseCallback)
+	if err := <-callbackDone; err != nil {
+		t.Fatalf("释放数据库租约失败: %v", err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatalf("租约释放后重试关闭失败: %v", err)
+	}
+	if connection.closedTimes() != 1 {
+		t.Fatalf("物理连接应只关闭一次，实际为 %d", connection.closedTimes())
+	}
+}
+
+// TestDatabaseCloseContextRejectsNil 验证关闭上下文不能静默接受 nil。
+func TestDatabaseCloseContextRejectsNil(t *testing.T) {
+	database := NewDB(&lifecycleConnection{})
+	var ctx context.Context
+	if err := database.CloseContext(ctx); !errors.Is(err, ErrInvalidDatabaseContext) {
+		t.Fatalf("nil 关闭上下文应返回 ErrInvalidDatabaseContext，实际为 %v", err)
+	}
+	canceledContext, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := database.CloseContext(canceledContext); !errors.Is(err, context.Canceled) {
+		t.Fatalf("已取消关闭上下文应返回 context.Canceled，实际为 %v", err)
+	}
+}
+
+func TestWithConnectionReleasesLeaseAfterPanic(t *testing.T) {
+	database := NewDB(&lifecycleConnection{})
+	func() {
+		defer func() {
+			if recovered := recover(); recovered != "boom" {
+				t.Fatalf("unexpected panic: %#v", recovered)
+			}
+		}()
+		_ = database.WithConnection(func(Connection) error { panic("boom") })
+	}()
+	if err := database.Close(); err != nil {
+		t.Fatalf("panic must release connection lease: %v", err)
 	}
 }
 

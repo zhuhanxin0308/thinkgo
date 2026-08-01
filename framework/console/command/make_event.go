@@ -2,7 +2,6 @@ package command
 
 import (
 	"fmt"
-	"path/filepath"
 
 	"thinkgo/framework/console"
 )
@@ -16,10 +15,11 @@ func (c *MakeEvent) Configure() {
 	c.Signature = "make:event"
 	c.Description = "Create a new event class"
 	c.AddArgument("name", "Event type name", true)
+	configureApplicationOption(&c.Command)
 }
 
 func (c *MakeEvent) Execute(input *console.Input, output *console.Output) error {
-	name, err := normalizedGeneratorInput(c.App, input, output, "")
+	name, err := normalizedGeneratorInput(&c.Command, input, output, "")
 	if err != nil {
 		return fmt.Errorf("invalid event name: %w", err)
 	}
@@ -38,7 +38,7 @@ func (e *%s) Name() string {
 }
 `, name, name, name, name)
 
-	if err := writeGeneratedAppSource(c.App, filepath.Join("app", "event"), lowerGoFilename(name), []byte(content)); err != nil {
+	if err := writeGeneratedAppSource(c.App, "event", lowerGoFilename(name), []byte(content)); err != nil {
 		return fmt.Errorf("create event %s: %w", name, err)
 	}
 

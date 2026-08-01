@@ -15,6 +15,7 @@ type RouteList struct {
 func (c *RouteList) Configure() {
 	c.Signature = "route:list"
 	c.Description = "List all registered routes"
+	configureApplicationOption(&c.Command)
 }
 
 func (c *RouteList) Execute(_ *console.Input, output *console.Output) error {
@@ -24,10 +25,11 @@ func (c *RouteList) Execute(_ *console.Input, output *console.Output) error {
 	if c.App == nil {
 		return framework.ErrNilApplication
 	}
-	if c.App.Route == nil {
-		return fmt.Errorf("应用路由不可用")
+	router, err := resolveApplicationRoute(c.App)
+	if err != nil {
+		return fmt.Errorf("应用路由不可用: %w", err)
 	}
-	routes, err := c.App.Route.Routes()
+	routes, err := router.Routes()
 	if err != nil {
 		return fmt.Errorf("failed to load routes: %w", err)
 	}

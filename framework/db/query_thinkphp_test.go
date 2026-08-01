@@ -1,8 +1,56 @@
 package db
 
 import (
+	"context"
 	"testing"
 )
+
+type thinkPHPWriteConnection struct {
+	connectionIdentityState
+	insertID   interface{}
+	insertCall int
+	updateCall int
+}
+
+func (connection *thinkPHPWriteConnection) Select(context.Context, SelectRequest) ([]map[string]interface{}, error) {
+	return nil, nil
+}
+func (connection *thinkPHPWriteConnection) Insert(_ context.Context, request InsertRequest) (InsertResult, error) {
+	connection.insertCall++
+	return InsertResult{Affected: 1, ID: connection.insertID, IDKnown: request.WantsID(), Data: request.Data()}, nil
+}
+func (connection *thinkPHPWriteConnection) Update(_ context.Context, request UpdateRequest) (UpdateResult, error) {
+	connection.updateCall++
+	return UpdateResult{Affected: 1, Matched: 1, Modified: 1, MatchedKnown: true, ModifiedKnown: true, Data: request.Data()}, nil
+}
+func (connection *thinkPHPWriteConnection) Delete(context.Context, DeleteRequest) (DeleteResult, error) {
+	return DeleteResult{Deleted: 1}, nil
+}
+func (connection *thinkPHPWriteConnection) Count(context.Context, CountRequest) (int64, error) {
+	return 0, nil
+}
+func (connection *thinkPHPWriteConnection) Close() error { return nil }
+
+func TestThinkPHPWriteAPIContract(t *testing.T) {
+	connection := &thinkPHPWriteConnection{insertID: "01JABC"}
+	query := NewDB(connection).Table("users")
+
+	if count, err := query.Insert(map[string]interface{}{"name": "Ada"}); err != nil || count != 1 {
+		t.Fatalf("Insert must return affected rows: count=%d err=%v", count, err)
+	}
+	if id, err := query.InsertGetId(map[string]interface{}{"name": "Lin"}); err != nil || id != "01JABC" {
+		t.Fatalf("InsertGetId must return the real driver id: id=%#v err=%v", id, err)
+	}
+	if count, err := query.WhereField("id", "=", 7).Save(map[string]interface{}{"name": "Grace"}); err != nil || count != 1 {
+		t.Fatalf("Save with a predicate must update: count=%d err=%v", count, err)
+	}
+	if count, err := query.Save(map[string]interface{}{"name": "New"}, true); err != nil || count != 1 {
+		t.Fatalf("forced Save must insert: count=%d err=%v", count, err)
+	}
+	if connection.insertCall != 3 || connection.updateCall != 1 {
+		t.Fatalf("ThinkPHP write routing is wrong: inserts=%d updates=%d", connection.insertCall, connection.updateCall)
+	}
+}
 
 // TestQueryValueReturnsFirstField 验证 Value() 返回第一行的指定字段值。
 func TestQueryValueReturnsFirstField(t *testing.T) {
@@ -145,16 +193,16 @@ func TestQueryLock(t *testing.T) {
 	db := NewDB(&mockConnection{})
 
 	q := db.Name("users").Lock()
-	if q.lockMode != "FOR UPDATE" {
-		t.Fatalf("Lock() 应设置 lockMode=FOR UPDATE，实际 %q", q.lockMode)
+	if q.lockMode != LockForUpdate {
+		t.Fatalf("Lock() 应设置 lockMode=LockForUpdate，实际 %v", q.lockMode)
 	}
 	if q.order != "" {
 		t.Fatalf("Lock() 不应污染 order，实际 order=%q", q.order)
 	}
 
 	q2 := db.Name("users").Lock(false)
-	if q2.lockMode != "LOCK IN SHARE MODE" {
-		t.Fatalf("Lock(false) 应设置 lockMode=LOCK IN SHARE MODE，实际 %q", q2.lockMode)
+	if q2.lockMode != LockForShare {
+		t.Fatalf("Lock(false) 应设置 lockMode=LockForShare，实际 %v", q2.lockMode)
 	}
 
 	// 无 ORDER BY 时锁子句应直接追加到末尾，且不产生非法的空 ORDER BY。

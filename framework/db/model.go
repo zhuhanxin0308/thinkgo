@@ -64,7 +64,17 @@ type ModelSetterFunc func(value interface{}, data map[string]interface{}) interf
 // ModelSearcherFunc 模型搜索器函数类型。
 // 接收 Query 对象和搜索值，在 Query 上追加条件。
 // 对应 ThinkPHP 的 searchXxxAttr($query, $value, $data) 方法。
-type ModelSearcherFunc func(query *Query, value interface{}, data map[string]interface{})
+type ModelSearcherFunc func(query *Query, value interface{}, data map[string]interface{}) *Query
+
+type modelGetterEntry struct {
+	field  string
+	getter ModelGetterFunc
+}
+
+type modelSetterEntry struct {
+	field  string
+	setter ModelSetterFunc
+}
 
 // Model 表示一个数据库模型，支持时间戳、软删除、关系定义、模型事件、获取器/修改器/搜索器。
 type Model struct {
@@ -79,10 +89,13 @@ type Model struct {
 	softDelete         bool
 	deleteTimeField    string
 	primaryKey         string
+	primaryKeyExplicit bool
 	relations          map[string]RelationDefinition
 	events             map[ModelEventType][]ModelEventCallback // 模型事件回调
 	getters            map[string]ModelGetterFunc              // 获取器映射
+	getterSnapshot     []modelGetterEntry                      // 按字段排序的不可变获取器快照
 	setters            map[string]ModelSetterFunc              // 修改器映射
+	setterSnapshot     []modelSetterEntry                      // 按字段排序的不可变修改器快照
 	searchers          map[string]ModelSearcherFunc            // 搜索器映射
 }
 
@@ -170,6 +183,12 @@ func (m *Model) Getter(field string, fn ModelGetterFunc) error {
 		return fmt.Errorf("%w: 字段 %q 的获取器已注册", ErrInvalidModel, field)
 	}
 	m.getters[field] = fn
+	fields := sortedModelCallbackFields(m.getters)
+	snapshot := make([]modelGetterEntry, 0, len(fields))
+	for _, registeredField := range fields {
+		snapshot = append(snapshot, modelGetterEntry{field: registeredField, getter: m.getters[registeredField]})
+	}
+	m.getterSnapshot = snapshot
 	m.mu.Unlock()
 	return nil
 }
@@ -194,6 +213,12 @@ func (m *Model) Setter(field string, fn ModelSetterFunc) error {
 		return fmt.Errorf("%w: 字段 %q 的修改器已注册", ErrInvalidModel, field)
 	}
 	m.setters[field] = fn
+	fields := sortedModelSetterFields(m.setters)
+	snapshot := make([]modelSetterEntry, 0, len(fields))
+	for _, registeredField := range fields {
+		snapshot = append(snapshot, modelSetterEntry{field: registeredField, setter: m.setters[registeredField]})
+	}
+	m.setterSnapshot = snapshot
 	m.mu.Unlock()
 	return nil
 }
@@ -202,8 +227,8 @@ func (m *Model) Setter(field string, fn ModelSetterFunc) error {
 // 使用 WithSearch 时，自动将搜索条件映射为查询条件。
 // 对应 ThinkPHP 的 searchFieldNameAttr 方法。
 //
-//	示例：model.Searcher("name", func(q *Query, v interface{}, data map[string]interface{}) {
-//	    q.Where("name LIKE ?", "%"+v.(string)+"%")
+//	示例：model.Searcher("name", func(q *Query, v interface{}, data map[string]interface{}) *Query {
+//	    return q.Where("name LIKE ?", "%"+v.(string)+"%")
 //	})
 func (m *Model) Searcher(field string, fn ModelSearcherFunc) error {
 	if m == nil || fn == nil {
@@ -228,15 +253,11 @@ func (m *Model) applyGetters(row map[string]interface{}) map[string]interface{} 
 		return row
 	}
 	m.mu.RLock()
-	getters := make(map[string]ModelGetterFunc, len(m.getters))
-	for field, getter := range m.getters {
-		getters[field] = getter
-	}
+	getters := m.getterSnapshot
 	m.mu.RUnlock()
-	for _, field := range sortedModelCallbackFields(getters) {
-		getter := getters[field]
-		if val, ok := row[field]; ok {
-			row[field] = getter(val, row)
+	for _, entry := range getters {
+		if val, ok := row[entry.field]; ok {
+			row[entry.field] = entry.getter(val, row)
 		}
 	}
 	return row
@@ -248,20 +269,11 @@ func (m *Model) applySetters(data map[string]interface{}) map[string]interface{}
 		return data
 	}
 	m.mu.RLock()
-	setters := make(map[string]ModelSetterFunc, len(m.setters))
-	for field, setter := range m.setters {
-		setters[field] = setter
-	}
+	setters := m.setterSnapshot
 	m.mu.RUnlock()
-	fields := make([]string, 0, len(setters))
-	for field := range setters {
-		fields = append(fields, field)
-	}
-	sort.Strings(fields)
-	for _, field := range fields {
-		setter := setters[field]
-		if val, ok := data[field]; ok {
-			data[field] = setter(val, data)
+	for _, entry := range setters {
+		if val, ok := data[entry.field]; ok {
+			data[entry.field] = entry.setter(val, data)
 		}
 	}
 	return data
@@ -292,7 +304,12 @@ func (m *Model) WithSearch(fields []string, data map[string]interface{}) *ModelQ
 		if !exists {
 			continue
 		}
-		searcher(mq.query, value, searchData)
+		derived := searcher(mq.query, value, cloneDatabaseMap(searchData))
+		if derived == nil {
+			mq.query = mq.query.setError(fmt.Errorf("%w: 搜索器 %q 返回空 Query", ErrInvalidModel, field))
+			continue
+		}
+		mq.query = derived
 	}
 	return mq
 }
@@ -309,30 +326,18 @@ func (m *Model) On(eventType ModelEventType, callback ModelEventCallback) error 
 	return nil
 }
 
-// fireEvent 触发模型事件。
-// before_* 事件中任一回调返回 false 将阻止操作。
-func (m *Model) fireEvent(eventType ModelEventType, data map[string]interface{}) bool {
-	if m == nil {
-		return false
-	}
-	m.mu.RLock()
-	callbacks, ok := m.events[eventType]
-	callbacks = append([]ModelEventCallback(nil), callbacks...)
-	m.mu.RUnlock()
-	if !ok {
-		return true
-	}
-	for _, cb := range callbacks {
-		if !cb(data) {
-			return false
-		}
-	}
-	return true
-}
-
 func sortedModelCallbackFields(callbacks map[string]ModelGetterFunc) []string {
 	fields := make([]string, 0, len(callbacks))
 	for field := range callbacks {
+		fields = append(fields, field)
+	}
+	sort.Strings(fields)
+	return fields
+}
+
+func sortedModelSetterFields(setters map[string]ModelSetterFunc) []string {
+	fields := make([]string, 0, len(setters))
+	for field := range setters {
 		fields = append(fields, field)
 	}
 	sort.Strings(fields)
@@ -456,6 +461,7 @@ func (m *Model) PrimaryKey(name string) *Model {
 	}
 	m.mu.Lock()
 	m.primaryKey = name
+	m.primaryKeyExplicit = true
 	m.mu.Unlock()
 	return m
 }
@@ -471,6 +477,26 @@ func (m *Model) primaryKeyField() string {
 		return "id"
 	}
 	return m.primaryKey
+}
+
+func resolveModelStoragePrimaryKey(database *DB, modelKey string, explicitlyConfigured bool) (string, error) {
+	if database == nil {
+		return modelKey, ErrDatabaseUnavailable
+	}
+	database.mu.RLock()
+	managed := database.connection
+	database.mu.RUnlock()
+	if managed == nil || isNilDatabaseDependency(managed.connection) {
+		return modelKey, ErrDatabaseUnavailable
+	}
+	storageKey := modelKey
+	if mapper, ok := managed.connection.(ModelPrimaryKeyMapper); ok {
+		storageKey = mapper.StoragePrimaryKey(modelKey, explicitlyConfigured)
+	}
+	if err := validateIdentifier(storageKey); err != nil {
+		return modelKey, fmt.Errorf("%w: invalid storage primary key: %v", ErrInvalidModel, err)
+	}
+	return storageKey, nil
 }
 
 // SoftDelete 开启软删除。
@@ -624,7 +650,7 @@ func (m *Model) BelongsToMany(relatedModel *Model, pivotTable string, foreignKey
 	database := m.db
 	m.mu.RUnlock()
 	// 1. 查询中间表，获取关联模型的 ID 列表
-	pivotRows, err := database.Name(pivotTable).Where(foreignKey+" = ?", localKeyValue).Select()
+	pivotRows, err := database.Name(pivotTable).Field(relatedForeignKey).Where(foreignKey+" = ?", localKeyValue).Select()
 	if err != nil {
 		return nil, fmt.Errorf("查询中间表 %s 失败: %w", pivotTable, err)
 	}
@@ -666,15 +692,25 @@ func (m *Model) Select() ([]map[string]interface{}, error) {
 	return m.newModelQuery().Select()
 }
 
+// Each 按行消费模型查询结果，适合大结果集且不会一次性保留全部行。
+func (m *Model) Each(callback func(row map[string]interface{}) bool) error {
+	return m.newModelQuery().Each(callback)
+}
+
 // Count 统计记录总数。
 func (m *Model) Count() (int64, error) {
 	return m.newModelQuery().Count()
 }
 
-// Insert 使用 map 插入记录。
+// Insert 使用 map 插入记录并返回影响行数。
 // 自动应用修改器，触发 before_insert/after_insert 模型事件。
 func (m *Model) Insert(data map[string]interface{}) (int64, error) {
 	return m.newModelQuery().Insert(data)
+}
+
+// InsertGetId 使用 map 插入记录并返回驱动报告的真实主键。
+func (m *Model) InsertGetId(data map[string]interface{}) (interface{}, error) {
+	return m.newModelQuery().InsertGetId(data)
 }
 
 // UpdateMap 使用 map 更新记录。
@@ -720,30 +756,58 @@ func (m *Model) Create(v interface{}) error {
 	if err != nil {
 		return err
 	}
+	binding, primaryWasZero, err := m.preparePrimaryKey(value)
+	if err != nil {
+		return err
+	}
+	return m.createWithBinding(v, binding, primaryWasZero)
+}
+
+func (m *Model) createWithBinding(v interface{}, binding primaryKeyBinding, primaryWasZero bool) error {
 	data, err := m.structToMap(v)
 	if err != nil {
 		return err
 	}
 
 	pk := m.primaryKeyField()
-	primaryWasZero := true
-	if val, ok := data[pk]; ok {
-		primaryWasZero = isZeroDBValue(val)
-	}
 	if primaryWasZero {
 		delete(data, pk)
 	}
 
-	id, err := m.newModelQuery().Insert(data)
+	result, err := m.newModelQuery().insertResult(data, true)
 	if err != nil {
 		return err
 	}
 	if primaryWasZero {
-		if err := setStructColumnInteger(value, pk, id); err != nil {
-			return err
+		id, idErr := result.InsertedID()
+		if idErr != nil {
+			return idErr
+		}
+		if assignErr := binding.Assign(id); assignErr != nil {
+			return &PartialWriteError{Result: result, Cause: assignErr}
 		}
 	}
 	return nil
+}
+
+// Save follows ThinkPHP model semantics: a zero primary key creates a record,
+// while a non-zero primary key updates the matching record.
+func (m *Model) Save(v interface{}) error {
+	if err := m.validationError(); err != nil {
+		return err
+	}
+	value, err := writableModelStruct(v)
+	if err != nil {
+		return err
+	}
+	binding, primaryIsZero, err := m.preparePrimaryKey(value)
+	if err != nil {
+		return err
+	}
+	if primaryIsZero {
+		return m.createWithBinding(v, binding, true)
+	}
+	return m.Update(v)
 }
 
 // Update 从结构体更新记录。
@@ -823,7 +887,6 @@ func (m *Model) BelongsTo(relatedModel *Model, foreignKey interface{}, ownerKey 
 //   - `thinkgo:"col"`        指定列名；
 //   - `thinkgo:"col,omitempty"` 当字段为零值时跳过，避免用零值覆盖已有数据。
 func (m *Model) structToMap(v interface{}) (map[string]interface{}, error) {
-	data := make(map[string]interface{})
 	value := reflect.ValueOf(v)
 	if !value.IsValid() {
 		return nil, fmt.Errorf("%w: 结构体不能为空", ErrInvalidModel)
@@ -835,41 +898,20 @@ func (m *Model) structToMap(v interface{}) (map[string]interface{}, error) {
 		return nil, fmt.Errorf("%w: 期望结构体，实际为 %s", ErrInvalidModel, value.Kind())
 	}
 
-	typ := value.Type()
-	for index := 0; index < value.NumField(); index++ {
-		field := typ.Field(index)
-		if field.PkgPath != "" {
-			continue
-		}
-
-		tag := field.Tag.Get("thinkgo")
-		name, options := parseStructTag(tag)
-		if name == "-" {
-			continue
-		}
-		if name == "" {
-			name = ToSnakeCase(field.Name)
-		}
-		if err := validateIdentifier(name); err != nil {
-			return nil, fmt.Errorf("%w: 字段 %s 的列名非法: %w", ErrInvalidModel, field.Name, err)
-		}
-		for option := range options {
-			if option != "omitempty" {
-				return nil, fmt.Errorf("%w: 字段 %s 使用未知标签选项 %q", ErrInvalidModel, field.Name, option)
-			}
-		}
-
-		fieldValue := value.Field(index)
-		if options["omitempty"] && fieldValue.IsZero() {
+	metadata, err := loadModelMetadata(value.Type())
+	if err != nil {
+		return nil, err
+	}
+	data := make(map[string]interface{}, len(metadata.fields))
+	for _, field := range metadata.fields {
+		fieldValue := value.Field(field.index)
+		if field.omitEmpty && fieldValue.IsZero() {
 			continue
 		}
 		if !fieldValue.CanInterface() {
 			continue
 		}
-		if _, duplicated := data[name]; duplicated {
-			return nil, fmt.Errorf("%w: 多个结构体字段映射到列 %q", ErrInvalidModel, name)
-		}
-		data[name] = fieldValue.Interface()
+		data[field.column] = fieldValue.Interface()
 	}
 	return data, nil
 }
@@ -884,47 +926,6 @@ func writableModelStruct(value interface{}) (reflect.Value, error) {
 		return reflect.Value{}, fmt.Errorf("%w: Create/Update 要求结构体指针", ErrInvalidModel)
 	}
 	return reflected, nil
-}
-
-func setStructColumnInteger(value reflect.Value, column string, id int64) error {
-	typ := value.Type()
-	for index := 0; index < value.NumField(); index++ {
-		fieldType := typ.Field(index)
-		if fieldType.PkgPath != "" {
-			continue
-		}
-		name, _ := parseStructTag(fieldType.Tag.Get("thinkgo"))
-		if name == "-" {
-			continue
-		}
-		if name == "" {
-			name = ToSnakeCase(fieldType.Name)
-		}
-		if name != column {
-			continue
-		}
-		field := value.Field(index)
-		if !field.CanSet() {
-			return fmt.Errorf("%w: 主键字段 %s 不可写", ErrInvalidModel, fieldType.Name)
-		}
-		switch field.Kind() {
-		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-			if field.OverflowInt(id) {
-				return fmt.Errorf("%w: 主键 %d 超出字段 %s 范围", ErrInvalidModel, id, fieldType.Name)
-			}
-			field.SetInt(id)
-			return nil
-		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-			if id < 0 || field.OverflowUint(uint64(id)) {
-				return fmt.Errorf("%w: 主键 %d 超出字段 %s 范围", ErrInvalidModel, id, fieldType.Name)
-			}
-			field.SetUint(uint64(id))
-			return nil
-		default:
-			return fmt.Errorf("%w: 主键字段 %s 必须为整数类型", ErrInvalidModel, fieldType.Name)
-		}
-	}
-	return nil
 }
 
 // parseStructTag 解析 thinkgo 标签，返回列名和选项集合。

@@ -9,6 +9,37 @@ import (
 )
 
 // TestLogTypedContextSnapshotAndDeepRedaction 验证类型化集合、结构体指针和 HTTP 头都会快照并深层脱敏。
+// TestLogRedactsKeyMaterialAndCredentials 验证密钥材料与凭据字段不会因命名变体绕过脱敏。
+func TestLogRedactsKeyMaterialAndCredentials(t *testing.T) {
+	entry := &LogEntry{
+		Time:  time.Now(),
+		Level: "error",
+		Context: map[string]interface{}{
+			"private-key":      "private-secret",
+			"signing_key":      "signing-secret",
+			"encryptionKey":    "encryption-secret",
+			"access_key":       "access-secret",
+			"clientSecret":     "client-secret",
+			"credential_value": "credential-secret",
+		},
+	}
+	formatted := entry.FormatEntry()
+	for _, secret := range []string{"private-secret", "signing-secret", "encryption-secret", "access-secret", "client-secret", "credential-secret"} {
+		if strings.Contains(formatted, secret) {
+			t.Fatalf("密钥或凭据值不应出现在日志中 %q，实际为 %s", secret, formatted)
+		}
+	}
+}
+
+// TestSanitizeErrorTextRedactsCredentialsInsideMessages 验证错误文本中的键值对也会被脱敏。
+func TestSanitizeErrorTextRedactsCredentialsInsideMessages(t *testing.T) {
+	secret := "error-text-password"
+	sanitized := SanitizeErrorText("database password=" + secret + " host=db.example")
+	if strings.Contains(sanitized, secret) || !strings.Contains(sanitized, logRedactedPlaceholder) {
+		t.Fatalf("错误文本中的凭据必须脱敏: %q", sanitized)
+	}
+}
+
 func TestLogTypedContextSnapshotAndDeepRedaction(t *testing.T) {
 	driver := newMockDriver()
 	logger := NewLog(driver)

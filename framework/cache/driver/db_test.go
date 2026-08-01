@@ -1,9 +1,11 @@
 package driver
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -89,6 +91,29 @@ func TestDBCacheRejectsInvalidConstruction(t *testing.T) {
 	}
 }
 
+// TestDBCacheResourceIdentity 验证数据库连接与表名共同决定缓存 namespace。
+func TestDBCacheResourceIdentity(t *testing.T) {
+	conn := newRecordingCacheConn()
+	first, err := NewDB(conn, "think_cache")
+	if err != nil {
+		t.Fatalf("创建首个 DB 缓存驱动失败: %v", err)
+	}
+	second, err := NewDB(conn, "think_cache")
+	if err != nil {
+		t.Fatalf("创建第二个 DB 缓存驱动失败: %v", err)
+	}
+	otherTable, err := NewDB(conn, "other_cache")
+	if err != nil {
+		t.Fatalf("创建另一张表的 DB 缓存驱动失败: %v", err)
+	}
+	if first.CacheResourceIdentity() == "" || first.CacheResourceIdentity() != second.CacheResourceIdentity() {
+		t.Fatalf("相同连接和表应产生相同资源标识: first=%q second=%q", first.CacheResourceIdentity(), second.CacheResourceIdentity())
+	}
+	if first.CacheResourceIdentity() == otherTable.CacheResourceIdentity() {
+		t.Fatal("不同缓存表不得共享资源标识")
+	}
+}
+
 type unsupportedJSONValue struct{}
 
 func (unsupportedJSONValue) MarshalJSON() ([]byte, error) {
@@ -162,6 +187,104 @@ func TestDBCacheConcurrentSetUsesRaceSafeUpsert(t *testing.T) {
 	}
 	if _, found, err := cache.Get("shared"); err != nil || !found {
 		t.Fatalf("并发写入后缓存不存在: found=%t err=%v", found, err)
+	}
+}
+
+// TestDBCacheConcurrentCounterUsesTableLock 验证多个缓存驱动实例并发计数不会丢失更新。
+func TestDBCacheConcurrentCounterUsesTableLock(t *testing.T) {
+	conn := newRecordingCacheConn()
+	first, err := NewDB(conn, "think_cache")
+	if err != nil {
+		t.Fatalf("创建首个 DB 缓存驱动失败: %v", err)
+	}
+	second, err := NewDB(conn, "think_cache")
+	if err != nil {
+		t.Fatalf("创建第二个 DB 缓存驱动失败: %v", err)
+	}
+	const workers = 32
+	var wait sync.WaitGroup
+	errorsChannel := make(chan error, workers)
+	for index := 0; index < workers; index++ {
+		wait.Add(1)
+		go func(index int) {
+			defer wait.Done()
+			driver := first
+			if index%2 == 1 {
+				driver = second
+			}
+			_, incErr := driver.Inc("counter", 1)
+			errorsChannel <- incErr
+		}(index)
+	}
+	wait.Wait()
+	close(errorsChannel)
+	for incErr := range errorsChannel {
+		if incErr != nil {
+			t.Fatalf("并发 DB 计数失败: %v", incErr)
+		}
+	}
+	if value, found, getErr := first.Get("counter"); getErr != nil || !found || value != float64(workers) {
+		t.Fatalf("并发 DB 计数结果错误: value=%#v found=%t err=%v", value, found, getErr)
+	}
+}
+
+// TestDBCacheUpsertTreatsMatchedUnchangedRowAsSuccess 验证数据库将未变化更新报告为 0 时不会误报插入失败。
+func TestDBCacheUpsertTreatsMatchedUnchangedRowAsSuccess(t *testing.T) {
+	conn := newRecordingCacheConn()
+	driver, err := NewDB(conn, "think_cache")
+	if err != nil {
+		t.Fatalf("创建 DB 缓存驱动失败: %v", err)
+	}
+	if err = driver.Set("stable", "same", 0); err != nil {
+		t.Fatalf("首次写入缓存失败: %v", err)
+	}
+	conn.lock.Lock()
+	conn.reportUnchanged = true
+	conn.lock.Unlock()
+	if err = driver.Set("stable", "same", 0); err != nil {
+		t.Fatalf("数据库将匹配但未变化报告为 0 时不应失败: %v", err)
+	}
+	if value, found, getErr := driver.Get("stable"); getErr != nil || !found || value != "same" {
+		t.Fatalf("匹配但未变化的缓存未保持可读: value=%#v found=%t err=%v", value, found, getErr)
+	}
+}
+
+// TestDBCacheLockLeaseAndClearPreservesLock 验证数据库锁的 owner 条件、续租和清空保留语义。
+func TestDBCacheLockLeaseAndClearPreservesLock(t *testing.T) {
+	conn := newRecordingCacheConn()
+	driver, err := NewDB(conn, "think_cache")
+	if err != nil {
+		t.Fatalf("创建 DB 缓存驱动失败: %v", err)
+	}
+	if acquired, lockErr := driver.AcquireLock("job", "owner-a", time.Minute); lockErr != nil || !acquired {
+		t.Fatalf("数据库锁首次获取失败: acquired=%t err=%v", acquired, lockErr)
+	}
+	if acquired, lockErr := driver.AcquireLock("job", "owner-b", time.Minute); lockErr != nil || acquired {
+		t.Fatalf("活动数据库锁不应被其他 owner 抢占: acquired=%t err=%v", acquired, lockErr)
+	}
+	if renewed, lockErr := driver.RenewLock("job", "owner-b", time.Minute); lockErr != nil || renewed {
+		t.Fatalf("错误 owner 不应续租数据库锁: renewed=%t err=%v", renewed, lockErr)
+	}
+	if renewed, lockErr := driver.RenewLock("job", "owner-a", time.Minute); lockErr != nil || !renewed {
+		t.Fatalf("正确 owner 续租数据库锁失败: renewed=%t err=%v", renewed, lockErr)
+	}
+	if err = driver.Set("business", "value", 0); err != nil {
+		t.Fatalf("写入业务缓存失败: %v", err)
+	}
+	if err = driver.Clear(); err != nil {
+		t.Fatalf("清空数据库缓存失败: %v", err)
+	}
+	if exists, hasErr := driver.Has("business"); hasErr != nil || exists {
+		t.Fatalf("Clear 后业务缓存仍存在: exists=%t err=%v", exists, hasErr)
+	}
+	if acquired, lockErr := driver.AcquireLock("job", "owner-b", time.Minute); lockErr != nil || acquired {
+		t.Fatalf("Clear 不得释放活动数据库锁: acquired=%t err=%v", acquired, lockErr)
+	}
+	if released, lockErr := driver.ReleaseLock("job", "owner-b"); lockErr != nil || released {
+		t.Fatalf("错误 owner 不应释放数据库锁: released=%t err=%v", released, lockErr)
+	}
+	if released, lockErr := driver.ReleaseLock("job", "owner-a"); lockErr != nil || !released {
+		t.Fatalf("正确 owner 释放数据库锁失败: released=%t err=%v", released, lockErr)
 	}
 }
 
@@ -273,15 +396,22 @@ func TestDBExpiredReadDoesNotDeleteConcurrentRefresh(t *testing.T) {
 
 type nonRawCacheConnection struct{}
 
-func (*nonRawCacheConnection) Select(string, string, []string, []interface{}, string, int, int) ([]map[string]interface{}, error) {
+var nonRawCacheConnectionID = db.NewConnectionID("cache-non-raw-test")
+
+func (*nonRawCacheConnection) ConnectionID() db.ConnectionID { return nonRawCacheConnectionID }
+func (*nonRawCacheConnection) Select(context.Context, db.SelectRequest) ([]map[string]interface{}, error) {
 	return nil, nil
 }
-func (*nonRawCacheConnection) Insert(string, map[string]interface{}) (int64, error) { return 0, nil }
-func (*nonRawCacheConnection) Update(string, map[string]interface{}, []string, []interface{}) (int64, error) {
-	return 0, nil
+func (*nonRawCacheConnection) Insert(context.Context, db.InsertRequest) (db.InsertResult, error) {
+	return db.InsertResult{}, nil
 }
-func (*nonRawCacheConnection) Delete(string, []string, []interface{}) (int64, error) { return 0, nil }
-func (*nonRawCacheConnection) Count(string, []string, []interface{}) (int64, error)  { return 0, nil }
+func (*nonRawCacheConnection) Update(context.Context, db.UpdateRequest) (db.UpdateResult, error) {
+	return db.UpdateResult{}, nil
+}
+func (*nonRawCacheConnection) Delete(context.Context, db.DeleteRequest) (db.DeleteResult, error) {
+	return db.DeleteResult{}, nil
+}
+func (*nonRawCacheConnection) Count(context.Context, db.CountRequest) (int64, error) { return 0, nil }
 func (*nonRawCacheConnection) Close() error                                          { return nil }
 
 // TestDBCacheEnsureTableRequiresRawConnection 验证不支持原生 SQL 的连接不会伪造建表成功。
@@ -303,19 +433,22 @@ type failingCacheConnection struct {
 	err error
 }
 
-func (c *failingCacheConnection) Select(string, string, []string, []interface{}, string, int, int) ([]map[string]interface{}, error) {
+var failingCacheConnectionID = db.NewConnectionID("cache-failing-test")
+
+func (*failingCacheConnection) ConnectionID() db.ConnectionID { return failingCacheConnectionID }
+func (c *failingCacheConnection) Select(context.Context, db.SelectRequest) ([]map[string]interface{}, error) {
 	return nil, c.err
 }
-func (c *failingCacheConnection) Insert(string, map[string]interface{}) (int64, error) {
-	return 0, c.err
+func (c *failingCacheConnection) Insert(context.Context, db.InsertRequest) (db.InsertResult, error) {
+	return db.InsertResult{}, c.err
 }
-func (c *failingCacheConnection) Update(string, map[string]interface{}, []string, []interface{}) (int64, error) {
-	return 0, c.err
+func (c *failingCacheConnection) Update(context.Context, db.UpdateRequest) (db.UpdateResult, error) {
+	return db.UpdateResult{}, c.err
 }
-func (c *failingCacheConnection) Delete(string, []string, []interface{}) (int64, error) {
-	return 0, c.err
+func (c *failingCacheConnection) Delete(context.Context, db.DeleteRequest) (db.DeleteResult, error) {
+	return db.DeleteResult{}, c.err
 }
-func (c *failingCacheConnection) Count(string, []string, []interface{}) (int64, error) {
+func (c *failingCacheConnection) Count(context.Context, db.CountRequest) (int64, error) {
 	return 0, c.err
 }
 func (c *failingCacheConnection) Close() error { return c.err }
@@ -354,14 +487,19 @@ func TestDBCachePropagatesConnectionErrors(t *testing.T) {
 }
 
 type recordingCacheConn struct {
-	lock        sync.Mutex
-	executedSQL []string
-	rows        map[string]map[string]interface{}
-	selectHook  func(string)
+	identity        db.ConnectionID
+	lock            sync.Mutex
+	executedSQL     []string
+	rows            map[string]map[string]interface{}
+	selectHook      func(string)
+	reportUnchanged bool
 }
 
 func newRecordingCacheConn() *recordingCacheConn {
-	return &recordingCacheConn{rows: make(map[string]map[string]interface{})}
+	return &recordingCacheConn{
+		identity: db.NewConnectionID("cache-recording-test"),
+		rows:     make(map[string]map[string]interface{}),
+	}
 }
 
 func cacheKeyFromArgs(args []interface{}) string {
@@ -379,8 +517,19 @@ func cloneCacheRow(row map[string]interface{}) map[string]interface{} {
 	return cloned
 }
 
-func (c *recordingCacheConn) Select(_ string, _ string, _ []string, args []interface{}, _ string, _ int, _ int) ([]map[string]interface{}, error) {
+func cachePredicateArgs(predicate db.Predicate) []interface{} {
+	var args []interface{}
+	for _, clause := range predicate.Clauses() {
+		args = append(args, clause.Args...)
+	}
+	return args
+}
+
+func (c *recordingCacheConn) ConnectionID() db.ConnectionID { return c.identity }
+
+func (c *recordingCacheConn) Select(_ context.Context, request db.SelectRequest) ([]map[string]interface{}, error) {
 	c.lock.Lock()
+	args := cachePredicateArgs(request.Predicate())
 	key := cacheKeyFromArgs(args)
 	row, exists := c.rows[key]
 	hook := c.selectHook
@@ -396,51 +545,61 @@ func (c *recordingCacheConn) Select(_ string, _ string, _ []string, args []inter
 	return []map[string]interface{}{cloned}, nil
 }
 
-func (c *recordingCacheConn) Insert(_ string, data map[string]interface{}) (int64, error) {
+func (c *recordingCacheConn) Insert(_ context.Context, request db.InsertRequest) (db.InsertResult, error) {
 	c.lock.Lock()
 	defer c.lock.Unlock()
+	data := request.Data()
 	key := fmt.Sprint(data["key"])
 	if _, exists := c.rows[key]; exists {
-		return 0, errors.New("duplicate key")
+		return db.InsertResult{}, errors.New("duplicate key")
 	}
 	c.rows[key] = cloneCacheRow(data)
-	return 1, nil
+	return db.InsertResult{Affected: 1, Data: cloneCacheRow(data)}, nil
 }
 
-func (c *recordingCacheConn) Update(_ string, data map[string]interface{}, _ []string, args []interface{}) (int64, error) {
+func (c *recordingCacheConn) Update(_ context.Context, request db.UpdateRequest) (db.UpdateResult, error) {
 	c.lock.Lock()
 	defer c.lock.Unlock()
-	key := cacheKeyFromArgs(args)
-	if _, exists := c.rows[key]; !exists {
-		return 0, nil
-	}
-	c.rows[key] = cloneCacheRow(data)
-	return 1, nil
-}
-
-func (c *recordingCacheConn) Delete(_ string, where []string, args []interface{}) (int64, error) {
-	c.lock.Lock()
-	defer c.lock.Unlock()
-	if len(where) == 0 || len(args) == 0 {
-		count := int64(len(c.rows))
-		c.rows = make(map[string]map[string]interface{})
-		return count, nil
-	}
+	args := cachePredicateArgs(request.Predicate())
 	key := cacheKeyFromArgs(args)
 	row, exists := c.rows[key]
-	if !exists {
-		return 0, nil
+	if !exists || !cachePredicateMatches(row, request.Predicate()) {
+		return db.UpdateResult{}, nil
 	}
-	if len(args) > 1 && fmt.Sprint(row["expiry"]) != fmt.Sprint(args[1]) {
-		return 0, nil
+	updatedRow := cloneCacheRow(row)
+	for field, value := range request.Data() {
+		updatedRow[field] = value
 	}
-	delete(c.rows, key)
-	return 1, nil
+	c.rows[key] = updatedRow
+	if c.reportUnchanged {
+		return db.UpdateResult{Data: cloneCacheRow(updatedRow), ModifiedKnown: true}, nil
+	}
+	return db.UpdateResult{Affected: 1, Modified: 1, ModifiedKnown: true, Data: cloneCacheRow(updatedRow)}, nil
 }
 
-func (c *recordingCacheConn) Count(_ string, _ []string, args []interface{}) (int64, error) {
+func (c *recordingCacheConn) Delete(_ context.Context, request db.DeleteRequest) (db.DeleteResult, error) {
 	c.lock.Lock()
 	defer c.lock.Unlock()
+	clauses := request.Predicate().Clauses()
+	if len(clauses) == 0 {
+		count := int64(len(c.rows))
+		c.rows = make(map[string]map[string]interface{})
+		return db.DeleteResult{Deleted: count}, nil
+	}
+	var deleted int64
+	for key, row := range c.rows {
+		if cachePredicateMatches(row, request.Predicate()) {
+			delete(c.rows, key)
+			deleted++
+		}
+	}
+	return db.DeleteResult{Deleted: deleted}, nil
+}
+
+func (c *recordingCacheConn) Count(_ context.Context, request db.CountRequest) (int64, error) {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+	args := cachePredicateArgs(request.Predicate())
 	if _, exists := c.rows[cacheKeyFromArgs(args)]; exists {
 		return 1, nil
 	}
@@ -458,4 +617,64 @@ func (c *recordingCacheConn) Execute(sql string, _ ...interface{}) (int64, error
 	c.executedSQL = append(c.executedSQL, sql)
 	c.lock.Unlock()
 	return 0, nil
+}
+
+func cachePredicateMatches(row map[string]interface{}, predicate db.Predicate) bool {
+	for _, clause := range predicate.Clauses() {
+		argumentIndex := 0
+		parts := strings.Fields(strings.ToLower(clause.SQL))
+		if len(parts) >= 4 && parts[1] == "not" && parts[2] == "like" {
+			if argumentIndex >= len(clause.Args) {
+				return false
+			}
+			pattern := strings.TrimSuffix(fmt.Sprint(clause.Args[argumentIndex]), "%")
+			argumentIndex++
+			field := strings.Trim(parts[0], "`\"[]")
+			if strings.HasPrefix(fmt.Sprint(row[field]), pattern) {
+				return false
+			}
+			continue
+		}
+		if len(parts) < 3 || argumentIndex >= len(clause.Args) {
+			return false
+		}
+		field := strings.Trim(parts[0], "`\"[]")
+		operator := parts[1]
+		actual := fmt.Sprint(row[field])
+		expected := fmt.Sprint(clause.Args[argumentIndex])
+		argumentIndex++
+		switch operator {
+		case "=":
+			if actual != expected {
+				return false
+			}
+		case "<=", ">", ">=", "<":
+			actualNumber, actualErr := strconv.ParseInt(actual, 10, 64)
+			expectedNumber, expectedErr := strconv.ParseInt(expected, 10, 64)
+			if actualErr != nil || expectedErr != nil {
+				return false
+			}
+			switch operator {
+			case "<=":
+				if actualNumber > expectedNumber {
+					return false
+				}
+			case ">":
+				if actualNumber <= expectedNumber {
+					return false
+				}
+			case ">=":
+				if actualNumber < expectedNumber {
+					return false
+				}
+			case "<":
+				if actualNumber >= expectedNumber {
+					return false
+				}
+			}
+		default:
+			return false
+		}
+	}
+	return true
 }

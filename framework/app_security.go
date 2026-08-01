@@ -3,12 +3,24 @@ package framework
 import (
 	"fmt"
 	"net/http"
+	"strings"
+	"sync/atomic"
 
 	"thinkgo/framework/context"
 	"thinkgo/framework/cookie"
 	"thinkgo/framework/middleware"
 	"thinkgo/framework/session"
 	sessionDriver "thinkgo/framework/session/driver"
+)
+
+const (
+	securityEnvironmentProduction        = "production"
+	securityWarningCookieSecret   uint32 = 1 << iota
+	securityWarningCSRFSecret
+	securityWarningAllowedHosts
+	securityWarningCSRFDisabled
+	securityWarningCookieTransport
+	securityWarningCSRFTransport
 )
 
 // createAppCookie 创建经过严格配置校验的全局 Cookie 工厂。
@@ -38,13 +50,25 @@ func createAppSession(app *App, raw map[string]interface{}, cookieFactory *cooki
 	var backend session.Driver
 	switch config.DriverType {
 	case "memory":
-		backend = sessionDriver.NewMemory()
+		backend, err = sessionDriver.NewMemoryWithMaxEntries(config.MaxEntries)
+		if err != nil {
+			return nil, err
+		}
 	case "file":
-		config.StoragePath, err = normalizeAppStoragePath(app.BasePath, config.StoragePath)
+		config.StoragePath, err = app.resolveStoragePath(config.StoragePath)
 		if err != nil {
 			return nil, fmt.Errorf("解析 Session 存储路径失败: %w", err)
 		}
 		backend, err = sessionDriver.NewFile(config.StoragePath)
+		if err != nil {
+			return nil, err
+		}
+	case "redis":
+		redisConfig, ok := raw["redis"].(map[string]interface{})
+		if !ok || len(redisConfig) == 0 {
+			return nil, fmt.Errorf("%w: Redis 配置不能为空", session.ErrInvalidSessionConfig)
+		}
+		backend, err = sessionDriver.NewRedis(redisConfig)
 		if err != nil {
 			return nil, err
 		}
@@ -58,7 +82,11 @@ func createAppSession(app *App, raw map[string]interface{}, cookieFactory *cooki
 func fallbackAppSession(cookieFactory *cookie.Cookie) *session.Session {
 	config := session.DefaultConfig()
 	config.DriverType = "memory"
-	manager, _ := session.NewSessionWithConfig(config, sessionDriver.NewMemory(), cookieFactory)
+	backend, err := sessionDriver.NewMemoryWithMaxEntries(config.MaxEntries)
+	if err != nil {
+		return nil
+	}
+	manager, _ := session.NewSessionWithConfig(config, backend, cookieFactory)
 	return manager
 }
 
@@ -79,4 +107,135 @@ func unavailableCSRFHandler(req *context.Request, next func(*context.Request) *c
 	return context.NewResponse().Abort(http.StatusInternalServerError, map[string]interface{}{
 		"message": "CSRF 服务不可用",
 	})
+}
+
+// warnProductionSecurity 在生产环境执行一次性分类安全检查，不安全配置会阻止服务启动。
+func (app *App) warnProductionSecurity() {
+	if app == nil || !strings.EqualFold(app.securityWarningEnvironment(), securityEnvironmentProduction) {
+		return
+	}
+
+	cookieSecret := ""
+	if app.cookie != nil {
+		cookieSecret = strings.TrimSpace(app.cookie.GetConfig().Secret)
+	}
+	if cookieSecret == "" {
+		app.emitSecurityWarning(securityWarningCookieSecret, "生产环境安全警告：Cookie/Session 密钥为空")
+	}
+	if app.cookie == nil || !app.cookie.GetConfig().Secure {
+		app.emitSecurityWarning(securityWarningCookieTransport, "生产环境安全警告：Cookie/Session Cookie 未启用 Secure")
+	}
+
+	csrfSecret := ""
+	if app.config != nil {
+		if configured, ok := app.config.GetMap("csrf")["secret"].(string); ok {
+			csrfSecret = strings.TrimSpace(configured)
+		}
+	}
+	if csrfSecret == "" {
+		csrfSecret = cookieSecret
+	}
+	if csrfSecret == "" {
+		app.emitSecurityWarning(securityWarningCSRFSecret, "生产环境安全警告：CSRF 密钥为空")
+	}
+
+	if !app.hasAllowedHosts() {
+		app.emitSecurityWarning(securityWarningAllowedHosts, "生产环境安全警告：allowed_hosts 未配置具体白名单或使用了 *")
+	}
+	if app.config == nil || !app.config.GetBool("app.csrf_enable", false) {
+		app.emitSecurityWarning(securityWarningCSRFDisabled, "生产环境安全警告：CSRF 未启用")
+	} else if !app.config.GetBool("csrf.secure", false) {
+		app.emitSecurityWarning(securityWarningCSRFTransport, "生产环境安全警告：CSRF Cookie 未启用 Secure")
+	}
+}
+
+func (app *App) securityWarningEnvironment() string {
+	if app == nil {
+		return ""
+	}
+	if app.env != nil {
+		if value, exists := app.env.Lookup("APP_ENV"); exists && strings.TrimSpace(value) != "" {
+			return normalizeSecurityEnvironment(value)
+		}
+	}
+	if app.config != nil {
+		if value, ok := app.config.Get("app.app_env").(string); ok && strings.TrimSpace(value) != "" {
+			return normalizeSecurityEnvironment(value)
+		}
+	}
+	return securityEnvironmentProduction
+}
+
+func normalizeSecurityEnvironment(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "prod", "production", "release":
+		return securityEnvironmentProduction
+	default:
+		return strings.ToLower(strings.TrimSpace(value))
+	}
+}
+
+func (app *App) hasAllowedHosts() bool {
+	if app == nil {
+		return false
+	}
+	if app.env != nil {
+		if raw := strings.TrimSpace(app.env.Get("SERVER_ALLOWED_HOSTS")); raw != "" {
+			return hasConcreteAllowedHosts(strings.Split(raw, ","))
+		}
+	}
+	if app.config == nil {
+		return false
+	}
+	values := app.config.Get("app.server.allowed_hosts")
+	switch typed := values.(type) {
+	case string:
+		return hasConcreteAllowedHosts(strings.Split(typed, ","))
+	case []string:
+		return hasConcreteAllowedHosts(typed)
+	case []interface{}:
+		values := make([]string, 0, len(typed))
+		for _, value := range typed {
+			if text, ok := value.(string); ok {
+				values = append(values, text)
+			}
+		}
+		return hasConcreteAllowedHosts(values)
+	}
+	return false
+}
+
+// hasConcreteAllowedHosts 判断生产 Host 配置是否包含至少一个具体主机且没有全匹配通配符。
+func hasConcreteAllowedHosts(values []string) bool {
+	configured := false
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		configured = true
+		if value == "*" {
+			return false
+		}
+	}
+	return configured
+}
+
+func (app *App) emitSecurityWarning(category uint32, message string) {
+	if app == nil {
+		return
+	}
+	for {
+		current := atomic.LoadUint32(&app.securityWarningBits)
+		if current&category != 0 {
+			return
+		}
+		if atomic.CompareAndSwapUint32(&app.securityWarningBits, current, current|category) {
+			if app.log != nil {
+				app.log.Warning(message)
+			}
+			app.recordStartupError(fmt.Errorf("生产环境安全检查失败: %s", message))
+			return
+		}
+	}
 }

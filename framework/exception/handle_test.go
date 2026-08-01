@@ -323,6 +323,21 @@ func TestRenderMasksServerExceptionDetails(t *testing.T) {
 	}
 }
 
+// TestSanitizeExceptionTextRedactsSensitiveAssignments 验证异常消息和原因文本不会把敏感键值写入日志或调试输出。
+func TestSanitizeExceptionTextRedactsSensitiveAssignments(t *testing.T) {
+	secret := "db-password-123"
+	jsonSecret := "json-token-456"
+	text := safeExceptionText(errors.New(`database password=` + secret + `, token: token-456; {"password":"` + jsonSecret + `","authorization":"Bearer json-auth"}`))
+	for _, leaked := range []string{secret, "token-456", jsonSecret, "Bearer json-auth"} {
+		if strings.Contains(text, leaked) {
+			t.Fatalf("异常文本不应包含敏感值 %q，实际为 %q", leaked, text)
+		}
+	}
+	if strings.Count(text, redactedPlaceholder) != 4 {
+		t.Fatalf("异常文本应包含四个脱敏占位符，实际为 %q", text)
+	}
+}
+
 // TestRenderRejectsInvalidExceptionStatus 验证异常不能利用非法或成功状态码构造伪成功响应。
 func TestRenderRejectsInvalidExceptionStatus(t *testing.T) {
 	handler := &Handle{App: &mockExceptionApp{debug: false}}
@@ -414,6 +429,20 @@ func TestRenderDebugPageOmitsBinaryBodyAndRedactsURL(t *testing.T) {
 	}
 	if !strings.Contains(recorder.Body.String(), url.QueryEscape(redactedPlaceholder)) {
 		t.Fatalf("调试页应标记已脱敏查询参数: %s", recorder.Body.String())
+	}
+}
+
+// TestSanitizeRequestURLRedactsNestedSensitiveAssignments 验证非敏感查询参数中嵌套的敏感键值也不会泄露。
+func TestSanitizeRequestURLRedactsNestedSensitiveAssignments(t *testing.T) {
+	secret := "nested-url-secret"
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/debug?note="+url.QueryEscape("token="+secret)+"&page=1", nil)
+
+	sanitized := sanitizeRequestURL(req)
+	if strings.Contains(sanitized, secret) {
+		t.Fatalf("URL 嵌套查询参数泄露敏感值: %s", sanitized)
+	}
+	if !strings.Contains(sanitized, url.QueryEscape(redactedPlaceholder)) {
+		t.Fatalf("URL 嵌套查询参数缺少脱敏占位符: %s", sanitized)
 	}
 }
 

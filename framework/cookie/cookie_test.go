@@ -11,6 +11,18 @@ import (
 	"time"
 )
 
+type typedNilResponseWriter struct{}
+
+func (*typedNilResponseWriter) Header() http.Header {
+	return nil
+}
+
+func (*typedNilResponseWriter) Write([]byte) (int, error) {
+	return 0, nil
+}
+
+func (*typedNilResponseWriter) WriteHeader(int) {}
+
 // TestParseConfigStrictlyValidatesCookiePolicy 验证配置类型、范围、未知字段和安全策略均在启动期收敛。
 func TestParseConfigStrictlyValidatesCookiePolicy(t *testing.T) {
 	config, err := ParseConfig(map[string]interface{}{
@@ -214,6 +226,36 @@ func TestCookieSecurePolicyAndDelete(t *testing.T) {
 	}
 }
 
+// TestCookieExplicitSecureOverride 验证框架传入的可信协议结论可以覆盖旧的请求级自动推断。
+func TestCookieExplicitSecureOverride(t *testing.T) {
+	spoofed := httptest.NewRequest(http.MethodGet, "http://example.com", nil)
+	spoofed.RemoteAddr = "127.0.0.1:54321"
+	spoofed.Header.Set("X-Forwarded-Proto", "https")
+	unsafeRecorder := httptest.NewRecorder()
+	unsafe, err := NewCookieForRequestWithSecure(DefaultConfig(), spoofed, unsafeRecorder, false)
+	if err != nil {
+		t.Fatalf("创建显式非安全 Cookie 失败: %v", err)
+	}
+	if err = unsafe.Set("sid", "value"); err != nil {
+		t.Fatalf("写入显式非安全 Cookie 失败: %v", err)
+	}
+	if cookies := unsafeRecorder.Result().Cookies(); len(cookies) != 1 || cookies[0].Secure {
+		t.Fatalf("不可信协议结论不应被伪造头提升为 Secure: %#v", cookies)
+	}
+
+	secureRecorder := httptest.NewRecorder()
+	secure, err := NewCookieForRequestWithSecure(DefaultConfig(), httptest.NewRequest(http.MethodGet, "http://example.com", nil), secureRecorder, true)
+	if err != nil {
+		t.Fatalf("创建显式安全 Cookie 失败: %v", err)
+	}
+	if err = secure.Set("sid", "value"); err != nil {
+		t.Fatalf("写入显式安全 Cookie 失败: %v", err)
+	}
+	if cookies := secureRecorder.Result().Cookies(); len(cookies) != 1 || !cookies[0].Secure {
+		t.Fatalf("可信协议结论应开启 Secure: %#v", cookies)
+	}
+}
+
 // TestCookieFactoryCopiesImmutableConfig 验证请求级实例复用配置快照且不修改工厂。
 func TestCookieFactoryCopiesImmutableConfig(t *testing.T) {
 	factory, err := NewCookie(map[string]interface{}{"path": "/", "httponly": true})
@@ -309,6 +351,26 @@ func TestCookieFactoriesAndSignaturesRejectInvalidState(t *testing.T) {
 	}
 	if _, err := signCookieValue("sid", "value", "short", now); !errors.Is(err, ErrInvalidCookieSignature) {
 		t.Fatalf("短密钥签名应失败，实际为 %v", err)
+	}
+}
+
+// TestCookieRejectsTypedNilWriter 验证承载 nil 指针的 ResponseWriter 不会绕过可用性检查触发 panic。
+func TestCookieRejectsTypedNilWriter(t *testing.T) {
+	var typedNil *typedNilResponseWriter
+	manager, err := NewCookieForRequest(DefaultConfig(), httptest.NewRequest(http.MethodGet, "/", nil), typedNil)
+	if err != nil {
+		t.Fatalf("typed nil writer 不应影响请求级 Cookie 创建，实际为 %v", err)
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			t.Fatalf("typed nil writer 不应触发 panic: %v", recovered)
+		}
+	}()
+	if err := manager.Set("sid", "value"); !errors.Is(err, ErrCookieWriterUnavailable) {
+		t.Fatalf("typed nil writer 应返回 ErrCookieWriterUnavailable，实际为 %v", err)
+	}
+	if err := manager.SetWriter(typedNil); !errors.Is(err, ErrCookieWriterUnavailable) {
+		t.Fatalf("绑定 typed nil writer 应返回 ErrCookieWriterUnavailable，实际为 %v", err)
 	}
 }
 

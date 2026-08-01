@@ -1,6 +1,7 @@
 package context
 
 import (
+	stdcontext "context"
 	"encoding/json"
 	"math"
 	"net/http"
@@ -12,7 +13,8 @@ import (
 
 // TestRequestMetadataAccessors 验证请求元数据、绝对地址和兼容别名保持一致语义。
 func TestRequestMetadataAccessors(t *testing.T) {
-	raw := httptest.NewRequest(http.MethodGet, "https://example.com:8443/files/report.json?q=go", nil)
+	requestContext := stdcontext.WithValue(stdcontext.Background(), struct{ name string }{"request"}, "context-value")
+	raw := httptest.NewRequest(http.MethodGet, "https://example.com:8443/files/report.json?q=go", nil).WithContext(requestContext)
 	raw.Header.Set("X-Requested-With", "XMLHttpRequest")
 	raw.Header.Set("X-Empty", "")
 	raw.AddCookie(&http.Cookie{Name: "sid", Value: "abc"})
@@ -49,6 +51,9 @@ func TestRequestMetadataAccessors(t *testing.T) {
 	if req.Raw() != raw {
 		t.Fatal("Raw 应返回当前原生请求")
 	}
+	if req.Context().Value(struct{ name string }{"request"}) != "context-value" {
+		t.Fatal("Context 应返回原生请求上下文")
+	}
 
 	methods := map[string]func(*Request) bool{
 		http.MethodPost:   (*Request).IsPost,
@@ -60,6 +65,17 @@ func TestRequestMetadataAccessors(t *testing.T) {
 		if !predicate(methodReq) {
 			t.Fatalf("方法判断 %s 应返回 true", method)
 		}
+	}
+}
+
+// TestRequestContextForNilRequest 验证空 Request 仍可安全获取后台上下文。
+func TestRequestContextForNilRequest(t *testing.T) {
+	var request *Request
+	if request.Context() == nil {
+		t.Fatal("空 Request.Context 不应返回 nil")
+	}
+	if _, ok := request.Context().Deadline(); ok {
+		t.Fatal("后台上下文不应伪造截止时间")
 	}
 }
 

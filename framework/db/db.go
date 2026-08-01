@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"regexp"
@@ -12,11 +13,18 @@ import (
 	"time"
 )
 
+const defaultDatabaseOperationTimeout = 30 * time.Second
+
 var (
 	sqlSensitiveAssignmentPattern  = regexp.MustCompile(`(?i)\b(password|passwd|token|secret|authorization|api_key|refresh_token)\b\s*=\s*[^,\s)]+`)
 	sqlSensitiveComparisonPattern  = regexp.MustCompile(`(?i)\b([a-z0-9_]*(password|passwd|token|secret|authorization|api_key|refresh_token)[a-z0-9_]*)\b\s*=\s*[^,\s)]+`)
 	sqlSensitiveAssignmentReplacer = `${1} = [REDACTED]`
+	sqlStatePattern                = regexp.MustCompile(`^[0-9A-Z]{5}$`)
 )
+
+type sqlStateCarrier interface {
+	SQLState() string
+}
 
 // Logger 抽象数据库层所需的最小日志能力，避免与具体日志实现形成循环依赖。
 type Logger interface {
@@ -28,29 +36,84 @@ type Logger interface {
 // 对应 ThinkPHP 8 的 think\DbManager。
 type DB struct {
 	mu                 sync.RWMutex
-	activeLeases       sync.WaitGroup
-	closeOnce          sync.Once
-	closeErr           error
 	closed             bool
-	connection         Connection
+	connection         *managedConnection
 	prefix             string
 	logger             Logger
 	autoTimestamp      bool
 	createTimeField    string
 	updateTimeField    string
 	timestampValueType string
+	location           *time.Location
+	clock              func() time.Time
 }
 
 // NewDB 创建数据库管理器实例。
 func NewDB(conn Connection) *DB {
 	return &DB{
-		connection:         conn,
+		connection:         newManagedConnection(conn),
 		prefix:             "",
 		autoTimestamp:      false,
 		createTimeField:    "create_time",
 		updateTimeField:    "update_time",
 		timestampValueType: TimestampValueTypeUnix,
+		location:           time.Local,
+		clock:              time.Now,
 	}
+}
+
+// SetLocation 设置数据库业务时间使用的应用时区，不修改进程全局时区。
+func (database *DB) SetLocation(location *time.Location) {
+	if database == nil {
+		return
+	}
+	if location == nil {
+		location = time.Local
+	}
+	database.mu.Lock()
+	database.location = location
+	managed := database.connection
+	database.mu.Unlock()
+	if managed != nil {
+		if locationAware, ok := managed.connection.(LocationAwareConnection); ok {
+			locationAware.SetLocation(location)
+		} else if locationAware, ok := managed.connection.(interface{ SetLocation(*time.Location) }); ok {
+			// 兼容只实现旧 SetLocation 方法的外部连接器。
+			locationAware.SetLocation(location)
+		}
+	}
+}
+
+// Location 返回数据库业务时间使用的应用时区。
+func (database *DB) Location() *time.Location {
+	if database == nil {
+		return time.Local
+	}
+	database.mu.RLock()
+	location := database.location
+	database.mu.RUnlock()
+	if location == nil {
+		return time.Local
+	}
+	return location
+}
+
+// Now 返回按数据库应用时区转换后的当前业务时间。
+func (database *DB) Now() time.Time {
+	if database == nil {
+		return time.Now().In(time.Local)
+	}
+	database.mu.RLock()
+	location := database.location
+	clock := database.clock
+	database.mu.RUnlock()
+	if location == nil {
+		location = time.Local
+	}
+	if clock == nil {
+		clock = time.Now
+	}
+	return clock().In(location)
 }
 
 // Connect 连接数据库（使用驱动注册表）。
@@ -87,7 +150,7 @@ func Connect(config Config) (*DB, error) {
 }
 
 // normalizeTimestampValueType 统一收敛自动时间戳的值类型，避免非法配置扩散到执行阶段。
-// 对应 ThinkPHP 支持的四种时间戳类型：int(unix)/timestamp/datetime/date。
+// 支持 unix/timestamp/datetime/date/native 五种时间戳类型。
 func normalizeTimestampValueType(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case TimestampValueTypeUnix, "int":
@@ -98,19 +161,32 @@ func normalizeTimestampValueType(value string) string {
 		return TimestampValueTypeTimestamp
 	case TimestampValueTypeDate:
 		return TimestampValueTypeDate
+	case TimestampValueTypeNative:
+		return TimestampValueTypeNative
 	default:
 		return TimestampValueTypeUnix
 	}
 }
 
+func isSupportedTimestampValueType(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case TimestampValueTypeUnix, "int", TimestampValueTypeDateTime, TimestampValueTypeTimestamp, TimestampValueTypeDate, TimestampValueTypeNative:
+		return true
+	default:
+		return false
+	}
+}
+
 // defaultTimestampValue 根据框架配置生成字段缺失时应补齐的时间值。
-// unix → int64 秒级时间戳；datetime/timestamp → "2006-01-02 15:04:05"；date → "2006-01-02"。
+// unix → int64 秒级时间戳；datetime/timestamp → "2006-01-02 15:04:05"；date → "2006-01-02"；native → time.Time。
 func defaultTimestampValue(now time.Time, valueType string) interface{} {
 	switch normalizeTimestampValueType(valueType) {
 	case TimestampValueTypeDateTime, TimestampValueTypeTimestamp:
 		return now.Format(DefaultTimeFormat)
 	case TimestampValueTypeDate:
 		return now.Format(DefaultDateFormat)
+	case TimestampValueTypeNative:
+		return now
 	default:
 		return now.Unix()
 	}
@@ -123,6 +199,8 @@ func defaultTimestampString(now time.Time, valueType string) string {
 		return now.Format(DefaultTimeFormat)
 	case TimestampValueTypeDate:
 		return now.Format(DefaultDateFormat)
+	case TimestampValueTypeNative:
+		return now.Format(DefaultTimeFormat)
 	default:
 		return strconv.FormatInt(now.Unix(), 10)
 	}
@@ -250,9 +328,18 @@ func (db *DB) ResolveTableName(name string) string {
 	return db.fullTableName(name)
 }
 
-// GetConnection 返回底层连接，供高阶调用使用。
-func (db *DB) GetConnection() (Connection, error) {
-	return db.connectionSnapshot()
+// WithConnection lends the current connection only for the callback lifetime.
+// The lease is released even when the callback panics.
+func (db *DB) WithConnection(callback func(Connection) error) error {
+	if callback == nil {
+		return fmt.Errorf("%w: connection callback cannot be nil", ErrInvalidQuery)
+	}
+	connection, release, err := db.acquireConnection()
+	if err != nil {
+		return err
+	}
+	defer release()
+	return callback(connection)
 }
 
 // SetLogger 设置数据库错误日志记录器。
@@ -267,28 +354,42 @@ func (db *DB) SetLogger(logger Logger) {
 
 // Close 关闭数据库连接。
 func (db *DB) Close() error {
+	return db.CloseContext(context.Background())
+}
+
+// CloseContext 关闭数据库包装器，并在等待在途租约时遵守调用方上下文。
+func (db *DB) CloseContext(ctx context.Context) error {
 	if db == nil {
 		return nil
 	}
-	db.closeOnce.Do(func() {
-		db.mu.Lock()
-		db.closed = true
-		connection := db.connection
-		db.mu.Unlock()
-		// 状态锁只负责阻止新租约；等待期间必须允许错误日志和配置快照读取，
-		// 否则在途操作报错时会与 Close 形成递归读锁死锁。
-		db.activeLeases.Wait()
-		if !isNilDatabaseDependency(connection) {
-			db.closeErr = connection.Close()
-		}
-	})
-	return db.closeErr
+	if ctx == nil {
+		return ErrInvalidDatabaseContext
+	}
+	connection := db.markClosed()
+	if connection == nil || connection.managerOwned.Load() {
+		return nil
+	}
+	return connection.CloseContext(ctx)
+}
+
+// markClosed 只封闭当前 DB 包装器，物理连接由 Manager 或最后的独立所有者关闭。
+func (db *DB) markClosed() *managedConnection {
+	if db == nil {
+		return nil
+	}
+	db.mu.Lock()
+	db.closed = true
+	connection := db.connection
+	db.mu.Unlock()
+	return connection
 }
 
 // Query 执行原生 SQL 查询。
 // 对应 ThinkPHP 的 Db::query()。
 func (db *DB) Query(sql string, args ...interface{}) ([]map[string]interface{}, error) {
-	return db.QueryContext(context.Background(), sql, args...)
+	ctx, cancel := databaseOperationContext(context.Background())
+	defer cancel()
+	return db.QueryContext(ctx, sql, args...)
 }
 
 // QueryContext 使用显式上下文执行原生查询。
@@ -299,17 +400,24 @@ func (db *DB) QueryContext(ctx context.Context, sql string, args ...interface{})
 	if err := validateRawStatement(sql, len(args)); err != nil {
 		return nil, db.reportError("query", err, nil)
 	}
+	if err := validateBindParameterBudget(databaseQueryBuilder(db), len(args)); err != nil {
+		return nil, db.reportError("query", err, nil)
+	}
 	connection, release, stateErr := db.acquireConnection()
 	if stateErr != nil {
 		return nil, db.reportError("query", stateErr, nil)
 	}
 	defer release()
+	dialect := connectionDialect(connection)
 	if raw, ok := connection.(ContextualRawQueryable); ok {
 		rows, err := raw.QueryContext(ctx, sql, args...)
 		if err != nil {
 			return nil, db.reportError("query", err, map[string]interface{}{
-				"sql": redactSQLText(sql), "args": redactArgCount(args),
+				"sql": redactSQLText(sql, dialect), "args": redactArgCount(args),
 			})
+		}
+		if err := validateMaterializedRows(rows); err != nil {
+			return nil, db.reportError("query", err, nil)
 		}
 		return rows, nil
 	}
@@ -317,15 +425,18 @@ func (db *DB) QueryContext(ctx context.Context, sql string, args ...interface{})
 		rows, err := raw.Query(sql, args...)
 		if err != nil {
 			return nil, db.reportError("query", err, map[string]interface{}{
-				"sql":  redactSQLText(sql),
+				"sql":  redactSQLText(sql, dialect),
 				"args": redactArgCount(args),
 			})
+		}
+		if err := validateMaterializedRows(rows); err != nil {
+			return nil, db.reportError("query", err, nil)
 		}
 		return rows, nil
 	}
 
 	return nil, db.reportError("query", fmt.Errorf("current connection does not support raw queries"), map[string]interface{}{
-		"sql":  redactSQLText(sql),
+		"sql":  redactSQLText(sql, dialect),
 		"args": redactArgCount(args),
 	})
 }
@@ -333,7 +444,9 @@ func (db *DB) QueryContext(ctx context.Context, sql string, args ...interface{})
 // Execute 执行原生 SQL 命令。
 // 对应 ThinkPHP 的 Db::execute()。
 func (db *DB) Execute(sql string, args ...interface{}) (int64, error) {
-	return db.ExecuteContext(context.Background(), sql, args...)
+	ctx, cancel := databaseOperationContext(context.Background())
+	defer cancel()
+	return db.ExecuteContext(ctx, sql, args...)
 }
 
 // ExecuteContext 使用显式上下文执行原生命令。
@@ -344,16 +457,20 @@ func (db *DB) ExecuteContext(ctx context.Context, sql string, args ...interface{
 	if err := validateRawStatement(sql, len(args)); err != nil {
 		return 0, db.reportError("execute", err, nil)
 	}
+	if err := validateBindParameterBudget(databaseQueryBuilder(db), len(args)); err != nil {
+		return 0, db.reportError("execute", err, nil)
+	}
 	connection, release, stateErr := db.acquireConnection()
 	if stateErr != nil {
 		return 0, db.reportError("execute", stateErr, nil)
 	}
 	defer release()
+	dialect := connectionDialect(connection)
 	if raw, ok := connection.(ContextualRawQueryable); ok {
 		affected, err := raw.ExecuteContext(ctx, sql, args...)
 		if err != nil {
 			return 0, db.reportError("execute", err, map[string]interface{}{
-				"sql": redactSQLText(sql), "args": redactArgCount(args),
+				"sql": redactSQLText(sql, dialect), "args": redactArgCount(args),
 			})
 		}
 		return affected, nil
@@ -362,7 +479,7 @@ func (db *DB) ExecuteContext(ctx context.Context, sql string, args ...interface{
 		affected, err := raw.Execute(sql, args...)
 		if err != nil {
 			return 0, db.reportError("execute", err, map[string]interface{}{
-				"sql":  redactSQLText(sql),
+				"sql":  redactSQLText(sql, dialect),
 				"args": redactArgCount(args),
 			})
 		}
@@ -370,9 +487,17 @@ func (db *DB) ExecuteContext(ctx context.Context, sql string, args ...interface{
 	}
 
 	return 0, db.reportError("execute", fmt.Errorf("current connection does not support raw execution"), map[string]interface{}{
-		"sql":  redactSQLText(sql),
+		"sql":  redactSQLText(sql, dialect),
 		"args": redactArgCount(args),
 	})
+}
+
+// databaseOperationContext 为未显式设置截止时间的原生 SQL 操作提供默认超时。
+func databaseOperationContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if _, hasDeadline := ctx.Deadline(); hasDeadline {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, defaultDatabaseOperationTimeout)
 }
 
 // redactDataKeys 仅保留写入数据的字段名用于排障，绝不记录字段值，
@@ -391,14 +516,36 @@ func redactArgCount(args []interface{}) string {
 	return fmt.Sprintf("%d args (redacted)", len(args))
 }
 
-func redactSQLText(sqlText string) string {
+func redactSQLText(sqlText string, dialect string) string {
 	if sqlText == "" {
 		return ""
 	}
-	redacted := redactSQLLiteralsAndComments(sqlText)
+	redacted := redactSQLLiteralsAndComments(sqlText, dialect)
 	redacted = sqlSensitiveAssignmentPattern.ReplaceAllString(redacted, sqlSensitiveAssignmentReplacer)
 	redacted = sqlSensitiveComparisonPattern.ReplaceAllString(redacted, sqlSensitiveAssignmentReplacer)
 	return redacted
+}
+
+func connectionDialect(connection Connection) string {
+	sqlConnection, ok := connection.(*SQLConnection)
+	if !ok || sqlConnection == nil || isNilDatabaseDependency(sqlConnection.Builder) {
+		return ""
+	}
+	return sqlConnection.Builder.DialectName()
+}
+
+func safeDatabaseErrorContext(err error) map[string]interface{} {
+	ctx := map[string]interface{}{
+		"error_type": fmt.Sprintf("%T", err),
+	}
+	var state sqlStateCarrier
+	if errors.As(err, &state) {
+		sqlState := state.SQLState()
+		if sqlStatePattern.MatchString(sqlState) {
+			ctx["sql_state"] = sqlState
+		}
+	}
+	return ctx
 }
 
 // reportError 统一记录数据库错误并保留原始错误返回给上层调用方。
@@ -421,18 +568,13 @@ func (db *DB) reportError(operation string, err error, ctx map[string]interface{
 		for key, value := range ctx {
 			logCtx[key] = value
 		}
-		logger.ErrorCtx(fmt.Sprintf("database %s failed: %v", operation, err), logCtx)
+		for key, value := range safeDatabaseErrorContext(err) {
+			logCtx[key] = value
+		}
+		logger.ErrorCtx("database operation failed", logCtx)
 	}
 
 	return err
-}
-
-func (db *DB) connectionSnapshot() (Connection, error) {
-	connection, release, err := db.acquireConnection()
-	if release != nil {
-		release()
-	}
-	return connection, err
 }
 
 // acquireConnection 为一次数据库操作登记独立生命周期租约，
@@ -446,17 +588,46 @@ func (db *DB) acquireConnection() (Connection, func(), error) {
 		db.mu.RUnlock()
 		return nil, nil, ErrDatabaseClosed
 	}
-	if isNilDatabaseDependency(db.connection) {
+	if db.connection == nil || isNilDatabaseDependency(db.connection.connection) {
 		db.mu.RUnlock()
 		return nil, nil, ErrDatabaseUnavailable
 	}
-	connection := db.connection
-	db.activeLeases.Add(1)
+	connection := db.connection.connection
+	managed := db.connection
+	managed.addLease()
 	db.mu.RUnlock()
 
 	var releaseOnce sync.Once
 	release := func() {
-		releaseOnce.Do(db.activeLeases.Done)
+		releaseOnce.Do(managed.releaseLease)
 	}
 	return connection, release, nil
+}
+
+func (db *DB) managedConnectionHandle() (*managedConnection, error) {
+	if db == nil {
+		return nil, ErrDatabaseUnavailable
+	}
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	if db.closed {
+		return nil, ErrDatabaseClosed
+	}
+	if db.connection == nil || isNilDatabaseDependency(db.connection.connection) {
+		return nil, ErrDatabaseUnavailable
+	}
+	return db.connection, nil
+}
+
+func (db *DB) attachManagedConnection(handle *managedConnection) error {
+	if db == nil || handle == nil || isNilDatabaseDependency(handle.connection) {
+		return ErrDatabaseUnavailable
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	if db.closed {
+		return ErrDatabaseClosed
+	}
+	db.connection = handle
+	return nil
 }

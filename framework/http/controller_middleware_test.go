@@ -8,16 +8,34 @@ import (
 	"testing"
 
 	"thinkgo/framework"
-	"thinkgo/framework/config"
 	fwcontext "thinkgo/framework/context"
-	"thinkgo/framework/log"
-	"thinkgo/framework/middleware"
-	"thinkgo/framework/route"
 )
 
 // mwTestController 用于验证控制器级中间件声明会被分发器实际应用。
 type mwTestController struct {
 	framework.Controller
+}
+
+// preInitTestController 用于验证需要保护 Init 副作用的中间件执行顺序。
+type preInitTestController struct {
+	framework.Controller
+	preInitSeen bool
+}
+
+func (c *preInitTestController) GetPreInitMiddleware() []framework.ControllerMiddleware {
+	return []framework.ControllerMiddleware{{Name: "pre-init-tap"}}
+}
+
+func (c *preInitTestController) Init(app *framework.App, req *fwcontext.Request) {
+	c.Controller.Init(app, req)
+	_, c.preInitSeen = req.GetData("pre-init-ran").(bool)
+}
+
+func (c *preInitTestController) Show() *fwcontext.Response {
+	if !c.preInitSeen {
+		return fwcontext.NewResponse().Code(stdhttp.StatusInternalServerError).Content("pre-init middleware ran too late")
+	}
+	return fwcontext.NewResponse().Content("pre-init middleware ran first")
 }
 
 // Init 在初始化阶段声明控制器级中间件，且仅对 Guarded 动作生效。
@@ -39,21 +57,7 @@ func (c *mwTestController) Open(req *fwcontext.Request) *fwcontext.Response {
 // newControllerTestApp 构建带容器的最小应用，供控制器分发相关测试使用。
 func newControllerTestApp(t *testing.T) *framework.App {
 	t.Helper()
-
-	cfg := config.NewConfig()
-	cfg.Set("app.server", map[string]interface{}{"host": "127.0.0.1", "port": 8080})
-	cfg.Set("app.compression", map[string]interface{}{"enable": false})
-
-	app := &framework.App{
-		Container:  framework.NewContainer(),
-		BasePath:   t.TempDir(),
-		Config:     cfg,
-		Route:      route.NewRouter(),
-		Middleware: middleware.NewPipeline(),
-		Log:        log.NewLog(),
-	}
-	t.Cleanup(func() { _ = app.Log.Close() })
-	return app
+	return newTestHTTPApp(t, t.TempDir(), map[string]interface{}{"enable": false})
 }
 
 // TestControllerMiddlewareApplied 验证 Only 命中的动作会执行控制器声明的中间件。
@@ -62,7 +66,7 @@ func TestControllerMiddlewareApplied(t *testing.T) {
 	app.BindFactory("MwCtrl", reflect.TypeOf(mwTestController{}))
 
 	// 注册中间件别名：命中时为响应打上标记头。
-	app.Middleware.Alias("tap", func(req *fwcontext.Request, next func(*fwcontext.Request) *fwcontext.Response) *fwcontext.Response {
+	mustHTTPMiddleware(t, app).Alias("tap", func(req *fwcontext.Request, next func(*fwcontext.Request) *fwcontext.Response) *fwcontext.Response {
 		resp := next(req)
 		if resp != nil {
 			resp.Header("X-Controller-Mw", "1")
@@ -70,8 +74,8 @@ func TestControllerMiddlewareApplied(t *testing.T) {
 		return resp
 	})
 
-	app.Route.Get("/guarded", "MwCtrl@Guarded")
-	app.Route.Get("/open", "MwCtrl@Open")
+	mustHTTPRoute(t, app).Get("/guarded", "MwCtrl@Guarded")
+	mustHTTPRoute(t, app).Get("/open", "MwCtrl@Open")
 
 	handler := newTestHTTPHandler(t, app)
 
@@ -96,11 +100,33 @@ func TestControllerMiddlewareApplied(t *testing.T) {
 	}
 }
 
+// TestControllerPreInitMiddlewareRunsBeforeInit 验证认证类中间件可以在 Init 副作用之前执行。
+func TestControllerPreInitMiddlewareRunsBeforeInit(t *testing.T) {
+	app := newControllerTestApp(t)
+	app.BindFactory("PreInitCtrl", reflect.TypeOf(preInitTestController{}))
+	mustHTTPMiddleware(t, app).Alias("pre-init-tap", func(req *fwcontext.Request, next func(*fwcontext.Request) *fwcontext.Response) *fwcontext.Response {
+		req.Set("pre-init-ran", true)
+		return next(req)
+	})
+	if _, err := mustHTTPRoute(t, app).Get("/pre-init", "PreInitCtrl@Show"); err != nil {
+		t.Fatalf("注册路由失败: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	newTestHTTPHandler(t, app).ServeHTTP(
+		recorder,
+		httptest.NewRequest(stdhttp.MethodGet, "http://example.com/pre-init", nil),
+	)
+	if recorder.Code != stdhttp.StatusOK || recorder.Body.String() != "pre-init middleware ran first" {
+		t.Fatalf("Init 前中间件执行顺序错误，状态码=%d，响应=%q", recorder.Code, recorder.Body.String())
+	}
+}
+
 // TestControllerMiddlewareMissingAliasFailsClosed 验证控制器声明的保护中间件缺失时返回 500，而不是绕过保护继续执行动作。
 func TestControllerMiddlewareMissingAliasFailsClosed(t *testing.T) {
 	app := newControllerTestApp(t)
 	app.BindFactory("MwCtrl", reflect.TypeOf(mwTestController{}))
-	if _, err := app.Route.Get("/guarded", "MwCtrl@Guarded"); err != nil {
+	if _, err := mustHTTPRoute(t, app).Get("/guarded", "MwCtrl@Guarded"); err != nil {
 		t.Fatalf("注册路由失败: %v", err)
 	}
 

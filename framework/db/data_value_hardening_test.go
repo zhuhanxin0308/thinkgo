@@ -9,9 +9,9 @@ import (
 	"time"
 )
 
-// TestDatabaseCursorComparisonAcrossSupportedTypes 验证游标分页对数字、文本、二进制和时间
-// 使用稳定的严格顺序，并拒绝类型漂移、空值和非有限数字。
-func TestDatabaseCursorComparisonAcrossSupportedTypes(t *testing.T) {
+// TestDatabaseCursorComparisonAcrossStableDefaultTypes 验证默认游标只对整数和时间
+// 使用稳定的严格顺序，其余数据库类型必须显式声明排序 codec。
+func TestDatabaseCursorComparisonAcrossStableDefaultTypes(t *testing.T) {
 	now := time.Date(2026, 7, 11, 10, 0, 0, 0, time.UTC)
 	cases := []struct {
 		name       string
@@ -20,17 +20,12 @@ func TestDatabaseCursorComparisonAcrossSupportedTypes(t *testing.T) {
 		comparison int
 	}{
 		{name: "跨整数类型", left: int8(1), right: uint64(2), comparison: -1},
-		{name: "整数与小数相等", left: int64(2), right: float32(2), comparison: 0},
-		{name: "JSON 数字", left: json.Number("3.5"), right: float64(3), comparison: 1},
-		{name: "字符串", left: "alpha", right: "beta", comparison: -1},
-		{name: "字符串相等", left: "same", right: "same", comparison: 0},
-		{name: "二进制", left: []byte{1, 2}, right: []byte{1, 3}, comparison: -1},
 		{name: "时间", left: now, right: now.Add(time.Second), comparison: -1},
 		{name: "时间相等", left: now, right: now, comparison: 0},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			comparison, err := compareDatabaseCursor(testCase.left, testCase.right)
+			comparison, err := compareOrderedDatabaseCursor(testCase.left, testCase.right)
 			if err != nil || comparison != testCase.comparison {
 				t.Fatalf("游标比较错误: got=%d want=%d err=%v", comparison, testCase.comparison, err)
 			}
@@ -40,15 +35,49 @@ func TestDatabaseCursorComparisonAcrossSupportedTypes(t *testing.T) {
 	invalid := [][2]interface{}{
 		{nil, 1},
 		{1, "1"},
-		{"1", []byte("1")},
-		{[]byte("1"), "1"},
 		{now, now.Format(time.RFC3339)},
-		{struct{}{}, struct{}{}},
-		{math.NaN(), 1.0},
 	}
 	for index, values := range invalid {
-		if _, err := compareDatabaseCursor(values[0], values[1]); !errors.Is(err, ErrInvalidDatabaseRow) {
+		if _, err := compareOrderedDatabaseCursor(values[0], values[1]); !errors.Is(err, ErrInvalidDatabaseRow) {
 			t.Fatalf("第 %d 个非法游标应返回 ErrInvalidDatabaseRow，实际为 %v", index, err)
+		}
+	}
+}
+
+// TestDatabaseCursorComparisonKeepsSignedUnsignedOrdering 验证有符号与无符号整数跨类型比较时不发生溢出。
+func TestDatabaseCursorComparisonKeepsSignedUnsignedOrdering(t *testing.T) {
+	cases := []struct {
+		name       string
+		left       interface{}
+		right      interface{}
+		comparison int
+	}{
+		{name: "negative signed before unsigned", left: int64(-1), right: uint64(0), comparison: -1},
+		{name: "max signed equals same unsigned", left: int64(math.MaxInt64), right: uint64(math.MaxInt64), comparison: 0},
+		{name: "max signed before larger unsigned", left: int64(math.MaxInt64), right: uint64(math.MaxInt64) + 1, comparison: -1},
+		{name: "max unsigned after max signed", left: uint64(math.MaxUint64), right: int64(math.MaxInt64), comparison: 1},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			comparison, err := compareOrderedDatabaseCursor(testCase.left, testCase.right)
+			if err != nil || comparison != testCase.comparison {
+				t.Fatalf("有符号/无符号游标比较错误: got=%d want=%d err=%v", comparison, testCase.comparison, err)
+			}
+		})
+	}
+}
+
+func TestOrderedCursorCodecSupportsOnlyStableDefaultTypes(t *testing.T) {
+	codec := OrderedCursorCodec{}
+	now := time.Date(2026, 7, 11, 10, 0, 0, 0, time.UTC)
+	for _, values := range [][2]interface{}{{int8(1), uint64(2)}, {now, now.Add(time.Second)}} {
+		if comparison, err := codec.Compare(values[0], values[1]); err != nil || comparison >= 0 {
+			t.Fatalf("stable cursor types must compare in ascending order: comparison=%d err=%v", comparison, err)
+		}
+	}
+	for _, values := range [][2]interface{}{{"a", "b"}, {[]byte("a"), []byte("b")}, {float64(1), float64(2)}} {
+		if _, err := codec.Compare(values[0], values[1]); !errors.Is(err, ErrUnsupportedCursorKey) {
+			t.Fatalf("cursor type %T must require an explicit codec: %v", values[0], err)
 		}
 	}
 }
@@ -199,5 +228,49 @@ func TestRelationValueKeyRejectsNonFiniteFloats(t *testing.T) {
 		if _, _, err := relationValueKey(value); !errors.Is(err, ErrInvalidRelation) {
 			t.Fatalf("非有限关联键 %T(%v) 应返回 ErrInvalidRelation，实际为 %v", value, value, err)
 		}
+	}
+}
+
+// TestRelationValueKeyPreservesBuiltinRepresentation 验证关系键优化不会改变类型前缀和值编码。
+func TestRelationValueKeyPreservesBuiltinRepresentation(t *testing.T) {
+	timestamp := time.Date(2026, 7, 28, 12, 30, 0, 123000000, time.UTC)
+	cases := []struct {
+		name  string
+		value interface{}
+		want  string
+	}{
+		{name: "string", value: "1", want: "string:1"},
+		{name: "bool", value: true, want: "bool:true"},
+		{name: "int", value: int(-7), want: "int:-7"},
+		{name: "int64", value: int64(7), want: "int64:7"},
+		{name: "uint64", value: uint64(9), want: "uint64:9"},
+		{name: "float32", value: float32(1.25), want: "float32:1.25"},
+		{name: "float64", value: float64(2.5), want: "float64:2.5"},
+		{name: "bytes", value: []byte{0xff}, want: "[]byte:/w"},
+		{name: "time", value: timestamp, want: "time.Time:2026-07-28T12:30:00.123Z"},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			key, usable, err := relationValueKey(testCase.value)
+			if err != nil || !usable || key != testCase.want {
+				t.Fatalf("关系键编码错误: key=%q usable=%t err=%v want=%q", key, usable, err, testCase.want)
+			}
+		})
+	}
+}
+
+// TestRelationComparableKeyPreservesTypeIdentity 验证内部关联键不会混淆不同数据库类型。
+func TestRelationComparableKeyPreservesTypeIdentity(t *testing.T) {
+	integer, usable, err := relationComparableValueKey(int64(1))
+	if err != nil || !usable {
+		t.Fatalf("整数关联键构造失败: key=%#v usable=%t err=%v", integer, usable, err)
+	}
+	sameInteger, _, err := relationComparableValueKey(int64(1))
+	if err != nil || integer != sameInteger {
+		t.Fatalf("相同类型关联键不相等: left=%#v right=%#v err=%v", integer, sameInteger, err)
+	}
+	text, usable, err := relationComparableValueKey("1")
+	if err != nil || !usable || integer == text {
+		t.Fatalf("不同类型关联键未隔离: integer=%#v text=%#v usable=%t err=%v", integer, text, usable, err)
 	}
 }

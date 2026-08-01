@@ -1,8 +1,10 @@
 package env
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -189,6 +191,52 @@ func TestLoadValidFileCommitsAllValues(t *testing.T) {
 		if !ok || got != want {
 			t.Fatalf("环境变量 %s 加载错误，want=%q got=%q ok=%v", key, want, got, ok)
 		}
+	}
+}
+
+// TestLoadRejectsDuplicateCaseInsensitiveKeys 验证不同大小写的重复环境键不会静默覆盖。
+func TestLoadRejectsDuplicateCaseInsensitiveKeys(t *testing.T) {
+	file := filepath.Join(t.TempDir(), ".env")
+	if err := os.WriteFile(file, []byte("APP_MODE=first\napp_mode=second\n"), 0o600); err != nil {
+		t.Fatalf("写入重复环境键失败: %v", err)
+	}
+	e := NewEnv()
+	if err := e.Load(file); !errors.Is(err, ErrEnvDuplicateKey) {
+		t.Fatalf("重复环境键应返回 ErrEnvDuplicateKey，实际为 %v", err)
+	}
+	if _, ok := e.Lookup("APP_MODE"); ok {
+		t.Fatal("重复环境键加载失败后不应提交部分数据")
+	}
+}
+
+// TestLoadRejectsOversizedFile 验证环境文件超过总字节限制时不会进入解析流程。
+func TestLoadRejectsOversizedFile(t *testing.T) {
+	file := filepath.Join(t.TempDir(), ".env")
+	content := strings.Repeat("A", int(maxEnvFileBytes)+1)
+	if err := os.WriteFile(file, []byte(content), 0o600); err != nil {
+		t.Fatalf("写入超大环境文件失败: %v", err)
+	}
+	if err := NewEnv().Load(file); !errors.Is(err, ErrEnvFileTooLarge) {
+		t.Fatalf("超大环境文件应返回 ErrEnvFileTooLarge，实际为 %v", err)
+	}
+}
+
+// TestLoadRejectsSymlink 验证环境文件符号链接不会被跟随读取。
+func TestLoadRejectsSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.env")
+	link := filepath.Join(dir, ".env")
+	if err := os.WriteFile(target, []byte("SECRET=value\n"), 0o600); err != nil {
+		t.Fatalf("写入符号链接目标失败: %v", err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		if runtime.GOOS == "windows" {
+			t.Skipf("当前 Windows 环境不允许创建符号链接: %v", err)
+		}
+		t.Fatalf("创建环境文件符号链接失败: %v", err)
+	}
+	if err := NewEnv().Load(link); !errors.Is(err, ErrEnvSymlinkNotAllowed) {
+		t.Fatalf("环境文件符号链接应返回 ErrEnvSymlinkNotAllowed，实际为 %v", err)
 	}
 }
 

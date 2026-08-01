@@ -1,6 +1,7 @@
 package framework
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -13,29 +14,35 @@ import (
 
 type appFakeManagerConnector struct{}
 
-type appFakeManagerConnection struct{}
-
-func (c *appFakeManagerConnector) Connect(config db.Config) (db.Connection, error) {
-	return &appFakeManagerConnection{}, nil
+type appFakeManagerConnection struct {
+	identity db.ConnectionID
 }
 
-func (c *appFakeManagerConnection) Select(table string, fields string, where []string, args []interface{}, order string, limit int, offset int) ([]map[string]interface{}, error) {
+func (c *appFakeManagerConnector) Connect(config db.Config) (db.Connection, error) {
+	return &appFakeManagerConnection{identity: db.NewConnectionID("app-manager-test")}, nil
+}
+
+func (c *appFakeManagerConnection) ConnectionID() db.ConnectionID {
+	return c.identity
+}
+
+func (c *appFakeManagerConnection) Select(context.Context, db.SelectRequest) ([]map[string]interface{}, error) {
 	return nil, nil
 }
 
-func (c *appFakeManagerConnection) Insert(table string, data map[string]interface{}) (int64, error) {
-	return 0, nil
+func (c *appFakeManagerConnection) Insert(context.Context, db.InsertRequest) (db.InsertResult, error) {
+	return db.InsertResult{}, nil
 }
 
-func (c *appFakeManagerConnection) Update(table string, data map[string]interface{}, where []string, args []interface{}) (int64, error) {
-	return 0, nil
+func (c *appFakeManagerConnection) Update(context.Context, db.UpdateRequest) (db.UpdateResult, error) {
+	return db.UpdateResult{}, nil
 }
 
-func (c *appFakeManagerConnection) Delete(table string, where []string, args []interface{}) (int64, error) {
-	return 0, nil
+func (c *appFakeManagerConnection) Delete(context.Context, db.DeleteRequest) (db.DeleteResult, error) {
+	return db.DeleteResult{}, nil
 }
 
-func (c *appFakeManagerConnection) Count(table string, where []string, args []interface{}) (int64, error) {
+func (c *appFakeManagerConnection) Count(context.Context, db.CountRequest) (int64, error) {
 	return 0, nil
 }
 
@@ -50,10 +57,8 @@ func TestAppInitializesMultiDatabaseManager(t *testing.T) {
 	}
 
 	baseDir := t.TempDir()
+	writeTestAppConfigFiles(t, baseDir)
 	configDir := filepath.Join(baseDir, "config")
-	if err := os.MkdirAll(configDir, 0o755); err != nil {
-		t.Fatalf("创建配置目录失败，错误为 %v", err)
-	}
 
 	databaseConfig := map[string]interface{}{
 		"default": "primary",
@@ -76,14 +81,15 @@ func TestAppInitializesMultiDatabaseManager(t *testing.T) {
 		t.Fatalf("写入数据库配置失败，错误为 %v", err)
 	}
 
-	app := NewApp(baseDir)
-	if app.DB == nil {
+	app := mustBuildTestApp(t, baseDir)
+	t.Cleanup(func() { _ = app.Close() })
+	if app.db == nil {
 		t.Fatal("默认数据库连接应初始化成功")
 	}
-	if app.DBManager == nil {
+	if app.dbManager == nil {
 		t.Fatal("多数据库管理器应初始化成功")
 	}
-	connection, err := app.DBManager.Connection("analytics")
+	connection, err := app.dbManager.Connection("analytics")
 	if err != nil {
 		t.Fatalf("analytics 连接应可读取，错误为 %v", err)
 	}

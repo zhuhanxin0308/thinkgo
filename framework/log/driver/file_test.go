@@ -1,6 +1,7 @@
 package driver
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -466,5 +467,38 @@ func TestNewFileWithOptionsReportsDirectoryConflict(t *testing.T) {
 	}
 	if _, err := NewFileWithOptions(path, FileOptions{}); err == nil {
 		t.Fatal("日志目录被文件占用时应返回错误")
+	}
+}
+
+// TestFileRejectsPreexistingSymlink 防止日志文件路径通过预先存在的符号链接越界写入。
+func TestFileRejectsPreexistingSymlink(t *testing.T) {
+	directory := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.log")
+	if err := os.WriteFile(outside, nil, 0o600); err != nil {
+		t.Fatalf("创建目标日志文件失败: %v", err)
+	}
+	link := filepath.Join(directory, time.Now().Format("2006-01-02")+".log")
+	if err := os.Symlink(outside, link); err != nil {
+		if runtime.GOOS == "windows" {
+			t.Skipf("当前 Windows 环境不允许创建符号链接: %v", err)
+		}
+		t.Fatalf("创建符号链接失败: %v", err)
+	}
+	driver, err := NewFileWithOptions(directory, FileOptions{})
+	if err != nil {
+		t.Fatalf("创建文件日志驱动失败: %v", err)
+	}
+	t.Cleanup(func() { _ = driver.Close() })
+
+	err = driver.WriteEntry(&log.LogEntry{Time: time.Now(), Level: "info", Message: "must not follow link"})
+	if !errors.Is(err, errUnsafeLogFilePath) {
+		t.Fatalf("预先存在的符号链接必须被拒绝，实际错误: %v", err)
+	}
+	content, readErr := os.ReadFile(outside)
+	if readErr != nil {
+		t.Fatalf("读取目标日志文件失败: %v", readErr)
+	}
+	if len(content) != 0 {
+		t.Fatalf("拒绝符号链接后不应写入目标文件，实际大小: %d", len(content))
 	}
 }

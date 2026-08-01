@@ -18,12 +18,22 @@ import (
 )
 
 const (
-	fileSessionLockWait       = 5 * time.Second
-	fileSessionLockLifetime   = 30 * time.Second
-	fileSessionLockRetry      = 10 * time.Millisecond
-	fileSessionCorruptLockAge = time.Minute
-	fileSessionTempMaxAge     = time.Hour
-	maxFileSessionLockBytes   = 1024
+	// 锁等待上限覆盖 Windows 高竞争下的文件删除/重建窗口，避免正常排队被误判为失效。
+	fileSessionLockWait        = 15 * time.Second
+	fileSessionLockLifetime    = 30 * time.Second
+	fileSessionLockRetry       = 10 * time.Millisecond
+	fileSessionLockRetrySlots  = 32
+	fileSessionLockRetryMix    = uint32(0x9e3779b9)
+	fileSessionLockRetryMixA   = uint32(0x21f0aaad)
+	fileSessionLockRetryMixB   = uint32(0x735a2d97)
+	fileSessionLockRetryShiftA = 16
+	fileSessionLockRetryShiftB = 15
+	fileSessionLockRetryShiftC = 15
+	fileSessionLockFNVOffset   = uint32(2166136261)
+	fileSessionLockFNVPrime    = uint32(16777619)
+	fileSessionCorruptLockAge  = time.Minute
+	fileSessionTempMaxAge      = time.Hour
+	maxFileSessionLockBytes    = 1024
 )
 
 // File 是采用哈希受管路径、原子替换和跨进程锁的文件 Session 驱动。
@@ -288,6 +298,14 @@ func (f *File) validateExistingTarget(path string) error {
 }
 
 func (f *File) readManagedFile(path string, limit int64) ([]byte, os.FileInfo, bool, error) {
+	return readManagedFileWithOpen(path, limit, os.Open)
+}
+
+func readManagedLockFile(path string, limit int64) ([]byte, os.FileInfo, bool, error) {
+	return readManagedFileWithOpen(path, limit, openLockFile)
+}
+
+func readManagedFileWithOpen(path string, limit int64, open func(string) (*os.File, error)) ([]byte, os.FileInfo, bool, error) {
 	linkInfo, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil, false, nil
@@ -298,16 +316,25 @@ func (f *File) readManagedFile(path string, limit int64) ([]byte, os.FileInfo, b
 	if linkInfo.Mode()&os.ModeSymlink != 0 || !linkInfo.Mode().IsRegular() {
 		return nil, linkInfo, false, ErrUnsafeSessionFile
 	}
-	handle, err := os.Open(path)
+	handle, err := open(path)
 	if err != nil {
 		return nil, linkInfo, false, err
 	}
 	openedInfo, statErr := handle.Stat()
 	currentInfo, verifyErr := os.Lstat(path)
-	if statErr != nil || verifyErr != nil || !openedInfo.Mode().IsRegular() ||
-		currentInfo.Mode()&os.ModeSymlink != 0 || !os.SameFile(openedInfo, currentInfo) {
+	if verifyErr == nil && currentInfo != nil &&
+		(currentInfo.Mode()&os.ModeSymlink != 0 || !currentInfo.Mode().IsRegular()) {
+		_ = handle.Close()
+		return nil, currentInfo, false, ErrUnsafeSessionFile
+	}
+	if statErr != nil || verifyErr != nil || openedInfo == nil || currentInfo == nil ||
+		!openedInfo.Mode().IsRegular() {
 		_ = handle.Close()
 		return nil, openedInfo, false, errors.Join(ErrUnsafeSessionFile, statErr, verifyErr)
+	}
+	if !os.SameFile(openedInfo, currentInfo) {
+		_ = handle.Close()
+		return nil, currentInfo, false, ErrUnsafeSessionFile
 	}
 	if openedInfo.Size() < 0 || openedInfo.Size() > limit {
 		_ = handle.Close()
@@ -376,49 +403,91 @@ func (f *File) withCrossProcessLock(id string, operation func() error) (result e
 func (f *File) acquireCrossProcessLock(id, owner string) (os.FileInfo, error) {
 	path := f.lockFilePath(id)
 	deadline := time.Now().Add(fileSessionLockWait)
+	retrySeed := fileSessionLockRetrySeed(owner)
+	retryAttempt := uint32(0)
+	deadlineGraceUsed := false
+	var accessDeniedErr error
 	for {
 		now := time.Now()
-		handle, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		handle, err := createLockFile(path)
 		if err == nil {
-			payload, marshalErr := json.Marshal(fileSessionLock{
-				Owner: owner, ExpireAt: now.Add(fileSessionLockLifetime).UnixNano(),
-			})
-			writeErr := restrictSessionPath(path, false)
-			if marshalErr == nil && writeErr == nil {
-				writeErr = writeSessionData(handle, payload)
-			}
-			if writeErr == nil {
-				writeErr = handle.Sync()
-			}
-			closeErr := handle.Close()
-			if combined := errors.Join(marshalErr, writeErr, closeErr); combined != nil {
-				_ = os.Remove(path)
-				return nil, combined
-			}
-			info, statErr := os.Lstat(path)
-			return info, statErr
+			return initializeCreatedLockFile(path, owner, handle, now, writeSessionData)
 		}
 		if !errors.Is(err, os.ErrExist) {
-			return nil, err
+			if isLockFileAccessDenied(err) {
+				accessDeniedErr = err
+				observed, observeErr := os.Lstat(path)
+				if observeErr == nil {
+					if observed.Mode()&os.ModeSymlink != 0 || !observed.Mode().IsRegular() {
+						return nil, ErrUnsafeSessionFile
+					}
+					err = os.ErrExist
+				} else if errors.Is(observeErr, os.ErrNotExist) || isLockFileAccessDenied(observeErr) {
+					if deadlineErr := fileSessionLockDeadlineError(now, deadline, accessDeniedErr); deadlineErr != nil {
+						if fileSessionLockCanRetryMissingAtDeadline(now, deadline, errors.Is(observeErr, os.ErrNotExist), &deadlineGraceUsed) {
+							continue
+						}
+						return nil, deadlineErr
+					}
+					time.Sleep(fileSessionLockRetryDelay(retrySeed, retryAttempt))
+					retryAttempt++
+					continue
+				} else {
+					return nil, err
+				}
+			} else if isLockFileCreateTransient(err) {
+				if deadlineErr := fileSessionLockDeadlineError(now, deadline, accessDeniedErr); deadlineErr != nil {
+					return nil, deadlineErr
+				}
+				time.Sleep(fileSessionLockRetryDelay(retrySeed, retryAttempt))
+				retryAttempt++
+				continue
+			}
+			if !errors.Is(err, os.ErrExist) {
+				return nil, err
+			}
 		}
 
-		data, info, found, readErr := f.readManagedFile(path, maxFileSessionLockBytes)
+		data, info, found, readErr := readManagedLockFile(path, maxFileSessionLockBytes)
+		accessDeniedErr = fileSessionLockAccessDeniedAfterRead(accessDeniedErr, found, readErr)
 		if readErr != nil || !found {
+			if isLockFileAccessDenied(readErr) {
+				if info != nil && (info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular()) {
+					return nil, errors.Join(ErrUnsafeSessionFile, readErr)
+				}
+				if deadlineErr := fileSessionLockDeadlineError(now, deadline, accessDeniedErr); deadlineErr != nil {
+					return nil, deadlineErr
+				}
+				time.Sleep(fileSessionLockRetryDelay(retrySeed, retryAttempt))
+				retryAttempt++
+				continue
+			}
 			if info != nil && now.Sub(info.ModTime()) >= fileSessionCorruptLockAge {
-				removed, removeErr := removeSessionFileIfSame(path, info)
+				removed, removeErr := removeOwnedLockFile(path, "", info)
 				if removeErr != nil {
 					return nil, removeErr
 				}
 				if removed {
 					continue
 				}
+			}
+			if lockObservationMayBeTransient(info, found, readErr) {
+				if deadlineErr := fileSessionLockDeadlineError(now, deadline, accessDeniedErr); deadlineErr != nil {
+					if fileSessionLockCanRetryMissingAtDeadline(now, deadline, !found && (readErr == nil || errors.Is(readErr, os.ErrNotExist)), &deadlineGraceUsed) {
+						continue
+					}
+					return nil, deadlineErr
+				}
+				time.Sleep(fileSessionLockRetryDelay(retrySeed, retryAttempt))
+				retryAttempt++
+				continue
 			}
 			return nil, errors.Join(ErrUnsafeSessionFile, readErr)
 		}
 		var payload fileSessionLock
 		if unmarshalErr := json.Unmarshal(data, &payload); unmarshalErr != nil || payload.Owner == "" || payload.ExpireAt <= 0 {
 			if now.Sub(info.ModTime()) >= fileSessionCorruptLockAge {
-				removed, removeErr := removeSessionFileIfSame(path, info)
+				removed, removeErr := removeOwnedLockFile(path, "", info)
 				if removeErr != nil {
 					return nil, removeErr
 				}
@@ -426,10 +495,18 @@ func (f *File) acquireCrossProcessLock(id, owner string) (os.FileInfo, error) {
 					continue
 				}
 			}
+			if lockPayloadMayBeIncomplete(data, unmarshalErr) {
+				if deadlineErr := fileSessionLockDeadlineError(now, deadline, accessDeniedErr); deadlineErr != nil {
+					return nil, deadlineErr
+				}
+				time.Sleep(fileSessionLockRetryDelay(retrySeed, retryAttempt))
+				retryAttempt++
+				continue
+			}
 			return nil, fmt.Errorf("%w: 锁载荷损坏", ErrUnsafeSessionFile)
 		}
 		if payload.ExpireAt <= now.UnixNano() {
-			removed, removeErr := removeSessionFileIfSame(path, info)
+			removed, removeErr := removeOwnedLockFile(path, payload.Owner, info)
 			if removeErr != nil {
 				return nil, removeErr
 			}
@@ -437,31 +514,151 @@ func (f *File) acquireCrossProcessLock(id, owner string) (os.FileInfo, error) {
 				continue
 			}
 		}
-		if !now.Before(deadline) {
-			return nil, ErrSessionLockTimeout
+		if deadlineErr := fileSessionLockDeadlineError(now, deadline, accessDeniedErr); deadlineErr != nil {
+			return nil, deadlineErr
 		}
-		time.Sleep(fileSessionLockRetry)
+		time.Sleep(fileSessionLockRetryDelay(retrySeed, retryAttempt))
+		retryAttempt++
 	}
+}
+
+// fileSessionLockCanRetryMissingAtDeadline 仅为已确认锁文件缺失的瞬态提供一次截止宽限获取机会。
+// 这不会延长有效锁、权限错误或损坏载荷的等待时间，也不会形成无界重试。
+func fileSessionLockCanRetryMissingAtDeadline(now, deadline time.Time, missing bool, used *bool) bool {
+	if !missing || now.Before(deadline) || used == nil || *used {
+		return false
+	}
+	*used = true
+	return true
+}
+
+// initializeCreatedLockFile 立即绑定创建句柄身份，并仅在身份与 owner 复核成功后返回锁。
+func initializeCreatedLockFile(
+	path, owner string,
+	handle *os.File,
+	now time.Time,
+	write func(io.Writer, []byte) error,
+) (os.FileInfo, error) {
+	createdInfo, statErr := handle.Stat()
+	if statErr != nil {
+		return nil, errors.Join(statErr, discardUnidentifiedCreatedLockFile(path, handle))
+	}
+	payload, marshalErr := json.Marshal(fileSessionLock{
+		Owner: owner, ExpireAt: now.Add(fileSessionLockLifetime).UnixNano(),
+	})
+	writeErr := restrictSessionPath(path, false)
+	if marshalErr == nil && writeErr == nil {
+		writeErr = write(handle, payload)
+	}
+	if writeErr == nil {
+		writeErr = handle.Sync()
+	}
+	closeErr := handle.Close()
+	if combined := errors.Join(marshalErr, writeErr, closeErr); combined != nil {
+		_, cleanupErr := removeOwnedLockFile(path, "", createdInfo)
+		return nil, errors.Join(combined, cleanupErr)
+	}
+	owned, verifyErr := lockFileMatchesOwner(path, owner, createdInfo)
+	if verifyErr != nil {
+		_, cleanupErr := removeOwnedLockFile(path, "", createdInfo)
+		return nil, errors.Join(verifyErr, cleanupErr)
+	}
+	if !owned {
+		_, cleanupErr := removeOwnedLockFile(path, "", createdInfo)
+		return nil, errors.Join(ErrUnsafeSessionFile, cleanupErr)
+	}
+	return createdInfo, nil
+}
+
+// fileSessionLockRetrySeed 为单次获取预计算 owner 的 FNV-1a 种子。
+func fileSessionLockRetrySeed(owner string) uint32 {
+	seed := fileSessionLockFNVOffset
+	for index := 0; index < len(owner); index++ {
+		seed ^= uint32(owner[index])
+		seed *= fileSessionLockFNVPrime
+	}
+	return seed
+}
+
+// fileSessionLockRetryDelay 使用 SplitMix 风格的 avalanche 混合生成有界偏移，
+// 让初始槽相同的等待者也能在后续重试中快速分离，避免高竞争下饥饿。
+func fileSessionLockRetryDelay(seed, attempt uint32) time.Duration {
+	mixed := seed + attempt*fileSessionLockRetryMix
+	mixed = (mixed ^ (mixed >> fileSessionLockRetryShiftA)) * fileSessionLockRetryMixA
+	mixed = (mixed ^ (mixed >> fileSessionLockRetryShiftB)) * fileSessionLockRetryMixB
+	mixed ^= mixed >> fileSessionLockRetryShiftC
+	slot := mixed % fileSessionLockRetrySlots
+	return fileSessionLockRetry + time.Duration(slot)*time.Millisecond
+}
+
+// fileSessionLockAccessDeniedAfterRead 在稳定读取到锁后清除已过期的拒绝访问错误。
+func fileSessionLockAccessDeniedAfterRead(previous error, found bool, readErr error) error {
+	if found && readErr == nil {
+		return nil
+	}
+	if isLockFileAccessDenied(readErr) {
+		return readErr
+	}
+	return previous
+}
+
+// fileSessionLockDeadlineError 在获取截止后保留最近的拒绝访问路径错误，其他情况返回锁超时。
+func fileSessionLockDeadlineError(now, deadline time.Time, accessDeniedErr error) error {
+	if now.Before(deadline) {
+		return nil
+	}
+	if accessDeniedErr != nil {
+		return accessDeniedErr
+	}
+	return ErrSessionLockTimeout
+}
+
+func lockObservationMayBeTransient(info os.FileInfo, found bool, err error) bool {
+	if !found && err == nil {
+		return true
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return true
+	}
+	if isLockFileReadTransient(err) {
+		return true
+	}
+	return info != nil && info.Mode().IsRegular() && errors.Is(err, ErrUnsafeSessionFile)
+}
+
+func lockPayloadMayBeIncomplete(data []byte, err error) bool {
+	var syntaxErr *json.SyntaxError
+	return errors.As(err, &syntaxErr) && syntaxErr.Offset >= int64(len(data))
 }
 
 func (f *File) releaseCrossProcessLock(id, owner string, expected os.FileInfo) error {
 	path := f.lockFilePath(id)
-	data, current, found, err := f.readManagedFile(path, maxFileSessionLockBytes)
-	if err != nil || !found {
-		return err
+	_, err := removeOwnedLockFile(path, owner, expected)
+	return err
+}
+
+func lockFileMatchesOwner(path, owner string, expected os.FileInfo) (bool, error) {
+	data, current, found, err := readManagedLockFile(path, maxFileSessionLockBytes)
+	if expected != nil && current != nil && !os.SameFile(expected, current) {
+		return false, nil
 	}
-	if expected == nil || !os.SameFile(expected, current) {
-		return nil
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil || !found {
+		return false, err
+	}
+	if expected == nil {
+		return false, nil
+	}
+	if owner == "" {
+		return true, nil
 	}
 	var payload fileSessionLock
 	if err = json.Unmarshal(data, &payload); err != nil {
-		return err
+		return false, err
 	}
-	if payload.Owner != owner {
-		return nil
-	}
-	_, err = removeSessionFileIfSame(path, current)
-	return err
+	return payload.Owner == owner, nil
 }
 
 func newSessionLockOwner() (string, error) {
@@ -495,23 +692,6 @@ func writeSessionData(writer io.Writer, data []byte) error {
 		return io.ErrShortWrite
 	}
 	return err
-}
-
-func removeSessionFileIfSame(path string, expected os.FileInfo) (bool, error) {
-	current, err := os.Lstat(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	if expected == nil || !os.SameFile(expected, current) {
-		return false, nil
-	}
-	if err = os.Remove(path); err != nil {
-		return false, err
-	}
-	return true, nil
 }
 
 func ignoreSessionNotExist(err error) error {

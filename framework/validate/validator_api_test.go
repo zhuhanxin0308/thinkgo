@@ -194,6 +194,77 @@ func TestValidatorPlanCacheInvalidatesOnConfigurationChanges(t *testing.T) {
 	}
 }
 
+// TestValidatorsShareImmutableCompiledPlans 验证不同请求创建的验证器可以复用同一不可变计划。
+func TestValidatorsShareImmutableCompiledPlans(t *testing.T) {
+	processValidationPlanCache.clear()
+	t.Cleanup(processValidationPlanCache.clear)
+	rules := map[string]string{"email|邮箱": "required|email", "name|姓名": "required"}
+	for index := 0; index < 2; index++ {
+		validator := NewValidator().SetRules(rules)
+		result, err := validator.Validate(map[string]interface{}{"email": "valid@example.com", "name": "Ada"})
+		if err != nil || !result.Valid() {
+			t.Fatalf("共享计划验证失败: result=%#v err=%v", result, err)
+		}
+	}
+	if size := processValidationPlanCache.size(); size != 1 {
+		t.Fatalf("相同规则应只生成一个共享计划，实际为 %d", size)
+	}
+}
+
+// TestSharedValidationPlanCacheIsBounded 验证动态规则不会无限增长进程级缓存。
+func TestSharedValidationPlanCacheIsBounded(t *testing.T) {
+	processValidationPlanCache.clear()
+	t.Cleanup(processValidationPlanCache.clear)
+	for index := 0; index < maxSharedValidationPlans+32; index++ {
+		field := fmt.Sprintf("field_%d", index)
+		validator := NewValidator().SetRules(map[string]string{field: "required"})
+		if _, err := validator.Validate(map[string]interface{}{field: "value"}); err != nil {
+			t.Fatalf("动态规则验证失败: field=%s err=%v", field, err)
+		}
+	}
+	if size := processValidationPlanCache.size(); size != maxSharedValidationPlans {
+		t.Fatalf("共享计划缓存必须保持有界，实际为 %d，上限为 %d", size, maxSharedValidationPlans)
+	}
+}
+
+// TestValidateRulesReusesImmutableValidator 验证便捷规则 API 复用快照且规则变化不会串用旧配置。
+func TestValidateRulesReusesImmutableValidator(t *testing.T) {
+	processValidatorCache.clear()
+	t.Cleanup(processValidatorCache.clear)
+	rules := map[string]string{"name": "required"}
+	result, err := ValidateRules(map[string]interface{}{"name": "Ada"}, rules)
+	if err != nil || !result.Valid() {
+		t.Fatalf("首次便捷验证失败: result=%#v err=%v", result, err)
+	}
+	result, err = ValidateRules(map[string]interface{}{}, rules)
+	if err != nil || result.Valid() {
+		t.Fatalf("共享验证器应保留规则语义: result=%#v err=%v", result, err)
+	}
+	rules["name"] = "email"
+	result, err = ValidateRules(map[string]interface{}{"name": "invalid"}, rules)
+	if err != nil || result.Valid() {
+		t.Fatalf("规则快照变更后不应命中旧验证器: result=%#v err=%v", result, err)
+	}
+	if size := processValidatorCache.size(); size != 2 {
+		t.Fatalf("两组规则应对应两个共享验证器，实际为 %d", size)
+	}
+}
+
+// TestSharedValidatorCacheIsBounded 验证便捷 API 的动态规则缓存保持固定上限。
+func TestSharedValidatorCacheIsBounded(t *testing.T) {
+	processValidatorCache.clear()
+	t.Cleanup(processValidatorCache.clear)
+	for index := 0; index < maxSharedValidationPlans+32; index++ {
+		field := fmt.Sprintf("field_%d", index)
+		if _, err := ValidateRules(map[string]interface{}{field: "value"}, map[string]string{field: "required"}); err != nil {
+			t.Fatalf("动态便捷验证失败: field=%s err=%v", field, err)
+		}
+	}
+	if size := processValidatorCache.size(); size != maxSharedValidationPlans {
+		t.Fatalf("共享验证器缓存必须保持有界，实际为 %d，上限为 %d", size, maxSharedValidationPlans)
+	}
+}
+
 // TestWithSceneOptionCanBeReusedConcurrently 验证同一个 Option 不含可变闭包状态。
 func TestWithSceneOptionCanBeReusedConcurrently(t *testing.T) {
 	validator := NewValidator().

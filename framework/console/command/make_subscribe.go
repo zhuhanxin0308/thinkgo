@@ -2,7 +2,6 @@ package command
 
 import (
 	"fmt"
-	"path/filepath"
 
 	"thinkgo/framework/console"
 )
@@ -17,11 +16,12 @@ func (c *MakeSubscribe) Configure() {
 	c.Signature = "make:subscribe"
 	c.Description = "Create a new subscriber class"
 	c.AddArgument("name", "Subscriber type name", true)
+	configureApplicationOption(&c.Command)
 }
 
 // Execute 校验名称后安全创建订阅者文件。
 func (c *MakeSubscribe) Execute(input *console.Input, output *console.Output) error {
-	name, err := normalizedGeneratorInput(c.App, input, output, "")
+	name, err := normalizedGeneratorInput(&c.Command, input, output, "")
 	if err != nil {
 		return fmt.Errorf("invalid subscriber name: %w", err)
 	}
@@ -56,8 +56,8 @@ func (s *%s) Handle(currentEvent event.Event) error {
 }
 `, name, name, name, name)
 
-	if err := writeGeneratedAppSource(c.App, filepath.Join("app", "subscribe"), lowerGoFilename(name), []byte(content)); err != nil {
-		return fmt.Errorf("create subscriber %s: %w", name, err)
+	if err := writeAndRegisterGeneratedAppSource(c.App, "subscribe", lowerGoFilename(name), []byte(content), applicationRegistrationSubscriber, name); err != nil {
+		return fmt.Errorf("create and register subscriber %s: %w", name, err)
 	}
 
 	output.Success(fmt.Sprintf("Subscriber %s created successfully.", name))

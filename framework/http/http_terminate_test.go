@@ -16,7 +16,7 @@ func TestServeHTTPRunsTerminatorsAfterResponse(t *testing.T) {
 	app := newTestHTTPApp(t, t.TempDir(), map[string]interface{}{"enable": false})
 	order := make([]string, 0, 5)
 
-	app.Middleware.PipeLifecycle(
+	mustHTTPMiddleware(t, app).PipeLifecycle(
 		func(req *fwcontext.Request, next func(*fwcontext.Request) *fwcontext.Response) *fwcontext.Response {
 			order = append(order, "handle:global")
 			return next(req)
@@ -38,7 +38,7 @@ func TestServeHTTPRunsTerminatorsAfterResponse(t *testing.T) {
 		},
 	)
 
-	app.Route.Get("/terminate", func(req *fwcontext.Request) *fwcontext.Response {
+	mustHTTPRoute(t, app).Get("/terminate", func(req *fwcontext.Request) *fwcontext.Response {
 		order = append(order, "dispatch")
 		return fwcontext.NewResponse().Content("ok")
 	}, routeMiddleware)

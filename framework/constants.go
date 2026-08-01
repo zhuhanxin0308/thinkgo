@@ -1,6 +1,9 @@
 package framework
 
-import frameworkVersion "thinkgo/framework/version"
+import (
+	"thinkgo/framework/debug"
+	frameworkVersion "thinkgo/framework/version"
+)
 
 const (
 	// Version 是供应用代码读取的当前框架语义版本号。
@@ -63,8 +66,8 @@ const (
 const (
 	// LangRequestKey 语言上下文键
 	LangRequestKey = "_lang"
-	// DebugRequestKey 调试实例上下文键
-	DebugRequestKey = "_debug"
+	// DebugRequestKey 是 debug.RequestKey 的兼容别名。
+	DebugRequestKey = debug.RequestKey
 	// SessionRequestKey 会话实例上下文键
 	SessionRequestKey = "_session"
 )

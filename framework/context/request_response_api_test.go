@@ -59,6 +59,19 @@ func TestRequestTypedAccessorsAndBatchGetters(t *testing.T) {
 	}
 }
 
+// TestRequestRouteParametersUseIsolatedNamespace 验证路由参数不会覆盖中间件使用的内部透传数据。
+func TestRequestRouteParametersUseIsolatedNamespace(t *testing.T) {
+	req := newRequestForTest(t, httptest.NewRequest(http.MethodGet, "/users/18", nil))
+	req.Set("_session", "trusted-session")
+	req.SetRoute("_session", "route-value")
+	if req.GetData("_session") != "trusted-session" {
+		t.Fatal("路由参数不应覆盖内部透传数据")
+	}
+	if req.Route("_session") != "route-value" || req.Param("_session") != "route-value" {
+		t.Fatal("路由参数应在 Route/Param 中保持最高优先级")
+	}
+}
+
 // TestRequestParamPrefersBodyOverQuery 验证状态变更请求中 body 参数优先于 URL query，避免查询串覆盖提交内容。
 func TestRequestParamPrefersBodyOverQuery(t *testing.T) {
 	body := `{"role":"user"}`
@@ -542,6 +555,22 @@ func TestResponseMetadataAPIs(t *testing.T) {
 	redirect := NewResponse().Redirect("/next", http.StatusTemporaryRedirect)
 	if redirect.GetStatus() != http.StatusTemporaryRedirect || redirect.Headers().Get("Location") != "/next" {
 		t.Fatalf("合法重定向构建错误: status=%d location=%q", redirect.GetStatus(), redirect.Headers().Get("Location"))
+	}
+}
+
+// TestResponseContentSetsSafeDefaultHeaders 验证纯文本响应不会依赖浏览器猜测内容类型。
+func TestResponseContentSetsSafeDefaultHeaders(t *testing.T) {
+	response := NewResponse().Content("plain")
+	headers := response.Headers()
+	if headers.Get("Content-Type") != "text/plain; charset=utf-8" {
+		t.Fatalf("纯文本响应 Content-Type 错误: %q", headers.Get("Content-Type"))
+	}
+	if headers.Get("X-Content-Type-Options") != "nosniff" {
+		t.Fatalf("纯文本响应必须启用 nosniff: %q", headers.Get("X-Content-Type-Options"))
+	}
+	response.Json(map[string]string{"ok": "yes"})
+	if response.Headers().Get("Content-Type") != "application/json" {
+		t.Fatalf("JSON 响应应覆盖默认文本类型: %q", response.Headers().Get("Content-Type"))
 	}
 }
 

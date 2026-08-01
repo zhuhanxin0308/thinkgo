@@ -4,29 +4,26 @@ import (
 	"fmt"
 	"os"
 
-	_ "thinkgo/app/controller" // 注册控制器
-	_ "thinkgo/app/middleware" // 注册全局中间件
+	_ "thinkgo/app/index"
 	"thinkgo/framework"
-	"thinkgo/framework/http"
-	_ "thinkgo/route" // 注册路由
+	fwhttp "thinkgo/framework/http"
+	_ "time/tzdata" // 内置时区数据，保证 Windows 发布制品可加载配置中的时区。
 )
 
 func main() {
-	// 创建应用实例
-	app := framework.NewApp()
-
-	// 创建 HTTP 内核并绑定到应用；配置错误必须在监听端口前失败。
-	kernel, err := http.NewHttp(app)
+	manager, err := framework.NewApplicationManager(resolveRuntimeBasePath())
 	if err != nil {
-		_ = app.Close()
-		fmt.Fprintln(os.Stderr, "HTTP kernel initialization failed:", err)
+		fmt.Fprintln(os.Stderr, "应用管理器初始化失败:", err)
 		os.Exit(1)
 	}
-	app.Kernel = kernel
-
-	// 启动应用
-	if err := app.Run(); err != nil {
-		fmt.Fprintln(os.Stderr, "Application exited with error:", err)
+	host, err := fwhttp.NewMultiHttp(manager)
+	if err != nil {
+		_ = manager.Close()
+		fmt.Fprintln(os.Stderr, "统一 HTTP 宿主初始化失败:", err)
+		os.Exit(1)
+	}
+	if err := host.Run(); err != nil {
+		fmt.Fprintln(os.Stderr, "应用退出并返回错误:", err)
 		os.Exit(1)
 	}
 }

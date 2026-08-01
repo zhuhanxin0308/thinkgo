@@ -3,10 +3,14 @@ package main
 import (
 	"bytes"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"thinkgo/framework"
 	"thinkgo/framework/console"
+	"thinkgo/framework/db"
 )
 
 // TestRunConsoleExecutesCommandAndPropagatesFailures 验证入口显式传递参数、
@@ -38,21 +42,47 @@ func TestRunConsoleExecutesCommandAndPropagatesFailures(t *testing.T) {
 
 // TestNewConsoleAppUsesExplicitCommand 验证初始化模式不依赖全局 os.Args，
 // 非 run 命令不会建立数据库连接。
-func TestNewConsoleAppUsesExplicitCommand(t *testing.T) {
-	app := newConsoleApp([]string{"version"})
-	if app == nil {
-		t.Fatal("命令行应用不能为空")
+func TestBuildConsoleAppUsesExplicitCommand(t *testing.T) {
+	basePath := t.TempDir()
+	writeThinkTestConfig(t, basePath)
+	app, err := framework.BuildConsoleApp(basePath)
+	if err != nil {
+		t.Fatalf("构建命令行应用失败: %v", err)
 	}
 	defer func() {
 		if err := app.Close(); err != nil {
 			t.Errorf("关闭命令行应用失败: %v", err)
 		}
 	}()
-	if app.DB != nil || app.DBManager == nil {
-		t.Fatalf("非 run 命令应保留空管理器但不建立默认连接: DB=%#v manager=%#v", app.DB, app.DBManager)
+	database, databaseErr := framework.ResolveServiceAs[*db.DB](app, framework.ServiceDB)
+	manager, managerErr := framework.ResolveServiceAs[*db.Manager](app, framework.ServiceDBManager)
+	if databaseErr == nil || database != nil || managerErr != nil || manager == nil {
+		t.Fatalf("非 run 命令应保留空管理器但不建立默认连接: DB=%#v dbErr=%v manager=%#v managerErr=%v", database, databaseErr, manager, managerErr)
 	}
-	if _, err := app.DBManager.Default(); err == nil {
+	if _, err := manager.Default(); err == nil {
 		t.Fatal("非 run 命令的空管理器不应返回默认数据库连接")
+	}
+}
+
+// writeThinkTestConfig 为命令入口测试提供明确的临时应用配置。
+func writeThinkTestConfig(t *testing.T, basePath string) {
+	t.Helper()
+	configPath := filepath.Join(basePath, "config")
+	if err := os.MkdirAll(configPath, 0o755); err != nil {
+		t.Fatalf("创建 think 测试配置目录失败: %v", err)
+	}
+	configs := map[string]string{
+		"app.json":     `{"app_env":"test","server":{"host":"127.0.0.1","port":8080},"compression":{"enable":false}}`,
+		"log.json":     `{"default":"file","channels":{"file":{"type":"file","path":"runtime/log"}}}`,
+		"cache.json":   `{"default":"file","stores":{"file":{"type":"file","path":"runtime/cache"}}}`,
+		"view.json":    `{"view_path":"app/view","view_suffix":"html","cache":false}`,
+		"cookie.json":  `{}`,
+		"session.json": `{"type":"memory","name":"TESTSESSID","expire":600}`,
+	}
+	for name, content := range configs {
+		if err := os.WriteFile(filepath.Join(configPath, name), []byte(content), 0o644); err != nil {
+			t.Fatalf("写入 think 测试配置 %q 失败: %v", name, err)
+		}
 	}
 }
 

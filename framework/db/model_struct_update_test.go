@@ -1,6 +1,9 @@
 package db
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 // capturingConnection 记录最后一次写操作的入参，便于断言。
 type capturingConnection struct {
@@ -11,18 +14,22 @@ type capturingConnection struct {
 	lastArgs  []interface{}
 }
 
-func (c *capturingConnection) Update(table string, data map[string]interface{}, where []string, args []interface{}) (int64, error) {
-	c.lastTable = table
-	c.lastData = data
+func (c *capturingConnection) Update(_ context.Context, request UpdateRequest) (UpdateResult, error) {
+	where, args, err := request.Predicate().compileSQL()
+	if err != nil {
+		return UpdateResult{}, err
+	}
+	c.lastTable = request.Table()
+	c.lastData = request.Data()
 	c.lastWhere = where
 	c.lastArgs = args
-	return 1, nil
+	return UpdateResult{Affected: 1, Data: request.Data()}, nil
 }
 
-func (c *capturingConnection) Insert(table string, data map[string]interface{}) (int64, error) {
-	c.lastTable = table
-	c.lastData = data
-	return 1, nil
+func (c *capturingConnection) Insert(_ context.Context, request InsertRequest) (InsertResult, error) {
+	c.lastTable = request.Table()
+	c.lastData = request.Data()
+	return InsertResult{Affected: 1, ID: int64(1), IDKnown: request.WantsID(), Data: request.Data()}, nil
 }
 
 type structUpdateUser struct {

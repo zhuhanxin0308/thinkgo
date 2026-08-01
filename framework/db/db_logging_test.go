@@ -1,34 +1,37 @@
 package db
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
 
 type failingQueryConnection struct {
+	connectionIdentityState
 	selectErr  error
 	queryErr   error
 	executeErr error
 }
 
-func (c *failingQueryConnection) Select(table string, fields string, where []string, args []interface{}, order string, limit int, offset int) ([]map[string]interface{}, error) {
+func (c *failingQueryConnection) Select(context.Context, SelectRequest) ([]map[string]interface{}, error) {
 	return nil, c.selectErr
 }
 
-func (c *failingQueryConnection) Insert(table string, data map[string]interface{}) (int64, error) {
-	return 0, c.executeErr
+func (c *failingQueryConnection) Insert(context.Context, InsertRequest) (InsertResult, error) {
+	return InsertResult{}, c.executeErr
 }
 
-func (c *failingQueryConnection) Update(table string, data map[string]interface{}, where []string, args []interface{}) (int64, error) {
-	return 0, c.executeErr
+func (c *failingQueryConnection) Update(context.Context, UpdateRequest) (UpdateResult, error) {
+	return UpdateResult{}, c.executeErr
 }
 
-func (c *failingQueryConnection) Delete(table string, where []string, args []interface{}) (int64, error) {
-	return 0, c.executeErr
+func (c *failingQueryConnection) Delete(context.Context, DeleteRequest) (DeleteResult, error) {
+	return DeleteResult{}, c.executeErr
 }
 
-func (c *failingQueryConnection) Count(table string, where []string, args []interface{}) (int64, error) {
+func (c *failingQueryConnection) Count(context.Context, CountRequest) (int64, error) {
 	return 0, c.executeErr
 }
 
@@ -55,6 +58,29 @@ type dbTestLogger struct {
 
 func (l *dbTestLogger) ErrorCtx(msg string, ctx map[string]interface{}) {
 	l.errorCalls = append(l.errorCalls, dbLogCall{msg: msg, ctx: ctx})
+}
+
+func TestDriverErrorTextIsReturnedButNotLogged(t *testing.T) {
+	const secret = "customer-token-7f3a"
+	driverErr := fmt.Errorf("duplicate value %s", secret)
+	logger := &dbTestLogger{}
+	database := NewDB(&failingQueryConnection{selectErr: driverErr})
+	database.SetLogger(logger)
+
+	_, err := database.Table("users").Select()
+	if !errors.Is(err, driverErr) {
+		t.Fatalf("returned error lost the original driver error: %v", err)
+	}
+	if len(logger.errorCalls) != 1 {
+		t.Fatalf("expected one error log, got %d", len(logger.errorCalls))
+	}
+	logged := fmt.Sprintf("%s %#v", logger.errorCalls[0].msg, logger.errorCalls[0].ctx)
+	if strings.Contains(logged, secret) {
+		t.Fatalf("log leaked driver error text: %s", logged)
+	}
+	if !strings.Contains(logged, "error_type") {
+		t.Fatalf("log is missing safe error classification: %s", logged)
+	}
 }
 
 // TestQueryWriteLogsDatabaseErrors 验证插入、更新、删除失败时，

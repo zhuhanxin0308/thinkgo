@@ -1,16 +1,24 @@
 package middleware
 
 import (
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"thinkgo/framework/cache"
+	cacheDriver "thinkgo/framework/cache/driver"
 	fwcontext "thinkgo/framework/context"
 	"thinkgo/framework/debug"
 	frameworkVersion "thinkgo/framework/version"
+	"thinkgo/framework/view"
 )
+
+var traceAllocationResponseSink *fwcontext.Response
 
 // newLocalTraceRequest 构造一个来自本机回环地址的请求，使其满足 Trace 调试条的暴露门禁。
 func newLocalTraceRequest(method, target string) *fwcontext.Request {
@@ -25,7 +33,7 @@ func TestTraceEscapesDebugPanelContent(t *testing.T) {
 	req := newLocalTraceRequest(http.MethodGet, "http://example.com/search?q=ok")
 
 	resp := trace.Handle(req, func(req *fwcontext.Request) *fwcontext.Response {
-		reqDebug, ok := req.GetData("_debug").(*debug.Debug)
+		reqDebug, ok := req.GetData(debug.RequestKey).(*debug.Debug)
 		if !ok || reqDebug == nil {
 			t.Fatal("Trace 中间件应向请求上下文写入调试实例")
 		}
@@ -183,5 +191,284 @@ func TestTraceServesStaticAssets(t *testing.T) {
 		if body := string(resp.GetBody()); !strings.Contains(body, tc.expected) {
 			t.Fatalf("%s 资源内容错误，期望包含 %q，实际为 %s", tc.name, tc.expected, body)
 		}
+	}
+}
+
+type traceIsolationViewDriver struct{}
+
+func (d *traceIsolationViewDriver) Config(map[string]interface{}) error { return nil }
+
+func (d *traceIsolationViewDriver) Fetch(name string, _ map[string]interface{}) (string, error) {
+	return name, nil
+}
+
+func (d *traceIsolationViewDriver) Display(writer io.Writer, name string, _ map[string]interface{}) error {
+	_, err := io.WriteString(writer, name)
+	return err
+}
+
+func (d *traceIsolationViewDriver) Exists(string) (bool, error) { return true, nil }
+
+func (d *traceIsolationViewDriver) SetFuncMap(map[string]interface{}) error { return nil }
+
+// TestTraceRequestIsolation 验证并发请求的缓存键和模板记录只进入各自的调试面板。
+func TestTraceRequestIsolation(t *testing.T) {
+	trace := &Trace{Debug: &debug.Debug{Enabled: true}}
+	rootCache := cache.NewCache(nil, cacheDriver.NewMemory())
+	rootView := view.NewView(nil, nil)
+	if err := rootView.SetDriver(&traceIsolationViewDriver{}); err != nil {
+		t.Fatalf("安装 Trace 测试视图驱动失败: %v", err)
+	}
+
+	const requestCount = 12
+	type result struct {
+		index int
+		body  string
+		err   error
+	}
+	results := make(chan result, requestCount)
+	release := make(chan struct{})
+	var ready sync.WaitGroup
+	ready.Add(requestCount)
+
+	for index := 0; index < requestCount; index++ {
+		index := index
+		go func() {
+			request := newLocalTraceRequest(http.MethodGet, fmt.Sprintf("http://example.com/request-%d", index))
+			var handlerErr error
+			response := trace.Handle(request, func(request *fwcontext.Request) *fwcontext.Response {
+				collector := debug.FromRequest(request)
+				if collector == nil {
+					handlerErr = fmt.Errorf("请求 %d 未挂载 collector", index)
+					ready.Done()
+					<-release
+					return fwcontext.NewResponse().Content("<html><body>missing</body></html>")
+				}
+				cacheKey := fmt.Sprintf("cache-request-%02d", index)
+				if err := rootCache.WithDebug(collector).Set(cacheKey, index, time.Minute); err != nil {
+					handlerErr = fmt.Errorf("请求 %d 写缓存失败: %w", index, err)
+				}
+				templateName := fmt.Sprintf("template-request-%02d", index)
+				if err := rootView.RenderWithDebug(collector, io.Discard, templateName, nil); err != nil {
+					handlerErr = fmt.Errorf("请求 %d 渲染视图失败: %w", index, err)
+				}
+				ready.Done()
+				<-release
+				return fwcontext.NewResponse().Content("<html><body>ok</body></html>")
+			})
+			results <- result{index: index, body: string(response.GetBody()), err: handlerErr}
+		}()
+	}
+
+	ready.Wait()
+	close(release)
+	for completed := 0; completed < requestCount; completed++ {
+		result := <-results
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		ownCacheKey := fmt.Sprintf("cache-request-%02d", result.index)
+		ownTemplate := fmt.Sprintf("template-request-%02d", result.index)
+		if !strings.Contains(result.body, ownCacheKey) || !strings.Contains(result.body, ownTemplate) {
+			t.Fatalf("请求 %d 面板缺少自己的数据，响应为 %s", result.index, result.body)
+		}
+		for other := 0; other < requestCount; other++ {
+			if other == result.index {
+				continue
+			}
+			if strings.Contains(result.body, fmt.Sprintf("cache-request-%02d", other)) ||
+				strings.Contains(result.body, fmt.Sprintf("template-request-%02d", other)) {
+				t.Fatalf("请求 %d 面板混入请求 %d 的数据，响应为 %s", result.index, other, result.body)
+			}
+		}
+	}
+}
+
+// TestTraceUnauthorizedRequestsDoNotAttachCollector 验证关闭 Trace 和远端请求都不会创建或挂载 collector。
+func TestTraceUnauthorizedRequestsDoNotAttachCollector(t *testing.T) {
+	cases := []struct {
+		name    string
+		trace   *Trace
+		request *fwcontext.Request
+	}{
+		{
+			name:    "nil-middleware",
+			trace:   nil,
+			request: newLocalTraceRequest(http.MethodGet, "http://example.com/nil-middleware"),
+		},
+		{
+			name:    "nil-config",
+			trace:   &Trace{},
+			request: newLocalTraceRequest(http.MethodGet, "http://example.com/nil-config"),
+		},
+		{
+			name:    "disabled",
+			trace:   &Trace{Debug: &debug.Debug{Enabled: false}},
+			request: newLocalTraceRequest(http.MethodGet, "http://example.com/disabled"),
+		},
+		{
+			name:    "remote",
+			trace:   &Trace{Debug: &debug.Debug{Enabled: true}},
+			request: fwcontext.MustNewRequest(httptest.NewRequest(http.MethodGet, "http://example.com/remote", nil)),
+		},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			response := testCase.trace.Handle(testCase.request, func(request *fwcontext.Request) *fwcontext.Response {
+				if collector := debug.FromRequest(request); collector != nil {
+					t.Fatalf("未授权请求不应挂载 collector，实际为 %#v", collector)
+				}
+				return fwcontext.NewResponse().Content("<html><body>ok</body></html>")
+			})
+			if collector := debug.FromRequest(testCase.request); collector != nil {
+				t.Fatalf("请求结束后仍发现未授权 collector: %#v", collector)
+			}
+			if strings.Contains(string(response.GetBody()), "tg-debug-bar") {
+				t.Fatalf("未授权请求不应注入调试面板，响应为 %s", response.GetBody())
+			}
+		})
+	}
+}
+
+// TestTraceDisabledDoesNotAllocateCollector 验证关闭 Trace 的路径与直接调用后继处理器具有相同堆分配数。
+func TestTraceDisabledDoesNotAllocateCollector(t *testing.T) {
+	trace := &Trace{Debug: &debug.Debug{Enabled: false}}
+	request := newLocalTraceRequest(http.MethodGet, "http://example.com/disabled")
+	response := fwcontext.NewResponse().Content("plain")
+	next := func(*fwcontext.Request) *fwcontext.Response { return response }
+
+	baseline := testing.AllocsPerRun(1000, func() {
+		traceAllocationResponseSink = next(request)
+	})
+	actual := testing.AllocsPerRun(1000, func() {
+		traceAllocationResponseSink = trace.Handle(request, next)
+	})
+	if actual != baseline {
+		t.Fatalf("关闭 Trace 不应产生 collector 额外分配，基线=%.2f，实际=%.2f", baseline, actual)
+	}
+}
+
+// TestTraceDebugPanelShowsTruncation 验证调试页只消费快照并明确展示每类数据的截断状态。
+func TestTraceDebugPanelShowsTruncation(t *testing.T) {
+	collector := debug.NewRequestDebug(true)
+	for index := 0; index <= debug.MaxLogEntries; index++ {
+		collector.AddLog("info", fmt.Sprintf("log-%d", index))
+	}
+	for index := 0; index <= debug.MaxSQLEntries; index++ {
+		collector.AddSql(fmt.Sprintf("select %d", index), time.Millisecond)
+	}
+	for index := 0; index <= debug.MaxCacheEntries; index++ {
+		collector.AddCache("GET", fmt.Sprintf("cache-%d", index))
+	}
+	for index := 0; index <= debug.MaxVarEntries; index++ {
+		collector.AddVar(fmt.Sprintf("var-%d", index), index)
+	}
+	for index := 0; index <= debug.MaxFileEntries; index++ {
+		collector.AddFile(fmt.Sprintf("file-%d", index))
+	}
+
+	panel := buildDebugBar(collector.GetInfo())
+	labels := []string{
+		fmt.Sprintf("SQL (%d, truncated)", debug.MaxSQLEntries),
+		fmt.Sprintf("Cache (%d, truncated)", debug.MaxCacheEntries),
+		fmt.Sprintf("Logs (%d, truncated)", debug.MaxLogEntries),
+		fmt.Sprintf("Files (%d, truncated)", debug.MaxFileEntries),
+		fmt.Sprintf("Debug (%d, truncated)", debug.MaxVarEntries),
+	}
+	for _, label := range labels {
+		if !strings.Contains(panel, label) {
+			t.Fatalf("调试页缺少截断标签 %q，面板为 %s", label, panel)
+		}
+	}
+}
+
+// TestTraceCollectorResponseBoundaries 验证授权请求在空响应、非 HTML 和无闭合标签响应上的 collector 生命周期。
+func TestTraceCollectorResponseBoundaries(t *testing.T) {
+	trace := &Trace{Debug: &debug.Debug{Enabled: true}}
+	tests := []struct {
+		name     string
+		response *fwcontext.Response
+	}{
+		{name: "nil-response", response: nil},
+		{name: "json-response", response: fwcontext.NewResponse().Json(map[string]interface{}{"ok": true})},
+		{name: "html-without-closing-tag", response: fwcontext.NewResponse().Content("plain fragment")},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			request := newLocalTraceRequest(http.MethodGet, "http://example.com/"+testCase.name)
+			response := trace.Handle(request, func(request *fwcontext.Request) *fwcontext.Response {
+				collector := debug.FromRequest(request)
+				if collector == nil || !collector.Enabled {
+					t.Fatalf("授权请求处理期间应挂载启用的 collector，实际为 %#v", collector)
+				}
+				collector.AddLog("info", testCase.name)
+				return testCase.response
+			})
+			if response != testCase.response {
+				t.Fatalf("Trace 应原样保留边界响应，期望 %#v，实际 %#v", testCase.response, response)
+			}
+			if response != nil && strings.Contains(string(response.GetBody()), "tg-debug-bar") {
+				t.Fatalf("边界响应不应注入调试面板，响应为 %s", response.GetBody())
+			}
+			collector := debug.FromRequest(request)
+			if collector == nil {
+				t.Fatal("授权请求结束后请求仍应拥有 collector")
+			}
+			if logs := collector.GetInfo()["logs"].([]map[string]interface{}); len(logs) != 0 {
+				t.Fatalf("请求结束后 collector 应释放已渲染数据，实际为 %#v", logs)
+			}
+		})
+	}
+}
+
+// TestTraceLocalProxyAddressBoundaries 验证回环代理链、IPv6 回环和畸形代理地址的授权边界。
+func TestTraceLocalProxyAddressBoundaries(t *testing.T) {
+	tests := []struct {
+		name       string
+		remoteAddr string
+		headers    http.Header
+		allowed    bool
+	}{
+		{
+			name:       "direct-ipv6-loopback",
+			remoteAddr: "[::1]:54321",
+			allowed:    true,
+		},
+		{
+			name:       "loopback-forwarded-chain",
+			remoteAddr: "127.0.0.1:54321",
+			headers: http.Header{
+				"Forwarded":       []string{`for=127.0.0.1;proto=https, for="[::1]:1234"`},
+				"X-Forwarded-For": []string{"127.0.0.2, ::1"},
+			},
+			allowed: true,
+		},
+		{
+			name:       "malformed-forwarded-address",
+			remoteAddr: "127.0.0.1:54321",
+			headers: http.Header{
+				"Forwarded": []string{`for="unknown"`},
+			},
+			allowed: false,
+		},
+		{
+			name:       "malformed-remote-address",
+			remoteAddr: "not-an-ip",
+			allowed:    false,
+		},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			raw := httptest.NewRequest(http.MethodGet, "http://example.com/debug", nil)
+			raw.RemoteAddr = testCase.remoteAddr
+			raw.Header = testCase.headers.Clone()
+			request := fwcontext.MustNewRequest(raw)
+			if allowed := isLocalTraceRequest(request); allowed != testCase.allowed {
+				t.Fatalf("本机 Trace 授权结果错误，期望 %t，实际 %t", testCase.allowed, allowed)
+			}
+		})
 	}
 }

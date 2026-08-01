@@ -1,11 +1,71 @@
 package connector
 
 import (
+	"errors"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"thinkgo/framework/db"
 )
+
+func TestSqliteMemoryDatabaseSurvivesConfiguredExpiry(t *testing.T) {
+	connection, err := (&Sqlite{}).Connect(db.Config{
+		Database:               ":memory:",
+		ConnMaxLifetimeSeconds: 1,
+		ConnMaxIdleTimeSeconds: 1,
+	})
+	if err != nil {
+		if strings.Contains(err.Error(), "CGO_ENABLED=0") || strings.Contains(err.Error(), "requires cgo") {
+			t.Skipf("skip SQLite memory expiry test without CGO: %v", err)
+		}
+		t.Fatalf("open SQLite memory database: %v", err)
+	}
+	database := db.NewDB(connection)
+	defer database.Close()
+	if _, err := database.Execute("CREATE TABLE keepalive (id INTEGER PRIMARY KEY)"); err != nil {
+		t.Fatalf("create SQLite memory table: %v", err)
+	}
+	time.Sleep(1100 * time.Millisecond)
+	if _, err := database.Query("SELECT id FROM keepalive"); err != nil {
+		t.Fatalf("SQLite memory database was lost after configured expiry: %v", err)
+	}
+}
+
+// TestSqliteNativeTimeUsesApplicationTimezone 验证 SQLite 原生时间读写与查询使用同一应用时区。
+func TestSqliteNativeTimeUsesApplicationTimezone(t *testing.T) {
+	location, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		t.Fatalf("加载测试时区失败: %v", err)
+	}
+	connection, err := (&Sqlite{}).Connect(db.Config{
+		Database: ":memory:",
+		Params:   map[string]string{"_loc": location.String()},
+	})
+	if err != nil {
+		t.Skipf("无法打开 SQLite（可能未启用 CGO）：%v", err)
+	}
+	database := db.NewDB(connection)
+	defer database.Close()
+	database.SetLocation(location)
+	if _, err := database.Execute(`CREATE TABLE events (id INTEGER PRIMARY KEY, happened_at DATETIME)`); err != nil {
+		t.Fatalf("创建 SQLite 时间表失败: %v", err)
+	}
+
+	instant := time.Date(2026, time.July, 24, 16, 30, 0, 123000000, time.UTC)
+	if _, err := database.Table("events").Insert(map[string]interface{}{"id": 1, "happened_at": instant}); err != nil {
+		t.Fatalf("写入 SQLite 原生时间失败: %v", err)
+	}
+	row, err := database.Table("events").WhereTimeAs("happened_at", db.TimestampValueTypeNative, "=", instant).Find()
+	if err != nil {
+		t.Fatalf("按原生时间查询 SQLite 失败: %v", err)
+	}
+	actual, ok := row["happened_at"].(time.Time)
+	if !ok || !actual.Equal(instant) || actual.Location() != location {
+		t.Fatalf("SQLite 原生时间未归一化到应用时区: %#v", row["happened_at"])
+	}
+}
 
 // newSqliteTestDB 打开一个内存 SQLite 库用于 ORM 集成测试。
 func newSqliteTestDB(t *testing.T) *db.DB {
@@ -151,5 +211,123 @@ func TestSqliteChunkById(t *testing.T) {
 	}
 	if lastSeen != 25 {
 		t.Fatalf("最后一条主键应为 25，实际 %d", lastSeen)
+	}
+}
+
+// TestSqliteModelEach 验证模型流式读取会应用获取器，并支持提前停止而不物化剩余行。
+func TestSqliteModelEach(t *testing.T) {
+	database := newSqliteTestDB(t)
+	defer database.Close()
+	for i := 1; i <= 5; i++ {
+		if _, err := database.Table("users").Insert(map[string]interface{}{"id": i, "name": "user", "status": 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	model := db.NewModel(database, "users")
+	if err := model.Getter("name", func(value interface{}, _ map[string]interface{}) interface{} {
+		return value.(string) + "-loaded"
+	}); err != nil {
+		t.Fatal(err)
+	}
+	seen := 0
+	err := model.Order("id").Each(func(row map[string]interface{}) bool {
+		seen++
+		if row["name"] != "user-loaded" {
+			t.Fatalf("Each 未应用模型获取器: %#v", row)
+		}
+		return seen < 2
+	})
+	if err != nil {
+		t.Fatalf("模型 Each 失败: %v", err)
+	}
+	if seen != 2 {
+		t.Fatalf("模型 Each 提前停止错误: seen=%d", seen)
+	}
+}
+
+// TestSqliteColumnProjectsRequestedField 验证 Column 仍只返回请求字段的值集合。
+func TestSqliteColumnProjectsRequestedField(t *testing.T) {
+	database := newSqliteTestDB(t)
+	defer database.Close()
+	for i := 1; i <= 3; i++ {
+		if _, err := database.Table("users").Insert(map[string]interface{}{"id": i, "name": "user", "status": i}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	values, err := database.Table("users").Order("id").Column("name")
+	if err != nil || !reflect.DeepEqual(values, []interface{}{"user", "user", "user"}) {
+		t.Fatalf("Column 结果错误: values=%#v err=%v", values, err)
+	}
+	keyed, err := database.Table("users").Order("id").Column("name", "id")
+	if err != nil || !reflect.DeepEqual(keyed, map[string]interface{}{"1": "user", "2": "user", "3": "user"}) {
+		t.Fatalf("带 key 的 Column 结果错误: values=%#v err=%v", keyed, err)
+	}
+	if _, err := database.Table("users").Column("name", "name"); !errors.Is(err, db.ErrInvalidDatabaseRow) {
+		t.Fatalf("重复列应返回 ErrInvalidDatabaseRow: %v", err)
+	}
+}
+
+// TestSqliteSeekPage 验证 SQLite 真实查询使用主键游标连续读取页面。
+func TestSqliteSeekPage(t *testing.T) {
+	database := newSqliteTestDB(t)
+	defer database.Close()
+
+	for i := 1; i <= 25; i++ {
+		if _, err := database.Table("users").Insert(map[string]interface{}{"id": i, "name": "u", "status": 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	query := database.Table("users").Field("id,name")
+	first, err := query.SeekPage(10, "id", nil)
+	if err != nil {
+		t.Fatalf("SQLite 首页游标分页失败: %v", err)
+	}
+	if len(first.List) != 10 || first.NextCursor != int64(10) || !first.HasMore {
+		t.Fatalf("SQLite 首页游标分页结果错误: %#v", first)
+	}
+
+	second, err := query.SeekPage(10, "id", first.NextCursor)
+	if err != nil {
+		t.Fatalf("SQLite 第二页游标分页失败: %v", err)
+	}
+	if len(second.List) != 10 || second.List[0]["id"] != int64(11) || second.List[9]["id"] != int64(20) || second.NextCursor != int64(20) || !second.HasMore {
+		t.Fatalf("SQLite 第二页游标分页结果错误: %#v", second)
+	}
+
+	third, err := query.SeekPage(10, "id", second.NextCursor)
+	if err != nil {
+		t.Fatalf("SQLite 末页游标分页失败: %v", err)
+	}
+	if len(third.List) != 5 || third.List[0]["id"] != int64(21) || third.List[4]["id"] != int64(25) || third.NextCursor != nil || third.HasMore {
+		t.Fatalf("SQLite 末页游标分页结果错误: %#v", third)
+	}
+}
+
+func TestSQLiteSimplePathAggregates(t *testing.T) {
+	database := newSqliteTestDB(t)
+	defer database.Close()
+	for _, amount := range []int{10, 20, 30} {
+		if _, err := database.Table("orders").Insert(map[string]interface{}{"user_id": 1, "amount": amount}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	tests := []struct {
+		name string
+		run  func(*db.Query) (float64, error)
+		want float64
+	}{
+		{name: "sum", run: func(query *db.Query) (float64, error) { return query.Sum("amount") }, want: 60},
+		{name: "avg", run: func(query *db.Query) (float64, error) { return query.Avg("amount") }, want: 20},
+		{name: "min", run: func(query *db.Query) (float64, error) { return query.Min("amount") }, want: 10},
+		{name: "max", run: func(query *db.Query) (float64, error) { return query.Max("amount") }, want: 30},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			got, err := testCase.run(database.Table("orders"))
+			if err != nil || got != testCase.want {
+				t.Fatalf("aggregate=%v want=%v err=%v", got, testCase.want, err)
+			}
+		})
 	}
 }

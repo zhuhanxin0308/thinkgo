@@ -180,6 +180,15 @@ func (r *Response) Content(content string) *Response {
 		return nil
 	}
 	r.clearEntitySource()
+	if r.header == nil {
+		r.header = make(http.Header)
+	}
+	if values := r.header["Content-Type"]; len(values) == 0 || values[0] == "" {
+		r.header["Content-Type"] = []string{"text/plain; charset=utf-8"}
+	}
+	if values := r.header["X-Content-Type-Options"]; len(values) == 0 || values[0] == "" {
+		r.header["X-Content-Type-Options"] = []string{"nosniff"}
+	}
 	r.body = []byte(content)
 	return r
 }
@@ -192,7 +201,7 @@ func (r *Response) Json(data interface{}) *Response {
 	r.clearEntitySource()
 	r.Header("Content-Type", "application/json")
 	r.Header("X-Content-Type-Options", "nosniff")
-	bytes, err := json.Marshal(data)
+	bytes, err := json.Marshal(NormalizeJSONTimes(data))
 	if err != nil {
 		r.addError(fmt.Errorf("%w: JSON: %v", ErrResponseSerialization, err))
 		r.status = http.StatusInternalServerError
@@ -214,7 +223,7 @@ func (r *Response) Jsonp(callback string, data interface{}) *Response {
 		})
 	}
 
-	payload, err := json.Marshal(data)
+	payload, err := json.Marshal(NormalizeJSONTimes(data))
 	if err != nil {
 		r.clearEntitySource()
 		r.addError(fmt.Errorf("%w: JSONP: %v", ErrResponseSerialization, err))
@@ -333,7 +342,7 @@ func (r *Response) Stream(writer func(io.Writer) error) *Response {
 		return r
 	}
 	r.streamWriter = writer
-	if r.header.Get("Content-Type") == "" {
+	if r.header == nil || r.header.Get("Content-Type") == "" {
 		r.Header("Content-Type", "application/octet-stream")
 	}
 	return r
@@ -482,6 +491,7 @@ func (r *Response) Cookie(name, value string, maxAge int, path, domain string, s
 	if r == nil {
 		return nil
 	}
+	// #nosec G124 -- 该兼容 API 接受调用方明确传入的 Secure/HttpOnly 策略，并校验 Cookie 格式。
 	cookie := &http.Cookie{
 		Name:     name,
 		Value:    value,

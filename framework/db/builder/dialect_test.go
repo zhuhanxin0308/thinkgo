@@ -1,6 +1,11 @@
 package builder
 
-import "testing"
+import (
+	"errors"
+	"testing"
+
+	"thinkgo/framework/db"
+)
 
 // TestPaginationDialects 验证各方言生成正确的分页语法。
 func TestPaginationDialects(t *testing.T) {
@@ -33,16 +38,29 @@ func TestPaginationDialects(t *testing.T) {
 	})
 }
 
-// TestLockClauseDialects 验证悲观锁子句方言差异。
-func TestLockClauseDialects(t *testing.T) {
-	if got := (&Mysql{}).LockClause("FOR UPDATE"); got != " FOR UPDATE" {
-		t.Fatalf("mysql FOR UPDATE: %q", got)
+func TestTypedLockCapabilities(t *testing.T) {
+	tests := []struct {
+		name    string
+		builder db.Builder
+		mode    db.LockMode
+		tail    string
+		table   string
+		wantErr error
+	}{
+		{name: "mysql update", builder: &Mysql{}, mode: db.LockForUpdate, tail: " FOR UPDATE"},
+		{name: "mysql share", builder: &Mysql{}, mode: db.LockForShare, tail: " LOCK IN SHARE MODE"},
+		{name: "postgres share", builder: &Pgsql{}, mode: db.LockForShare, tail: " FOR SHARE"},
+		{name: "sqlite update", builder: &Sqlite{}, mode: db.LockForUpdate, wantErr: db.ErrUnsupportedFeature},
+		{name: "sqlserver update", builder: &Sqlsrv{}, mode: db.LockForUpdate, table: " WITH (UPDLOCK, ROWLOCK)"},
+		{name: "sqlserver share", builder: &Sqlsrv{}, mode: db.LockForShare, table: " WITH (HOLDLOCK, ROWLOCK)"},
 	}
-	if got := (&Pgsql{}).LockClause("LOCK IN SHARE MODE"); got != " FOR SHARE" {
-		t.Fatalf("pgsql 共享锁应译为 FOR SHARE，实际 %q", got)
-	}
-	if got := (&Sqlite{}).LockClause("FOR UPDATE"); got != "" {
-		t.Fatalf("sqlite 不应输出锁子句，实际 %q", got)
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			spec, err := testCase.builder.Lock(testCase.mode)
+			if !errors.Is(err, testCase.wantErr) || spec.Tail != testCase.tail || spec.TableHint != testCase.table {
+				t.Fatalf("lock capability mismatch: spec=%#v err=%v", spec, err)
+			}
+		})
 	}
 }
 

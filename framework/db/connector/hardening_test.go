@@ -95,8 +95,9 @@ func TestSQLPoolConfigurationRejectsOverflowAndInconsistentLimits(t *testing.T) 
 
 // TestMysqlRejectsDangerousDriverFlags 验证高风险驱动开关不能通过 Params 绕过框架约束。
 func TestMysqlRejectsDangerousDriverFlags(t *testing.T) {
-	for _, key := range []string{"multiStatements", "allowAllFiles", "allowCleartextPasswords", "allowFallbackToPlaintext"} {
-		if err := validateMysqlParameters(map[string]string{key: "true"}); !errors.Is(err, db.ErrInvalidDatabaseConfig) {
+	for _, key := range []string{"multiStatements", "allowAllFiles", "allowCleartextPasswords", "allowFallbackToPlaintext", "allowOldPasswords"} {
+		config := db.Config{Username: "root", Hostname: "localhost", Hostport: "3306", Database: "app", Params: map[string]string{key: "true"}}
+		if _, err := buildMysqlDSN(config); !errors.Is(err, db.ErrInvalidDatabaseConfig) {
 			t.Fatalf("参数 %s=true 应被拒绝，实际为 %v", key, err)
 		}
 	}
@@ -159,5 +160,19 @@ func TestSqliteMemoryPoolRejectsMultipleConnections(t *testing.T) {
 	_, err := (&Sqlite{}).Connect(db.Config{Database: ":memory:", MaxOpenConns: 2})
 	if !errors.Is(err, db.ErrInvalidDatabaseConfig) {
 		t.Fatalf("多连接内存 SQLite 应返回 ErrInvalidDatabaseConfig，实际为 %v", err)
+	}
+}
+
+func TestSqliteMemoryPoolDisablesExpiry(t *testing.T) {
+	settings, err := sqlitePoolConfig(db.Config{
+		Database:               ":memory:",
+		ConnMaxLifetimeSeconds: 1,
+		ConnMaxIdleTimeSeconds: 1,
+	})
+	if err != nil {
+		t.Fatalf("resolve SQLite memory pool: %v", err)
+	}
+	if settings.MaxOpenConns != 1 || settings.MaxIdleConns != 1 || settings.ConnMaxLifetime != 0 || settings.ConnMaxIdleTime != 0 {
+		t.Fatalf("SQLite memory pool must be 1/1/0/0: %#v", settings)
 	}
 }

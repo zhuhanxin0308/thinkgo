@@ -2,7 +2,6 @@ package command
 
 import (
 	"fmt"
-	"path/filepath"
 
 	"thinkgo/framework/console"
 	modeldb "thinkgo/framework/db"
@@ -17,10 +16,11 @@ func (c *MakeModel) Configure() {
 	c.Signature = "make:model"
 	c.Description = "Create a new model class with snake_case table naming"
 	c.AddArgument("name", "Model type name", true)
+	configureApplicationOption(&c.Command)
 }
 
 func (c *MakeModel) Execute(input *console.Input, output *console.Output) error {
-	structName, err := normalizedGeneratorInput(c.App, input, output, "")
+	structName, err := normalizedGeneratorInput(&c.Command, input, output, "")
 	if err != nil {
 		return fmt.Errorf("invalid model name: %w", err)
 	}
@@ -53,7 +53,7 @@ func New%s(database *db.DB) (*%s, error) {
 }
 `, structName, structName, structName, structName, structName, structName)
 
-	if err := writeGeneratedAppSource(c.App, filepath.Join("app", "model"), fileBaseName+".go", []byte(content)); err != nil {
+	if err := writeGeneratedAppSource(c.App, "model", fileBaseName+".go", []byte(content)); err != nil {
 		return fmt.Errorf("create model %s: %w", structName, err)
 	}
 

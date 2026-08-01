@@ -6,7 +6,6 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"thinkgo/framework"
 	fwcontext "thinkgo/framework/context"
 )
 
@@ -36,7 +35,6 @@ func (c *invalidSignatureController) Bad(first, second string) string {
 // TestDispatchCachesControllerPlan 验证第一次分发后会缓存控制器方法计划，后续请求复用同一计划。
 func TestDispatchCachesControllerPlan(t *testing.T) {
 	app := newTestHTTPApp(t, t.TempDir(), map[string]interface{}{"enable": false})
-	app.Container = framework.NewContainer()
 	app.BindFactory("TestDispatchController", func() interface{} {
 		return &testDispatchController{}
 	})
@@ -72,10 +70,40 @@ func TestDispatchCachesControllerPlan(t *testing.T) {
 	}
 }
 
+// TestDispatchCachesAutoRoutePlan 验证自动路由也复用控制器反射计划，避免热路径重复解析签名。
+func TestDispatchCachesAutoRoutePlan(t *testing.T) {
+	app := newTestHTTPApp(t, t.TempDir(), map[string]interface{}{"enable": false})
+	app.BindFactory("AutoDispatch", func() interface{} {
+		return &testDispatchController{}
+	})
+	router := mustHTTPRoute(t, app)
+	if err := router.EnableAutoRoute(true); err != nil {
+		t.Fatalf("启用自动路由失败: %v", err)
+	}
+	handler := newTestHTTPHandler(t, app)
+	req := fwcontext.MustNewRequest(httptest.NewRequest("GET", "http://example.com/autoDispatch/show", nil))
+	matchedRoute, _, err := router.Match(req)
+	if err != nil || matchedRoute == nil {
+		t.Fatalf("匹配自动路由失败: route=%#v err=%v", matchedRoute, err)
+	}
+	if response := handler.dispatch(matchedRoute, req); string(response.GetBody()) != "ok" {
+		t.Fatalf("第一次自动路由分发结果错误: %q", string(response.GetBody()))
+	}
+	firstPlan := handler.dispatchPlans["AutoDispatch@Show"]
+	if firstPlan == nil {
+		t.Fatal("第一次自动路由分发后应缓存控制器计划")
+	}
+	if response := handler.dispatch(matchedRoute, req); string(response.GetBody()) != "ok" {
+		t.Fatalf("第二次自动路由分发结果错误: %q", string(response.GetBody()))
+	}
+	if secondPlan := handler.dispatchPlans["AutoDispatch@Show"]; secondPlan != firstPlan {
+		t.Fatal("自动路由后续请求应复用已缓存的控制器计划")
+	}
+}
+
 // TestDispatchHandlesActionErrorsAndRejectsInvalidSignatures 验证反射动作错误被处理，非法签名不会在 Call 时 panic。
 func TestDispatchHandlesActionErrorsAndRejectsInvalidSignatures(t *testing.T) {
 	app := newTestHTTPApp(t, t.TempDir(), map[string]interface{}{"enable": false})
-	app.Container = framework.NewContainer()
 	app.BindFactory("ErrorController", func() interface{} { return &errorDispatchController{} })
 	app.BindFactory("InvalidController", func() interface{} { return &invalidSignatureController{} })
 	handler := newTestHTTPHandler(t, app)

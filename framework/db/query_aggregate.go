@@ -38,7 +38,7 @@ func (q *Query) aggregate(fn, field string) (float64, error) {
 	}
 
 	cloned := q.clone()
-	cloned.fields = fmt.Sprintf("%s(%s) AS tp_aggregate", fn, field)
+	cloned.aggregateExpression = &AggregateExpression{Function: fn, Field: field, Alias: "tp_aggregate"}
 
 	rows, err := cloned.Select()
 	if err != nil {
@@ -155,6 +155,16 @@ func (q *Query) Column(field string, key ...string) (interface{}, error) {
 	} else {
 		cloned.fields = field
 	}
+	if cloned.canUseDirectSQLColumn() {
+		keyField := ""
+		if len(key) > 0 {
+			keyField = key[0]
+		}
+		return cloned.columnFromSQL(field, keyField)
+	}
+	if cloned.canStreamSQLRows() {
+		return cloned.columnFromStream(field, key...)
+	}
 
 	rows, err := cloned.Select()
 	if err != nil {
@@ -187,6 +197,105 @@ func (q *Query) Column(field string, key ...string) (interface{}, error) {
 			return nil, q.reportError("column", fmt.Errorf("%w: 第 %d 行缺少字段 %q", ErrInvalidDatabaseRow, index, field), nil)
 		}
 		result = append(result, value)
+	}
+	return result, nil
+}
+
+// canUseDirectSQLColumn 判断是否可以绕过整行 map 物化，使用 SQL 专用列扫描路径。
+func (q *Query) canUseDirectSQLColumn() bool {
+	return q != nil && q.txExecutor == nil && !q.needsRawSelect() && q.canStreamSQLRows()
+}
+
+// columnFromSQL 使用结构化查询参数执行专用列扫描，保持普通 SELECT 的条件和分页语义。
+func (q *Query) columnFromSQL(field, key string) (interface{}, error) {
+	connection, release, err := q.db.acquireConnection()
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	sqlConnection, ok := connection.(*SQLConnection)
+	if !ok || sqlConnection == nil {
+		return nil, fmt.Errorf("%w: 直接列扫描要求 SQL 连接", ErrUnsupportedFeature)
+	}
+	predicate, err := q.operationPredicate()
+	if err != nil {
+		return nil, err
+	}
+	return sqlConnection.selectColumn(q.context(), newSelectRequest(
+		q.resolveTable(), q.fields, predicate, q.insertPrimaryKey, q.order, q.limit, q.offset, q.aggregateExpression, q.modelPrimaryKey,
+	), field, key)
+}
+
+// canStreamSQLRows 判断当前查询是否可以使用 SQL 行流，避免为非 SQL 连接改变原有结果路径。
+func (q *Query) canStreamSQLRows() bool {
+	if q == nil {
+		return false
+	}
+	if q.txExecutor != nil {
+		return true
+	}
+	if q.db == nil {
+		return false
+	}
+	q.db.mu.RLock()
+	managed := q.db.connection
+	q.db.mu.RUnlock()
+	if managed == nil || isNilDatabaseDependency(managed.connection) {
+		return false
+	}
+	_, ok := managed.connection.(*SQLConnection)
+	return ok
+}
+
+// columnFromStream 逐行提取 Column 结果，只保留调用方要求的值而不保存完整行集合。
+func (q *Query) columnFromStream(field string, key ...string) (interface{}, error) {
+	if len(key) > 0 && key[0] != "" {
+		result := make(map[string]interface{})
+		var callbackErr error
+		index := 0
+		err := q.Each(func(row map[string]interface{}) bool {
+			keyValue, keyExists := databaseResultField(row, key[0])
+			fieldValue, fieldExists := databaseResultField(row, field)
+			if !keyExists || keyValue == nil || !fieldExists {
+				callbackErr = fmt.Errorf("%w: 第 %d 行缺少 key 或目标字段", ErrInvalidDatabaseRow, index)
+				return false
+			}
+			keyText := fmt.Sprint(keyValue)
+			if _, duplicated := result[keyText]; duplicated {
+				callbackErr = fmt.Errorf("%w: key %q 重复或字符串化后冲突", ErrInvalidDatabaseRow, keyText)
+				return false
+			}
+			result[keyText] = fieldValue
+			index++
+			return true
+		})
+		if err != nil {
+			return nil, err
+		}
+		if callbackErr != nil {
+			return nil, q.reportError("column", callbackErr, nil)
+		}
+		return result, nil
+	}
+
+	result := make([]interface{}, 0)
+	var callbackErr error
+	index := 0
+	err := q.Each(func(row map[string]interface{}) bool {
+		value, exists := databaseResultField(row, field)
+		if !exists {
+			callbackErr = fmt.Errorf("%w: 第 %d 行缺少字段 %q", ErrInvalidDatabaseRow, index, field)
+			return false
+		}
+		result = append(result, value)
+		index++
+		return true
+	})
+	if err != nil {
+		return nil, err
+	}
+	if callbackErr != nil {
+		return nil, q.reportError("column", callbackErr, nil)
 	}
 	return result, nil
 }

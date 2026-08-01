@@ -3,6 +3,7 @@ package cache
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	cacheDriver "thinkgo/framework/cache/driver"
+	"thinkgo/framework/debug"
 )
 
 // TestCacheStoresTagsAndLocks 验证多存储、标签、计数和锁的成功路径均保留明确错误边界。
@@ -86,6 +88,112 @@ func TestCacheStoresTagsAndLocks(t *testing.T) {
 	}
 }
 
+// TestRegisterStoreRejectsDistinctDriversSharingResource 验证运行时注册路径也不会让两个 store 复用同一后端 namespace。
+func TestRegisterStoreRejectsDistinctDriversSharingResource(t *testing.T) {
+	tests := []struct {
+		name   string
+		create func(t *testing.T) (Driver, Driver)
+	}{
+		{
+			name: "file",
+			create: func(t *testing.T) (Driver, Driver) {
+				path := filepath.Join(t.TempDir(), "cache")
+				first, err := cacheDriver.NewFile(path)
+				if err != nil {
+					t.Fatalf("创建第一个文件驱动失败: %v", err)
+				}
+				second, err := cacheDriver.NewFile(path)
+				if err != nil {
+					t.Fatalf("创建第二个文件驱动失败: %v", err)
+				}
+				return first, second
+			},
+		},
+		{
+			name: "redis",
+			create: func(t *testing.T) (Driver, Driver) {
+				config := map[string]interface{}{"host": "localhost", "port": 6379, "select": 2, "prefix": "shared:"}
+				first, err := cacheDriver.NewRedis(config)
+				if err != nil {
+					t.Fatalf("创建第一个 Redis 驱动失败: %v", err)
+				}
+				second, err := cacheDriver.NewRedis(config)
+				if err != nil {
+					_ = first.Close()
+					t.Fatalf("创建第二个 Redis 驱动失败: %v", err)
+				}
+				t.Cleanup(func() {
+					_ = first.Close()
+					_ = second.Close()
+				})
+				return first, second
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			first, second := test.create(t)
+			manager := NewCache(nil, first)
+			if err := manager.RegisterStore("secondary", second); !errors.Is(err, ErrCacheStoreExists) {
+				t.Fatalf("复用同一后端的不同驱动应被拒绝，实际错误为 %v", err)
+			}
+		})
+	}
+}
+
+// TestCacheLockCanRenew 验证持有者可以在长任务中延长锁租约，并且不会修改 owner 边界。
+func TestCacheLockCanRenew(t *testing.T) {
+	manager := NewCache(nil, cacheDriver.NewMemory())
+	lock, err := manager.Lock("lease", 20*time.Millisecond)
+	if err != nil {
+		t.Fatalf("创建租约锁失败: %v", err)
+	}
+	if acquired, err := lock.Acquire(); err != nil || !acquired {
+		t.Fatalf("获取租约锁失败: acquired=%t err=%v", acquired, err)
+	}
+	if renewed, err := lock.Renew(time.Minute); err != nil || !renewed {
+		t.Fatalf("续租失败: renewed=%t err=%v", renewed, err)
+	}
+	other, err := manager.Lock("lease", time.Minute)
+	if err != nil {
+		t.Fatalf("创建竞争租约锁失败: %v", err)
+	}
+	if acquired, err := other.Acquire(); err != nil || acquired {
+		t.Fatalf("续租后竞争 owner 不应获取锁: acquired=%t err=%v", acquired, err)
+	}
+	if released, err := lock.Release(); err != nil || !released {
+		t.Fatalf("释放续租锁失败: released=%t err=%v", released, err)
+	}
+}
+
+// TestTaggedCacheCapacityFailurePreservesMetadata 验证有界内存标签缓存容量不足时不会留下损坏关系。
+func TestTaggedCacheCapacityFailurePreservesMetadata(t *testing.T) {
+	driver, err := cacheDriver.NewMemoryWithMaxEntries(3)
+	if err != nil {
+		t.Fatalf("创建有界内存缓存失败: %v", err)
+	}
+	manager := NewCache(nil, driver)
+	tagged, err := manager.Tag("users")
+	if err != nil {
+		t.Fatalf("创建标签缓存失败: %v", err)
+	}
+	if err = tagged.Set("user:1", "张三", 0); err != nil {
+		t.Fatalf("首个标签项写入失败: %v", err)
+	}
+	if err = tagged.Set("user:2", "李四", 0); !errors.Is(err, cacheDriver.ErrMemoryCapacityExhausted) {
+		t.Fatalf("容量不足时标签写入应显式失败，实际错误为 %v", err)
+	}
+	if value, found, getErr := tagged.Get("user:1"); getErr != nil || !found || value != "张三" {
+		t.Fatalf("标签写入失败不得破坏已有项: value=%#v found=%t err=%v", value, found, getErr)
+	}
+	if err = tagged.Flush(); err != nil {
+		t.Fatalf("容量失败后的标签元数据仍应可清理: %v", err)
+	}
+	if _, found, getErr := manager.Get("user:1"); getErr != nil || found {
+		t.Fatalf("标签清理后业务项不应继续存在: found=%t err=%v", found, getErr)
+	}
+}
+
 // TestCacheDistinguishesNilHitAndCoalescesRemember 验证 nil 值仍是命中，且并发 Remember 只执行一次回调。
 func TestCacheDistinguishesNilHitAndCoalescesRemember(t *testing.T) {
 	manager := NewCache(nil, cacheDriver.NewMemory())
@@ -128,6 +236,123 @@ func TestCacheDistinguishesNilHitAndCoalescesRemember(t *testing.T) {
 	}
 	if callbackCount.Load() != 1 {
 		t.Fatalf("并发 Remember 回调只能执行一次，实际为 %d", callbackCount.Load())
+	}
+}
+
+// TestRememberWithLockCoalescesAcrossCacheManagers 验证显式分布式 Remember 能跨管理器合并缓存未命中加载。
+func TestRememberWithLockCoalescesAcrossCacheManagers(t *testing.T) {
+	driver := cacheDriver.NewMemory()
+	managerA := NewCache(nil, driver)
+	managerB := NewCache(nil, driver)
+	const workers = 24
+	var callbackCount atomic.Int32
+	var wait sync.WaitGroup
+	errorsChannel := make(chan error, workers)
+	for index := 0; index < workers; index++ {
+		wait.Add(1)
+		go func(index int) {
+			defer wait.Done()
+			manager := managerA
+			if index%2 == 1 {
+				manager = managerB
+			}
+			value, err := manager.RememberWithLock("distributed", time.Minute, time.Second, func() (interface{}, error) {
+				callbackCount.Add(1)
+				time.Sleep(20 * time.Millisecond)
+				return "computed", nil
+			})
+			if err != nil || value != "computed" {
+				errorsChannel <- fmt.Errorf("value=%#v err=%v", value, err)
+			}
+		}(index)
+	}
+	wait.Wait()
+	close(errorsChannel)
+	for err := range errorsChannel {
+		if err != nil {
+			t.Fatalf("跨管理器 RememberWithLock 失败: %v", err)
+		}
+	}
+	if callbackCount.Load() != 1 {
+		t.Fatalf("跨管理器 RememberWithLock 回调次数错误: %d", callbackCount.Load())
+	}
+}
+
+// TestTaggedCacheHonorsCrossManagerMutationLock 验证标签写入不会绕过其它管理器持有的标签锁。
+// TestRememberWithLockReleasesAfterPanic 验证 RememberWithLock 的回调 panic 也不会遗留活动锁。
+func TestRememberWithLockReleasesAfterPanic(t *testing.T) {
+	manager := NewCache(nil, cacheDriver.NewMemory())
+	func() {
+		defer func() {
+			if recovered := recover(); recovered == nil {
+				t.Fatal("RememberWithLock 回调 panic 应继续向调用方传播")
+			}
+		}()
+		_, _ = manager.RememberWithLock("panic", time.Minute, time.Second, func() (interface{}, error) {
+			panic("load panic")
+		})
+	}()
+	lock, err := manager.Lock("panic", time.Minute)
+	if err != nil {
+		t.Fatalf("创建 panic 回调复用锁失败: %v", err)
+	}
+	if acquired, err := lock.Acquire(); err != nil || !acquired {
+		t.Fatalf("panic 回调结束后锁仍未释放: acquired=%t err=%v", acquired, err)
+	}
+	if released, err := lock.Release(); err != nil || !released {
+		t.Fatalf("释放 panic 回调复用锁失败: released=%t err=%v", released, err)
+	}
+}
+
+// TestRememberWithLockRenewsLease 验证长于初始租约的回调会自动续租并安全写回结果。
+func TestRememberWithLockRenewsLease(t *testing.T) {
+	manager := NewCache(nil, cacheDriver.NewMemory())
+	value, err := manager.RememberWithLock("expired-load", time.Minute, 100*time.Millisecond, func() (interface{}, error) {
+		time.Sleep(250 * time.Millisecond)
+		return "stale", nil
+	})
+	if value != "stale" || err != nil {
+		t.Fatalf("自动续租后应返回回调值且不丢锁: value=%#v err=%v", value, err)
+	}
+	if cached, found, getErr := manager.Get("expired-load"); getErr != nil || !found || cached != "stale" {
+		t.Fatalf("自动续租后应写入结果: cached=%#v found=%t err=%v", cached, found, getErr)
+	}
+}
+
+// TestRememberWithLockRejectsNonRenewableLocker 验证仅实现基础锁接口的自定义驱动不会执行无法安全写回的回调。
+func TestRememberWithLockRejectsNonRenewableLocker(t *testing.T) {
+	driver := &distributedOnlyDriver{memory: cacheDriver.NewMemory()}
+	manager := NewCache(nil, driver)
+	callbackCalled := false
+	if _, err := manager.RememberWithLock("non-renewable", time.Minute, time.Second, func() (interface{}, error) {
+		callbackCalled = true
+		return "value", nil
+	}); !errors.Is(err, ErrCacheLockUnsupported) {
+		t.Fatalf("不可续租驱动应在回调前返回 ErrCacheLockUnsupported，实际为 %v", err)
+	}
+	if callbackCalled {
+		t.Fatal("不可续租驱动不应执行 RememberWithLock 回调")
+	}
+}
+
+func TestTaggedCacheHonorsCrossManagerMutationLock(t *testing.T) {
+	manager := NewCache(nil, cacheDriver.NewMemory())
+	lock, err := manager.Lock("tag:"+defaultStoreName, time.Minute)
+	if err != nil {
+		t.Fatalf("创建标签互斥锁失败: %v", err)
+	}
+	if acquired, err := lock.Acquire(); err != nil || !acquired {
+		t.Fatalf("获取标签互斥锁失败: acquired=%t err=%v", acquired, err)
+	}
+	tagged, err := manager.Tag("users")
+	if err != nil {
+		t.Fatalf("创建标签视图失败: %v", err)
+	}
+	if err = tagged.Set("user:1", "张三", time.Minute); !errors.Is(err, ErrCacheLockBusy) {
+		t.Fatalf("标签写入应尊重活动互斥锁，实际错误为 %v", err)
+	}
+	if released, err := lock.Release(); err != nil || !released {
+		t.Fatalf("释放标签互斥锁失败: released=%t err=%v", released, err)
 	}
 }
 
@@ -174,6 +399,46 @@ func (d *failingDriver) Delete(string) error                          { return d
 func (d *failingDriver) Clear() error                                 { return d.err }
 func (d *failingDriver) Inc(string, int64) (int64, error)             { return 0, d.err }
 func (d *failingDriver) Dec(string, int64) (int64, error)             { return 0, d.err }
+
+type distributedOnlyDriver struct {
+	memory *cacheDriver.Memory
+}
+
+func (d *distributedOnlyDriver) Get(key string) (interface{}, bool, error) {
+	return d.memory.Get(key)
+}
+
+func (d *distributedOnlyDriver) Set(key string, value interface{}, ttl time.Duration) error {
+	return d.memory.Set(key, value, ttl)
+}
+
+func (d *distributedOnlyDriver) Has(key string) (bool, error) {
+	return d.memory.Has(key)
+}
+
+func (d *distributedOnlyDriver) Delete(key string) error {
+	return d.memory.Delete(key)
+}
+
+func (d *distributedOnlyDriver) Clear() error {
+	return d.memory.Clear()
+}
+
+func (d *distributedOnlyDriver) Inc(key string, step int64) (int64, error) {
+	return d.memory.Inc(key, step)
+}
+
+func (d *distributedOnlyDriver) Dec(key string, step int64) (int64, error) {
+	return d.memory.Dec(key, step)
+}
+
+func (d *distributedOnlyDriver) AcquireLock(key, owner string, ttl time.Duration) (bool, error) {
+	return d.memory.AcquireLock(key, owner, ttl)
+}
+
+func (d *distributedOnlyDriver) ReleaseLock(key, owner string) (bool, error) {
+	return d.memory.ReleaseLock(key, owner)
+}
 
 // TestCachePropagatesDriverAndCallbackErrors 验证驱动错误与 Remember 回调错误原样向上传播。
 func TestCachePropagatesDriverAndCallbackErrors(t *testing.T) {
@@ -536,4 +801,88 @@ func TestCacheCloseWaitsForActiveDriverOperation(t *testing.T) {
 	default:
 		t.Fatal("活动操作结束后未关闭驱动")
 	}
+}
+
+// TestCacheWithDebugSharesStateAndIsolatesCollectors 验证请求 facade 共享驱动生命周期，但不会共享调试数据。
+func TestCacheWithDebugSharesStateAndIsolatesCollectors(t *testing.T) {
+	root := NewCache(nil, cacheDriver.NewMemory())
+	if root.WithDebug(nil) != root {
+		t.Fatal("未绑定 collector 时应复用根 facade，避免关闭 Trace 的请求产生额外分配")
+	}
+	if err := root.RegisterStore("secondary", cacheDriver.NewMemory()); err != nil {
+		t.Fatalf("注册 secondary store 失败: %v", err)
+	}
+	collectorA := debug.NewRequestDebug(true)
+	collectorB := debug.NewRequestDebug(true)
+	requestA := root.WithDebug(collectorA)
+	requestB := root.WithDebug(collectorB)
+
+	if requestA == root || requestB == root || requestA.state != root.state || requestB.state != root.state {
+		t.Fatal("WithDebug 应复制轻量 facade 并共享同一底层状态")
+	}
+	if root.debug != nil || requestA.debug != collectorA || requestB.debug != collectorB {
+		t.Fatal("root 应保持无 collector，派生 facade 应绑定各自请求 collector")
+	}
+
+	if err := requestA.Set("request-a", "shared", 0); err != nil {
+		t.Fatalf("请求 A 写缓存失败: %v", err)
+	}
+	if value, found, err := requestB.Get("request-a"); err != nil || !found || value != "shared" {
+		t.Fatalf("请求 facade 应共享驱动数据: value=%#v found=%t err=%v", value, found, err)
+	}
+	if err := root.Set("root-key", true, 0); err != nil {
+		t.Fatalf("root 写缓存失败: %v", err)
+	}
+
+	secondaryA, err := requestA.Store("secondary")
+	if err != nil {
+		t.Fatalf("请求 A 选择 secondary store 失败: %v", err)
+	}
+	if secondaryA.debug != collectorA || secondaryA.state != root.state {
+		t.Fatal("Store 派生 facade 应继续传播当前请求 collector 和共享状态")
+	}
+	if err = secondaryA.Set("secondary-a", true, 0); err != nil {
+		t.Fatalf("请求 A secondary 写入失败: %v", err)
+	}
+
+	taggedB, err := requestB.Tag("request-b")
+	if err != nil {
+		t.Fatalf("请求 B 创建标签 facade 失败: %v", err)
+	}
+	if taggedB.cache.debug != collectorB || taggedB.cache.state != root.state {
+		t.Fatal("Tag 派生 facade 应继续传播当前请求 collector 和共享状态")
+	}
+	if err = taggedB.Set("tagged-b", true, 0); err != nil {
+		t.Fatalf("请求 B 标签写入失败: %v", err)
+	}
+
+	keysA := debugCacheKeys(collectorA)
+	keysB := debugCacheKeys(collectorB)
+	if !keysA["request-a"] || !keysA["secondary-a"] || keysA["tagged-b"] || keysA["root-key"] {
+		t.Fatalf("请求 A 调试记录隔离错误: %#v", keysA)
+	}
+	if !keysB["request-a"] || !keysB["tagged-b"] || keysB["secondary-a"] || keysB["root-key"] {
+		t.Fatalf("请求 B 调试记录隔离错误: %#v", keysB)
+	}
+}
+
+// TestCacheWithDebugPreservesLegacyConstructorBinding 验证旧 NewCache trace 参数仍绑定直接调用 facade。
+func TestCacheWithDebugPreservesLegacyConstructorBinding(t *testing.T) {
+	collector := debug.NewRequestDebug(true)
+	manager := NewCache(collector, cacheDriver.NewMemory())
+	if err := manager.Set("legacy", true, 0); err != nil {
+		t.Fatalf("旧构造方式写缓存失败: %v", err)
+	}
+	if keys := debugCacheKeys(collector); !keys["legacy"] {
+		t.Fatalf("旧构造参数应继续记录调试数据，实际为 %#v", keys)
+	}
+}
+
+func debugCacheKeys(collector *debug.Debug) map[string]bool {
+	keys := make(map[string]bool)
+	for _, entry := range collector.GetInfo()["cache"].([]map[string]interface{}) {
+		key, _ := entry["key"].(string)
+		keys[key] = true
+	}
+	return keys
 }

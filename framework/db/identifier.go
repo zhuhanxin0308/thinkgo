@@ -8,7 +8,6 @@ import (
 )
 
 var (
-	safeIdentifierPattern    = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 	safeCompareClausePattern = regexp.MustCompile(`(?i)^([A-Za-z_][A-Za-z0-9_\.]*)\s*(=|!=|<>|>=|<=|>|<|LIKE|NOT LIKE|IS|IS NOT)\s*\?$`)
 	safeNullClausePattern    = regexp.MustCompile(`(?i)^([A-Za-z_][A-Za-z0-9_\.]*)\s+IS\s+(NOT\s+)?NULL$`)
 	safeBetweenClausePattern = regexp.MustCompile(`(?i)^([A-Za-z_][A-Za-z0-9_\.]*)\s+BETWEEN\s+\?\s+AND\s+\?$`)
@@ -32,16 +31,45 @@ func validateIdentifier(value string) error {
 		return fmt.Errorf("identifier exceeds %d bytes", maxIdentifierLength)
 	}
 
-	for _, part := range strings.Split(value, ".") {
+	partStart := 0
+	for index := 0; index <= len(value); index++ {
+		if index < len(value) && value[index] != '.' {
+			continue
+		}
+		part := value[partStart:index]
+		if len(part) == 0 {
+			return fmt.Errorf("unsafe identifier %q", value)
+		}
 		if len(part) > maxIdentifierPartLength {
 			return fmt.Errorf("identifier part exceeds %d bytes", maxIdentifierPartLength)
 		}
-		if !safeIdentifierPattern.MatchString(part) {
+		if !isSafeIdentifierPart(part) {
 			return fmt.Errorf("unsafe identifier %q", value)
 		}
+		partStart = index + 1
 	}
 
 	return nil
+}
+
+func isSafeIdentifierPart(part string) bool {
+	if len(part) == 0 || !isIdentifierStart(part[0]) {
+		return false
+	}
+	for index := 1; index < len(part); index++ {
+		if !isIdentifierPart(part[index]) {
+			return false
+		}
+	}
+	return true
+}
+
+func isIdentifierStart(character byte) bool {
+	return character == '_' || character >= 'A' && character <= 'Z' || character >= 'a' && character <= 'z'
+}
+
+func isIdentifierPart(character byte) bool {
+	return isIdentifierStart(character) || character >= '0' && character <= '9'
 }
 
 // validateIdentifierList 校验逗号分隔的字段列表，并允许显式 AS 别名。
@@ -131,6 +159,10 @@ var allowedOperators = map[string]bool{
 }
 
 func normalizeOperator(op string) (string, error) {
+	switch op {
+	case "=", "!=", "<>", ">", ">=", "<", "<=", "LIKE", "NOT LIKE", "IS", "IS NOT":
+		return op, nil
+	}
 	normalized := strings.ToUpper(strings.Join(strings.Fields(op), " "))
 	if normalized == "" {
 		return "", errors.New("operator is empty")

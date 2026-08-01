@@ -2,7 +2,6 @@ package command
 
 import (
 	"fmt"
-	"path/filepath"
 
 	"thinkgo/framework/console"
 )
@@ -17,11 +16,12 @@ func (c *MakeValidate) Configure() {
 	c.Signature = "make:validate"
 	c.Description = "Create a new validator class"
 	c.AddArgument("name", "Validator type name", true)
+	configureApplicationOption(&c.Command)
 }
 
 // Execute 校验名称后安全创建验证器文件。
 func (c *MakeValidate) Execute(input *console.Input, output *console.Output) error {
-	name, err := normalizedGeneratorInput(c.App, input, output, "")
+	name, err := normalizedGeneratorInput(&c.Command, input, output, "")
 	if err != nil {
 		return fmt.Errorf("invalid validator name: %w", err)
 	}
@@ -52,7 +52,7 @@ func New%s() *%s {
 }
 `, name, name, name, name, name, name)
 
-	if err := writeGeneratedAppSource(c.App, filepath.Join("app", "validate"), lowerGoFilename(name), []byte(content)); err != nil {
+	if err := writeGeneratedAppSource(c.App, "validate", lowerGoFilename(name), []byte(content)); err != nil {
 		return fmt.Errorf("create validator %s: %w", name, err)
 	}
 

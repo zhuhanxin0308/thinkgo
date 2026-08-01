@@ -46,7 +46,7 @@ func TestNormalizeViewPathMakesRelativePathAbsolute(t *testing.T) {
 // TestApplicationURLHelpersNormalizeAndValidateInputs 验证 URL 拼接不会产生双斜杠、协议绕过或控制字符注入。
 func TestApplicationURLHelpersNormalizeAndValidateInputs(t *testing.T) {
 	t.Setenv("SERVER_DOMAIN", "https://example.com/")
-	app := &App{DebugMode: true, Env: frameworkenv.NewEnv()}
+	app := &App{DebugMode: true, env: frameworkenv.NewEnv()}
 	if !app.IsDebug() {
 		t.Fatal("IsDebug 应返回应用调试状态")
 	}
@@ -107,25 +107,31 @@ type perRequestTestController struct {
 }
 
 // initTestConnection 用最小连接实现隔离初始化测试，避免依赖真实数据库驱动。
-type initTestConnection struct{}
+type initTestConnection struct {
+	identity db.ConnectionID
+}
 
-func (c *initTestConnection) Select(table string, fields string, where []string, args []interface{}, order string, limit int, offset int) ([]map[string]interface{}, error) {
+func (c *initTestConnection) ConnectionID() db.ConnectionID {
+	return c.identity
+}
+
+func (c *initTestConnection) Select(context.Context, db.SelectRequest) ([]map[string]interface{}, error) {
 	return nil, nil
 }
 
-func (c *initTestConnection) Insert(table string, data map[string]interface{}) (int64, error) {
-	return 1, nil
+func (c *initTestConnection) Insert(context.Context, db.InsertRequest) (db.InsertResult, error) {
+	return db.InsertResult{Affected: 1}, nil
 }
 
-func (c *initTestConnection) Update(table string, data map[string]interface{}, where []string, args []interface{}) (int64, error) {
-	return 1, nil
+func (c *initTestConnection) Update(context.Context, db.UpdateRequest) (db.UpdateResult, error) {
+	return db.UpdateResult{Affected: 1}, nil
 }
 
-func (c *initTestConnection) Delete(table string, where []string, args []interface{}) (int64, error) {
-	return 1, nil
+func (c *initTestConnection) Delete(context.Context, db.DeleteRequest) (db.DeleteResult, error) {
+	return db.DeleteResult{Deleted: 1}, nil
 }
 
-func (c *initTestConnection) Count(table string, where []string, args []interface{}) (int64, error) {
+func (c *initTestConnection) Count(context.Context, db.CountRequest) (int64, error) {
 	return 0, nil
 }
 
@@ -153,7 +159,7 @@ func (c *initTestConnector) Connect(config db.Config) (db.Connection, error) {
 
 	c.config = config
 	c.called = true
-	return &initTestConnection{}, nil
+	return &initTestConnection{identity: db.NewConnectionID("app-init-test")}, nil
 }
 
 func (c *initTestConnector) LastConfig() (db.Config, bool) {
@@ -179,6 +185,7 @@ func writeTestAppConfigFiles(t *testing.T, basePath string) {
 
 	files := map[string]string{
 		"app.json": `{
+  "app_env": "test",
   "app_debug": false,
   "app_trace": false,
   "default_lang": "zh-cn",
@@ -258,7 +265,7 @@ func TestCreateAppCacheRegistersDefaultAliasAndNamedStores(t *testing.T) {
 				"path": "./runtime/cache",
 			},
 			"memory": map[string]interface{}{
-				"type": "memory",
+				"type": "memory", "max_entries": 2,
 			},
 		},
 	})
@@ -282,6 +289,21 @@ func TestCreateAppCacheRegistersDefaultAliasAndNamedStores(t *testing.T) {
 	}
 	if _, found, getErr := memoryStore.Get("shared"); getErr != nil || found {
 		t.Fatalf("memory store 不应读到 file 数据: found=%t err=%v", found, getErr)
+	}
+	for _, entry := range []struct{ key, value string }{
+		{key: "first", value: "1"},
+		{key: "second", value: "2"},
+		{key: "third", value: "3"},
+	} {
+		if err = memoryStore.Set(entry.key, entry.value, 0); err != nil {
+			t.Fatalf("写入有界 memory store 失败: key=%s err=%v", entry.key, err)
+		}
+	}
+	if _, found, getErr := memoryStore.Get("first"); getErr != nil || found {
+		t.Fatalf("memory store 超过容量后应淘汰最早条目: found=%t err=%v", found, getErr)
+	}
+	if _, found, getErr := memoryStore.Get("third"); getErr != nil || !found {
+		t.Fatalf("memory store 最新条目不应被淘汰: found=%t err=%v", found, getErr)
 	}
 	if _, statErr := os.Stat(filepath.Join(basePath, "runtime", "cache")); statErr != nil {
 		t.Fatalf("相对文件缓存目录未归一化到应用根目录: %v", statErr)
@@ -319,10 +341,42 @@ func TestCreateAppCacheRejectsInvalidConfiguration(t *testing.T) {
 				"file": map[string]interface{}{"type": "file", "path": "runtime/\tcache"},
 			},
 		},
+		"memory 容量为负数": {
+			"default": "memory",
+			"stores": map[string]interface{}{
+				"memory": map[string]interface{}{"type": "memory", "max_entries": -1},
+			},
+		},
+		"memory 容量不是整数": {
+			"default": "memory",
+			"stores": map[string]interface{}{
+				"memory": map[string]interface{}{"type": "memory", "max_entries": 1.5},
+			},
+		},
 		"Redis 类型错误": {
 			"default": "redis",
 			"stores": map[string]interface{}{
 				"redis": map[string]interface{}{"type": "redis", "timeout_ms": "slow"},
+			},
+		},
+		"Redis 缺少安全命名空间": {
+			"default": "redis",
+			"stores": map[string]interface{}{
+				"redis": map[string]interface{}{"type": "redis"},
+			},
+		},
+		"重复文件缓存目录": {
+			"default": "file",
+			"stores": map[string]interface{}{
+				"file":   map[string]interface{}{"type": "file", "path": "./runtime/cache"},
+				"backup": map[string]interface{}{"type": "file", "path": "runtime/cache"},
+			},
+		},
+		"重复 Redis 命名空间": {
+			"default": "redis",
+			"stores": map[string]interface{}{
+				"redis":  map[string]interface{}{"type": "redis", "prefix": "thinkgo:"},
+				"backup": map[string]interface{}{"type": "redis", "prefix": "thinkgo:"},
 			},
 		},
 		"不支持的驱动": {
@@ -342,7 +396,53 @@ func TestCreateAppCacheRejectsInvalidConfiguration(t *testing.T) {
 	}
 }
 
+// TestCreateAppCacheRejectsRelativeSymlinkEscape 验证相对缓存路径不能通过 runtime 内符号链接逃出应用目录。
+func TestCreateAppCacheRejectsRelativeSymlinkEscape(t *testing.T) {
+	basePath := t.TempDir()
+	runtimePath := filepath.Join(basePath, "runtime")
+	outsidePath := filepath.Join(basePath, "outside")
+	if err := os.MkdirAll(runtimePath, 0o700); err != nil {
+		t.Fatalf("创建 runtime 测试目录失败: %v", err)
+	}
+	if err := os.MkdirAll(outsidePath, 0o700); err != nil {
+		t.Fatalf("创建外部测试目录失败: %v", err)
+	}
+	linkPath := filepath.Join(runtimePath, "linked")
+	if err := os.Symlink(outsidePath, linkPath); err != nil {
+		t.Skipf("当前环境不允许创建符号链接: %v", err)
+	}
+	config := map[string]interface{}{
+		"default": "file",
+		"stores": map[string]interface{}{
+			"file": map[string]interface{}{"type": "file", "path": "runtime/linked/cache"},
+		},
+	}
+	manager, err := createAppCache(&App{BasePath: basePath}, config)
+	if manager != nil || err == nil {
+		t.Fatalf("符号链接逃逸路径应失败且不返回管理器: manager=%#v err=%v", manager, err)
+	}
+	if _, statErr := os.Stat(filepath.Join(outsidePath, "cache")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("拒绝路径后不应在 runtime 外创建缓存目录: %v", statErr)
+	}
+}
+
 // TestInitializeDoesNotFallbackFromInvalidCacheConfig 验证应用启动不会把非法缓存配置静默替换成文件驱动。
+// TestCreateAppCacheRejectsRedisPrefixWithWrongTypeWhenFlushAuthorized 验证危险授权不会放宽命名空间类型校验。
+func TestCreateAppCacheRejectsRedisPrefixWithWrongTypeWhenFlushAuthorized(t *testing.T) {
+	basePath := t.TempDir()
+	config := map[string]interface{}{
+		"default": "redis",
+		"stores": map[string]interface{}{
+			"redis": map[string]interface{}{
+				"type": "redis", "prefix": true, "allow_flush_db": true,
+			},
+		},
+	}
+	if manager, err := createAppCache(&App{BasePath: basePath}, config); manager != nil || err == nil {
+		t.Fatalf("prefix 类型错误不应被 allow_flush_db 放宽: manager=%#v err=%v", manager, err)
+	}
+}
+
 func TestInitializeDoesNotFallbackFromInvalidCacheConfig(t *testing.T) {
 	basePath := t.TempDir()
 	writeTestAppConfigFiles(t, basePath)
@@ -355,12 +455,11 @@ func TestInitializeDoesNotFallbackFromInvalidCacheConfig(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(basePath, "config", "cache.json"), []byte(invalidCache), 0o600); err != nil {
 		t.Fatalf("写入非法缓存配置失败: %v", err)
 	}
-	app := NewConsoleApp(basePath)
-	t.Cleanup(func() { _ = app.Close() })
+	app, _ := initializeTestConsoleApp(t, basePath)
 	if startupErr := app.StartupError(); startupErr == nil || !strings.Contains(startupErr.Error(), "初始化缓存失败") {
 		t.Fatalf("非法缓存配置未进入启动错误: %v", startupErr)
 	}
-	if _, _, err := app.Cache.Get("key"); !errors.Is(err, cache.ErrCacheDriverNotConfigured) {
+	if _, _, err := app.cache.Get("key"); !errors.Is(err, cache.ErrCacheDriverNotConfigured) {
 		t.Fatalf("非法配置后不应安装隐式回退驱动，实际为 %v", err)
 	}
 }
@@ -406,20 +505,20 @@ func TestInitializeBuildsStrictCookieSessionAndCSRFServices(t *testing.T) {
 			t.Fatalf("写入安全模块测试配置 %s 失败: %v", name, err)
 		}
 	}
-	app := NewConsoleApp(basePath)
+	app := mustBuildTestConsoleApp(t, basePath)
 	t.Cleanup(func() { _ = app.Close() })
 	if err := app.StartupError(); err != nil {
 		t.Fatalf("合法安全模块配置不应产生启动错误: %v", err)
 	}
-	if app.Cookie == nil || app.Session == nil || app.Middleware.ResolveAlias("csrf") == nil {
+	if app.cookie == nil || app.session == nil || app.middleware.ResolveAlias("csrf") == nil {
 		t.Fatal("Cookie、Session 与 CSRF 服务必须全部初始化")
 	}
-	if app.Get("cookie") != app.Cookie || app.Get("session") != app.Session {
+	if app.Get("cookie") != app.cookie || app.Get("session") != app.session {
 		t.Fatal("Cookie 与 Session 必须绑定到应用容器")
 	}
 	expectedStorage := filepath.Clean(filepath.Join(basePath, "runtime", "session"))
-	if app.Session.GetConfig().StoragePath != expectedStorage {
-		t.Fatalf("Session 相对路径未基于应用根目录解析: %q", app.Session.GetConfig().StoragePath)
+	if app.session.GetConfig().StoragePath != expectedStorage {
+		t.Fatalf("Session 相对路径未基于应用根目录解析: %q", app.session.GetConfig().StoragePath)
 	}
 	if _, err := os.Stat(expectedStorage); err != nil {
 		t.Fatalf("Session 存储目录未创建: %v", err)
@@ -446,12 +545,11 @@ func TestInitializeReportsInvalidSecurityModuleConfiguration(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(basePath, "config", test.filename), []byte(test.content), 0o600); err != nil {
 				t.Fatalf("写入非法安全配置失败: %v", err)
 			}
-			app := NewConsoleApp(basePath)
-			t.Cleanup(func() { _ = app.Close() })
+			app, _ := initializeTestConsoleApp(t, basePath)
 			if err := app.StartupError(); err == nil || !strings.Contains(err.Error(), test.errorMatch) {
 				t.Fatalf("非法配置应进入启动错误并包含 %q，实际为 %v", test.errorMatch, err)
 			}
-			if app.Cookie == nil || app.Session == nil || app.Middleware.ResolveAlias("csrf") == nil {
+			if app.cookie == nil || app.session == nil || app.middleware.ResolveAlias("csrf") == nil {
 				t.Fatal("启动错误后安全服务仍必须保持非空且可拒绝请求")
 			}
 		})
@@ -466,8 +564,7 @@ func TestInitializeReportsEnvironmentLoadError(t *testing.T) {
 		t.Fatalf("写入损坏环境文件失败: %v", err)
 	}
 
-	app := NewConsoleApp(basePath)
-	t.Cleanup(func() { _ = app.Close() })
+	app, _ := initializeTestConsoleApp(t, basePath)
 	if err := app.StartupError(); err == nil || !strings.Contains(err.Error(), "load environment failed") {
 		t.Fatalf("损坏 .env 应进入启动错误，实际为 %v", err)
 	}
@@ -479,10 +576,50 @@ func TestInitializeRejectsInvalidBooleanEnvironmentOverride(t *testing.T) {
 	writeTestAppConfigFiles(t, basePath)
 	t.Setenv("APP_DEBUG", "not-a-boolean")
 
-	app := NewConsoleApp(basePath)
-	t.Cleanup(func() { _ = app.Close() })
+	app, _ := initializeTestConsoleApp(t, basePath)
 	if err := app.StartupError(); err == nil || !strings.Contains(err.Error(), "APP_DEBUG") {
 		t.Fatalf("非法 APP_DEBUG 应进入启动错误，实际为 %v", err)
+	}
+}
+
+// TestInitializeAppliesSecurityEnvironmentOverrides 验证生产部署可通过环境变量注入安全配置。
+func TestInitializeAppliesSecurityEnvironmentOverrides(t *testing.T) {
+	basePath := t.TempDir()
+	writeTestAppConfigFiles(t, basePath)
+	cookieSecret := strings.Repeat("c", 32)
+	csrfSecret := strings.Repeat("s", 32)
+	t.Setenv("COOKIE_SECRET", cookieSecret)
+	t.Setenv("CSRF_SECRET", csrfSecret)
+	t.Setenv("APP_CSRF_ENABLE", "true")
+
+	app := mustBuildTestConsoleApp(t, basePath)
+	t.Cleanup(func() { _ = app.Close() })
+	if err := app.StartupError(); err != nil {
+		t.Fatalf("合法安全环境变量不应产生启动错误: %v", err)
+	}
+	if app.cookie == nil {
+		t.Fatal("Cookie 服务必须完成初始化")
+	}
+	if got := app.cookie.GetConfig().Secret; got != cookieSecret {
+		t.Fatalf("COOKIE_SECRET 未覆盖 Cookie 配置，实际为 %q", got)
+	}
+	if got := app.config.GetString("csrf.secret"); got != csrfSecret {
+		t.Fatalf("CSRF_SECRET 未覆盖 CSRF 配置，实际为 %q", got)
+	}
+	if !app.config.GetBool("app.csrf_enable", false) {
+		t.Fatal("APP_CSRF_ENABLE=true 应启用全局 CSRF")
+	}
+}
+
+// TestInitializeRejectsInvalidCSRFEnvironmentOverride 验证非法 CSRF 开关不会被静默解释为 false。
+func TestInitializeRejectsInvalidCSRFEnvironmentOverride(t *testing.T) {
+	basePath := t.TempDir()
+	writeTestAppConfigFiles(t, basePath)
+	t.Setenv("APP_CSRF_ENABLE", "not-a-boolean")
+
+	app, _ := initializeTestConsoleApp(t, basePath)
+	if err := app.StartupError(); err == nil || !strings.Contains(err.Error(), "APP_CSRF_ENABLE") {
+		t.Fatalf("非法 APP_CSRF_ENABLE 应进入启动错误，实际为 %v", err)
 	}
 }
 
@@ -505,7 +642,7 @@ func TestEnvironmentUsesUnifiedEnvironmentPrecedence(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(basePath, ".env"), []byte("APP_ENV=staging\n"), 0o600); err != nil {
 		t.Fatalf("写入环境文件失败: %v", err)
 	}
-	app := NewConsoleApp(basePath)
+	app := mustBuildTestConsoleApp(t, basePath)
 	t.Cleanup(func() { _ = app.Close() })
 	if got := app.Environment(); got != "staging" {
 		t.Fatalf("Environment 应读取 .env 兜底，实际为 %q", got)
@@ -516,16 +653,16 @@ func TestEnvironmentUsesUnifiedEnvironmentPrecedence(t *testing.T) {
 func TestInitializeIsIdempotent(t *testing.T) {
 	basePath := t.TempDir()
 	writeTestAppConfigFiles(t, basePath)
-	app := NewConsoleApp(basePath)
+	app := mustBuildTestConsoleApp(t, basePath)
 	t.Cleanup(func() { _ = app.Close() })
 
-	manager := app.DBManager
-	logger := app.Log
-	pipeline := app.Middleware
+	manager := app.dbManager
+	logger := app.log
+	pipeline := app.middleware
 	if err := app.Initialize(); err != nil {
 		t.Fatalf("重复初始化应返回首次结果，实际为 %v", err)
 	}
-	if app.DBManager != manager || app.Log != logger || app.Middleware != pipeline {
+	if app.dbManager != manager || app.log != logger || app.middleware != pipeline {
 		t.Fatal("重复 Initialize 不应替换已初始化资源")
 	}
 }
@@ -545,7 +682,7 @@ func TestInitializeConvertsUnexpectedPanicToStartupError(t *testing.T) {
 func TestInitializeReportsLanguageLoadError(t *testing.T) {
 	basePath := t.TempDir()
 	writeTestAppConfigFiles(t, basePath)
-	langDir := filepath.Join(basePath, "app", "lang")
+	langDir := filepath.Join(basePath, "app", "index", "lang")
 	if err := os.MkdirAll(langDir, 0o755); err != nil {
 		t.Fatalf("创建语言目录失败: %v", err)
 	}
@@ -553,15 +690,7 @@ func TestInitializeReportsLanguageLoadError(t *testing.T) {
 		t.Fatalf("写入损坏语言包失败: %v", err)
 	}
 
-	app := NewApp(basePath)
-	defer func() {
-		if app.Log != nil {
-			_ = app.Log.Close()
-		}
-		if app.DB != nil {
-			_ = app.DB.Close()
-		}
-	}()
+	app, _ := initializeTestApp(t, basePath)
 
 	err := app.StartupError()
 	if err == nil {
@@ -581,8 +710,7 @@ func TestInitializeReportsInvalidLanguageConfig(t *testing.T) {
 		t.Fatalf("写入非法多语言配置失败: %v", err)
 	}
 
-	app := NewConsoleApp(basePath)
-	t.Cleanup(func() { _ = app.Close() })
+	app, _ := initializeTestConsoleApp(t, basePath)
 	if err := app.StartupError(); err == nil || !strings.Contains(err.Error(), "初始化多语言配置失败") {
 		t.Fatalf("非法多语言配置应进入启动错误，实际为 %v", err)
 	}
@@ -599,13 +727,13 @@ func TestInitializeBindsControllersAsFactory(t *testing.T) {
 	}
 	defer unregisterController(controllerName)
 
-	app := NewApp(basePath)
+	app := mustBuildTestApp(t, basePath)
 	defer func() {
-		if app.Log != nil {
-			_ = app.Log.Close()
+		if app.log != nil {
+			_ = app.log.Close()
 		}
-		if app.DB != nil {
-			_ = app.DB.Close()
+		if app.db != nil {
+			_ = app.db.Close()
 		}
 	}()
 
@@ -634,6 +762,16 @@ func TestInitializeBindsControllersAsFactory(t *testing.T) {
 func TestInitializeLoadsUnixTimestampValueType(t *testing.T) {
 	basePath := t.TempDir()
 	writeTestAppConfigFiles(t, basePath)
+	appConfigPath := filepath.Join(basePath, "config", "app.json")
+	appConfig, err := os.ReadFile(appConfigPath)
+	if err != nil {
+		t.Fatalf("读取测试应用配置失败: %v", err)
+	}
+	appConfig = []byte(strings.Replace(string(appConfig), `  "default_lang": "zh-cn",`, `  "default_timezone": "Asia/Shanghai",
+  "default_lang": "zh-cn",`, 1))
+	if err := os.WriteFile(appConfigPath, appConfig, 0o644); err != nil {
+		t.Fatalf("写入测试应用时区失败: %v", err)
+	}
 
 	connectorName := fmt.Sprintf("__test_init_timestamp_connector_%d__", time.Now().UnixNano())
 	connector := &initTestConnector{}
@@ -658,18 +796,21 @@ func TestInitializeLoadsUnixTimestampValueType(t *testing.T) {
 		t.Fatalf("覆盖数据库配置失败: %v", err)
 	}
 
-	app := NewApp(basePath)
+	app := mustBuildTestApp(t, basePath)
 	defer func() {
-		if app.Log != nil {
-			_ = app.Log.Close()
+		if app.log != nil {
+			_ = app.log.Close()
 		}
-		if app.DB != nil {
-			_ = app.DB.Close()
+		if app.db != nil {
+			_ = app.db.Close()
 		}
 	}()
 
-	if app.DB == nil {
+	if app.db == nil {
 		t.Fatal("应用初始化后默认数据库连接不应为空")
+	}
+	if got := app.db.Location().String(); got != "Asia/Shanghai" {
+		t.Fatalf("数据库未继承应用时区: got=%q", got)
 	}
 
 	config, ok := connector.LastConfig()
@@ -684,198 +825,5 @@ func TestInitializeLoadsUnixTimestampValueType(t *testing.T) {
 	}
 	if config.CreateTimeField != "create_time" || config.UpdateTimeField != "update_time" {
 		t.Fatalf("初始化后时间字段配置错误，实际 create=%q update=%q", config.CreateTimeField, config.UpdateTimeField)
-	}
-}
-
-// TestInitializeAppliesLogRetentionConfiguration 验证应用配置会完整传递文件数量和容量治理参数。
-func TestInitializeAppliesLogRetentionConfiguration(t *testing.T) {
-	basePath := t.TempDir()
-	writeTestAppConfigFiles(t, basePath)
-	logDirectory := filepath.Join(basePath, "runtime", "managed-log")
-	if err := os.MkdirAll(logDirectory, 0o700); err != nil {
-		t.Fatalf("创建日志目录失败: %v", err)
-	}
-	now := time.Now()
-	for offset := 1; offset <= 2; offset++ {
-		filename := filepath.Join(logDirectory, now.AddDate(0, 0, -offset).Format("2006-01-02")+".log")
-		if err := os.WriteFile(filename, []byte("old"), 0o600); err != nil {
-			t.Fatalf("创建旧日志失败: %v", err)
-		}
-	}
-	logConfig := fmt.Sprintf(`{
-  "default": "file",
-  "channels": {
-    "file": {
-      "type": "file",
-      "path": %q,
-      "max_file_size": 1048576,
-      "retention_days": 30,
-      "max_files": 1,
-      "max_total_size": 1048576
-    }
-  }
-}`, filepath.ToSlash(logDirectory))
-	if err := os.WriteFile(filepath.Join(basePath, "config", "log.json"), []byte(logConfig), 0o600); err != nil {
-		t.Fatalf("覆盖日志配置失败: %v", err)
-	}
-
-	app := NewApp(basePath)
-	defer func() {
-		if app.Log != nil {
-			_ = app.Log.Close()
-		}
-		if app.DB != nil {
-			_ = app.DB.Close()
-		}
-	}()
-	if err := app.StartupError(); err != nil {
-		t.Fatalf("应用初始化失败: %v", err)
-	}
-	app.Log.Info("trigger retention")
-	if err := app.Log.Flush(context.Background()); err != nil {
-		t.Fatalf("刷盘应用日志失败: %v", err)
-	}
-
-	entries, err := os.ReadDir(logDirectory)
-	if err != nil {
-		t.Fatalf("读取日志目录失败: %v", err)
-	}
-	logCount := 0
-	for _, entry := range entries {
-		if filepath.Ext(entry.Name()) == ".log" {
-			logCount++
-		}
-	}
-	if logCount != 1 {
-		t.Fatalf("max_files=1 时应只保留当前日志，实际为 %d 个", logCount)
-	}
-}
-
-// TestInitializeReportsInvalidLogDirectory 验证日志目录初始化失败会进入启动错误而非延迟静默失败。
-func TestInitializeReportsInvalidLogDirectory(t *testing.T) {
-	basePath := t.TempDir()
-	writeTestAppConfigFiles(t, basePath)
-	invalidPath := filepath.Join(basePath, "runtime", "not-a-directory")
-	if err := os.MkdirAll(filepath.Dir(invalidPath), 0o700); err != nil {
-		t.Fatalf("创建运行目录失败: %v", err)
-	}
-	if err := os.WriteFile(invalidPath, []byte("file"), 0o600); err != nil {
-		t.Fatalf("创建冲突文件失败: %v", err)
-	}
-	logConfig := fmt.Sprintf(`{
-  "default": "file",
-  "channels": {
-    "file": {"type": "file", "path": %q}
-  }
-}`, filepath.ToSlash(invalidPath))
-	if err := os.WriteFile(filepath.Join(basePath, "config", "log.json"), []byte(logConfig), 0o600); err != nil {
-		t.Fatalf("覆盖日志配置失败: %v", err)
-	}
-
-	app := NewApp(basePath)
-	defer func() {
-		if app.Log != nil {
-			_ = app.Log.Close()
-		}
-		if app.DB != nil {
-			_ = app.DB.Close()
-		}
-	}()
-	err := app.StartupError()
-	if err == nil || !strings.Contains(err.Error(), "日志目录") {
-		t.Fatalf("无效日志目录应产生明确启动错误，实际为 %v", err)
-	}
-}
-
-// TestReadLogFileOptionsUsesStrictIntegerSemantics 验证日志容量配置拒绝小数、字符串和 int64 溢出。
-func TestReadLogFileOptionsUsesStrictIntegerSemantics(t *testing.T) {
-	options, err := readLogFileOptions(map[string]interface{}{
-		"max_file_size":  int64(1024),
-		"retention_days": float64(7),
-		"max_files":      uint16(12),
-		"max_total_size": json.Number("4096"),
-	})
-	if err != nil {
-		t.Fatalf("合法日志配置解析失败: %v", err)
-	}
-	if options.MaxFileSize != 1024 || options.RetentionDays != 7 || options.MaxFiles != 12 || options.MaxTotalSize != 4096 {
-		t.Fatalf("日志配置解析结果错误: %#v", options)
-	}
-
-	invalidCases := []map[string]interface{}{
-		{"max_file_size": 1.5},
-		{"retention_days": "30"},
-		{"max_files": true},
-		{"max_total_size": uint64(1) << 63},
-		{"max_total_size": json.Number("1.25")},
-	}
-	for _, invalid := range invalidCases {
-		if _, err := readLogFileOptions(invalid); err == nil {
-			t.Fatalf("非法日志整数配置应返回错误: %#v", invalid)
-		}
-	}
-}
-
-// TestCreateAppLogChannelRejectsUnsupportedAndNegativeConfiguration 验证通道构造不会对错误类型或负数配置静默回退。
-func TestCreateAppLogChannelRejectsUnsupportedAndNegativeConfiguration(t *testing.T) {
-	app := &App{BasePath: t.TempDir()}
-	testCases := []map[string]interface{}{
-		{"type": "unknown"},
-		{"type": "file", "max_files": -1},
-		{"type": "file", "level": []interface{}{"info", 7}},
-		{"type": "file", "path": ""},
-	}
-	for _, config := range testCases {
-		if logger, err := createAppLogChannel(app, config, false); err == nil {
-			if logger != nil {
-				_ = logger.Close()
-			}
-			t.Fatalf("非法日志通道配置应返回错误: %#v", config)
-		}
-	}
-}
-
-// TestCreateAppLogChannelResolvesRelativePathFromApplicationRoot 验证日志路径不依赖进程工作目录。
-func TestCreateAppLogChannelResolvesRelativePathFromApplicationRoot(t *testing.T) {
-	basePath := t.TempDir()
-	app := &App{BasePath: basePath}
-	logger, err := createAppLogChannel(app, map[string]interface{}{
-		"type": "file",
-		"path": filepath.Join("runtime", "relative-log"),
-	}, false)
-	if err != nil {
-		t.Fatalf("创建相对路径日志通道失败: %v", err)
-	}
-	defer func() { _ = logger.Close() }()
-	expected := filepath.Join(basePath, "runtime", "relative-log")
-	if info, err := os.Stat(expected); err != nil || !info.IsDir() {
-		t.Fatalf("相对日志目录应创建在应用根目录下，路径=%s 错误=%v", expected, err)
-	}
-}
-
-// TestInitializeReportsMissingDefaultLogChannel 验证默认通道不存在时不会静默使用构造期临时日志器。
-func TestInitializeReportsMissingDefaultLogChannel(t *testing.T) {
-	basePath := t.TempDir()
-	writeTestAppConfigFiles(t, basePath)
-	if err := os.WriteFile(
-		filepath.Join(basePath, "config", "log.json"),
-		[]byte(`{"default":"missing","channels":{"file":{"type":"file"}}}`),
-		0o600,
-	); err != nil {
-		t.Fatalf("覆盖日志配置失败: %v", err)
-	}
-
-	app := NewApp(basePath)
-	defer func() {
-		if app.Log != nil {
-			_ = app.Log.Close()
-		}
-		if app.DB != nil {
-			_ = app.DB.Close()
-		}
-	}()
-	err := app.StartupError()
-	if err == nil || !strings.Contains(err.Error(), "默认日志通道") {
-		t.Fatalf("缺失默认日志通道应产生启动错误，实际为 %v", err)
 	}
 }

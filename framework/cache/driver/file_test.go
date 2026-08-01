@@ -1,10 +1,13 @@
 package driver
 
 import (
+	"encoding/json"
 	"errors"
 	"math"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -48,12 +51,24 @@ func TestFileCacheRoundTripWithUnsafeKey(t *testing.T) {
 	}
 }
 
+// TestFileCacheResourceIdentity 验证文件驱动暴露稳定的后端资源标识。
+func TestFileCacheResourceIdentity(t *testing.T) {
+	driver, _ := newTestFileDriver(t)
+	if identity := driver.CacheResourceIdentity(); identity == "" {
+		t.Fatal("文件驱动资源标识不应为空")
+	}
+}
+
 // TestFileCacheClearKeepsLocksAndUnmanagedFiles 验证 Flush 不会释放业务锁或删除非缓存文件。
 func TestFileCacheClearKeepsLocksAndUnmanagedFiles(t *testing.T) {
 	driver, cacheDir := newTestFileDriver(t)
 	unmanagedPath := filepath.Join(cacheDir, "keep.txt")
+	foreignCachePath := filepath.Join(cacheDir, "foreign.cache")
 	if err := os.WriteFile(unmanagedPath, []byte("origin"), 0o600); err != nil {
 		t.Fatalf("写入非缓存文件失败: %v", err)
+	}
+	if err := os.WriteFile(foreignCachePath, []byte("origin"), 0o600); err != nil {
+		t.Fatalf("写入非受管 .cache 文件失败: %v", err)
 	}
 	if err := driver.Set("managed", "cached-value", time.Minute); err != nil {
 		t.Fatalf("写入缓存失败: %v", err)
@@ -70,6 +85,9 @@ func TestFileCacheClearKeepsLocksAndUnmanagedFiles(t *testing.T) {
 	if content, err := os.ReadFile(unmanagedPath); err != nil || string(content) != "origin" {
 		t.Fatalf("Clear 删除了非缓存文件: content=%q err=%v", string(content), err)
 	}
+	if content, err := os.ReadFile(foreignCachePath); err != nil || string(content) != "origin" {
+		t.Fatalf("Clear 删除了非受管 .cache 文件: content=%q err=%v", string(content), err)
+	}
 	if acquired, err := driver.AcquireLock("job", "owner-b", time.Minute); err != nil || acquired {
 		t.Fatalf("Clear 不得释放现有锁: acquired=%t err=%v", acquired, err)
 	}
@@ -81,14 +99,33 @@ func TestFileCacheClearKeepsLocksAndUnmanagedFiles(t *testing.T) {
 // TestFileCacheCounterPreservesExpiryAndRejectsInvalidValues 验证文件计数严格整数化、检测溢出并保留原 TTL。
 func TestFileCacheCounterPreservesExpiryAndRejectsInvalidValues(t *testing.T) {
 	driver, _ := newTestFileDriver(t)
-	if err := driver.Set("counter", int64(5), 80*time.Millisecond); err != nil {
+	if err := driver.Set("counter", int64(5), time.Hour); err != nil {
 		t.Fatalf("写入计数缓存失败: %v", err)
 	}
 	if value, err := driver.Inc("counter", 2); err != nil || value != 7 {
 		t.Fatalf("文件计数递增错误: value=%d err=%v", value, err)
 	}
 	counterPath := driver.cacheFilePath("counter")
-	time.Sleep(120 * time.Millisecond)
+	data, err := os.ReadFile(counterPath)
+	if err != nil {
+		t.Fatalf("读取计数缓存文件失败: %v", err)
+	}
+	var item storedItem
+	if err := json.Unmarshal(data, &item); err != nil {
+		t.Fatalf("解析计数缓存文件失败: %v", err)
+	}
+	now := time.Now()
+	if item.Expiry.Before(now) || item.Expiry.After(now.Add(2*time.Hour)) {
+		t.Fatalf("计数递增应保持原始 TTL: expiry=%s", item.Expiry)
+	}
+	item.Expiry = now.Add(-time.Second)
+	expiredData, err := json.Marshal(item)
+	if err != nil {
+		t.Fatalf("编码过期计数缓存失败: %v", err)
+	}
+	if err := os.WriteFile(counterPath, expiredData, 0o600); err != nil {
+		t.Fatalf("写入过期计数缓存失败: %v", err)
+	}
 	if _, found, err := driver.Get("counter"); err != nil || found {
 		t.Fatalf("计数递增不应清除原 TTL: found=%t err=%v", found, err)
 	}
@@ -114,6 +151,87 @@ func TestFileCacheCounterPreservesExpiryAndRejectsInvalidValues(t *testing.T) {
 	if _, err := driver.Dec("negative-step", -1); !errors.Is(err, ErrInvalidCounterStep) {
 		t.Fatalf("负递减步长应返回 ErrInvalidCounterStep，实际为 %v", err)
 	}
+}
+
+// TestFileCacheCounterHonorsCrossProcessLock 验证计数操作会尊重同一缓存键的跨进程锁。
+func TestFileCacheCounterHonorsCrossProcessLock(t *testing.T) {
+	driver, _ := newTestFileDriver(t)
+	if err := driver.Set("counter", int64(0), 0); err != nil {
+		t.Fatalf("初始化文件计数失败: %v", err)
+	}
+	if acquired, err := driver.AcquireLock("__thinkgo_lock__:counter", "owner-a", time.Minute); err != nil || !acquired {
+		t.Fatalf("预占文件计数锁失败: acquired=%t err=%v", acquired, err)
+	}
+	result := make(chan struct {
+		value int64
+		err   error
+	}, 1)
+	go func() {
+		value, err := driver.Inc("counter", 1)
+		result <- struct {
+			value int64
+			err   error
+		}{value: value, err: err}
+	}()
+	select {
+	case outcome := <-result:
+		t.Fatalf("计数操作不应绕过活动锁: value=%d err=%v", outcome.value, outcome.err)
+	case <-time.After(30 * time.Millisecond):
+	}
+	if released, err := driver.ReleaseLock("__thinkgo_lock__:counter", "owner-a"); err != nil || !released {
+		t.Fatalf("释放文件计数锁失败: released=%t err=%v", released, err)
+	}
+	select {
+	case outcome := <-result:
+		if outcome.err != nil || outcome.value != 1 {
+			t.Fatalf("释放锁后计数失败: value=%d err=%v", outcome.value, outcome.err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("释放锁后计数操作未完成")
+	}
+}
+
+// TestFileCacheLockAcrossProcesses 验证不同进程通过同一 OS 文件锁观察活动租约，并能在释放后接管。
+func TestFileCacheLockAcrossProcesses(t *testing.T) {
+	if os.Getenv("THINKGO_FILE_LOCK_HELPER") == "1" {
+		driver, err := NewFile(os.Getenv("THINKGO_FILE_LOCK_ROOT"))
+		if err != nil {
+			t.Fatalf("子进程创建文件驱动失败: %v", err)
+		}
+		acquired, err := driver.AcquireLock("cross-process", "child", time.Minute)
+		expected := os.Getenv("THINKGO_FILE_LOCK_EXPECTED") == "true"
+		if err != nil || acquired != expected {
+			t.Fatalf("子进程锁结果错误: acquired=%t expected=%t err=%v", acquired, expected, err)
+		}
+		if acquired {
+			if released, releaseErr := driver.ReleaseLock("cross-process", "child"); releaseErr != nil || !released {
+				t.Fatalf("子进程释放文件锁失败: released=%t err=%v", released, releaseErr)
+			}
+		}
+		return
+	}
+
+	driver, cacheDir := newTestFileDriver(t)
+	if acquired, err := driver.AcquireLock("cross-process", "parent", time.Minute); err != nil || !acquired {
+		t.Fatalf("父进程获取文件锁失败: acquired=%t err=%v", acquired, err)
+	}
+	runHelper := func(expected bool) {
+		t.Helper()
+		command := exec.Command(os.Args[0], "-test.run=^TestFileCacheLockAcrossProcesses$", "-test.v")
+		command.Env = append(os.Environ(),
+			"THINKGO_FILE_LOCK_HELPER=1",
+			"THINKGO_FILE_LOCK_ROOT="+cacheDir,
+			"THINKGO_FILE_LOCK_EXPECTED="+strconv.FormatBool(expected),
+		)
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("子进程文件锁验证失败: %v\n%s", err, output)
+		}
+	}
+	runHelper(false)
+	if released, err := driver.ReleaseLock("cross-process", "parent"); err != nil || !released {
+		t.Fatalf("父进程释放文件锁失败: released=%t err=%v", released, err)
+	}
+	runHelper(true)
 }
 
 // TestFileCacheRejectsInvalidRootAndSymlinkEntry 验证缓存根目录和缓存项都不能被符号链接绕过。
@@ -239,5 +357,25 @@ func TestFileCacheLockOwnershipExpiryAndCorruptRecovery(t *testing.T) {
 	}
 	if acquired, err := driver.AcquireLock("corrupt", "owner-c", time.Second); err != nil || !acquired {
 		t.Fatalf("陈旧损坏锁应被安全恢复: acquired=%t err=%v", acquired, err)
+	}
+}
+
+// TestFileCacheLockRenewal 验证文件锁续租保持 owner 边界并延长活动时间。
+func TestFileCacheLockRenewal(t *testing.T) {
+	driver, _ := newTestFileDriver(t)
+	if acquired, err := driver.AcquireLock("lease", "owner-a", time.Second); err != nil || !acquired {
+		t.Fatalf("获取文件租约锁失败: acquired=%t err=%v", acquired, err)
+	}
+	if renewed, err := driver.RenewLock("lease", "owner-a", time.Minute); err != nil || !renewed {
+		t.Fatalf("续租文件锁失败: renewed=%t err=%v", renewed, err)
+	}
+	if renewed, err := driver.RenewLock("lease", "owner-b", time.Minute); err != nil || renewed {
+		t.Fatalf("错误 owner 不得续租文件锁: renewed=%t err=%v", renewed, err)
+	}
+	if acquired, err := driver.AcquireLock("lease", "owner-b", time.Minute); err != nil || acquired {
+		t.Fatalf("续租后竞争 owner 不应获取文件锁: acquired=%t err=%v", acquired, err)
+	}
+	if released, err := driver.ReleaseLock("lease", "owner-a"); err != nil || !released {
+		t.Fatalf("释放续租文件锁失败: released=%t err=%v", released, err)
 	}
 }

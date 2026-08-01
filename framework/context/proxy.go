@@ -24,17 +24,38 @@ var (
 
 const maxRequestMemoryOrBodyBytes int64 = 1 << 30
 
+// TrustedProxySet 是不可变的受信代理网段集合；集合应在应用启动时编译。
+type TrustedProxySet struct {
+	networks []*net.IPNet
+}
+
+// CompileTrustedProxies 编译受信代理配置，返回值可安全复用于多个请求。
+func CompileTrustedProxies(entries []string) (*TrustedProxySet, error) {
+	configured := append([]string(nil), entries...)
+	networks, err := parseTrustedProxies(configured)
+	if err != nil {
+		return nil, err
+	}
+	return &TrustedProxySet{networks: networks}, nil
+}
+
 // WithTrustedProxies 配置受信代理网段。
 // 只有请求来源命中这些网段时，框架才会信任 X-Forwarded-For 和 X-Forwarded-Proto。
 func WithTrustedProxies(entries []string) RequestOption {
-	// 复制调用方切片，避免构造请求前配置被并发修改。
-	configured := append([]string(nil), entries...)
+	trusted, compileErr := CompileTrustedProxies(entries)
 	return func(r *Request) error {
-		trusted, err := parseTrustedProxies(configured)
-		if err != nil {
-			return err
+		if compileErr != nil {
+			return compileErr
 		}
 		r.trustedProxies = trusted
+		return nil
+	}
+}
+
+// WithTrustedProxySet 将启动期编译好的代理集合传入请求，避免热路径重复解析配置字符串。
+func WithTrustedProxySet(set *TrustedProxySet) RequestOption {
+	return func(r *Request) error {
+		r.trustedProxies = set
 		return nil
 	}
 }
@@ -107,8 +128,8 @@ func parseTrustedProxyEntry(entry string) (*net.IPNet, error) {
 }
 
 // shouldTrustProxyHeaders 判断当前连接是否来自受信代理。
-func shouldTrustProxyHeaders(raw *http.Request, trusted []*net.IPNet) bool {
-	if raw == nil || len(trusted) == 0 {
+func shouldTrustProxyHeaders(raw *http.Request, trusted *TrustedProxySet) bool {
+	if raw == nil || trusted == nil || len(trusted.networks) == 0 {
 		return false
 	}
 
@@ -117,12 +138,22 @@ func shouldTrustProxyHeaders(raw *http.Request, trusted []*net.IPNet) bool {
 		return false
 	}
 
-	return isTrustedProxyIP(remoteIP, trusted)
+	return trusted.contains(remoteIP)
 }
 
 // isTrustedProxyIP 判断单个 IP 是否命中受信代理网段。
-func isTrustedProxyIP(ip net.IP, trusted []*net.IPNet) bool {
-	for _, network := range trusted {
+func isTrustedProxyIP(ip net.IP, trusted *TrustedProxySet) bool {
+	if trusted == nil {
+		return false
+	}
+	return trusted.contains(ip)
+}
+
+func (trusted *TrustedProxySet) contains(ip net.IP) bool {
+	if trusted == nil || ip == nil {
+		return false
+	}
+	for _, network := range trusted.networks {
 		if network.Contains(ip) {
 			return true
 		}
@@ -131,7 +162,7 @@ func isTrustedProxyIP(ip net.IP, trusted []*net.IPNet) bool {
 }
 
 // resolveClientIP 在可信代理链路下解析真实客户端 IP，否则回退到直接连接地址。
-func resolveClientIP(raw *http.Request, trusted []*net.IPNet) string {
+func resolveClientIP(raw *http.Request, trusted *TrustedProxySet) string {
 	if raw == nil {
 		return ""
 	}
@@ -170,7 +201,7 @@ func directClientIP(raw *http.Request) string {
 
 // resolveForwardedFor 从右向左剥离受信代理，返回离受信代理最近的非受信客户端 IP。
 // 这样即使客户端预先伪造 X-Forwarded-For 首段，也不会覆盖真实来源。
-func resolveForwardedFor(value string, trusted []*net.IPNet) (string, bool) {
+func resolveForwardedFor(value string, trusted *TrustedProxySet) (string, bool) {
 	forwardedIPs, valid := parseForwardedIPList(value)
 	if !valid || len(forwardedIPs) == 0 {
 		return "", false
@@ -202,7 +233,7 @@ func parseForwardedIPList(value string) ([]net.IP, bool) {
 }
 
 // isHTTPS 在原生 TLS 或可信代理声明为 HTTPS 时返回 true。
-func isHTTPS(raw *http.Request, trusted []*net.IPNet) bool {
+func isHTTPS(raw *http.Request, trusted *TrustedProxySet) bool {
 	if raw == nil {
 		return false
 	}

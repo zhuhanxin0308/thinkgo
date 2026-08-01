@@ -1,6 +1,7 @@
 package event
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"path"
@@ -14,6 +15,9 @@ import (
 
 const maxEventNameBytes = 256
 
+// maxResolvedEventCacheEntries 限制事件解析缓存的容量，避免动态事件名导致缓存无限增长。
+const maxResolvedEventCacheEntries = 256
+
 var (
 	// ErrInvalidEvent 表示分发的事件对象为空或不可用。
 	ErrInvalidEvent = errors.New("无效事件")
@@ -25,6 +29,8 @@ var (
 	ErrInvalidSubscriber = errors.New("无效事件订阅者")
 	// ErrEventCallbackPanic 表示事件或回调发生 panic，已被调度器隔离。
 	ErrEventCallbackPanic = errors.New("事件回调发生 panic")
+	// ErrInvalidEventContext 表示事件分发没有提供有效上下文。
+	ErrInvalidEventContext = errors.New("事件分发上下文无效")
 )
 
 // Event 定义事件对象最小接口。
@@ -35,6 +41,11 @@ type Event interface {
 // Listener 定义事件监听器。
 type Listener interface {
 	Handle(event Event) error
+}
+
+// ContextualListener 为需要感知取消信号的事件监听器提供可选上下文接口。
+type ContextualListener interface {
+	HandleContext(ctx context.Context, event Event) error
 }
 
 // Subscriber 允许一个对象批量注册多个监听器。
@@ -50,10 +61,28 @@ type listenerEntry struct {
 
 // Dispatcher 负责注册监听器、订阅者以及事件分发。
 type Dispatcher struct {
+	listeners        map[string][]listenerEntry
+	wildcards        map[string]struct{}
+	resolved         map[string][]listenerEntry
+	resolutionEpoch  uint64
+	subscriptionLock sync.Mutex
+	subscriptionTx   *subscriptionTransaction
+	lock             sync.RWMutex
+	sequence         int64
+}
+
+// subscriptionSnapshot 保存一次订阅事务开始前的监听器注册状态。
+// sequence 不纳入快照，回滚后继续使用递增序号，避免复用旧序号破坏同优先级监听器的稳定顺序。
+type subscriptionSnapshot struct {
 	listeners map[string][]listenerEntry
 	wildcards map[string]struct{}
-	lock      sync.RWMutex
-	sequence  int64
+}
+
+// subscriptionTransaction 聚合同一注册窗口内的嵌套或并发订阅，避免回滚时相互覆盖。
+type subscriptionTransaction struct {
+	snapshot subscriptionSnapshot
+	active   int
+	failed   bool
 }
 
 // NewDispatcher 创建事件调度器。
@@ -61,6 +90,7 @@ func NewDispatcher() *Dispatcher {
 	return &Dispatcher{
 		listeners: make(map[string][]listenerEntry),
 		wildcards: make(map[string]struct{}),
+		resolved:  make(map[string][]listenerEntry),
 	}
 }
 
@@ -101,6 +131,7 @@ func (d *Dispatcher) Listen(eventName string, listener Listener, priority ...int
 	if containsWildcard(eventName) {
 		d.wildcards[eventName] = struct{}{}
 	}
+	d.invalidateResolutionCacheLocked()
 	return nil
 }
 
@@ -115,11 +146,12 @@ func (d *Dispatcher) Forget(eventName string) error {
 	d.lock.Lock()
 	delete(d.listeners, eventName)
 	delete(d.wildcards, eventName)
+	d.invalidateResolutionCacheLocked()
 	d.lock.Unlock()
 	return nil
 }
 
-// Subscribe 注册订阅者。
+// Subscribe 以事务方式注册订阅者；当前活动窗口内任一回调失败或 panic 时，窗口内监听器会统一回滚。
 func (d *Dispatcher) Subscribe(subscriber Subscriber) (err error) {
 	if d == nil {
 		return fmt.Errorf("%w: 调度器不能为空", ErrInvalidSubscriber)
@@ -127,16 +159,87 @@ func (d *Dispatcher) Subscribe(subscriber Subscriber) (err error) {
 	if isNilEventValue(subscriber) {
 		return fmt.Errorf("%w: 订阅者不能为空", ErrInvalidSubscriber)
 	}
+
+	d.subscriptionLock.Lock()
+	if d.subscriptionTx == nil {
+		d.subscriptionTx = &subscriptionTransaction{
+			snapshot: d.captureSubscriptionSnapshot(),
+		}
+	}
+	tx := d.subscriptionTx
+	tx.active++
+	d.subscriptionLock.Unlock()
+
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			err = fmt.Errorf("%w: Subscribe: %v", ErrEventCallbackPanic, recovered)
 		}
+		d.finishSubscription(tx, err != nil)
 	}()
 	return subscriber.Subscribe(d)
 }
 
+// finishSubscription 完成一个订阅回调；最后一个回调退出时决定提交还是回滚整个注册窗口。
+func (d *Dispatcher) finishSubscription(tx *subscriptionTransaction, failed bool) {
+	d.subscriptionLock.Lock()
+	if failed {
+		tx.failed = true
+	}
+	tx.active--
+	if tx.active > 0 {
+		d.subscriptionLock.Unlock()
+		return
+	}
+
+	shouldRestore := tx.failed
+	snapshot := tx.snapshot
+	d.subscriptionTx = nil
+	if shouldRestore {
+		// 持有 subscriptionLock 直到恢复完成，阻止新的订阅在回滚过程中获取过期快照。
+		d.restoreSubscriptionSnapshot(snapshot)
+	}
+	d.subscriptionLock.Unlock()
+}
+
+// captureSubscriptionSnapshot 在锁保护下复制监听器注册表，确保失败时可以恢复完整状态。
+func (d *Dispatcher) captureSubscriptionSnapshot() subscriptionSnapshot {
+	d.lock.RLock()
+	defer d.lock.RUnlock()
+
+	snapshot := subscriptionSnapshot{
+		listeners: make(map[string][]listenerEntry, len(d.listeners)),
+		wildcards: make(map[string]struct{}, len(d.wildcards)),
+	}
+	for eventName, entries := range d.listeners {
+		snapshot.listeners[eventName] = append([]listenerEntry(nil), entries...)
+	}
+	for eventName := range d.wildcards {
+		snapshot.wildcards[eventName] = struct{}{}
+	}
+	return snapshot
+}
+
+// restoreSubscriptionSnapshot 恢复注册表并清空解析缓存，保证回滚后的派发结果只来自已提交监听器。
+func (d *Dispatcher) restoreSubscriptionSnapshot(snapshot subscriptionSnapshot) {
+	d.lock.Lock()
+	defer d.lock.Unlock()
+
+	d.listeners = snapshot.listeners
+	d.wildcards = snapshot.wildcards
+	d.resolved = make(map[string][]listenerEntry)
+	d.resolutionEpoch++
+}
+
 // Dispatch 触发事件，支持优先级、通配监听和传播中断。
 func (d *Dispatcher) Dispatch(currentEvent Event) error {
+	return d.DispatchContext(context.Background(), currentEvent)
+}
+
+// DispatchContext 使用调用方上下文触发事件；旧 Listener 会保持原有行为。
+func (d *Dispatcher) DispatchContext(ctx context.Context, currentEvent Event) error {
+	if ctx == nil {
+		return ErrInvalidEventContext
+	}
 	if d == nil || isNilEventValue(currentEvent) {
 		return fmt.Errorf("%w: 事件不能为空", ErrInvalidEvent)
 	}
@@ -149,8 +252,14 @@ func (d *Dispatcher) Dispatch(currentEvent Event) error {
 	}
 	listeners := d.resolveListeners(eventName)
 	for index, entry := range listeners {
-		if err := safeHandle(entry.listener, currentEvent); err != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := safeHandleContext(ctx, entry.listener, currentEvent); err != nil {
 			return fmt.Errorf("分发事件 %q 的第 %d 个监听器失败: %w", eventName, index+1, err)
+		}
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 		if stoppable, ok := currentEvent.(interface{ IsPropagationStopped() bool }); ok && stoppable.IsPropagationStopped() {
 			return nil
@@ -159,8 +268,34 @@ func (d *Dispatcher) Dispatch(currentEvent Event) error {
 	return nil
 }
 
+// HasListeners 判断指定事件是否存在精确或通配监听器，用于 HTTP 生命周期事件的零监听快速路径。
+func (d *Dispatcher) HasListeners(eventName string) bool {
+	if d == nil || validateEventName(eventName, false) != nil {
+		return false
+	}
+	d.lock.RLock()
+	if len(d.listeners[eventName]) > 0 {
+		d.lock.RUnlock()
+		return true
+	}
+	for pattern := range d.wildcards {
+		if len(d.listeners[pattern]) > 0 && wildcardMatch(pattern, eventName) {
+			d.lock.RUnlock()
+			return true
+		}
+	}
+	d.lock.RUnlock()
+	return false
+}
+
 func (d *Dispatcher) resolveListeners(eventName string) []listenerEntry {
 	d.lock.RLock()
+	epoch := d.resolutionEpoch
+	if cached, ok := d.resolved[eventName]; ok {
+		listeners := append([]listenerEntry(nil), cached...)
+		d.lock.RUnlock()
+		return listeners
+	}
 	collected := append([]listenerEntry(nil), d.listeners[eventName]...)
 	for pattern := range d.wildcards {
 		if wildcardMatch(pattern, eventName) {
@@ -175,7 +310,28 @@ func (d *Dispatcher) resolveListeners(eventName string) []listenerEntry {
 		}
 		return collected[i].priority > collected[j].priority
 	})
+
+	// 只有监听器集合未发生变化时才写入缓存，避免并发注册造成旧快照污染。
+	d.lock.Lock()
+	if d.resolutionEpoch == epoch {
+		if d.resolved == nil {
+			d.resolved = make(map[string][]listenerEntry)
+		}
+		if len(d.resolved) < maxResolvedEventCacheEntries {
+			d.resolved[eventName] = append([]listenerEntry(nil), collected...)
+		}
+	}
+	d.lock.Unlock()
 	return collected
+}
+
+// invalidateResolutionCacheLocked 使已解析的监听器快照失效；调用方必须持有写锁。
+func (d *Dispatcher) invalidateResolutionCacheLocked() {
+	d.resolutionEpoch++
+	if len(d.resolved) == 0 {
+		return
+	}
+	d.resolved = make(map[string][]listenerEntry)
 }
 
 func wildcardMatch(pattern string, eventName string) bool {
@@ -280,11 +436,14 @@ func safeEventName(currentEvent Event) (eventName string, err error) {
 	return currentEvent.Name(), nil
 }
 
-func safeHandle(listener Listener, currentEvent Event) (err error) {
+func safeHandleContext(ctx context.Context, listener Listener, currentEvent Event) (err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			err = fmt.Errorf("%w: Listener.Handle: %v", ErrEventCallbackPanic, recovered)
+			err = fmt.Errorf("%w: Listener.HandleContext: %v", ErrEventCallbackPanic, recovered)
 		}
 	}()
+	if contextual, ok := listener.(ContextualListener); ok {
+		return contextual.HandleContext(ctx, currentEvent)
+	}
 	return listener.Handle(currentEvent)
 }

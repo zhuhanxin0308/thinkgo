@@ -1,7 +1,9 @@
 package db
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -24,6 +26,7 @@ func TestAccumulateAffectedRowsRejectsNegativeAndOverflow(t *testing.T) {
 
 // batchRecorderConn 记录所有执行过的写 SQL，用于断言批量插入分批行为。
 type batchRecorderConn struct {
+	connectionIdentityState
 	execSQL  []string
 	execArgs [][]interface{}
 }
@@ -46,16 +49,20 @@ func (b *dialectBatchBuilder) InsertBatch(_ string, fields []string, rows []map[
 	return "DIALECT INSERT (?, ?), (?, ?)", values
 }
 
-func (c *batchRecorderConn) Select(table, fields string, where []string, args []interface{}, order string, limit, offset int) ([]map[string]interface{}, error) {
+func (c *batchRecorderConn) Select(context.Context, SelectRequest) ([]map[string]interface{}, error) {
 	return nil, nil
 }
-func (c *batchRecorderConn) Insert(string, map[string]interface{}) (int64, error) { return 1, nil }
-func (c *batchRecorderConn) Update(string, map[string]interface{}, []string, []interface{}) (int64, error) {
-	return 1, nil
+func (c *batchRecorderConn) Insert(_ context.Context, request InsertRequest) (InsertResult, error) {
+	return InsertResult{Affected: 1, ID: int64(1), IDKnown: request.WantsID()}, nil
 }
-func (c *batchRecorderConn) Delete(string, []string, []interface{}) (int64, error) { return 1, nil }
-func (c *batchRecorderConn) Count(string, []string, []interface{}) (int64, error)  { return 0, nil }
-func (c *batchRecorderConn) Close() error                                          { return nil }
+func (c *batchRecorderConn) Update(context.Context, UpdateRequest) (UpdateResult, error) {
+	return UpdateResult{Affected: 1}, nil
+}
+func (c *batchRecorderConn) Delete(context.Context, DeleteRequest) (DeleteResult, error) {
+	return DeleteResult{Deleted: 1}, nil
+}
+func (c *batchRecorderConn) Count(context.Context, CountRequest) (int64, error) { return 0, nil }
+func (c *batchRecorderConn) Close() error                                       { return nil }
 func (c *batchRecorderConn) Query(sql string, args ...interface{}) ([]map[string]interface{}, error) {
 	return nil, nil
 }
@@ -67,15 +74,27 @@ func (c *batchRecorderConn) Execute(sql string, args ...interface{}) (int64, err
 
 // chunkRecorderConn 按主键游标返回分页数据，用于验证 ChunkById 的 keyset 行为。
 type chunkRecorderConn struct {
-	selects   []string // 记录每次 Select 的 where 条件拼接
-	whereArgs [][]interface{}
-	pages     [][]map[string]interface{}
-	idx       int
+	connectionIdentityState
+	selects    []string // 记录每次 Select 的 where 条件拼接
+	whereArgs  [][]interface{}
+	orders     []string
+	limits     []int
+	offsets    []int
+	countCalls int
+	pages      [][]map[string]interface{}
+	idx        int
 }
 
-func (c *chunkRecorderConn) Select(table, fields string, where []string, args []interface{}, order string, limit, offset int) ([]map[string]interface{}, error) {
+func (c *chunkRecorderConn) Select(_ context.Context, request SelectRequest) ([]map[string]interface{}, error) {
+	where, args, err := request.Predicate().compileSQL()
+	if err != nil {
+		return nil, err
+	}
 	c.selects = append(c.selects, strings.Join(where, " AND "))
 	c.whereArgs = append(c.whereArgs, args)
+	c.orders = append(c.orders, request.Order())
+	c.limits = append(c.limits, request.Limit())
+	c.offsets = append(c.offsets, request.Offset())
 	if c.idx >= len(c.pages) {
 		return []map[string]interface{}{}, nil
 	}
@@ -83,13 +102,20 @@ func (c *chunkRecorderConn) Select(table, fields string, where []string, args []
 	c.idx++
 	return page, nil
 }
-func (c *chunkRecorderConn) Insert(string, map[string]interface{}) (int64, error) { return 1, nil }
-func (c *chunkRecorderConn) Update(string, map[string]interface{}, []string, []interface{}) (int64, error) {
-	return 1, nil
+func (c *chunkRecorderConn) Insert(_ context.Context, request InsertRequest) (InsertResult, error) {
+	return InsertResult{Affected: 1, ID: int64(1), IDKnown: request.WantsID()}, nil
 }
-func (c *chunkRecorderConn) Delete(string, []string, []interface{}) (int64, error) { return 1, nil }
-func (c *chunkRecorderConn) Count(string, []string, []interface{}) (int64, error)  { return 0, nil }
-func (c *chunkRecorderConn) Close() error                                          { return nil }
+func (c *chunkRecorderConn) Update(context.Context, UpdateRequest) (UpdateResult, error) {
+	return UpdateResult{Affected: 1}, nil
+}
+func (c *chunkRecorderConn) Delete(context.Context, DeleteRequest) (DeleteResult, error) {
+	return DeleteResult{Deleted: 1}, nil
+}
+func (c *chunkRecorderConn) Count(context.Context, CountRequest) (int64, error) {
+	c.countCalls++
+	return 0, nil
+}
+func (c *chunkRecorderConn) Close() error { return nil }
 
 // TestInsertAllRequiresSQLConnection 验证批量插入要求 SQL 连接（非 SQL 连接应报错而非静默）。
 // 真实分批落库由 connector 包的 SQLite 集成测试覆盖（TestSqliteInsertAllBatching）。
@@ -170,6 +196,44 @@ func TestInsertAllSplitsByDialectBindLimit(t *testing.T) {
 	}
 }
 
+// TestInsertAllSplitsByPacketBudgetAndKeepsAtomicity 验证大字段批量写入会在绑定参数之外按包预算拆分，
+// 并且因包预算产生多批时仍自动启用事务。
+func TestInsertAllSplitsByPacketBudgetAndKeepsAtomicity(t *testing.T) {
+	connection, recorder := newRecordingHardeningSQLConnection(t)
+	connection.Builder = builder.NewMysql(400)
+	database := NewDB(connection)
+	rows := []map[string]interface{}{
+		{"id": int64(1), "payload": strings.Repeat("a", 80)},
+		{"id": int64(2), "payload": strings.Repeat("b", 80)},
+		{"id": int64(3), "payload": strings.Repeat("c", 80)},
+	}
+
+	affected, err := database.Table("users").InsertAll(rows)
+	if err != nil {
+		t.Fatalf("按包预算分批写入失败: %v", err)
+	}
+	if affected != 4 {
+		t.Fatalf("测试驱动两批各返回 2 行，累计影响行数错误: %d", affected)
+	}
+	if got := recorder.recordedExecCount(); got != 2 {
+		t.Fatalf("包预算应拆成两条 INSERT，实际执行 %d 条", got)
+	}
+	if got := recorder.recordedBeginCount(); got != 1 {
+		t.Fatalf("包预算导致多批时应自动开启一次事务，实际 %d 次", got)
+	}
+}
+
+// TestBuildBatchInsertChunkRejectsOversizedSingleRow 验证单行已经超过预算时不会退化成发送必失败的 SQL。
+func TestBuildBatchInsertChunkRejectsOversizedSingleRow(t *testing.T) {
+	build := builder.NewMysql(128)
+	_, _, _, err := buildBatchInsertChunk(build, "users", []string{"id", "payload"}, []map[string]interface{}{{
+		"id": int64(1), "payload": strings.Repeat("x", 512),
+	}}, 1)
+	if !errors.Is(err, ErrBatchStatementTooLarge) {
+		t.Fatalf("超大单行应返回 ErrBatchStatementTooLarge，实际为 %v", err)
+	}
+}
+
 // TestInsertAllRejectsEmptyRowWithoutPanic 验证空行会被明确拒绝，
 // 避免按字段数计算批次大小时触发除零崩溃。
 func TestInsertAllRejectsEmptyRowWithoutPanic(t *testing.T) {
@@ -222,6 +286,140 @@ func TestChunkByIdUsesKeysetCursor(t *testing.T) {
 	}
 	if len(conn.whereArgs[1]) != 1 || conn.whereArgs[1][0] != int64(2) {
 		t.Fatalf("第二批游标值应为上一批末尾主键 2，实际 %v", conn.whereArgs[1])
+	}
+}
+
+// TestSeekPageUsesKeysetWithoutCountOrOffset 验证游标分页只读取下一窗口，不执行 COUNT 或 OFFSET。
+func TestSeekPageUsesKeysetWithoutCountOrOffset(t *testing.T) {
+	conn := &chunkRecorderConn{
+		pages: [][]map[string]interface{}{
+			{{"id": int64(1)}, {"id": int64(2)}, {"id": int64(3)}},
+			{{"id": int64(3)}, {"id": int64(4)}},
+		},
+	}
+	database := NewDB(conn)
+	query := database.Table("users")
+
+	first, err := query.SeekPage(2, "id", nil)
+	if err != nil {
+		t.Fatalf("首个游标分页不应报错: %v", err)
+	}
+	if len(first.List) != 2 || first.List[0]["id"] != int64(1) || first.List[1]["id"] != int64(2) {
+		t.Fatalf("首个游标分页结果错误: %#v", first.List)
+	}
+	if first.NextCursor != int64(2) || !first.HasMore || first.PageSize != 2 {
+		t.Fatalf("首个游标分页元数据错误: %#v", first)
+	}
+
+	second, err := query.SeekPage(2, "id", first.NextCursor)
+	if err != nil {
+		t.Fatalf("后续游标分页不应报错: %v", err)
+	}
+	if len(second.List) != 2 || second.List[0]["id"] != int64(3) || second.List[1]["id"] != int64(4) {
+		t.Fatalf("后续游标分页结果错误: %#v", second.List)
+	}
+	if second.NextCursor != nil || second.HasMore {
+		t.Fatalf("末页游标分页元数据错误: %#v", second)
+	}
+	if conn.countCalls != 0 {
+		t.Fatalf("SeekPage 不应执行 COUNT，实际执行 %d 次", conn.countCalls)
+	}
+	if len(conn.orders) != 2 || conn.orders[0] != "id" || conn.orders[1] != "id" {
+		t.Fatalf("SeekPage 应固定按游标字段升序读取: %#v", conn.orders)
+	}
+	if len(conn.limits) != 2 || conn.limits[0] != 3 || conn.limits[1] != 3 {
+		t.Fatalf("SeekPage 应多读取一行判断是否还有下一页: %#v", conn.limits)
+	}
+	if len(conn.offsets) != 2 || conn.offsets[0] != 0 || conn.offsets[1] != 0 {
+		t.Fatalf("SeekPage 不应使用 OFFSET: %#v", conn.offsets)
+	}
+	if len(conn.whereArgs) != 2 || len(conn.whereArgs[1]) != 1 || conn.whereArgs[1][0] != int64(2) {
+		t.Fatalf("后续页面应使用上一页末游标: %#v", conn.whereArgs)
+	}
+}
+
+// TestSeekPageValidatesCursorRows 验证游标字段、类型和严格递增约束。
+func TestSeekPageValidatesCursorRows(t *testing.T) {
+	tests := []struct {
+		name  string
+		pages [][]map[string]interface{}
+		want  error
+	}{
+		{
+			name:  "缺少游标字段",
+			pages: [][]map[string]interface{}{{{"name": "missing"}}},
+			want:  ErrInvalidDatabaseRow,
+		},
+		{
+			name:  "游标未严格递增",
+			pages: [][]map[string]interface{}{{{"id": int64(1)}, {"id": int64(1)}}},
+			want:  ErrInvalidDatabaseRow,
+		},
+		{
+			name:  "默认类型不支持文本",
+			pages: [][]map[string]interface{}{{{"id": "a"}}},
+			want:  ErrUnsupportedCursorKey,
+		},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			database := NewDB(&chunkRecorderConn{pages: testCase.pages})
+			_, err := database.Table("users").SeekPage(2, "id", nil)
+			if !errors.Is(err, testCase.want) {
+				t.Fatalf("错误类型不正确: got=%v want=%v", err, testCase.want)
+			}
+		})
+	}
+
+	database := NewDB(&chunkRecorderConn{pages: [][]map[string]interface{}{{{"id": "a"}, {"id": "b"}}}})
+	page, err := database.Table("users").SeekPageWithCodec(2, "id", lexicalCursorCodec{}, nil)
+	if err != nil || len(page.List) != 2 {
+		t.Fatalf("显式文本 codec 应支持游标分页: page=%#v err=%v", page, err)
+	}
+}
+
+// TestSeekPageRejectsInvalidAfter 验证传入的游标边界会在发起查询前校验。
+func TestSeekPageRejectsInvalidAfter(t *testing.T) {
+	conn := &chunkRecorderConn{pages: [][]map[string]interface{}{{{"id": int64(1)}}}}
+	database := NewDB(conn)
+	_, err := database.Table("users").SeekPage(2, "id", "not-an-integer")
+	if !errors.Is(err, ErrUnsupportedCursorKey) {
+		t.Fatalf("非法 after 应返回 ErrUnsupportedCursorKey，实际为 %v", err)
+	}
+	if len(conn.selects) != 0 {
+		t.Fatal("非法 after 不应发起数据库查询")
+	}
+}
+
+func TestChunkByIdRejectsTextWithoutCodec(t *testing.T) {
+	database := NewDB(&chunkRecorderConn{pages: [][]map[string]interface{}{
+		{{"id": "a"}, {"id": "b"}},
+	}})
+	err := database.Table("users").ChunkById(2, "id", func([]map[string]interface{}) bool { return true })
+	if !errors.Is(err, ErrUnsupportedCursorKey) {
+		t.Fatalf("text cursor must require an explicit codec: %v", err)
+	}
+}
+
+type lexicalCursorCodec struct{}
+
+func (lexicalCursorCodec) Compare(previous, next interface{}) (int, error) {
+	previousText, previousOK := previous.(string)
+	nextText, nextOK := next.(string)
+	if !previousOK || !nextOK {
+		return 0, fmt.Errorf("%w: lexical cursor changed from %T to %T", ErrInvalidDatabaseRow, previous, next)
+	}
+	return strings.Compare(previousText, nextText), nil
+}
+
+func TestChunkByIdAllowsExplicitTextCodec(t *testing.T) {
+	database := NewDB(&chunkRecorderConn{pages: [][]map[string]interface{}{
+		{{"id": "a"}, {"id": "b"}},
+		{{"id": "c"}},
+	}})
+	err := database.Table("users").ChunkByIdWithCodec(2, "id", lexicalCursorCodec{}, func([]map[string]interface{}) bool { return true })
+	if err != nil {
+		t.Fatalf("explicit lexical cursor codec failed: %v", err)
 	}
 }
 

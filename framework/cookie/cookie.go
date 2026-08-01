@@ -10,6 +10,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -76,11 +77,13 @@ type CookieOptions struct {
 
 // Cookie 是不可共享请求状态的 Cookie 工厂或请求级实例。
 type Cookie struct {
-	config  CookieConfig
-	request *http.Request
-	writer  http.ResponseWriter
-	mu      sync.RWMutex
-	writeMu sync.Mutex
+	config           CookieConfig
+	request          *http.Request
+	writer           http.ResponseWriter
+	requestSecure    bool
+	requestSecureSet bool
+	mu               sync.RWMutex
+	writeMu          sync.Mutex
 }
 
 // DefaultConfig 返回安全的 Cookie 默认配置。
@@ -199,6 +202,17 @@ func NewCookieForRequest(config CookieConfig, req *http.Request, writer http.Res
 	return &Cookie{config: config, request: req, writer: writer}, nil
 }
 
+// NewCookieForRequestWithSecure 创建请求级 Cookie，并使用调用方已经完成可信代理校验的协议结论。
+func NewCookieForRequestWithSecure(config CookieConfig, req *http.Request, writer http.ResponseWriter, secure bool) (*Cookie, error) {
+	if req == nil {
+		return nil, ErrCookieRequestUnavailable
+	}
+	if err := validateCookieConfig(config); err != nil {
+		return nil, err
+	}
+	return &Cookie{config: config, request: req, writer: writer, requestSecure: secure, requestSecureSet: true}, nil
+}
+
 // ForRequest 从工厂创建隔离的请求级 Cookie 实例。
 func (c *Cookie) ForRequest(req *http.Request, writer http.ResponseWriter) (*Cookie, error) {
 	if c == nil {
@@ -207,9 +221,17 @@ func (c *Cookie) ForRequest(req *http.Request, writer http.ResponseWriter) (*Coo
 	return NewCookieForRequest(c.config, req, writer)
 }
 
+// ForRequestWithSecure 从工厂创建请求级 Cookie，并显式传入可信协议结论。
+func (c *Cookie) ForRequestWithSecure(req *http.Request, writer http.ResponseWriter, secure bool) (*Cookie, error) {
+	if c == nil {
+		return nil, ErrInvalidCookieConfig
+	}
+	return NewCookieForRequestWithSecure(c.config, req, writer, secure)
+}
+
 // SetWriter 为请求级 Cookie 绑定响应 writer。
 func (c *Cookie) SetWriter(writer http.ResponseWriter) error {
-	if c == nil || writer == nil {
+	if c == nil || isNilResponseWriter(writer) {
 		return ErrCookieWriterUnavailable
 	}
 	c.mu.Lock()
@@ -238,7 +260,7 @@ func (c *Cookie) Set(name, value string, options ...CookieOptions) error {
 	c.mu.RLock()
 	writer := c.writer
 	c.mu.RUnlock()
-	if writer == nil {
+	if isNilResponseWriter(writer) {
 		return ErrCookieWriterUnavailable
 	}
 	// http.Header 本身不保证并发安全，请求级 Cookie 的并发写入在此串行化。
@@ -246,6 +268,20 @@ func (c *Cookie) Set(name, value string, options ...CookieOptions) error {
 	writer.Header().Add("Set-Cookie", header)
 	c.writeMu.Unlock()
 	return nil
+}
+
+// isNilResponseWriter 同时识别 nil 接口和承载 nil 指针的接口，避免写 Cookie 时触发反射后的 panic。
+func isNilResponseWriter(writer http.ResponseWriter) bool {
+	if writer == nil {
+		return true
+	}
+	value := reflect.ValueOf(writer)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
 }
 
 // BuildHeader 构建经过完整配置、签名和长度校验的 Set-Cookie 头值，不要求绑定 writer。
@@ -270,6 +306,8 @@ func (c *Cookie) BuildHeader(name, value string, options ...CookieOptions) (stri
 
 	c.mu.RLock()
 	request := c.request
+	requestSecure := c.requestSecure
+	requestSecureSet := c.requestSecureSet
 	c.mu.RUnlock()
 	now := time.Now()
 	encodedValue := value
@@ -279,7 +317,13 @@ func (c *Cookie) BuildHeader(name, value string, options ...CookieOptions) (stri
 			return "", err
 		}
 	}
-	secure := opts.Secure || isSecureCookieRequest(request) || strings.EqualFold(opts.SameSite, "None")
+	secure := opts.Secure || strings.EqualFold(opts.SameSite, "None")
+	if requestSecureSet {
+		secure = secure || requestSecure
+	} else {
+		secure = secure || isSecureCookieRequest(request)
+	}
+	// #nosec G124 -- 安全属性来自调用方已校验的 CookieOptions，保留显式兼容策略。
 	cookie := &http.Cookie{
 		Name:     finalName,
 		Value:    encodedValue,
@@ -375,6 +419,7 @@ func (c *Cookie) finalName(name string) (string, error) {
 	if len(finalName) > maxCookieNameBytes || hasCookieControl(finalName) {
 		return "", fmt.Errorf("%w: %q", ErrInvalidCookieName, finalName)
 	}
+	// #nosec G124 -- 该 Cookie 只用于校验名称语法，不会写入响应。
 	probe := &http.Cookie{Name: finalName, Value: "x", Path: "/"}
 	if err := probe.Valid(); err != nil {
 		return "", fmt.Errorf("%w: %v", ErrInvalidCookieName, err)
@@ -420,6 +465,7 @@ func validateCookieConfig(config CookieConfig) error {
 		return invalidCookieConfig("prefix", "包含非法字符或过长")
 	}
 	if config.Prefix != "" {
+		// #nosec G124 -- 该 Cookie 只用于校验前缀语法，不会写入响应。
 		probe := &http.Cookie{Name: config.Prefix + "x", Value: "x", Path: "/"}
 		if err := probe.Valid(); err != nil {
 			return invalidCookieConfig("prefix", err.Error())
@@ -460,6 +506,7 @@ func validateCookiePolicy(path, domain string) error {
 	if path == "" || !strings.HasPrefix(path, "/") || hasCookieControl(path) || strings.Contains(path, ";") {
 		return errors.New("Cookie Path 必须以 / 开头且不含控制字符或分号")
 	}
+	// #nosec G124 -- 该 Cookie 只用于校验路径和域名语法，不会写入响应。
 	probe := &http.Cookie{Name: "probe", Value: "x", Path: path, Domain: domain}
 	if err := probe.Valid(); err != nil {
 		return err

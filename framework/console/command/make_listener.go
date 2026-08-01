@@ -2,7 +2,6 @@ package command
 
 import (
 	"fmt"
-	"path/filepath"
 
 	"thinkgo/framework/console"
 )
@@ -17,11 +16,12 @@ func (c *MakeListener) Configure() {
 	c.Signature = "make:listener"
 	c.Description = "Create a new listener class"
 	c.AddArgument("name", "Listener type name", true)
+	configureApplicationOption(&c.Command)
 }
 
 // Execute 校验名称后安全创建监听器文件。
 func (c *MakeListener) Execute(input *console.Input, output *console.Output) error {
-	name, err := normalizedGeneratorInput(c.App, input, output, "")
+	name, err := normalizedGeneratorInput(&c.Command, input, output, "")
 	if err != nil {
 		return fmt.Errorf("invalid listener name: %w", err)
 	}
@@ -47,8 +47,8 @@ func (l *%s) Handle(currentEvent event.Event) error {
 }
 `, name, name, name)
 
-	if err := writeGeneratedAppSource(c.App, filepath.Join("app", "listener"), lowerGoFilename(name), []byte(content)); err != nil {
-		return fmt.Errorf("create listener %s: %w", name, err)
+	if err := writeAndRegisterGeneratedAppSource(c.App, "listener", lowerGoFilename(name), []byte(content), applicationRegistrationListener, name); err != nil {
+		return fmt.Errorf("create and register listener %s: %w", name, err)
 	}
 
 	output.Success(fmt.Sprintf("Listener %s created successfully.", name))

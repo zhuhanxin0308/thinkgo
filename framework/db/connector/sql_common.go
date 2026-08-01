@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"thinkgo/framework/db"
@@ -27,6 +28,21 @@ type sqlConnectionPoolConfig struct {
 	MaxIdleConns    int
 	ConnMaxLifetime time.Duration
 	ConnMaxIdleTime time.Duration
+}
+
+var builtinsOnce sync.Once
+
+// RegisterBuiltins 显式注册框架内置数据库连接器，避免导入 connector 包时通过 init 隐式改变全局注册表。
+func RegisterBuiltins() {
+	builtinsOnce.Do(func() {
+		mustRegisterConnector("mysql", &Mysql{})
+		mustRegisterConnector("pgsql", &Pgsql{})
+		mustRegisterConnector("sqlsrv", &Sqlsrv{})
+		mustRegisterConnector("sqlite", &Sqlite{})
+		mustRegisterConnector("mongo", &Mongo{})
+		mustRegisterConnector("neo4j", &Neo4j{})
+		registerOracle()
+	})
 }
 
 func resolveSQLConnectionPoolConfig(config db.Config) (sqlConnectionPoolConfig, error) {
@@ -83,6 +99,14 @@ func openSQLConnection(driverName, dataSourceName string, build db.Builder, conf
 	return verifySQLConnection(handle, build, config)
 }
 
+func openSQLConnectionWithPool(driverName, dataSourceName string, build db.Builder, settings sqlConnectionPoolConfig) (db.Connection, error) {
+	handle, err := sql.Open(driverName, dataSourceName)
+	if err != nil {
+		return nil, err
+	}
+	return verifySQLConnectionWithPool(handle, build, settings)
+}
+
 func verifySQLConnection(handle *sql.DB, build db.Builder, config db.Config) (db.Connection, error) {
 	settings, err := resolveSQLConnectionPoolConfig(config)
 	if err != nil {
@@ -91,6 +115,10 @@ func verifySQLConnection(handle *sql.DB, build db.Builder, config db.Config) (db
 		}
 		return nil, err
 	}
+	return verifySQLConnectionWithPool(handle, build, settings)
+}
+
+func verifySQLConnectionWithPool(handle *sql.DB, build db.Builder, settings sqlConnectionPoolConfig) (db.Connection, error) {
 	if handle == nil {
 		return nil, db.ErrDatabaseUnavailable
 	}
@@ -103,7 +131,7 @@ func verifySQLConnection(handle *sql.DB, build db.Builder, config db.Config) (db
 	if err := handle.PingContext(ctx); err != nil {
 		return nil, joinCloseError(err, handle.Close())
 	}
-	return &db.SQLConnection{DB: handle, Builder: build}, nil
+	return db.NewSQLConnection(handle, build), nil
 }
 
 // isNilSQLBuilder 识别接口中的类型化 nil，避免连接初始化阶段调用空方言实现。

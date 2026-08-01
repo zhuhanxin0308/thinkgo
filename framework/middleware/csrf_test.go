@@ -122,6 +122,120 @@ func TestCSRFAllowsOnlyMatchingValidSignedToken(t *testing.T) {
 	}
 }
 
+// TestCSRFOriginUsesServerRequestHost 验证真实 net/http 服务端请求缺少 URL 主机时仍能通过合法同源校验。
+func TestCSRFOriginUsesServerRequestHost(t *testing.T) {
+	config := DefaultCSRFConfig()
+	config.Secret = strings.Repeat("s", 32)
+	handler := newCSRFHandler(t, config)
+	written := issueCSRFTokenCookie(t, handler)
+	raw := httptest.NewRequest(http.MethodPost, "/save", nil)
+	raw.Host = "example.com"
+	raw.AddCookie(written)
+	raw.Header.Set(config.HeaderName, written.Value)
+	raw.Header.Set("Origin", "http://example.com")
+	called := false
+	response := handler(fwcontext.MustNewRequest(raw), func(*fwcontext.Request) *fwcontext.Response {
+		called = true
+		return fwcontext.NewResponse().Content("ok")
+	})
+	if !called || response.GetStatus() != http.StatusOK {
+		t.Fatalf("真实服务端同源请求不应被误拒绝: called=%t status=%d", called, response.GetStatus())
+	}
+}
+
+// TestCSRFOriginUsesTrustedForwardedScheme 验证可信 TLS 终止代理后的同源请求使用外部 HTTPS 协议校验。
+func TestCSRFOriginUsesTrustedForwardedScheme(t *testing.T) {
+	config := DefaultCSRFConfig()
+	config.Secret = strings.Repeat("p", 32)
+	handler := newCSRFHandler(t, config)
+	written := issueCSRFTokenCookie(t, handler)
+
+	raw := httptest.NewRequest(http.MethodPost, "/save", nil)
+	raw.Host = "example.com"
+	raw.RemoteAddr = "127.0.0.1:4321"
+	raw.Header.Set("X-Forwarded-Proto", "https")
+	raw.Header.Set("Origin", "https://example.com")
+	raw.AddCookie(written)
+	raw.Header.Set(config.HeaderName, written.Value)
+	req, err := fwcontext.NewRequest(raw, fwcontext.WithTrustedProxies([]string{"127.0.0.1/32"}))
+	if err != nil {
+		t.Fatalf("构造可信代理请求失败: %v", err)
+	}
+
+	called := false
+	response := handler(req, func(*fwcontext.Request) *fwcontext.Response {
+		called = true
+		return fwcontext.NewResponse().Code(http.StatusOK)
+	})
+	if !req.IsSsl() || !called || response == nil || response.GetStatus() != http.StatusOK {
+		t.Fatalf("可信代理后的合法 HTTPS CSRF 请求应通过: ssl=%t called=%t response=%#v", req.IsSsl(), called, response)
+	}
+}
+
+// TestCSRFRejectsCrossOriginStateChanges 验证有效 token 也不能绕过来源校验。
+func TestCSRFRejectsCrossOriginStateChanges(t *testing.T) {
+	config := DefaultCSRFConfig()
+	config.Secret = strings.Repeat("o", 32)
+	handler := newCSRFHandler(t, config)
+	written := issueCSRFTokenCookie(t, handler)
+
+	raw := httptest.NewRequest(http.MethodPost, "https://example.com/save", nil)
+	raw.AddCookie(written)
+	raw.Header.Set(config.HeaderName, written.Value)
+	raw.Header.Set("Origin", "https://evil.example")
+	called := false
+	response := handler(fwcontext.MustNewRequest(raw), func(*fwcontext.Request) *fwcontext.Response {
+		called = true
+		return fwcontext.NewResponse()
+	})
+	if called || response.GetStatus() != http.StatusForbidden {
+		t.Fatalf("跨源状态变更请求必须拒绝: called=%t status=%d", called, response.GetStatus())
+	}
+
+	raw = httptest.NewRequest(http.MethodPost, "https://example.com/save", nil)
+	raw.AddCookie(written)
+	raw.Header.Set(config.HeaderName, written.Value)
+	raw.Header.Set("Referer", "https://example.com/account/form")
+	response = handler(fwcontext.MustNewRequest(raw), func(*fwcontext.Request) *fwcontext.Response {
+		return fwcontext.NewResponse().Content("ok")
+	})
+	if response.GetStatus() != http.StatusOK {
+		t.Fatalf("同源 Referer 请求应通过: status=%d", response.GetStatus())
+	}
+}
+
+// TestCSRFPreservesURLFormBodyForDownstreamRequest 验证 CSRF 解析表单后，控制器仍能读取完整原始请求体。
+func TestCSRFPreservesURLFormBodyForDownstreamRequest(t *testing.T) {
+	config := DefaultCSRFConfig()
+	config.Secret = strings.Repeat("b", 32)
+	handler := newCSRFHandler(t, config)
+	written := issueCSRFTokenCookie(t, handler)
+	form := url.Values{
+		config.FieldName: {written.Value},
+		"name":           {"bob"},
+	}.Encode()
+	raw := httptest.NewRequest(http.MethodPost, "https://example.com/save", strings.NewReader(form))
+	raw.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	raw.AddCookie(written)
+
+	response := handler(fwcontext.MustNewRequest(raw), func(request *fwcontext.Request) *fwcontext.Response {
+		body, err := request.Body()
+		if err != nil {
+			t.Fatalf("CSRF 解析后读取请求体失败: %v", err)
+		}
+		if string(body) != form {
+			t.Fatalf("CSRF 解析后请求体应保持完整，期望 %q，实际 %q", form, string(body))
+		}
+		if request.Post("name") != "bob" {
+			t.Fatal("控制器仍应能读取表单字段")
+		}
+		return fwcontext.NewResponse().Content("done")
+	})
+	if response.GetStatus() != http.StatusOK || string(response.GetBody()) != "done" {
+		t.Fatalf("合法表单请求应正常通过，实际 status=%d body=%q", response.GetStatus(), response.GetBody())
+	}
+}
+
 // TestCSRFRejectsCookieInjectionTamperingAndDuplicates 验证匹配但不可验签的注入值及重复 Cookie 均失败。
 func TestCSRFRejectsCookieInjectionTamperingAndDuplicates(t *testing.T) {
 	config := DefaultCSRFConfig()

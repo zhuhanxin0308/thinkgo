@@ -10,21 +10,23 @@ import (
 )
 
 type modelBusinessConnection struct {
-	rows          []map[string]interface{}
-	tableRows     map[string][]map[string]interface{}
-	count         int64
-	aggregate     interface{}
-	insertID      int64
-	updateCount   int64
-	deleteCount   int64
-	insertData    map[string]interface{}
-	updateData    map[string]interface{}
-	lastContext   context.Context
-	lastRawSQL    string
-	lastRawArgs   []interface{}
-	lastTable     string
-	lastWhere     []string
-	lastWhereArgs []interface{}
+	connectionIdentityState
+	rows              []map[string]interface{}
+	tableRows         map[string][]map[string]interface{}
+	count             int64
+	aggregate         interface{}
+	insertID          int64
+	updateCount       int64
+	deleteCount       int64
+	insertData        map[string]interface{}
+	updateData        map[string]interface{}
+	lastContext       context.Context
+	lastRawSQL        string
+	lastRawArgs       []interface{}
+	lastTable         string
+	lastWhere         []string
+	lastWhereArgs     []interface{}
+	lastFieldsByTable map[string]string
 }
 
 func (connection *modelBusinessConnection) sourceRows(table string) []map[string]interface{} {
@@ -36,6 +38,10 @@ func (connection *modelBusinessConnection) sourceRows(table string) []map[string
 
 func (connection *modelBusinessConnection) selectedRows(table, fields string, where []string, args []interface{}, limit, offset int) []map[string]interface{} {
 	connection.lastTable = table
+	if connection.lastFieldsByTable == nil {
+		connection.lastFieldsByTable = make(map[string]string)
+	}
+	connection.lastFieldsByTable[table] = fields
 	connection.lastWhere = append([]string(nil), where...)
 	connection.lastWhereArgs = append([]interface{}(nil), args...)
 	if strings.Contains(fields, " AS tp_aggregate") {
@@ -68,55 +74,53 @@ func (connection *modelBusinessConnection) selectedRows(table, fields string, wh
 	return projected
 }
 
-func (connection *modelBusinessConnection) Select(table, fields string, where []string, args []interface{}, _ string, limit, offset int) ([]map[string]interface{}, error) {
-	return connection.selectedRows(table, fields, where, args, limit, offset), nil
-}
-
-func (connection *modelBusinessConnection) SelectContext(ctx context.Context, table, fields string, where []string, args []interface{}, order string, limit, offset int) ([]map[string]interface{}, error) {
+func (connection *modelBusinessConnection) Select(ctx context.Context, request SelectRequest) ([]map[string]interface{}, error) {
 	connection.lastContext = ctx
-	return connection.Select(table, fields, where, args, order, limit, offset)
+	where, args, err := request.Predicate().compileSQL()
+	if err != nil {
+		return nil, err
+	}
+	if request.Aggregate() != nil {
+		connection.lastTable = request.Table()
+		connection.lastWhere = append([]string(nil), where...)
+		connection.lastWhereArgs = append([]interface{}(nil), args...)
+		return []map[string]interface{}{{"tp_aggregate": connection.aggregate}}, nil
+	}
+	return connection.selectedRows(request.Table(), request.Fields(), where, args, request.Limit(), request.Offset()), nil
 }
 
-func (connection *modelBusinessConnection) Insert(_ string, data map[string]interface{}) (int64, error) {
-	connection.insertData = cloneDatabaseMap(data)
-	return connection.insertID, nil
-}
-
-func (connection *modelBusinessConnection) InsertContext(ctx context.Context, table string, data map[string]interface{}) (int64, error) {
+func (connection *modelBusinessConnection) Insert(ctx context.Context, request InsertRequest) (InsertResult, error) {
 	connection.lastContext = ctx
-	return connection.Insert(table, data)
+	connection.insertData = request.Data()
+	return InsertResult{Affected: 1, ID: connection.insertID, IDKnown: request.WantsID(), Data: request.Data()}, nil
 }
 
-func (connection *modelBusinessConnection) Update(_ string, data map[string]interface{}, where []string, args []interface{}) (int64, error) {
-	connection.updateData = cloneDatabaseMap(data)
+func (connection *modelBusinessConnection) Update(ctx context.Context, request UpdateRequest) (UpdateResult, error) {
+	connection.lastContext = ctx
+	where, args, err := request.Predicate().compileSQL()
+	if err != nil {
+		return UpdateResult{}, err
+	}
+	connection.updateData = request.Data()
 	connection.lastWhere = append([]string(nil), where...)
 	connection.lastWhereArgs = append([]interface{}(nil), args...)
-	return connection.updateCount, nil
+	return UpdateResult{Affected: connection.updateCount, Data: request.Data()}, nil
 }
 
-func (connection *modelBusinessConnection) UpdateContext(ctx context.Context, table string, data map[string]interface{}, where []string, args []interface{}) (int64, error) {
+func (connection *modelBusinessConnection) Delete(ctx context.Context, request DeleteRequest) (DeleteResult, error) {
 	connection.lastContext = ctx
-	return connection.Update(table, data, where, args)
-}
-
-func (connection *modelBusinessConnection) Delete(_ string, where []string, args []interface{}) (int64, error) {
+	where, args, err := request.Predicate().compileSQL()
+	if err != nil {
+		return DeleteResult{}, err
+	}
 	connection.lastWhere = append([]string(nil), where...)
 	connection.lastWhereArgs = append([]interface{}(nil), args...)
-	return connection.deleteCount, nil
+	return DeleteResult{Deleted: connection.deleteCount}, nil
 }
 
-func (connection *modelBusinessConnection) DeleteContext(ctx context.Context, table string, where []string, args []interface{}) (int64, error) {
+func (connection *modelBusinessConnection) Count(ctx context.Context, _ CountRequest) (int64, error) {
 	connection.lastContext = ctx
-	return connection.Delete(table, where, args)
-}
-
-func (connection *modelBusinessConnection) Count(string, []string, []interface{}) (int64, error) {
 	return connection.count, nil
-}
-
-func (connection *modelBusinessConnection) CountContext(ctx context.Context, table string, where []string, args []interface{}) (int64, error) {
-	connection.lastContext = ctx
-	return connection.Count(table, where, args)
 }
 
 func (connection *modelBusinessConnection) Query(sqlText string, args ...interface{}) ([]map[string]interface{}, error) {
@@ -322,8 +326,8 @@ func TestModelQueryTerminalBusinessFlows(t *testing.T) {
 	}
 
 	insertData := map[string]interface{}{"name": "ADA"}
-	if id, err := model.Insert(insertData); err != nil || id != 42 {
-		t.Fatalf("Model.Insert 结果错误: id=%d err=%v", id, err)
+	if id, err := model.InsertGetId(insertData); err != nil || id != int64(42) {
+		t.Fatalf("Model.InsertGetId 结果错误: id=%v err=%v", id, err)
 	}
 	if insertData["name"] != "ADA" || connection.insertData["name"] != "ada" {
 		t.Fatalf("修改器必须只修改内部副本: caller=%#v driver=%#v", insertData, connection.insertData)
@@ -416,6 +420,38 @@ func TestModelQueryTerminalBusinessFlows(t *testing.T) {
 	}
 	if affected, err := model.newModelQuery().WithContext(ctx).WhereField("id", "=", 1).Inc("score", 2).Update(nil); err != nil || affected != 2 || connection.lastContext != ctx {
 		t.Fatalf("模型自增执行错误: affected=%d sql=%q args=%v err=%v", affected, connection.lastRawSQL, connection.lastRawArgs, err)
+	}
+}
+
+// TestModelSeekPageAppliesGetters 验证模型游标分页继承主键默认值并应用获取器。
+func TestModelSeekPageAppliesGetters(t *testing.T) {
+	connection := &chunkRecorderConn{pages: [][]map[string]interface{}{
+		{{"id": int64(1), "name": "alice"}, {"id": int64(2), "name": "bob"}},
+		{{"id": int64(2), "name": "bob"}},
+	}}
+	model := NewModel(NewDB(connection), "users")
+	if err := model.Getter("name", func(value interface{}, _ map[string]interface{}) interface{} {
+		return strings.ToUpper(value.(string))
+	}); err != nil {
+		t.Fatalf("注册模型获取器失败: %v", err)
+	}
+
+	first, err := model.newModelQuery().SeekPage(1, "", nil)
+	if err != nil {
+		t.Fatalf("模型首个游标分页失败: %v", err)
+	}
+	if len(first.List) != 1 || first.List[0]["name"] != "ALICE" || first.NextCursor != int64(1) || !first.HasMore {
+		t.Fatalf("模型首个游标分页结果错误: %#v", first)
+	}
+	second, err := model.newModelQuery().SeekPage(1, "", first.NextCursor)
+	if err != nil {
+		t.Fatalf("模型后续游标分页失败: %v", err)
+	}
+	if len(second.List) != 1 || second.List[0]["name"] != "BOB" || second.NextCursor != nil || second.HasMore {
+		t.Fatalf("模型末页游标分页结果错误: %#v", second)
+	}
+	if connection.countCalls != 0 {
+		t.Fatalf("模型 SeekPage 不应执行 COUNT，实际执行 %d 次", connection.countCalls)
 	}
 }
 

@@ -1,37 +1,42 @@
 package db
 
-import "testing"
+import (
+	"context"
+	"testing"
+	"time"
+)
 
 // timestampCaptureConnection 用于捕获自动时间戳写入的数据，验证框架是否按配置输出正确的时间值类型。
 type timestampCaptureConnection struct {
+	connectionIdentityState
 	insertData    map[string]interface{}
 	updateData    map[string]interface{}
 	lastOperation string
 }
 
-func (c *timestampCaptureConnection) Select(table string, fields string, where []string, args []interface{}, order string, limit int, offset int) ([]map[string]interface{}, error) {
+func (c *timestampCaptureConnection) Select(context.Context, SelectRequest) ([]map[string]interface{}, error) {
 	c.lastOperation = "select"
 	return nil, nil
 }
 
-func (c *timestampCaptureConnection) Insert(table string, data map[string]interface{}) (int64, error) {
+func (c *timestampCaptureConnection) Insert(_ context.Context, request InsertRequest) (InsertResult, error) {
 	c.lastOperation = "insert"
-	c.insertData = cloneCapturedData(data)
-	return 1, nil
+	c.insertData = cloneCapturedData(request.Data())
+	return InsertResult{Affected: 1, ID: int64(1), IDKnown: request.WantsID(), Data: request.Data()}, nil
 }
 
-func (c *timestampCaptureConnection) Update(table string, data map[string]interface{}, where []string, args []interface{}) (int64, error) {
+func (c *timestampCaptureConnection) Update(_ context.Context, request UpdateRequest) (UpdateResult, error) {
 	c.lastOperation = "update"
-	c.updateData = cloneCapturedData(data)
-	return 1, nil
+	c.updateData = cloneCapturedData(request.Data())
+	return UpdateResult{Affected: 1, Data: request.Data()}, nil
 }
 
-func (c *timestampCaptureConnection) Delete(table string, where []string, args []interface{}) (int64, error) {
+func (c *timestampCaptureConnection) Delete(context.Context, DeleteRequest) (DeleteResult, error) {
 	c.lastOperation = "delete"
-	return 1, nil
+	return DeleteResult{Deleted: 1}, nil
 }
 
-func (c *timestampCaptureConnection) Count(table string, where []string, args []interface{}) (int64, error) {
+func (c *timestampCaptureConnection) Count(context.Context, CountRequest) (int64, error) {
 	c.lastOperation = "count"
 	return 0, nil
 }
@@ -146,6 +151,23 @@ func TestQueryAutoTimestampUsesDateWhenConfigured(t *testing.T) {
 	}
 }
 
+// TestQueryAutoTimestampUsesNativeTimeWhenConfigured 验证 native 模式把自动时间戳交给驱动处理。
+func TestQueryAutoTimestampUsesNativeTimeWhenConfigured(t *testing.T) {
+	conn := &timestampCaptureConnection{}
+	database := NewDB(conn)
+	database.autoTimestamp = true
+	database.timestampValueType = TimestampValueTypeNative
+
+	if _, err := database.Name("users").Insert(map[string]interface{}{"username": "tester"}); err != nil {
+		t.Fatalf("native 模式 Insert 不应返回错误: %v", err)
+	}
+	for _, field := range []string{"create_time", "update_time"} {
+		if _, ok := conn.insertData[field].(time.Time); !ok {
+			t.Fatalf("native 模式 %s 应写入 time.Time，实际为 %T", field, conn.insertData[field])
+		}
+	}
+}
+
 // TestNormalizeTimestampValueType 验证各种输入都能正确归一化。
 func TestNormalizeTimestampValueType(t *testing.T) {
 	cases := []struct {
@@ -159,6 +181,7 @@ func TestNormalizeTimestampValueType(t *testing.T) {
 		{"DATETIME", TimestampValueTypeDateTime},
 		{"timestamp", TimestampValueTypeTimestamp},
 		{"date", TimestampValueTypeDate},
+		{"native", TimestampValueTypeNative},
 		{"  datetime  ", TimestampValueTypeDateTime},
 		{"", TimestampValueTypeUnix},        // 空串回退到 unix
 		{"invalid", TimestampValueTypeUnix}, // 未知类型回退到 unix

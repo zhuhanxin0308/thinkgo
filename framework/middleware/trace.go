@@ -15,9 +15,18 @@ import (
 	frameworkVersion "thinkgo/framework/version"
 )
 
-// Trace middleware
+// Trace 为通过本机授权门禁的请求创建私有调试 collector。
 type Trace struct {
-	Debug *debug.Debug
+	Debug    *debug.Debug
+	Location *time.Location
+}
+
+// location 返回 Trace 使用的应用时区。
+func (t *Trace) location() *time.Location {
+	if t == nil || t.Location == nil {
+		return time.Local
+	}
+	return t.Location
 }
 
 const (
@@ -88,17 +97,19 @@ window.TgDebug = window.TgDebug || {
 func (t *Trace) Handle(req *context.Request, next func(*context.Request) *context.Response) *context.Response {
 	// 与异常调试页保持一致的门禁：即使开启 Trace，也仅对本机回环请求注入调试条与提供调试资源，
 	// 避免把 SQL 语句、客户端 IP、耗时等内部信息泄露给远程客户端。
-	enabled := t.Debug != nil && t.Debug.Enabled && isLocalTraceRequest(req)
-	if enabled {
-		if assetResp := t.serveTraceAsset(req); assetResp != nil {
-			return assetResp
-		}
+	if t == nil || t.Debug == nil || !t.Debug.Enabled || !isLocalTraceRequest(req) {
+		return next(req)
+	}
+	if assetResp := t.serveTraceAsset(req); assetResp != nil {
+		return assetResp
 	}
 
-	reqDebug := debug.NewRequestDebug(enabled)
-	req.Set("_debug", reqDebug)
+	reqDebug := debug.NewRequestDebug(true)
+	reqDebug.SetLocation(t.location())
+	req.Set(debug.RequestKey, reqDebug)
+	defer reqDebug.Clear()
 
-	start := time.Now()
+	start := time.Now().In(t.location())
 	resp := next(req)
 	duration := time.Since(start).Seconds()
 
@@ -106,16 +117,9 @@ func (t *Trace) Handle(req *context.Request, next func(*context.Request) *contex
 		return resp
 	}
 
-	// 未通过门禁（Trace 未启用或非本机回环请求）时，绝不注入调试条，避免信息泄露。
-	if !enabled {
-		reqDebug.Clear()
-		return resp
-	}
-
 	// 仅对 HTML 响应注入调试条：先按 Content-Type 过滤，避免对 JSON/二进制等
 	// 非 HTML 响应也整体小写化大字符串造成无谓的内存与 CPU 开销。
 	if !isHTMLResponse(resp) {
-		reqDebug.Clear()
 		return resp
 	}
 
@@ -137,7 +141,6 @@ func (t *Trace) Handle(req *context.Request, next func(*context.Request) *contex
 		}
 	}
 
-	reqDebug.Clear()
 	return resp
 }
 
@@ -234,7 +237,16 @@ func isHTMLResponse(resp *context.Response) bool {
 	if contentType == "" {
 		return true
 	}
-	return strings.Contains(contentType, "text/html")
+	if strings.Contains(contentType, "text/html") {
+		return true
+	}
+	// Content 默认标记为纯文本，但调试与模板测试可能尚未显式设置 HTML 类型；
+	// 仅在实体确实包含 HTML 结束标签时恢复注入能力，避免泛化为任意文本注入。
+	if strings.HasPrefix(contentType, "text/plain") {
+		body := strings.ToLower(string(resp.GetBody()))
+		return strings.Contains(body, "</html>") || strings.Contains(body, "</body>")
+	}
+	return false
 }
 
 // serveTraceAsset 为调试面板提供静态 CSS/JS 资源，避免每个响应都重复内联整段样式与脚本。
@@ -262,6 +274,7 @@ func buildDebugBar(info map[string]interface{}) string {
 	logEntries := debugEntries(info["logs"])
 	files := debugStringSlice(info["files"])
 	debugVars := debugVarsMap(info["vars"])
+	truncated := info["truncated"]
 
 	return fmt.Sprintf(`
 <link rel="stylesheet" href="%s">
@@ -271,11 +284,11 @@ func buildDebugBar(info map[string]interface{}) string {
 		<div id="tg-bar-header">
 			<div class="tg-tab tg-tab-logo">ThinkGo</div>
 			<div class="tg-tab active" onclick="TgDebug.tab(this, 'base')">General</div>
-			<div class="tg-tab" onclick="TgDebug.tab(this, 'sql')">SQL (%d)</div>
-			<div class="tg-tab" onclick="TgDebug.tab(this, 'cache')">Cache (%d)</div>
-			<div class="tg-tab" onclick="TgDebug.tab(this, 'log')">Logs (%d)</div>
-			<div class="tg-tab" onclick="TgDebug.tab(this, 'file')">Files (%d)</div>
-			<div class="tg-tab" onclick="TgDebug.tab(this, 'debug')">Debug (%d)</div>
+			<div class="tg-tab" onclick="TgDebug.tab(this, 'sql')">SQL (%s)</div>
+			<div class="tg-tab" onclick="TgDebug.tab(this, 'cache')">Cache (%s)</div>
+			<div class="tg-tab" onclick="TgDebug.tab(this, 'log')">Logs (%s)</div>
+			<div class="tg-tab" onclick="TgDebug.tab(this, 'file')">Files (%s)</div>
+			<div class="tg-tab" onclick="TgDebug.tab(this, 'debug')">Debug (%s)</div>
 			<div class="tg-tab tg-tab-close" onclick="TgDebug.toggle()">&times;</div>
 		</div>
 		<div id="tg-bar-content">
@@ -291,11 +304,11 @@ func buildDebugBar(info map[string]interface{}) string {
 <script src="%s"></script>
 `,
 		traceStylesheetPath,
-		len(sqlEntries),
-		len(cacheEntries),
-		len(logEntries),
-		len(files),
-		len(debugVars),
+		debugCountLabel(len(sqlEntries), debugSnapshotTruncated(truncated, debug.KindSQL)),
+		debugCountLabel(len(cacheEntries), debugSnapshotTruncated(truncated, debug.KindCache)),
+		debugCountLabel(len(logEntries), debugSnapshotTruncated(truncated, debug.KindLog)),
+		debugCountLabel(len(files), debugSnapshotTruncated(truncated, debug.KindFile)),
+		debugCountLabel(len(debugVars), debugSnapshotTruncated(truncated, debug.KindVar)),
 		renderBasePanel(info),
 		renderSQLPanel(sqlEntries),
 		renderCachePanel(cacheEntries),
@@ -496,6 +509,27 @@ func debugVarsMap(raw interface{}) map[string]interface{} {
 		return typed
 	}
 	return map[string]interface{}{}
+}
+
+// debugSnapshotTruncated 从 collector 快照读取指定类别的截断状态。
+func debugSnapshotTruncated(raw interface{}, kind debug.Kind) bool {
+	switch values := raw.(type) {
+	case map[string]bool:
+		return values[string(kind)]
+	case map[string]interface{}:
+		truncated, _ := values[string(kind)].(bool)
+		return truncated
+	default:
+		return false
+	}
+}
+
+// debugCountLabel 把被截断的类别明确标记在调试页标签中。
+func debugCountLabel(count int, truncated bool) string {
+	if truncated {
+		return fmt.Sprintf("%d, truncated", count)
+	}
+	return fmt.Sprintf("%d", count)
 }
 
 // debugText 把调试值稳定转换为字符串。

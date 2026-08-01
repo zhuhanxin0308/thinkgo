@@ -11,7 +11,9 @@ import (
 	"time"
 
 	"thinkgo/framework"
+	"thinkgo/framework/config"
 	"thinkgo/framework/context"
+	"thinkgo/framework/env"
 )
 
 var ErrInvalidHTTPConfig = errors.New("HTTP 配置非法")
@@ -25,6 +27,7 @@ type serverConf struct {
 	EnableHTTP3       bool
 	AllowedHosts      []string
 	TrustedProxies    []string
+	TrustedProxySet   *context.TrustedProxySet
 	ReadHeaderTimeout time.Duration
 	ReadTimeout       time.Duration
 	WriteTimeout      time.Duration
@@ -42,10 +45,18 @@ type compressionConf struct {
 }
 
 func parseHTTPConfig(app *framework.App) (serverConf, compressionConf, error) {
-	if app == nil || app.Config == nil || app.Route == nil || app.Middleware == nil {
-		return serverConf{}, compressionConf{}, fmt.Errorf("%w: 应用、配置、路由和中间件必须完成初始化", ErrInvalidHTTPConfig)
+	configuration, err := framework.ResolveServiceAs[*config.Config](app, framework.ServiceConfig)
+	if err != nil {
+		return serverConf{}, compressionConf{}, fmt.Errorf("%w: 应用配置服务不可用: %v", ErrInvalidHTTPConfig, err)
 	}
-	serverValues, err := strictConfigMap(app.Config.Get("app.server", map[string]interface{}{}), "app.server")
+	var environment *env.Env
+	if app.Has(string(framework.ServiceEnv)) {
+		environment, err = framework.ResolveServiceAs[*env.Env](app, framework.ServiceEnv)
+		if err != nil {
+			return serverConf{}, compressionConf{}, fmt.Errorf("%w: 应用环境服务不可用: %v", ErrInvalidHTTPConfig, err)
+		}
+	}
+	serverValues, err := strictConfigMap(configuration.Get("app.server", map[string]interface{}{}), "app.server")
 	if err != nil {
 		return serverConf{}, compressionConf{}, err
 	}
@@ -57,11 +68,11 @@ func parseHTTPConfig(app *framework.App) (serverConf, compressionConf, error) {
 	}); err != nil {
 		return serverConf{}, compressionConf{}, err
 	}
-	server, err := parseServerConfig(serverValues, app)
+	server, err := parseServerConfig(serverValues, environment)
 	if err != nil {
 		return serverConf{}, compressionConf{}, err
 	}
-	compressionValues, err := strictConfigMap(app.Config.Get("app.compression", map[string]interface{}{}), "app.compression")
+	compressionValues, err := strictConfigMap(configuration.Get("app.compression", map[string]interface{}{}), "app.compression")
 	if err != nil {
 		return serverConf{}, compressionConf{}, err
 	}
@@ -77,7 +88,7 @@ func parseHTTPConfig(app *framework.App) (serverConf, compressionConf, error) {
 	return server, compression, nil
 }
 
-func parseServerConfig(values map[string]interface{}, app *framework.App) (serverConf, error) {
+func parseServerConfig(values map[string]interface{}, environment *env.Env) (serverConf, error) {
 	config := serverConf{
 		Host:              "0.0.0.0",
 		Port:              8080,
@@ -180,14 +191,14 @@ func parseServerConfig(values map[string]interface{}, app *framework.App) (serve
 	}
 	config.MultipartMemory = multipartMB << 20
 
-	if app.Env != nil {
-		if raw := strings.TrimSpace(app.Env.Get("SERVER_ALLOWED_HOSTS", "")); raw != "" {
+	if environment != nil {
+		if raw := strings.TrimSpace(environment.Get("SERVER_ALLOWED_HOSTS", "")); raw != "" {
 			config.AllowedHosts, err = splitStrictConfigList(raw, "SERVER_ALLOWED_HOSTS")
 			if err != nil {
 				return serverConf{}, err
 			}
 		}
-		if raw := strings.TrimSpace(app.Env.Get("SERVER_TRUSTED_PROXIES", "")); raw != "" {
+		if raw := strings.TrimSpace(environment.Get("SERVER_TRUSTED_PROXIES", "")); raw != "" {
 			config.TrustedProxies, err = splitStrictConfigList(raw, "SERVER_TRUSTED_PROXIES")
 			if err != nil {
 				return serverConf{}, err
@@ -198,7 +209,8 @@ func parseServerConfig(values map[string]interface{}, app *framework.App) (serve
 	if err != nil {
 		return serverConf{}, err
 	}
-	if _, err = context.NewRequest(nil, context.WithTrustedProxies(config.TrustedProxies)); err != nil {
+	config.TrustedProxySet, err = context.CompileTrustedProxies(config.TrustedProxies)
+	if err != nil {
 		return serverConf{}, invalidHTTPConfig("受信代理配置错误: %v", err)
 	}
 	return config, nil

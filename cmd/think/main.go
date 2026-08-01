@@ -6,12 +6,11 @@ import (
 	"io"
 	"os"
 
-	_ "thinkgo/app/controller" // 注册控制器
-	_ "thinkgo/app/middleware" // 注册全局中间件
+	_ "thinkgo/app/index" // 注册 index 应用
 	"thinkgo/framework"
 	"thinkgo/framework/console"
 	"thinkgo/framework/console/command"
-	_ "thinkgo/route" // 注册路由
+	_ "time/tzdata" // 内置时区数据，保证 Windows CLI 制品可加载配置中的时区。
 )
 
 func main() {
@@ -24,15 +23,15 @@ func main() {
 
 // runConsole 装配并执行命令行应用，始终合并返回应用关闭错误。
 func runConsole(args []string, stdout, stderr io.Writer) (returnErr error) {
-	app := newConsoleApp(args)
-	if app == nil {
-		return framework.ErrNilApplication
+	manager, err := newConsoleManager(args)
+	if err != nil {
+		return err
 	}
 	defer func() {
-		returnErr = errors.Join(returnErr, app.Close())
+		returnErr = errors.Join(returnErr, manager.Close())
 	}()
 
-	cli := console.NewConsole(app)
+	cli := console.NewConsoleWithManager(manager)
 	if err := cli.SetOutput(console.NewOutputWithAutoColor(stdout, stderr)); err != nil {
 		return err
 	}
@@ -40,6 +39,12 @@ func runConsole(args []string, stdout, stderr io.Writer) (returnErr error) {
 		return err
 	}
 	return cli.Run(args...)
+}
+
+// newConsoleManager 按命令类型创建多应用管理器，避免控制台命令共享全局 App 状态。
+func newConsoleManager(args []string) (*framework.ApplicationManager, error) {
+	skipDatabase := len(args) == 0 || args[0] != "run"
+	return framework.NewApplicationManagerFromDefinitions("", framework.ApplicationDefinitions(), skipDatabase)
 }
 
 // registerDefaultCommands 注册全部内置命令，任何定义冲突都会阻止 CLI 启动。
@@ -70,12 +75,4 @@ func registerDefaultCommands(cli *console.Console) error {
 		}
 	}
 	return nil
-}
-
-// newConsoleApp 根据显式命令参数选择初始化方式，不读取全局 os.Args。
-func newConsoleApp(args []string) *framework.App {
-	if len(args) > 0 && args[0] == "run" {
-		return framework.NewApp()
-	}
-	return framework.NewConsoleApp()
 }

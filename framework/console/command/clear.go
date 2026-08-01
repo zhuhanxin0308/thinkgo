@@ -2,7 +2,6 @@ package command
 
 import (
 	"fmt"
-	"path/filepath"
 
 	"thinkgo/framework"
 	cacheDriver "thinkgo/framework/cache/driver"
@@ -17,6 +16,7 @@ type Clear struct {
 func (c *Clear) Configure() {
 	c.Signature = "clear"
 	c.Description = "Clear application cache"
+	configureApplicationOption(&c.Command)
 }
 
 func (c *Clear) Execute(_ *console.Input, output *console.Output) error {
@@ -31,14 +31,18 @@ func (c *Clear) Execute(_ *console.Input, output *console.Output) error {
 	}
 
 	// 先走缓存管理器，保证 Redis、自定义 file store 等当前 store 都按驱动语义清理。
-	if c.App.Cache != nil {
-		if err := c.App.Cache.Flush(); err != nil {
+	applicationCache, err := resolveApplicationCache(c.App)
+	if err != nil {
+		return fmt.Errorf("解析应用缓存失败: %w", err)
+	}
+	if applicationCache != nil {
+		if err := applicationCache.Flush(); err != nil {
 			return fmt.Errorf("failed to clear cache backend: %w", err)
 		}
 	}
 
 	// runtime/cache 也使用文件驱动的受管清理，保留活动锁和目录内非缓存文件。
-	cachePath := filepath.Join(c.App.BasePath, "runtime", "cache")
+	cachePath := c.App.RuntimeCachePath()
 	fileCache, err := cacheDriver.NewFile(cachePath)
 	if err != nil {
 		return fmt.Errorf("failed to open local cache directory: %w", err)

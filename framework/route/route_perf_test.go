@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"sync"
 	"testing"
 
@@ -77,4 +78,47 @@ func TestRouterConcurrentRegistrationAndMatching(t *testing.T) {
 		}()
 	}
 	matches.Wait()
+}
+
+// BenchmarkRouteMatch 记录动态路由在不同规模、首中尾命中和未命中场景下的匹配成本。
+func BenchmarkRouteMatch(b *testing.B) {
+	for _, routeCount := range []int{10, 100, 1000, 10000} {
+		b.Run(strconv.Itoa(routeCount), func(b *testing.B) {
+			router := benchmarkRouter(b, routeCount)
+			requests := make([]*fwcontext.Request, 0, 4)
+			for _, routeIndex := range []int{0, routeCount / 2, routeCount - 1, routeCount} {
+				raw := httptest.NewRequest(http.MethodGet, fmt.Sprintf("http://example.com/resource/%d/value", routeIndex), nil)
+				requests = append(requests, fwcontext.MustNewRequest(raw))
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for index := 0; index < b.N; index++ {
+				matched, _, err := router.Match(requests[index%len(requests)])
+				if err != nil {
+					b.Fatal(err)
+				}
+				if index%len(requests) == len(requests)-1 {
+					if matched != nil {
+						b.Fatal("未注册的动态路由不应命中")
+					}
+				} else if matched == nil {
+					b.Fatal("已注册的动态路由必须命中")
+				}
+			}
+		})
+	}
+}
+
+func benchmarkRouter(b *testing.B, routeCount int) *Router {
+	b.Helper()
+	router := NewRouter()
+	for index := 0; index < routeCount; index++ {
+		if _, err := router.Get(fmt.Sprintf("/resource/%d/:value", index), "Resource@Show"); err != nil {
+			b.Fatalf("注册基准路由 %d 失败: %v", index, err)
+		}
+	}
+	if err := router.Freeze(); err != nil {
+		b.Fatalf("冻结基准路由失败: %v", err)
+	}
+	return router
 }

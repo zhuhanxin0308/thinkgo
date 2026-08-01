@@ -15,8 +15,10 @@ import (
 const (
 	defaultSessionExpireSeconds = 1440
 	defaultSessionMaxDataBytes  = 64 << 10
+	defaultSessionMaxEntries    = 100000
 	maxSessionExpireSeconds     = 400 * 24 * 3600
 	maxSessionDataBytes         = (1 << 20) - 4096
+	maxSessionEntries           = 1_000_000
 	maxSessionNameBytes         = 128
 	maxSessionKeyBytes          = 256
 )
@@ -56,28 +58,30 @@ type Config struct {
 	HttpOnly     bool
 	SameSite     string
 	MaxDataBytes int
+	MaxEntries   int
 }
 
 // DefaultConfig 返回安全且完整的 Session 默认配置。
 func DefaultConfig() Config {
 	return Config{
 		Name:         DefaultSessionName,
-		DriverType:   "file",
+		DriverType:   "memory",
 		StoragePath:  "./runtime/session",
 		CookiePath:   "/",
 		Expire:       defaultSessionExpireSeconds,
 		HttpOnly:     true,
 		SameSite:     "Lax",
 		MaxDataBytes: defaultSessionMaxDataBytes,
+		MaxEntries:   defaultSessionMaxEntries,
 	}
 }
 
 // ParseConfig 严格解析 Session 配置，拒绝旧 path 歧义字段、未知字段和数值截断。
 func ParseConfig(raw map[string]interface{}) (Config, error) {
 	allowed := map[string]bool{
-		"name": true, "type": true, "storage_path": true, "cookie_path": true,
+		"name": true, "type": true, "storage_path": true, "redis": true, "cookie_path": true,
 		"expire": true, "domain": true, "secure": true, "httponly": true,
-		"samesite": true, "max_data_bytes": true,
+		"samesite": true, "max_data_bytes": true, "max_entries": true,
 	}
 	for key := range raw {
 		if !allowed[key] {
@@ -151,6 +155,18 @@ func ParseConfig(raw map[string]interface{}) (Config, error) {
 			return Config{}, err
 		}
 	}
+	if value, exists := raw["max_entries"]; exists {
+		config.MaxEntries, err = sessionConfigInteger(value, "max_entries", 1, maxSessionEntries)
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	if config.DriverType == "redis" {
+		redisConfig, exists := raw["redis"].(map[string]interface{})
+		if !exists || len(redisConfig) == 0 {
+			return Config{}, invalidSessionConfig("redis", "Redis 驱动必须提供非空配置对象")
+		}
+	}
 	if err = validateSessionConfig(config); err != nil {
 		return Config{}, err
 	}
@@ -162,8 +178,8 @@ func validateSessionConfig(config Config) error {
 		hasSessionControl(config.Name) {
 		return invalidSessionConfig("name", "为空、过长或包含控制字符")
 	}
-	if config.DriverType != "file" && config.DriverType != "memory" {
-		return invalidSessionConfig("type", "仅支持 file 或 memory")
+	if config.DriverType != "file" && config.DriverType != "memory" && config.DriverType != "redis" {
+		return invalidSessionConfig("type", "仅支持 file、memory 或 redis")
 	}
 	if strings.TrimSpace(config.StoragePath) == "" || hasSessionControl(config.StoragePath) {
 		return invalidSessionConfig("storage_path", "不能为空或包含控制字符")
@@ -174,6 +190,9 @@ func validateSessionConfig(config Config) error {
 	if config.MaxDataBytes < 256 || config.MaxDataBytes > maxSessionDataBytes {
 		return invalidSessionConfig("max_data_bytes", "超出允许范围")
 	}
+	if config.MaxEntries < 1 || config.MaxEntries > maxSessionEntries {
+		return invalidSessionConfig("max_entries", "超出允许范围")
+	}
 	if !config.HttpOnly {
 		return invalidSessionConfig("httponly", "Session Cookie 必须启用 HttpOnly")
 	}
@@ -181,6 +200,7 @@ func validateSessionConfig(config Config) error {
 	if err != nil || normalized != config.SameSite {
 		return invalidSessionConfig("samesite", "必须是规范形式 Lax、Strict 或 None")
 	}
+	// #nosec G124 -- 该 Cookie 只用于校验名称、路径和域名语法，不会写入响应。
 	probe := &http.Cookie{
 		Name: config.Name, Value: "x", Path: config.CookiePath, Domain: config.Domain,
 	}

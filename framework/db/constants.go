@@ -17,4 +17,6 @@ const (
 	TimestampValueTypeDateTime = "datetime"
 	// TimestampValueTypeDate 表示自动时间戳写入 date 格式字符串。
 	TimestampValueTypeDate = "date"
+	// TimestampValueTypeNative 表示由数据库驱动处理原生时间值，框架传递 time.Time。
+	TimestampValueTypeNative = "native"
 )

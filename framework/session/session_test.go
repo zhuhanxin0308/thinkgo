@@ -128,13 +128,23 @@ func TestParseConfigStrictlyValidatesSessionPolicy(t *testing.T) {
 		"httponly":       true,
 		"samesite":       "Strict",
 		"max_data_bytes": float64(32768),
+		"max_entries":    float64(2048),
 	})
 	if err != nil {
 		t.Fatalf("合法 Session 配置解析失败: %v", err)
 	}
 	if config.Name != "SID" || config.DriverType != "file" || config.CookiePath != "/account" ||
-		config.Expire != 3600 || config.MaxDataBytes != 32768 || !config.Secure {
+		config.Expire != 3600 || config.MaxDataBytes != 32768 || config.MaxEntries != 2048 || !config.Secure {
 		t.Fatalf("Session 配置解析结果错误: %#v", config)
+	}
+	redisConfig, err := ParseConfig(map[string]interface{}{
+		"type": "redis",
+		"redis": map[string]interface{}{
+			"host": "127.0.0.1", "port": 6379, "prefix": "thinkgo:test:session:",
+		},
+	})
+	if err != nil || redisConfig.DriverType != "redis" {
+		t.Fatalf("合法 Redis Session 配置解析失败: config=%#v err=%v", redisConfig, err)
 	}
 
 	invalid := []map[string]interface{}{
@@ -150,11 +160,19 @@ func TestParseConfigStrictlyValidatesSessionPolicy(t *testing.T) {
 		{"httponly": false},
 		{"samesite": "invalid"},
 		{"max_data_bytes": 0},
+		{"max_entries": 0},
 	}
 	for _, raw := range invalid {
 		if parsed, parseErr := ParseConfig(raw); !errors.Is(parseErr, ErrInvalidSessionConfig) || parsed != (Config{}) {
 			t.Fatalf("非法 Session 配置 %#v 应失败: parsed=%#v err=%v", raw, parsed, parseErr)
 		}
+	}
+}
+
+// TestDefaultSessionConfigUsesMemory 验证未显式选择后端时不会默认启用高延迟文件驱动。
+func TestDefaultSessionConfigUsesMemory(t *testing.T) {
+	if config := DefaultConfig(); config.DriverType != "memory" {
+		t.Fatalf("Session 默认驱动应为 memory，实际为 %q", config.DriverType)
 	}
 }
 
@@ -172,6 +190,59 @@ func TestSaveSkipsUntouchedSession(t *testing.T) {
 	}
 	if driver.updateCount != 0 || len(recorder.Result().Cookies()) != 0 {
 		t.Fatalf("未使用 Session 不应产生副作用: update=%d cookies=%d", driver.updateCount, len(recorder.Result().Cookies()))
+	}
+}
+
+// TestSetSameValueSkipsPersistence 验证幂等 Set 不会重复制造持久化写入，降低文件 Session 的无效 I/O。
+func TestSetSameValueSkipsPersistence(t *testing.T) {
+	driver := newCountingDriver()
+	manager := newTestSessionManager(t, driver, map[string]interface{}{"name": "SID", "expire": 0}, nil)
+	recorder := httptest.NewRecorder()
+	reqSession, err := manager.NewRequestSession(httptest.NewRequest(http.MethodGet, "http://example.com/", nil), recorder)
+	if err != nil {
+		t.Fatalf("创建请求 Session 失败: %v", err)
+	}
+	if err = reqSession.Set("role", "admin"); err != nil {
+		t.Fatalf("首次设置 Session 失败: %v", err)
+	}
+	if err = reqSession.Save(); err != nil {
+		t.Fatalf("首次保存 Session 失败: %v", err)
+	}
+	writes := driver.updateCount
+	if err = reqSession.Set("role", "admin"); err != nil {
+		t.Fatalf("重复设置 Session 失败: %v", err)
+	}
+	if err = reqSession.Save(); err != nil {
+		t.Fatalf("重复设置后保存 Session 失败: %v", err)
+	}
+	if driver.updateCount != writes {
+		t.Fatalf("相同 Session 值不应再次持久化: before=%d after=%d", writes, driver.updateCount)
+	}
+}
+
+// TestSetSameValueRefreshesExpiringSession 验证带 TTL 的 Session 仍通过重复 Set 刷新服务端过期时间。
+func TestSetSameValueRefreshesExpiringSession(t *testing.T) {
+	driver := newCountingDriver()
+	manager := newTestSessionManager(t, driver, map[string]interface{}{"name": "SID", "expire": 60}, nil)
+	reqSession, err := manager.NewRequestSession(httptest.NewRequest(http.MethodGet, "http://example.com/", nil), httptest.NewRecorder())
+	if err != nil {
+		t.Fatalf("创建请求 Session 失败: %v", err)
+	}
+	if err = reqSession.Set("role", "admin"); err != nil {
+		t.Fatalf("首次设置 Session 失败: %v", err)
+	}
+	if err = reqSession.Save(); err != nil {
+		t.Fatalf("首次保存 Session 失败: %v", err)
+	}
+	writes := driver.updateCount
+	if err = reqSession.Set("role", "admin"); err != nil {
+		t.Fatalf("重复设置带 TTL 的 Session 失败: %v", err)
+	}
+	if err = reqSession.Save(); err != nil {
+		t.Fatalf("重复设置带 TTL 的 Session 保存失败: %v", err)
+	}
+	if driver.updateCount != writes+1 {
+		t.Fatalf("带 TTL 的相同值 Set 必须刷新持久化记录: before=%d after=%d", writes, driver.updateCount)
 	}
 }
 
@@ -201,6 +272,43 @@ func TestSaveUsesSessionCookiePolicy(t *testing.T) {
 	if written.Path != "/admin" || written.Domain != "example.com" || !written.Secure || !written.HttpOnly ||
 		written.SameSite != http.SameSiteStrictMode || written.MaxAge != 600 {
 		t.Fatalf("Session Cookie 属性错误: %#v", written)
+	}
+}
+
+// TestSessionExplicitSecurePolicy 验证 Session 中间件传入的协议结论不会被原始请求头重新推断。
+func TestSessionExplicitSecurePolicy(t *testing.T) {
+	manager := newTestSessionManager(t, newCountingDriver(), map[string]interface{}{"name": "SID"}, nil)
+	spoofed := httptest.NewRequest(http.MethodPost, "http://example.com/login", nil)
+	spoofed.RemoteAddr = "127.0.0.1:4321"
+	spoofed.Header.Set("X-Forwarded-Proto", "https")
+	unsafeRecorder := httptest.NewRecorder()
+	unsafe, err := manager.NewRequestSessionWithSecure(spoofed, unsafeRecorder, false)
+	if err != nil {
+		t.Fatalf("创建显式非安全 Session 失败: %v", err)
+	}
+	if err = unsafe.Set("uid", 1); err != nil {
+		t.Fatalf("设置显式非安全 Session 失败: %v", err)
+	}
+	if err = unsafe.Save(); err != nil {
+		t.Fatalf("保存显式非安全 Session 失败: %v", err)
+	}
+	if cookies := unsafeRecorder.Result().Cookies(); len(cookies) != 1 || cookies[0].Secure {
+		t.Fatalf("不可信协议结论不应产生 Secure Session Cookie: %#v", cookies)
+	}
+
+	secureRecorder := httptest.NewRecorder()
+	secure, err := manager.NewRequestSessionWithSecure(httptest.NewRequest(http.MethodPost, "http://example.com/login", nil), secureRecorder, true)
+	if err != nil {
+		t.Fatalf("创建显式安全 Session 失败: %v", err)
+	}
+	if err = secure.Set("uid", 1); err != nil {
+		t.Fatalf("设置显式安全 Session 失败: %v", err)
+	}
+	if err = secure.Save(); err != nil {
+		t.Fatalf("保存显式安全 Session 失败: %v", err)
+	}
+	if cookies := secureRecorder.Result().Cookies(); len(cookies) != 1 || !cookies[0].Secure {
+		t.Fatalf("可信协议结论应产生 Secure Session Cookie: %#v", cookies)
 	}
 }
 

@@ -2,7 +2,6 @@ package command
 
 import (
 	"fmt"
-	"path/filepath"
 
 	"thinkgo/framework/console"
 )
@@ -17,11 +16,12 @@ func (c *MakeService) Configure() {
 	c.Signature = "make:service"
 	c.Description = "Create a new service class"
 	c.AddArgument("name", "Service type name", true)
+	configureApplicationOption(&c.Command)
 }
 
 // Execute 校验名称后安全创建服务文件。
 func (c *MakeService) Execute(input *console.Input, output *console.Output) error {
-	name, err := normalizedGeneratorInput(c.App, input, output, "")
+	name, err := normalizedGeneratorInput(&c.Command, input, output, "")
 	if err != nil {
 		return fmt.Errorf("invalid service name: %w", err)
 	}
@@ -63,8 +63,8 @@ func (s *%s) Boot(app *framework.App) error {
 }
 `, name, name, name, name, name, name, name, name, name)
 
-	if err := writeGeneratedAppSource(c.App, filepath.Join("app", "service"), lowerGoFilename(name), []byte(content)); err != nil {
-		return fmt.Errorf("create service %s: %w", name, err)
+	if err := writeAndRegisterGeneratedAppSource(c.App, "service", lowerGoFilename(name), []byte(content), applicationRegistrationProvider, name); err != nil {
+		return fmt.Errorf("create and register service %s: %w", name, err)
 	}
 
 	output.Success(fmt.Sprintf("Service %s created successfully.", name))

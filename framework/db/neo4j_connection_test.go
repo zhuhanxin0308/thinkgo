@@ -20,6 +20,7 @@ type fakeNeo4jExecutor struct {
 	collectRecords []*neo4j.Record
 	singleRecords  []*neo4j.Record
 	affected       int64
+	relatedDeleted int64
 	operationErr   error
 	closeErr       error
 	closeCalls     int
@@ -30,6 +31,145 @@ type contextCaptureNeo4jCloser struct {
 	ctx            context.Context
 	errDuringClose error
 	hasDeadline    bool
+}
+
+type managedExecutorResult struct {
+	neo4j.ResultWithContext
+	record  *neo4j.Record
+	records []*neo4j.Record
+	summary neo4j.ResultSummary
+}
+
+func (result *managedExecutorResult) Single(context.Context) (*neo4j.Record, error) {
+	return result.record, nil
+}
+
+func (result *managedExecutorResult) Collect(context.Context) ([]*neo4j.Record, error) {
+	return result.records, nil
+}
+
+func (result *managedExecutorResult) Consume(context.Context) (neo4j.ResultSummary, error) {
+	return result.summary, nil
+}
+
+type managedExecutorCounters struct {
+	neo4j.Counters
+	nodesDeleted         int
+	relationshipsDeleted int
+}
+
+func (counters *managedExecutorCounters) NodesDeleted() int {
+	return counters.nodesDeleted
+}
+
+func (counters *managedExecutorCounters) RelationshipsDeleted() int {
+	return counters.relationshipsDeleted
+}
+
+type managedExecutorSummary struct {
+	neo4j.ResultSummary
+	counters neo4j.Counters
+}
+
+func (summary *managedExecutorSummary) Counters() neo4j.Counters {
+	return summary.counters
+}
+
+type managedExecutorTransaction struct {
+	neo4j.ManagedTransaction
+	session *managedExecutorSession
+}
+
+func (transaction *managedExecutorTransaction) Run(_ context.Context, cypher string, params map[string]interface{}) (neo4j.ResultWithContext, error) {
+	transaction.session.transactionRunCalls++
+	transaction.session.lastCypher = cypher
+	transaction.session.lastParams = cloneDatabaseMap(params)
+	return transaction.session.result, nil
+}
+
+type managedExecutorSession struct {
+	neo4j.SessionWithContext
+	result              neo4j.ResultWithContext
+	executeReadCalls    int
+	executeWriteCalls   int
+	transactionRunCalls int
+	autoCommitRunCalls  int
+	closeCalls          int
+	lastCypher          string
+	lastParams          map[string]interface{}
+}
+
+func (session *managedExecutorSession) ExecuteRead(ctx context.Context, work neo4j.ManagedTransactionWork, _ ...func(*neo4j.TransactionConfig)) (interface{}, error) {
+	session.executeReadCalls++
+	return work(&managedExecutorTransaction{session: session})
+}
+
+func (session *managedExecutorSession) ExecuteWrite(ctx context.Context, work neo4j.ManagedTransactionWork, _ ...func(*neo4j.TransactionConfig)) (interface{}, error) {
+	session.executeWriteCalls++
+	return work(&managedExecutorTransaction{session: session})
+}
+
+func (session *managedExecutorSession) Run(context.Context, string, map[string]interface{}, ...func(*neo4j.TransactionConfig)) (neo4j.ResultWithContext, error) {
+	session.autoCommitRunCalls++
+	return session.result, nil
+}
+
+func (session *managedExecutorSession) Close(context.Context) error {
+	session.closeCalls++
+	return nil
+}
+
+type managedExecutorDriver struct {
+	neo4j.DriverWithContext
+	session    neo4j.SessionWithContext
+	lastConfig neo4j.SessionConfig
+}
+
+func (driver *managedExecutorDriver) NewSession(_ context.Context, config neo4j.SessionConfig) neo4j.SessionWithContext {
+	driver.lastConfig = config
+	return driver.session
+}
+
+func TestNeoExecutorUsesManagedTransactions(t *testing.T) {
+	record := &neo4j.Record{Keys: []string{"count"}, Values: []interface{}{int64(1)}}
+	session := &managedExecutorSession{result: &managedExecutorResult{record: record}}
+	driver := &managedExecutorDriver{session: session}
+	executor := &neo4jDriverExecutor{driver: driver, database: "tenant_a"}
+
+	actual, err := executor.Single(context.Background(), neo4j.AccessModeWrite, "CREATE (n) RETURN count(n)", map[string]interface{}{"name": "Ada"})
+	if err != nil || actual != record {
+		t.Fatalf("managed Single failed: record=%#v err=%v", actual, err)
+	}
+	if session.executeWriteCalls != 1 || session.executeReadCalls != 0 || session.transactionRunCalls != 1 || session.autoCommitRunCalls != 0 {
+		t.Fatalf("executor did not use managed write transaction: %#v", session)
+	}
+	if driver.lastConfig.DatabaseName != "tenant_a" || session.closeCalls != 1 {
+		t.Fatalf("executor lost target database or session cleanup: config=%#v closes=%d", driver.lastConfig, session.closeCalls)
+	}
+}
+
+func TestNeoExecutorManagedModesCoverCollectAndExecute(t *testing.T) {
+	records := []*neo4j.Record{{Keys: []string{"name"}, Values: []interface{}{"Ada"}}}
+	session := &managedExecutorSession{result: &managedExecutorResult{records: records}}
+	executor := &neo4jDriverExecutor{driver: &managedExecutorDriver{session: session}, database: "tenant_a"}
+
+	actual, err := executor.Collect(context.Background(), neo4j.AccessModeRead, "MATCH (n) RETURN n.name", nil)
+	if err != nil || !reflect.DeepEqual(actual, records) {
+		t.Fatalf("managed Collect failed: records=%#v err=%v", actual, err)
+	}
+	session.result = &managedExecutorResult{summary: &managedExecutorSummary{counters: &managedExecutorCounters{
+		nodesDeleted: 2, relationshipsDeleted: 3,
+	}}}
+	deleted, err := executor.Execute(context.Background(), neo4j.AccessModeWrite, "MATCH (n) DETACH DELETE n", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted.Deleted != 2 || deleted.RelatedDeleted != 3 || !deleted.RelatedDeletedKnown {
+		t.Fatalf("managed Execute lost counters: %#v", deleted)
+	}
+	if session.executeReadCalls != 1 || session.executeWriteCalls != 1 || session.transactionRunCalls != 2 || session.autoCommitRunCalls != 0 || session.closeCalls != 2 {
+		t.Fatalf("managed modes were not used consistently: %#v", session)
+	}
 }
 
 func (closer *contextCaptureNeo4jCloser) Close(ctx context.Context) error {
@@ -61,14 +201,103 @@ func (executor *fakeNeo4jExecutor) Single(_ context.Context, mode neo4j.AccessMo
 	return record, nil
 }
 
-func (executor *fakeNeo4jExecutor) Execute(_ context.Context, mode neo4j.AccessMode, cypher string, params map[string]interface{}) (int64, error) {
+func (executor *fakeNeo4jExecutor) Execute(_ context.Context, mode neo4j.AccessMode, cypher string, params map[string]interface{}) (DeleteResult, error) {
 	executor.record(mode, cypher, params)
-	return executor.affected, executor.operationErr
+	return DeleteResult{
+		Deleted:             executor.affected,
+		RelatedDeleted:      executor.relatedDeleted,
+		RelatedDeletedKnown: true,
+	}, executor.operationErr
 }
 
 func (executor *fakeNeo4jExecutor) Close(context.Context) error {
 	executor.closeCalls++
 	return executor.closeErr
+}
+
+func TestNeoDeleteModesAreExplicit(t *testing.T) {
+	executor := &fakeNeo4jExecutor{affected: 2, relatedDeleted: 3}
+	connection := &Neo4jConnection{executor: executor}
+	predicate := mustTestPredicate(t, []string{"id = ?"}, []interface{}{int64(7)})
+
+	strict, err := connection.Delete(context.Background(), newDeleteRequest("users", predicate, "id", false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	strictCypher := executor.calls[len(executor.calls)-1].cypher
+	if strict.Deleted != 2 || !strings.Contains(strictCypher, " DELETE n") || strings.Contains(strictCypher, "DETACH") {
+		t.Fatalf("strict delete used detach semantics: result=%#v cypher=%q", strict, strictCypher)
+	}
+
+	detached, err := connection.Delete(context.Background(), newDeleteRequest("users", predicate, "id", true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	detachCypher := executor.calls[len(executor.calls)-1].cypher
+	if !strings.Contains(detachCypher, "DETACH DELETE n") || !detached.RelatedDeletedKnown || detached.RelatedDeleted != 3 {
+		t.Fatalf("detach delete lost explicit semantics: result=%#v cypher=%q", detached, detachCypher)
+	}
+}
+
+func TestQueryDeleteDefaultsToStrictAndRequiresExplicitDetach(t *testing.T) {
+	executor := &fakeNeo4jExecutor{affected: 1, relatedDeleted: 2}
+	database := NewDB(&Neo4jConnection{executor: executor})
+	query := database.Name("users").WhereField("id", "=", int64(7))
+
+	if deleted, err := query.Delete(); err != nil || deleted != 1 {
+		t.Fatalf("strict Query.Delete failed: deleted=%d err=%v", deleted, err)
+	}
+	if cypher := executor.calls[len(executor.calls)-1].cypher; strings.Contains(cypher, "DETACH") {
+		t.Fatalf("Query.Delete must remain strict: %q", cypher)
+	}
+	result, err := query.DetachDeleteResult()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cypher := executor.calls[len(executor.calls)-1].cypher; !strings.Contains(cypher, "DETACH DELETE n") {
+		t.Fatalf("DetachDeleteResult did not request detach semantics: %q", cypher)
+	}
+	if result.Deleted != 1 || result.RelatedDeleted != 2 || !result.RelatedDeletedKnown {
+		t.Fatalf("DetachDeleteResult lost counters: %#v", result)
+	}
+}
+
+func TestNeoRejectsDottedPropertyOnEveryWrite(t *testing.T) {
+	executor := &fakeNeo4jExecutor{singleRecords: []*neo4j.Record{
+		{Keys: []string{"count"}, Values: []interface{}{int64(1)}},
+		{Keys: []string{"count"}, Values: []interface{}{int64(1)}},
+	}}
+	connection := &Neo4jConnection{executor: executor}
+	predicate := mustTestPredicate(t, []string{"id = ?"}, []interface{}{int64(7)})
+	tests := []struct {
+		name    string
+		execute func() error
+	}{
+		{
+			name: "insert",
+			execute: func() error {
+				_, err := connection.Insert(context.Background(), newInsertRequest("users", map[string]interface{}{"profile.name": "Ada"}, "id", false))
+				return err
+			},
+		},
+		{
+			name: "update",
+			execute: func() error {
+				_, err := connection.Update(context.Background(), newUpdateRequest("users", map[string]interface{}{"profile.name": "Ada"}, predicate, "id"))
+				return err
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := test.execute(); !errors.Is(err, ErrInvalidQuery) {
+				t.Fatalf("dotted Neo4j property must be rejected: %v", err)
+			}
+		})
+	}
+	if len(executor.calls) != 0 {
+		t.Fatalf("invalid properties must fail before executor access: %#v", executor.calls)
+	}
 }
 
 // TestNeo4jBuildCypherWhereRejectsUnparseable 验证无法解析的条件会返回错误，
@@ -214,21 +443,26 @@ func TestNeo4jConnectionExecutesParameterizedOperations(t *testing.T) {
 	}
 	connection := &Neo4jConnection{executor: executor}
 
-	rows, err := connection.Select("users", "name AS username", []string{"id = ?"}, []interface{}{int64(7)}, "name DESC", 10, 1)
+	rows, err := connection.Select(context.Background(), newSelectRequest(
+		"users", "name AS username", mustTestPredicate(t, []string{"id = ?"}, []interface{}{int64(7)}), "id", "name DESC", 10, 1, nil,
+	))
 	if err != nil || len(rows) != 1 || rows[0]["username"] != "张三" {
 		t.Fatalf("Neo4j 查询结果错误: rows=%#v err=%v", rows, err)
 	}
 	data := map[string]interface{}{"name": "张三"}
-	if affected, err := connection.Insert("users", data); err != nil || affected != 1 {
+	if result, err := connection.Insert(context.Background(), newInsertRequest("users", data, "id", false)); err != nil || result.Affected != 1 {
+		affected := result.Affected
 		t.Fatalf("Neo4j 插入结果错误: affected=%d err=%v", affected, err)
 	}
-	if affected, err := connection.Update("users", map[string]interface{}{"active": true}, []string{"id = ?"}, []interface{}{7}); err != nil || affected != 2 {
+	if result, err := connection.Update(context.Background(), newUpdateRequest("users", map[string]interface{}{"active": true}, mustTestPredicate(t, []string{"id = ?"}, []interface{}{7}), "id")); err != nil || result.Count() != 2 {
+		affected := result.Count()
 		t.Fatalf("Neo4j 更新结果错误: affected=%d err=%v", affected, err)
 	}
-	if affected, err := connection.Delete("users", []string{"active = ?"}, []interface{}{false}); err != nil || affected != 3 {
+	if result, err := connection.Delete(context.Background(), newDeleteRequest("users", mustTestPredicate(t, []string{"active = ?"}, []interface{}{false}), "id", true)); err != nil || result.Deleted != 3 {
+		affected := result.Deleted
 		t.Fatalf("Neo4j 删除结果错误: affected=%d err=%v", affected, err)
 	}
-	if count, err := connection.Count("users", []string{"active = ?"}, []interface{}{true}); err != nil || count != 2 {
+	if count, err := connection.Count(context.Background(), newCountRequest("users", mustTestPredicate(t, []string{"active = ?"}, []interface{}{true}), "id")); err != nil || count != 2 {
 		t.Fatalf("Neo4j 计数结果错误: count=%d err=%v", count, err)
 	}
 
@@ -251,12 +485,62 @@ func TestNeo4jConnectionExecutesParameterizedOperations(t *testing.T) {
 	}
 }
 
+func TestNeo4jOperationUsesApplicationPrimaryKeyAsInsertedID(t *testing.T) {
+	executor := &fakeNeo4jExecutor{singleRecords: []*neo4j.Record{
+		{Keys: []string{"count"}, Values: []interface{}{int64(1)}},
+		{Keys: []string{"count"}, Values: []interface{}{int64(2)}},
+	}}
+	connection := &Neo4jConnection{executor: executor}
+
+	inserted, err := connection.Insert(context.Background(), newInsertRequest(
+		"users", map[string]interface{}{"uuid": "u-1", "name": "Ada"}, "uuid", true,
+	))
+	if err != nil {
+		t.Fatalf("Neo4j typed insert failed: %v", err)
+	}
+	if inserted.Affected != 1 || !inserted.IDKnown || inserted.ID != "u-1" {
+		t.Fatalf("Neo4j insert must return the application primary key: %#v", inserted)
+	}
+
+	predicate := newPredicate().appendValidated("uuid = ?", []interface{}{"u-1"})
+	updated, err := connection.Update(context.Background(), newUpdateRequest(
+		"users", map[string]interface{}{"active": true}, predicate, "uuid",
+	))
+	if err != nil {
+		t.Fatalf("Neo4j typed update failed: %v", err)
+	}
+	if updated.Affected != 2 || updated.Matched != 2 || !updated.MatchedKnown || updated.ModifiedKnown {
+		t.Fatalf("Neo4j update capability semantics are wrong: %#v", updated)
+	}
+}
+
+func TestNeo4jOperationRejectsUnavailableIDAndRawPredicate(t *testing.T) {
+	executor := &fakeNeo4jExecutor{}
+	connection := &Neo4jConnection{executor: executor}
+
+	_, err := connection.Insert(context.Background(), newInsertRequest(
+		"users", map[string]interface{}{"name": "Ada"}, "uuid", true,
+	))
+	if !errors.Is(err, ErrInsertIDUnavailable) {
+		t.Fatalf("Neo4j missing application primary key must be explicit, got %v", err)
+	}
+
+	predicate := newPredicate().appendRaw("uuid = ?", []interface{}{"u-1"})
+	_, err = connection.Delete(context.Background(), newDeleteRequest("users", predicate, "uuid", true))
+	if !errors.Is(err, ErrUnsafeExpression) {
+		t.Fatalf("Neo4j raw predicate must be rejected before executor access, got %v", err)
+	}
+	if len(executor.calls) != 0 {
+		t.Fatalf("invalid typed operations must not access Neo4j: %#v", executor.calls)
+	}
+}
+
 // TestNeo4jConnectionRejectsInvalidRowsAndClosesOnce 验证非法聚合结果不会被吞掉，
 // 且执行器关闭错误在重复关闭时保持稳定。
 func TestNeo4jConnectionRejectsInvalidRowsAndClosesOnce(t *testing.T) {
 	executor := &fakeNeo4jExecutor{singleRecords: []*neo4j.Record{{Values: []interface{}{"invalid"}}}, closeErr: errors.New("close failed")}
 	connection := &Neo4jConnection{executor: executor}
-	if _, err := connection.Count("users", nil, nil); !errors.Is(err, ErrInvalidAggregateValue) {
+	if _, err := connection.Count(context.Background(), newCountRequest("users", newPredicate(), "id")); !errors.Is(err, ErrInvalidAggregateValue) {
 		t.Fatalf("非法计数应返回 ErrInvalidAggregateValue，实际为 %v", err)
 	}
 	first := connection.Close()
@@ -271,7 +555,7 @@ func TestNeo4jConnectionRejectsInvalidRowsAndClosesOnce(t *testing.T) {
 func TestNeo4jConnectionRejectsDuplicateProjectionAliases(t *testing.T) {
 	executor := &fakeNeo4jExecutor{}
 	connection := &Neo4jConnection{executor: executor}
-	if _, err := connection.Select("users", "name AS value,email AS value", nil, nil, "", 0, 0); !errors.Is(err, ErrInvalidQuery) {
+	if _, err := connection.Select(context.Background(), newSelectRequest("users", "name AS value,email AS value", newPredicate(), "id", "", 0, 0, nil)); !errors.Is(err, ErrInvalidQuery) {
 		t.Fatalf("重复投影别名应返回 ErrInvalidQuery，实际为 %v", err)
 	}
 	if len(executor.calls) != 0 {
@@ -279,7 +563,7 @@ func TestNeo4jConnectionRejectsDuplicateProjectionAliases(t *testing.T) {
 	}
 
 	executor.collectRecords = []*neo4j.Record{{Keys: []string{"name", "name"}, Values: []interface{}{"Ada", "Grace"}}}
-	if _, err := connection.Select("users", "name,email", nil, nil, "", 0, 0); !errors.Is(err, ErrInvalidDatabaseRow) {
+	if _, err := connection.Select(context.Background(), newSelectRequest("users", "name,email", newPredicate(), "id", "", 0, 0, nil)); !errors.Is(err, ErrInvalidDatabaseRow) {
 		t.Fatalf("驱动重复列键应返回 ErrInvalidDatabaseRow，实际为 %v", err)
 	}
 }

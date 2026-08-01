@@ -104,6 +104,41 @@ func TestApplicationRegistrySnapshotsValidCallbacks(t *testing.T) {
 	}
 }
 
+// TestApplicationRegistryCloneFromCopiesConsistentSnapshot 验证多应用复制注册表时集合来自同一快照且互不共享底层容器。
+func TestApplicationRegistryCloneFromCopiesConsistentSnapshot(t *testing.T) {
+	source := &applicationRegistry{}
+	target := &applicationRegistry{}
+	loader := RouteLoader(func(*App) error { return nil })
+	handler := func(request *frameworkcontext.Request, next func(*frameworkcontext.Request) *frameworkcontext.Response) *frameworkcontext.Response {
+		return next(request)
+	}
+	if err := source.registerController("SnapshotController", &registryTestController{}); err != nil {
+		t.Fatalf("注册快照控制器失败: %v", err)
+	}
+	if err := source.registerRouteLoader(loader); err != nil {
+		t.Fatalf("注册快照路由加载器失败: %v", err)
+	}
+	if err := source.registerGlobalMiddleware(handler); err != nil {
+		t.Fatalf("注册快照中间件失败: %v", err)
+	}
+	target.cloneFrom(source)
+	controllers := target.snapshotControllers()
+	routeLoaders := target.snapshotRouteLoaders()
+	middlewares := target.snapshotMiddlewares()
+	if len(controllers) != 1 || len(routeLoaders) != 1 || len(middlewares) != 1 {
+		t.Fatalf("复制注册表集合不完整: controllers=%d routes=%d middleware=%d", len(controllers), len(routeLoaders), len(middlewares))
+	}
+	if routeLoaders[0] == nil || middlewares[0] == nil {
+		t.Fatal("复制注册表不应包含空回调")
+	}
+	if err := source.registerController("LaterController", &registryTestController{}); err != nil {
+		t.Fatalf("追加源注册表控制器失败: %v", err)
+	}
+	if _, exists := target.snapshotControllers()["LaterController"]; exists {
+		t.Fatal("目标注册表不应共享源注册表的控制器 map")
+	}
+}
+
 // TestMustRegisterControllerPanicsOnProgrammerError 验证 Must API 在 init 阶段立即暴露错误配置。
 func TestMustRegisterControllerPanicsOnProgrammerError(t *testing.T) {
 	defer func() {

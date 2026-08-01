@@ -11,12 +11,30 @@ import (
 	"unicode"
 
 	"thinkgo/framework"
+	"thinkgo/framework/cache"
+	"thinkgo/framework/config"
 	"thinkgo/framework/console"
+	"thinkgo/framework/route"
 )
 
-// normalizedGeneratorInput 校验生成器执行上下文并规范化类型名。
-func normalizedGeneratorInput(app *framework.App, input *console.Input, output *console.Output, suffix string) (string, error) {
-	if app == nil {
+// resolveApplicationConfig 通过应用服务边界解析配置，避免命令包依赖 App 内部字段。
+func resolveApplicationConfig(app *framework.App) (*config.Config, error) {
+	return framework.ResolveServiceAs[*config.Config](app, framework.ServiceConfig)
+}
+
+// resolveApplicationCache 通过应用服务边界解析缓存，命令只依赖缓存契约。
+func resolveApplicationCache(app *framework.App) (*cache.Cache, error) {
+	return framework.ResolveServiceAs[*cache.Cache](app, framework.ServiceCache)
+}
+
+// resolveApplicationRoute 通过应用服务边界解析路由器，避免暴露 App 路由字段。
+func resolveApplicationRoute(app *framework.App) (*route.Router, error) {
+	return framework.ResolveServiceAs[*route.Router](app, framework.ServiceRoute)
+}
+
+// normalizedGeneratorInput 校验应用选择、生成器执行上下文并规范化类型名。
+func normalizedGeneratorInput(command *console.Command, input *console.Input, output *console.Output, suffix string) (string, error) {
+	if command == nil {
 		return "", framework.ErrNilApplication
 	}
 	if input == nil {
@@ -24,6 +42,12 @@ func normalizedGeneratorInput(app *framework.App, input *console.Input, output *
 	}
 	if output == nil {
 		return "", console.ErrInvalidOutput
+	}
+	if err := command.SelectApplication(input); err != nil {
+		return "", err
+	}
+	if command.App == nil {
+		return "", framework.ErrNilApplication
 	}
 	return normalizeGeneratorName(input.GetArgument(0), suffix)
 }
@@ -33,7 +57,101 @@ func writeGeneratedAppSource(app *framework.App, relativeDir, filename string, s
 	if app == nil {
 		return framework.ErrNilApplication
 	}
-	return writeGeneratedSource(app.BasePath, relativeDir, filename, source)
+	applicationDir, err := applicationRelativeDirectory(app)
+	if err != nil {
+		return err
+	}
+	return writeGeneratedSource(app.BasePath, filepath.Join(applicationDir, relativeDir), filename, source)
+}
+
+// writeAndRegisterGeneratedAppSource 在注册失败时回滚刚创建的源码，避免留下无法装配的孤儿组件。
+func writeAndRegisterGeneratedAppSource(app *framework.App, relativeDir, filename string, source []byte, kind applicationRegistrationKind, typeName string) error {
+	if err := writeGeneratedAppSource(app, relativeDir, filename, source); err != nil {
+		return err
+	}
+	if err := updateApplicationRegistration(app, kind, typeName); err != nil {
+		applicationDir, directoryErr := applicationRelativeDirectory(app)
+		if directoryErr != nil {
+			return errors.Join(err, directoryErr)
+		}
+		return errors.Join(err, removeGeneratedAppSource(app, filepath.Join(applicationDir, relativeDir), filename))
+	}
+	return nil
+}
+
+func removeGeneratedAppSource(app *framework.App, relativeDir, filename string) error {
+	if app == nil {
+		return framework.ErrNilApplication
+	}
+	if filepath.IsAbs(relativeDir) || filename == "" || filepath.Base(filename) != filename || filepath.Ext(filename) != ".go" {
+		return fmt.Errorf("生成回滚路径非法: dir=%q file=%q", relativeDir, filename)
+	}
+	root, err := os.OpenRoot(app.BasePath)
+	if err != nil {
+		return fmt.Errorf("打开项目根目录失败: %w", err)
+	}
+	defer root.Close()
+	if err := root.Remove(filepath.Join(relativeDir, filename)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("回滚生成文件失败: %w", err)
+	}
+	return nil
+}
+
+func applicationRelativeDirectory(app *framework.App) (string, error) {
+	if app == nil {
+		return "", framework.ErrNilApplication
+	}
+	basePath := strings.TrimSpace(app.BasePath)
+	if basePath == "" {
+		return "", fmt.Errorf("应用根目录不能为空")
+	}
+	baseAbsolute, err := filepath.Abs(basePath)
+	if err != nil {
+		return "", fmt.Errorf("解析应用根目录失败: %w", err)
+	}
+	var configuration *config.Config
+	if app.Has(string(framework.ServiceConfig)) {
+		var resolveErr error
+		configuration, resolveErr = resolveApplicationConfig(app)
+		if resolveErr != nil {
+			return "", fmt.Errorf("解析应用配置失败: %w", resolveErr)
+		}
+	}
+	if configuration != nil {
+		configuredPath := strings.TrimSpace(configuration.GetString("console.auto_path"))
+		if configuredPath != "" {
+			candidate := configuredPath
+			if !filepath.IsAbs(candidate) {
+				candidate = filepath.Join(baseAbsolute, candidate)
+			}
+			candidate, err = filepath.Abs(filepath.Clean(candidate))
+			if err != nil {
+				return "", fmt.Errorf("解析 console.auto_path 失败: %w", err)
+			}
+			relative, relErr := filepath.Rel(baseAbsolute, candidate)
+			if relErr != nil || filepath.IsAbs(relative) || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+				return "", fmt.Errorf("console.auto_path 必须位于项目根目录下: %s", configuredPath)
+			}
+			return relative, nil
+		}
+	}
+	applicationPath := strings.TrimSpace(app.ApplicationPath)
+	if applicationPath == "" {
+		applicationName := strings.TrimSpace(app.ApplicationName)
+		if applicationName == "" {
+			applicationName = "index"
+		}
+		applicationPath = filepath.Join(baseAbsolute, "app", applicationName)
+	}
+	applicationAbsolute, err := filepath.Abs(applicationPath)
+	if err != nil {
+		return "", fmt.Errorf("解析应用路径失败: %w", err)
+	}
+	relative, err := filepath.Rel(baseAbsolute, applicationAbsolute)
+	if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
+		return "", fmt.Errorf("应用路径必须位于项目根目录下: %s", applicationPath)
+	}
+	return relative, nil
 }
 
 // writeGeneratedSource 在应用根目录约束内格式化并独占创建 Go 源码。

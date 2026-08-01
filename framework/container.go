@@ -123,23 +123,24 @@ func (c *Container) Make(abstract string, params ...interface{}) (interface{}, e
 		return nil, scope.circularError(abstract)
 	}
 
-	state.lock.Lock()
+	state.lock.RLock()
 	if instance, ok := state.instances[abstract]; ok {
-		state.lock.Unlock()
+		state.lock.RUnlock()
 		return instance, nil
 	}
 
 	registered, ok := state.bindings[abstract]
 	if !ok {
-		state.lock.Unlock()
+		state.lock.RUnlock()
 		return nil, fmt.Errorf("binding not found: %s", abstract)
 	}
 
 	if registered.lifecycle == Factory {
 		generation := registered.generation
-		node := state.nextNodeLocked(abstract)
-		state.lock.Unlock()
-		instance, err := c.build(registered.concrete, scope.push(abstract, node), params...)
+		concrete := registered.concrete
+		state.lock.RUnlock()
+		// Factory 不参与单例等待图，使用空节点即可避免为每次请求获取排他锁。
+		instance, err := c.build(concrete, scope.push(abstract, ""), params...)
 		if err != nil {
 			return nil, fmt.Errorf("build factory %s failed: %w", abstract, err)
 		}
@@ -150,6 +151,23 @@ func (c *Container) Make(abstract string, params ...interface{}) (interface{}, e
 			return nil, bindingChangedError(abstract)
 		}
 		return instance, nil
+	}
+	state.lock.RUnlock()
+
+	// 单例路径需要创建等待状态，重新获取排他锁并复核绑定，防止读锁释放期间发生重绑定。
+	state.lock.Lock()
+	if instance, ok := state.instances[abstract]; ok {
+		state.lock.Unlock()
+		return instance, nil
+	}
+	registered, ok = state.bindings[abstract]
+	if !ok {
+		state.lock.Unlock()
+		return nil, fmt.Errorf("binding not found: %s", abstract)
+	}
+	if registered.lifecycle == Factory {
+		state.lock.Unlock()
+		return c.Make(abstract, params...)
 	}
 
 	if active, ok := state.building[abstract]; ok {
@@ -254,11 +272,22 @@ func (c *Container) callFactory(factory reflect.Value, scope *resolution, params
 		if !outputs[1].Type().Implements(errorType) {
 			return nil, fmt.Errorf("工厂第二个返回值必须实现 error")
 		}
-		if !outputs[1].IsNil() {
-			return nil, outputs[1].Interface().(error)
+		if reflectErrorOutputIsNil(outputs[1]) {
+			return outputs[0].Interface(), nil
 		}
+		return outputs[0].Interface(), outputs[1].Interface().(error)
 	}
 	return outputs[0].Interface(), nil
+}
+
+// reflectErrorOutputIsNil 只把 nil 接口和 nil 指针视为无错误，避免对具体值类型调用 IsNil 导致反射 panic。
+func reflectErrorOutputIsNil(output reflect.Value) bool {
+	switch output.Kind() {
+	case reflect.Interface, reflect.Pointer:
+		return output.IsNil()
+	default:
+		return false
+	}
 }
 
 func (c *Container) factoryInputs(factoryType reflect.Type, scope *resolution, params []interface{}) ([]reflect.Value, error) {

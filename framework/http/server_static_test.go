@@ -1,6 +1,8 @@
 package http
 
 import (
+	stdcontext "context"
+	"crypto/tls"
 	"errors"
 	"net"
 	"net/http"
@@ -159,7 +161,7 @@ func TestHTTPServerHelpers(t *testing.T) {
 		t.Fatalf("关闭未启动 HTTP Server 应幂等: %v", err)
 	}
 	http3Server := handler.newHTTP3Server(handler.newServer().Addr)
-	if http3Server.MaxHeaderBytes != handler.srvConf.MaxHeaderBytes || http3Server.IdleTimeout != handler.srvConf.IdleTimeout {
+	if http3Server.MaxHeaderBytes != handler.srvConf.MaxHeaderBytes || http3Server.IdleTimeout != handler.srvConf.IdleTimeout || http3Server.TLSConfig == nil || http3Server.TLSConfig.MinVersion != tls.VersionTLS12 {
 		t.Fatalf("HTTP/3 必须继承请求头和空闲超时边界: maxHeader=%d idle=%s", http3Server.MaxHeaderBytes, http3Server.IdleTimeout)
 	}
 	handler.srvConf.EnableTLS = true
@@ -185,11 +187,41 @@ func TestRunReturnsListenErrorAndClosesPeers(t *testing.T) {
 	defer occupied.Close()
 	port := occupied.Addr().(*net.TCPAddr).Port
 	app := newTestHTTPApp(t, t.TempDir(), map[string]interface{}{"enable": false})
-	app.Config.Set("app.server.host", "127.0.0.1")
-	app.Config.Set("app.server.port", port)
+	mustHTTPConfig(t, app).Set("app.server.host", "127.0.0.1")
+	mustHTTPConfig(t, app).Set("app.server.port", port)
 	handler := newTestHTTPHandler(t, app)
 	if err = handler.Run(); err == nil || !strings.Contains(err.Error(), "服务异常退出") {
 		t.Fatalf("端口占用应让 Run 返回监听错误，实际为 %v", err)
+	}
+}
+
+// TestRunLogsReadyOnlyAfterTCPListenerBound 验证启动日志发生在真实 TCP 监听成功之后。
+func TestRunLogsReadyOnlyAfterTCPListenerBound(t *testing.T) {
+	ctx, cancel := stdcontext.WithCancel(stdcontext.Background())
+	defer cancel()
+	config := serverConf{
+		Host:            "127.0.0.1",
+		Port:            0,
+		ShutdownTimeout: 500 * time.Millisecond,
+	}
+	var dialErr error
+	runErr := runHTTPServersContext(ctx, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusNoContent)
+	}), config, nil, func(address string) {
+		connection, err := net.DialTimeout("tcp", address, time.Second)
+		if err != nil {
+			dialErr = err
+			cancel()
+			return
+		}
+		_ = connection.Close()
+		cancel()
+	})
+	if dialErr != nil {
+		t.Fatalf("启动日志回调时 TCP 尚未可连接: %v", dialErr)
+	}
+	if !errors.Is(runErr, stdcontext.Canceled) {
+		t.Fatalf("上下文取消应作为 Run 结果返回: %v", runErr)
 	}
 }
 

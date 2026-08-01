@@ -27,7 +27,7 @@ func TestMakeModelUsesCurrentORMConvention(t *testing.T) {
 		t.Fatalf("执行模型生成命令失败: %v", err)
 	}
 
-	filename := filepath.Join(basePath, "app", "model", "user_profile.go")
+	filename := filepath.Join(basePath, "app", "index", "model", "user_profile.go")
 	content, err := os.ReadFile(filename)
 	if err != nil {
 		t.Fatalf("生成模型文件失败: %v", err)
