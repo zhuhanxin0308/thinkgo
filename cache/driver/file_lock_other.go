@@ -6,27 +6,30 @@ import (
 	"errors"
 	"os"
 
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/winfile"
 	"golang.org/x/sys/unix"
 )
 
 // createCacheLockFile 使用独占创建语义建立缓存锁文件。
 func createCacheLockFile(path string) (*os.File, error) {
+	// #nosec G304 -- AcquireLock 仅传入已规范化缓存根目录下的哈希锁名，O_EXCL 拒绝覆盖已有文件及符号链接。
 	return os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 }
 
 // openCacheLockFileForUpdate 以读写模式打开租约文件，续租时不会再通过路径替换文件身份。
 func openCacheLockFileForUpdate(path string) (*os.File, error) {
+	// #nosec G304 -- openLockedCacheLockFile 使用缓存根目录下的哈希锁名，打开前后复核普通文件、符号链接和 SameFile 身份。
 	return os.OpenFile(path, os.O_RDWR, 0o600)
 }
 
 // lockCacheLockFile 使用 Unix 文件锁串行化跨进程的读取、删除和续租。
 func lockCacheLockFile(handle *os.File) error {
-	return unix.Flock(int(handle.Fd()), unix.LOCK_EX)
+	return winfile.Flock(handle, unix.LOCK_EX)
 }
 
 // unlockCacheLockFile 释放由 lockCacheLockFile 建立的 Unix 文件锁。
 func unlockCacheLockFile(handle *os.File) error {
-	return unix.Flock(int(handle.Fd()), unix.LOCK_UN)
+	return winfile.Flock(handle, unix.LOCK_UN)
 }
 
 // discardCreatedCacheLockFile 仅在无法取得文件身份时关闭句柄，避免按路径误删替换后的文件。

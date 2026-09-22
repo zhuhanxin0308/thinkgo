@@ -9,6 +9,33 @@ import (
 	"testing"
 )
 
+// TestUnixCacheLockRejectsUnavailableHandles 验证租约加锁和解锁均拒绝空句柄及已关闭句柄。
+func TestUnixCacheLockRejectsUnavailableHandles(t *testing.T) {
+	handle, err := createCacheLockFile(filepath.Join(t.TempDir(), "closed.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := handle.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, operation := range []struct {
+		name string
+		run  func(*os.File) error
+	}{
+		{name: "加锁", run: lockCacheLockFile},
+		{name: "解锁", run: unlockCacheLockFile},
+	} {
+		t.Run(operation.name, func(t *testing.T) {
+			if err := operation.run(nil); !errors.Is(err, os.ErrInvalid) {
+				t.Fatalf("空句柄错误丢失: %v", err)
+			}
+			if err := operation.run(handle); err == nil {
+				t.Fatal("关闭句柄错误丢失")
+			}
+		})
+	}
+}
+
 // TestUnixCreatedLockCleanupPreservesIdentity 验证 Unix 创建失败清理只删除本次创建的身份并关闭所有句柄。
 func TestUnixCreatedLockCleanupPreservesIdentity(t *testing.T) {
 	if err := discardCreatedCacheLockFile("missing", nil, nil); err != nil {

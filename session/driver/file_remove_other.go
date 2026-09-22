@@ -19,6 +19,7 @@ func removeSessionFileIfSame(path string, expected os.FileInfo) (bool, error) {
 	if current.Mode()&os.ModeSymlink != 0 || !current.Mode().IsRegular() {
 		return false, ErrUnsafeSessionFile
 	}
+	// #nosec G304 -- 调用方仅传入会话根目录内的受管文件；此处已拒绝符号链接，删除前继续核对句柄与路径的 SameFile 身份。
 	handle, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
