@@ -14,7 +14,7 @@ require (
 	github.com/mattn/go-sqlite3 v1.14.47
 	github.com/microsoft/go-mssqldb v1.10.0
 	github.com/neo4j/neo4j-go-driver/v5 v5.28.4
-	github.com/quic-go/quic-go v0.60.0
+	github.com/quic-go/quic-go v0.62.0
 	github.com/redis/go-redis/v9 v9.21.0
 	go.mongodb.org/mongo-driver/v2 v2.8.0
 	go.opentelemetry.io/otel v1.45.0
