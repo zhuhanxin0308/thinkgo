@@ -15,7 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	frameworkenv "github.com/zhuhanxin0308/thinkgo/framework/env"
+	frameworkenv "github.com/zhuhanxin0308/thinkgo/v3/env"
 )
 
 const (

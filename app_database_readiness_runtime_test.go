@@ -6,8 +6,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/db"
-	"github.com/zhuhanxin0308/thinkgo/framework/health"
+	"github.com/zhuhanxin0308/thinkgo/v3/db"
+	"github.com/zhuhanxin0308/thinkgo/v3/health"
 )
 
 type readinessRuntimeConnection struct {

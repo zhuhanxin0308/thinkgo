@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework"
+	"github.com/zhuhanxin0308/thinkgo/v3"
 )
 
 // buildConsoleTestApp 创建已完成初始化的控制台应用，供命令测试解析正式服务边界。

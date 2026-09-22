@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/db"
+	"github.com/zhuhanxin0308/thinkgo/v3/db"
 )
 
 // appDatabaseProvider 负责在配置完成后创建数据库管理器并装配数据库连接。

@@ -117,7 +117,7 @@ ConnectionID() db.ConnectionID
 裸 `GetConnection` 已移除。需要官方驱动 API 时只在 `WithConnection` callback 内使用，不得保存到 callback 外，也不得关闭框架托管连接：
 
 ```go
-import mongoDriver "github.com/zhuhanxin0308/thinkgo/framework/db/driver/mongo"
+import mongoDriver "github.com/zhuhanxin0308/thinkgo/v3/db/driver/mongo"
 
 err = database.WithConnection(func(connection db.Connection) error {
 	mongoConnection, ok := connection.(*mongoDriver.MongoConnection)

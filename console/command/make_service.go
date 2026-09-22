@@ -3,7 +3,7 @@ package command
 import (
 	"fmt"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/console"
+	"github.com/zhuhanxin0308/thinkgo/v3/console"
 )
 
 // MakeService 生成服务提供者源码。
@@ -30,7 +30,7 @@ func (c *MakeService) Execute(input *console.Input, output *console.Output) erro
 	// 模板使用与 ThinkPHP AppService 一致的无参数服务生命周期。
 	content := fmt.Sprintf(`package service
 
-import "github.com/zhuhanxin0308/thinkgo/framework"
+import "github.com/zhuhanxin0308/thinkgo/v3"
 
 // %s 服务。
 type %s struct {

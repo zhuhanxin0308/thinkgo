@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/middleware"
+	"github.com/zhuhanxin0308/thinkgo/v3/middleware"
 )
 
 // ResourceRoute 表示一组可原子裁剪的 RESTful 资源路由。

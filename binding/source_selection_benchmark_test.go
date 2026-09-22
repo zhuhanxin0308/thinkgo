@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	fwcontext "github.com/zhuhanxin0308/thinkgo/framework/context"
+	fwcontext "github.com/zhuhanxin0308/thinkgo/v3/context"
 )
 
 // BenchmarkBindSourceSelection 区分新请求首次绑定与已解析请求重复绑定，类型计划均预热。

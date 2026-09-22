@@ -1,8 +1,8 @@
 package framework
 
 import (
-	"github.com/zhuhanxin0308/thinkgo/framework/middleware"
-	"github.com/zhuhanxin0308/thinkgo/framework/route"
+	"github.com/zhuhanxin0308/thinkgo/v3/middleware"
+	"github.com/zhuhanxin0308/thinkgo/v3/route"
 )
 
 // AddWithCommit 为接口契约提供显式错误入口，并保留门面当前的分组作用域。

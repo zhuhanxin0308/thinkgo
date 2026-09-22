@@ -6,7 +6,7 @@ import (
 	"errors"
 	"os"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/internal/winfile"
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/winfile"
 )
 
 // removeSessionFileIfSame 复用身份保护删除原语，同时保留会话错误契约。

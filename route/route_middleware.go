@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"reflect"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/context"
-	"github.com/zhuhanxin0308/thinkgo/framework/middleware"
+	"github.com/zhuhanxin0308/thinkgo/v3/context"
+	"github.com/zhuhanxin0308/thinkgo/v3/middleware"
 )
 
 // WithoutMiddleware 仅在目标函数指针唯一时移除，歧义时失败关闭。

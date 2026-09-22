@@ -10,11 +10,11 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/zhuhanxin0308/thinkgo/framework"
-	"github.com/zhuhanxin0308/thinkgo/framework/cache"
-	"github.com/zhuhanxin0308/thinkgo/framework/config"
-	"github.com/zhuhanxin0308/thinkgo/framework/console"
-	"github.com/zhuhanxin0308/thinkgo/framework/route"
+	"github.com/zhuhanxin0308/thinkgo/v3"
+	"github.com/zhuhanxin0308/thinkgo/v3/cache"
+	"github.com/zhuhanxin0308/thinkgo/v3/config"
+	"github.com/zhuhanxin0308/thinkgo/v3/console"
+	"github.com/zhuhanxin0308/thinkgo/v3/route"
 )
 
 // resolveApplicationConfig 通过应用服务边界解析配置，避免命令包依赖 App 内部字段。

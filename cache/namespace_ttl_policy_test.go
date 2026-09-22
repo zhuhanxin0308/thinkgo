@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	cacheDriver "github.com/zhuhanxin0308/thinkgo/framework/cache/driver"
+	cacheDriver "github.com/zhuhanxin0308/thinkgo/v3/cache/driver"
 )
 
 // TestNamespaceConditionalTTLForwardsAtomicPolicy 验证多层命名空间转发同一次原子 TTL 决策，并拒绝旧驱动模拟。

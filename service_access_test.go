@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/cache"
+	"github.com/zhuhanxin0308/thinkgo/v3/cache"
 )
 
 // TestResolveServiceUsesStableServiceNames 验证应用通过公开服务名称解析已装配服务。

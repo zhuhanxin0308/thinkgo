@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/db"
-	"github.com/zhuhanxin0308/thinkgo/framework/db/builder"
+	"github.com/zhuhanxin0308/thinkgo/v3/db"
+	"github.com/zhuhanxin0308/thinkgo/v3/db/builder"
 
 	_ "github.com/mattn/go-sqlite3" // 测试真实事务、DDL 和迁移历史的一致性。
 )

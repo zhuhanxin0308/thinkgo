@@ -10,13 +10,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework"
-	"github.com/zhuhanxin0308/thinkgo/framework/console"
+	"github.com/zhuhanxin0308/thinkgo/v3"
+	"github.com/zhuhanxin0308/thinkgo/v3/console"
 )
 
 const crudTestModel = `package model
 
-import "github.com/zhuhanxin0308/thinkgo/framework/db"
+import "github.com/zhuhanxin0308/thinkgo/v3/db"
 
 // User 是生成器验收使用的真实模型，包含敏感字段与可空字段。
 type User struct {

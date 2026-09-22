@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	fwcontext "github.com/zhuhanxin0308/thinkgo/framework/context"
+	fwcontext "github.com/zhuhanxin0308/thinkgo/v3/context"
 )
 
 // TestStreamFailureAbortsRealTCPResponse 验证已提交的失败响应不会以正常 EOF 冒充完整成功。

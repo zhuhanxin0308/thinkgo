@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework"
-	"github.com/zhuhanxin0308/thinkgo/framework/console"
+	"github.com/zhuhanxin0308/thinkgo/v3"
+	"github.com/zhuhanxin0308/thinkgo/v3/console"
 )
 
 // TestListFiltersNamespaceAndSupportsRaw 验证命名空间筛选和可供脚本消费的原始列表。

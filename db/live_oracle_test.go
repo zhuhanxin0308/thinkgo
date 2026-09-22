@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/godror/godror"
-	"github.com/zhuhanxin0308/thinkgo/framework/db"
-	"github.com/zhuhanxin0308/thinkgo/framework/db/connector"
+	"github.com/zhuhanxin0308/thinkgo/v3/db"
+	"github.com/zhuhanxin0308/thinkgo/v3/db/connector"
 )
 
 // TestLiveOracleContract 显式启用 Oracle 驱动并使用真实 OCI 客户端验证同一组数据库契约。

@@ -11,11 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/cache"
-	cacheDriver "github.com/zhuhanxin0308/thinkgo/framework/cache/driver"
-	frameworkContext "github.com/zhuhanxin0308/thinkgo/framework/context"
-	"github.com/zhuhanxin0308/thinkgo/framework/exception"
-	"github.com/zhuhanxin0308/thinkgo/framework/validate"
+	"github.com/zhuhanxin0308/thinkgo/v3/cache"
+	cacheDriver "github.com/zhuhanxin0308/thinkgo/v3/cache/driver"
+	frameworkContext "github.com/zhuhanxin0308/thinkgo/v3/context"
+	"github.com/zhuhanxin0308/thinkgo/v3/exception"
+	"github.com/zhuhanxin0308/thinkgo/v3/validate"
 )
 
 // TestBaseControllerThinkPHPBusinessAPI 验证控制器中间件、视图赋值、标准

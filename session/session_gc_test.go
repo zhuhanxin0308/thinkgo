@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/cookie"
+	"github.com/zhuhanxin0308/thinkgo/v3/cookie"
 )
 
 type blockingGCDriver struct {

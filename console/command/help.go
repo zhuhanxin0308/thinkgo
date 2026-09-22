@@ -3,7 +3,7 @@ package command
 import (
 	"fmt"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/console"
+	"github.com/zhuhanxin0308/thinkgo/v3/console"
 )
 
 // Help 展示指定命令帮助，对应 ThinkPHP 内置 help 命令。

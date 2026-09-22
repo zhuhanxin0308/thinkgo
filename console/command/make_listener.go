@@ -3,7 +3,7 @@ package command
 import (
 	"fmt"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/console"
+	"github.com/zhuhanxin0308/thinkgo/v3/console"
 )
 
 // MakeListener 生成事件监听器源码。
@@ -32,7 +32,7 @@ func (c *MakeListener) Execute(input *console.Input, output *console.Output) err
 
 import (
 	"fmt"
-	"github.com/zhuhanxin0308/thinkgo/framework/event"
+	"github.com/zhuhanxin0308/thinkgo/v3/event"
 )
 
 // %s 监听器。

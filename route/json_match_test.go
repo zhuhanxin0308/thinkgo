@@ -5,7 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/context"
+	"github.com/zhuhanxin0308/thinkgo/v3/context"
 )
 
 // TestJSONRoutesConsumeTheirDeclaredPath 验证列表不会吞掉详情路径，普通路由继续保留前缀匹配。

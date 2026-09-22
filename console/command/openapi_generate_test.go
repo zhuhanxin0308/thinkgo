@@ -11,14 +11,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework"
-	"github.com/zhuhanxin0308/thinkgo/framework/console"
-	"github.com/zhuhanxin0308/thinkgo/framework/openapi"
+	"github.com/zhuhanxin0308/thinkgo/v3"
+	"github.com/zhuhanxin0308/thinkgo/v3/console"
+	"github.com/zhuhanxin0308/thinkgo/v3/openapi"
 )
 
 const commentedAPISource = `package api
 
-import "github.com/zhuhanxin0308/thinkgo/framework/binding"
+import "github.com/zhuhanxin0308/thinkgo/v3/binding"
 
 // Input 用户查询条件。
 type Input struct {

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/middleware"
+	"github.com/zhuhanxin0308/thinkgo/v3/middleware"
 )
 
 // ApplicationComponents 描述 service:discover 为单个业务应用发现的组件。

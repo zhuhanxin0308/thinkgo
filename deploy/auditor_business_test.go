@@ -8,10 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework"
-	"github.com/zhuhanxin0308/thinkgo/framework/db"
-	"github.com/zhuhanxin0308/thinkgo/framework/route"
-	"github.com/zhuhanxin0308/thinkgo/framework/telemetry"
+	"github.com/zhuhanxin0308/thinkgo/v3"
+	"github.com/zhuhanxin0308/thinkgo/v3/db"
+	"github.com/zhuhanxin0308/thinkgo/v3/route"
+	"github.com/zhuhanxin0308/thinkgo/v3/telemetry"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace/noop"
 )

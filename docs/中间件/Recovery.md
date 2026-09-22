@@ -1,6 +1,6 @@
 # Recovery
 
-`framework/middleware.Recovery` 捕获下游处理过程中的 panic，并把它交给 `framework/exception.Handle` 渲染为统一的 `context.Response`。应用初始化时它始终位于全局管道最前面。
+框架的 `middleware.Recovery` 捕获下游处理过程中的 panic，并把它交给 `exception.Handle` 渲染为统一的 `context.Response`。应用初始化时它始终位于全局管道最前面。
 
 ## 装配
 

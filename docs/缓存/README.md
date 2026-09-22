@@ -1,6 +1,6 @@
 # 缓存
 
-`framework/cache` 把缓存键、多个 store、标签、并发加载、计数、锁和驱动生命周期统一到 `cache.Cache`。业务代码通过 `app.Cache()` 直接取得缓存服务。内存与文件驱动位于 `framework/cache/driver`，可选 Redis 与数据库驱动分别位于其 `redis`、`database` 子包。
+框架的 `cache` 包把缓存键、多个 store、标签、并发加载、计数、锁和驱动生命周期统一到 `cache.Cache`。业务代码通过 `app.Cache()` 直接取得缓存服务。内存与文件驱动位于 `cache/driver`，可选 Redis 与数据库驱动分别位于其 `redis`、`database` 子包。
 
 本目录按能力拆分：
 

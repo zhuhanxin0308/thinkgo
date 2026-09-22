@@ -18,7 +18,7 @@ func TestCacheCoreDoesNotImportOptionalBackends(t *testing.T) {
 		t.Fatalf("读取编译依赖失败: %v %s", err, output)
 	}
 	for _, dependency := range strings.Fields(string(output)) {
-		for _, backend := range []string{"github.com/redis/", "go.mongodb.org/", "github.com/neo4j/", "github.com/zhuhanxin0308/thinkgo/framework/cache/driver"} {
+		for _, backend := range []string{"github.com/redis/", "go.mongodb.org/", "github.com/neo4j/", "github.com/zhuhanxin0308/thinkgo/v3/cache/driver"} {
 			if strings.HasPrefix(dependency, backend) {
 				t.Fatalf("Cache 核心包含可选后端: %s", dependency)
 			}

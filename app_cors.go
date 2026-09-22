@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/context"
-	"github.com/zhuhanxin0308/thinkgo/framework/middleware"
+	"github.com/zhuhanxin0308/thinkgo/v3/context"
+	"github.com/zhuhanxin0308/thinkgo/v3/middleware"
 )
 
 // createAppCors 严格解析应用 CORS 配置；禁用全局管道时仍构造别名并校验完整策略。

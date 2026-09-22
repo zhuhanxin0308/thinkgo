@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	fwcontext "github.com/zhuhanxin0308/thinkgo/framework/context"
+	fwcontext "github.com/zhuhanxin0308/thinkgo/v3/context"
 )
 
 // TestPipelineEmptyFastPathPreservesTerminatorDelta 验证空管道仍按本次执行范围返回新增终结回调。

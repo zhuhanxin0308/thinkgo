@@ -12,12 +12,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/zhuhanxin0308/thinkgo/framework"
-	"github.com/zhuhanxin0308/thinkgo/framework/config"
-	"github.com/zhuhanxin0308/thinkgo/framework/db"
-	"github.com/zhuhanxin0308/thinkgo/framework/migration"
-	"github.com/zhuhanxin0308/thinkgo/framework/route"
-	"github.com/zhuhanxin0308/thinkgo/framework/telemetry"
+	"github.com/zhuhanxin0308/thinkgo/v3"
+	"github.com/zhuhanxin0308/thinkgo/v3/config"
+	"github.com/zhuhanxin0308/thinkgo/v3/db"
+	"github.com/zhuhanxin0308/thinkgo/v3/migration"
+	"github.com/zhuhanxin0308/thinkgo/v3/route"
+	"github.com/zhuhanxin0308/thinkgo/v3/telemetry"
 )
 
 // Level 表示部署检查结果的严重级别。

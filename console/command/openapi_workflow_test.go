@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/console"
+	"github.com/zhuhanxin0308/thinkgo/v3/console"
 )
 
 // TestOpenAPICommentBuildSelection 验证构建标签、测试包和嵌套模块不会混入当前目标文档。
@@ -122,9 +122,9 @@ const commentCommandFixture = `package main
 
 import (
 	"os"
-	"github.com/zhuhanxin0308/thinkgo/framework"
-	"github.com/zhuhanxin0308/thinkgo/framework/console"
-	"github.com/zhuhanxin0308/thinkgo/framework/console/command"
+	"github.com/zhuhanxin0308/thinkgo/v3"
+	"github.com/zhuhanxin0308/thinkgo/v3/console"
+	"github.com/zhuhanxin0308/thinkgo/v3/console/command"
 )
 
 func main() {

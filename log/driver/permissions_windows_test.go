@@ -8,7 +8,7 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/log"
+	"github.com/zhuhanxin0308/thinkgo/v3/log"
 	"golang.org/x/sys/windows"
 )
 

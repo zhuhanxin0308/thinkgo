@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	cacheDriver "github.com/zhuhanxin0308/thinkgo/framework/cache/driver"
+	cacheDriver "github.com/zhuhanxin0308/thinkgo/v3/cache/driver"
 )
 
 // TestAtomicOriginHandlesDelayedInvalidation 模拟失效已领票但暂停发布，包括旧租约持有者恢复。

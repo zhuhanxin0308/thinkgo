@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	cacheDriver "github.com/zhuhanxin0308/thinkgo/framework/cache/driver"
+	cacheDriver "github.com/zhuhanxin0308/thinkgo/v3/cache/driver"
 )
 
 func benchmarkScopedReads(b *testing.B, manager *Cache, scopes int) {

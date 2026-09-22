@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	fwcontext "github.com/zhuhanxin0308/thinkgo/framework/context"
-	"github.com/zhuhanxin0308/thinkgo/framework/event"
+	fwcontext "github.com/zhuhanxin0308/thinkgo/v3/context"
+	"github.com/zhuhanxin0308/thinkgo/v3/event"
 )
 
 // TestEndReportsFinalTransmissionStatus 验证文件和流式发送形成的最终状态同步到结束事件与终结回调。

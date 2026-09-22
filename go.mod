@@ -1,4 +1,4 @@
-module github.com/zhuhanxin0308/thinkgo/framework
+module github.com/zhuhanxin0308/thinkgo/v3
 
 go 1.26.6
 

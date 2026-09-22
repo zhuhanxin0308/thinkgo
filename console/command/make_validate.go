@@ -3,7 +3,7 @@ package command
 import (
 	"fmt"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/console"
+	"github.com/zhuhanxin0308/thinkgo/v3/console"
 )
 
 // MakeValidate 生成可直接配置规则的验证器源码。
@@ -31,7 +31,7 @@ func (c *MakeValidate) Execute(input *console.Input, output *console.Output) err
 	content := fmt.Sprintf(`package validate
 
 import (
-	"github.com/zhuhanxin0308/thinkgo/framework/validate"
+	"github.com/zhuhanxin0308/thinkgo/v3/validate"
 )
 
 // %s 验证器

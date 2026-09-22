@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/debug"
+	"github.com/zhuhanxin0308/thinkgo/v3/debug"
 )
 
 type recordingViewDriver struct {

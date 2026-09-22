@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework"
-	"github.com/zhuhanxin0308/thinkgo/framework/config"
-	"github.com/zhuhanxin0308/thinkgo/framework/console"
+	"github.com/zhuhanxin0308/thinkgo/v3"
+	"github.com/zhuhanxin0308/thinkgo/v3/config"
+	"github.com/zhuhanxin0308/thinkgo/v3/console"
 )
 
 // TestRedactConfigDumpDataMasksNestedSensitiveValues 验证配置导出前会递归脱敏敏感字段。

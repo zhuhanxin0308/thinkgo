@@ -6,7 +6,7 @@ import (
 	"math"
 	"strconv"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/middleware"
+	"github.com/zhuhanxin0308/thinkgo/v3/middleware"
 )
 
 func createAppSecurityHeaders(values map[string]interface{}) (middleware.Handler, bool, error) {

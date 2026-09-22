@@ -3,7 +3,7 @@ package framework
 import (
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/middleware"
+	"github.com/zhuhanxin0308/thinkgo/v3/middleware"
 )
 
 // TestApplicationAssemblyUsesContainerServices 验证应用装配阶段使用容器中的服务实例。

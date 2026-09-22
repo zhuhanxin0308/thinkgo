@@ -7,8 +7,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/config"
-	"github.com/zhuhanxin0308/thinkgo/framework/env"
+	"github.com/zhuhanxin0308/thinkgo/v3/config"
+	"github.com/zhuhanxin0308/thinkgo/v3/env"
 )
 
 // ErrProjectConfigurationOverrideUnavailable 表示项目配置尚未初始化完成，

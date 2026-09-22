@@ -7,10 +7,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/zhuhanxin0308/thinkgo/framework"
-	"github.com/zhuhanxin0308/thinkgo/framework/config"
-	"github.com/zhuhanxin0308/thinkgo/framework/telemetry"
-	"github.com/zhuhanxin0308/thinkgo/framework/version"
+	"github.com/zhuhanxin0308/thinkgo/v3"
+	"github.com/zhuhanxin0308/thinkgo/v3/config"
+	"github.com/zhuhanxin0308/thinkgo/v3/telemetry"
+	"github.com/zhuhanxin0308/thinkgo/v3/version"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
@@ -132,7 +132,7 @@ func (provider *Provider) Initialize(app *framework.App) (initializeErr error) {
 		Enabled:                true,
 		Provider:               sdk,
 		Propagator:             propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}),
-		InstrumentationName:    "github.com/zhuhanxin0308/thinkgo/framework/http",
+		InstrumentationName:    "github.com/zhuhanxin0308/thinkgo/v3/http",
 		InstrumentationVersion: version.Number,
 	})
 	if err != nil {

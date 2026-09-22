@@ -10,7 +10,7 @@ import (
 // TestDefaultCacheConfigMatchesStrictDriverSchema 验证默认缓存配置保留 ThinkPHP
 // file store 的完整公共字段，并由应用装配层真实应用这些字段。
 func TestDefaultCacheConfigMatchesStrictDriverSchema(t *testing.T) {
-	content, err := os.ReadFile(filepath.Join("..", "..", "config", "cache.json"))
+	content, err := os.ReadFile(filepath.Join("..", "testdata", "project", "config", "cache.json"))
 	if err != nil {
 		t.Fatalf("读取 cache.json 失败: %v", err)
 	}

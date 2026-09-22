@@ -3,7 +3,7 @@ package framework
 import (
 	"fmt"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/event"
+	"github.com/zhuhanxin0308/thinkgo/v3/event"
 )
 
 // EventDefinition 对应 ThinkPHP app/event.php 的 bind、listen、subscribe 三段配置。

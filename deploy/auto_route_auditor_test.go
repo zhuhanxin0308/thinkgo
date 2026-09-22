@@ -7,10 +7,10 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework"
-	frameworkcontext "github.com/zhuhanxin0308/thinkgo/framework/context"
-	"github.com/zhuhanxin0308/thinkgo/framework/route"
-	"github.com/zhuhanxin0308/thinkgo/framework/testkit"
+	"github.com/zhuhanxin0308/thinkgo/v3"
+	frameworkcontext "github.com/zhuhanxin0308/thinkgo/v3/context"
+	"github.com/zhuhanxin0308/thinkgo/v3/route"
+	"github.com/zhuhanxin0308/thinkgo/v3/testkit"
 )
 
 // TestAutomaticRouteAuditUsesLoadedRouter 验证部署门禁读取加载器执行后的实际策略，

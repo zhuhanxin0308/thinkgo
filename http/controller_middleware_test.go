@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework"
-	fwcontext "github.com/zhuhanxin0308/thinkgo/framework/context"
+	"github.com/zhuhanxin0308/thinkgo/v3"
+	fwcontext "github.com/zhuhanxin0308/thinkgo/v3/context"
 )
 
 // mwTestController 用于验证控制器级中间件声明会被分发器实际应用。

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/db/builder"
+	"github.com/zhuhanxin0308/thinkgo/v3/db/builder"
 )
 
 // TestPaginationValueObjects 验证分页结果对象在空指针和正常值下都保持稳定的响应结构。

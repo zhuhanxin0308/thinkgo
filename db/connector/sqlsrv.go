@@ -3,8 +3,8 @@ package connector
 import (
 	"net/url"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/db"
-	"github.com/zhuhanxin0308/thinkgo/framework/db/builder"
+	"github.com/zhuhanxin0308/thinkgo/v3/db"
+	"github.com/zhuhanxin0308/thinkgo/v3/db/builder"
 
 	_ "github.com/microsoft/go-mssqldb"
 )

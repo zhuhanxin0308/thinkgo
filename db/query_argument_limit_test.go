@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/db/builder"
+	"github.com/zhuhanxin0308/thinkgo/v3/db/builder"
 )
 
 // TestQueryWhereInRejectsArgumentsAboveFallbackLimit 验证无 SQL 方言连接时的统一参数上限。

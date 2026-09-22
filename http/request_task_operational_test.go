@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework"
-	fwcontext "github.com/zhuhanxin0308/thinkgo/framework/context"
+	"github.com/zhuhanxin0308/thinkgo/v3"
+	fwcontext "github.com/zhuhanxin0308/thinkgo/v3/context"
 )
 
 // TestOperationalCapacityPreservesMiddlewareAndAccess 验证满载时仍可探测，但预留容量不能绕过来源和中间件。

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/internal/winfile"
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/winfile"
 )
 
 const fileMutationGuardShards = 64

@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/queue"
+	"github.com/zhuhanxin0308/thinkgo/v3/queue"
 )
 
 // TestBackendTaskOwnsItsData 验证适配器只需检查零值，但必须保留后端与不可变任务的数据隔离。

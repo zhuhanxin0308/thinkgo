@@ -1,6 +1,6 @@
 # 数据库
 
-本目录描述 `framework/db` 当前实现的数据库能力。每个文件只负责一个主题，示例遵循应用层的调用边界：
+本目录描述框架的 `db` 包当前实现的数据库能力。每个文件只负责一个主题，示例遵循应用层的调用边界：
 
 ```text
 Controller -> Validator -> Service -> Model/ORM -> Database

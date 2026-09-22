@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	frameworkcookie "github.com/zhuhanxin0308/thinkgo/framework/cookie"
-	frameworkenv "github.com/zhuhanxin0308/thinkgo/framework/env"
-	frameworksession "github.com/zhuhanxin0308/thinkgo/framework/session"
-	sessiondriver "github.com/zhuhanxin0308/thinkgo/framework/session/driver"
+	frameworkcookie "github.com/zhuhanxin0308/thinkgo/v3/cookie"
+	frameworkenv "github.com/zhuhanxin0308/thinkgo/v3/env"
+	frameworksession "github.com/zhuhanxin0308/thinkgo/v3/session"
+	sessiondriver "github.com/zhuhanxin0308/thinkgo/v3/session/driver"
 )
 
 // TestRequestThinkPHPDomainAndRuntimeMetadataAPI 验证根域名、子域名、请求时间、

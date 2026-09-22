@@ -7,7 +7,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework"
+	"github.com/zhuhanxin0308/thinkgo/v3"
 )
 
 func nativeResolverApplications(names ...string) map[string]*Http {

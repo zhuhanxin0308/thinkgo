@@ -8,8 +8,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	fwcontext "github.com/zhuhanxin0308/thinkgo/framework/context"
-	"github.com/zhuhanxin0308/thinkgo/framework/middleware"
+	fwcontext "github.com/zhuhanxin0308/thinkgo/v3/context"
+	"github.com/zhuhanxin0308/thinkgo/v3/middleware"
 )
 
 type nilHTTPRouteHandler struct{}

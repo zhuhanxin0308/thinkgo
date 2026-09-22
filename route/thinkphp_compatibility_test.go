@@ -5,7 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	fwcontext "github.com/zhuhanxin0308/thinkgo/framework/context"
+	fwcontext "github.com/zhuhanxin0308/thinkgo/v3/context"
 )
 
 // TestRouterDefaultsMatchThinkPHP8 验证无项目配置时的路由默认值与

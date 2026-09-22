@@ -4,7 +4,7 @@ import (
 	"errors"
 	"net/http"
 
-	frameworksession "github.com/zhuhanxin0308/thinkgo/framework/session"
+	frameworksession "github.com/zhuhanxin0308/thinkgo/v3/session"
 )
 
 // SetSession 绑定当前请求 Session，使响应发送前完成持久化和 Cookie 提交。

@@ -9,9 +9,9 @@ import (
 	"testing"
 
 	"github.com/getkin/kin-openapi/openapi3"
-	"github.com/zhuhanxin0308/thinkgo/framework/binding"
-	fwcontext "github.com/zhuhanxin0308/thinkgo/framework/context"
-	"github.com/zhuhanxin0308/thinkgo/framework/route"
+	"github.com/zhuhanxin0308/thinkgo/v3/binding"
+	fwcontext "github.com/zhuhanxin0308/thinkgo/v3/context"
+	"github.com/zhuhanxin0308/thinkgo/v3/route"
 )
 
 type handleInput struct {

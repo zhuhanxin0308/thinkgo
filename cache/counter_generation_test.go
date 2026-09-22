@@ -3,7 +3,7 @@ package cache
 import (
 	"testing"
 
-	cacheDriver "github.com/zhuhanxin0308/thinkgo/framework/cache/driver"
+	cacheDriver "github.com/zhuhanxin0308/thinkgo/v3/cache/driver"
 )
 
 // TestCounterRebasesPastExistingGeneration 验证计数从当前值计算，并取得严格较新的独占提交身份。

@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"reflect"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/binding"
-	"github.com/zhuhanxin0308/thinkgo/framework/context"
+	"github.com/zhuhanxin0308/thinkgo/v3/binding"
+	"github.com/zhuhanxin0308/thinkgo/v3/context"
 )
 
 // JSONHandler 固定成功状态和 JSON 输出方式，完整匹配声明路径，不自动添加 URL 后缀。

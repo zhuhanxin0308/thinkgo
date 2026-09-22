@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/binding"
-	fwcontext "github.com/zhuhanxin0308/thinkgo/framework/context"
+	"github.com/zhuhanxin0308/thinkgo/v3/binding"
+	fwcontext "github.com/zhuhanxin0308/thinkgo/v3/context"
 )
 
 type requestJSONBenchmarkCheckout struct {

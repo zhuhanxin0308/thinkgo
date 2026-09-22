@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/db"
+	"github.com/zhuhanxin0308/thinkgo/v3/db"
 )
 
 func (store *DatabaseStore) nextFencingToken(ctx context.Context) (int64, error) {

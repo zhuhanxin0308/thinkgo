@@ -5,8 +5,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/cache"
-	cacheDriver "github.com/zhuhanxin0308/thinkgo/framework/cache/driver"
+	"github.com/zhuhanxin0308/thinkgo/v3/cache"
+	cacheDriver "github.com/zhuhanxin0308/thinkgo/v3/cache/driver"
 )
 
 type blockingOwnedCacheDriver struct {

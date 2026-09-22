@@ -13,11 +13,11 @@ import (
 	"runtime/debug"
 	"strings"
 
-	"github.com/zhuhanxin0308/thinkgo/framework"
-	"github.com/zhuhanxin0308/thinkgo/framework/console"
+	"github.com/zhuhanxin0308/thinkgo/v3"
+	"github.com/zhuhanxin0308/thinkgo/v3/console"
 )
 
-const scaffoldFrameworkModule = "github.com/zhuhanxin0308/thinkgo/framework"
+const scaffoldFrameworkModule = "github.com/zhuhanxin0308/thinkgo/v3"
 
 var projectNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
 

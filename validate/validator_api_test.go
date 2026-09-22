@@ -9,7 +9,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/lang"
+	"github.com/zhuhanxin0308/thinkgo/v3/lang"
 )
 
 // TestValidateReturnsIsolatedConcurrentResults 验证共享验证器的每次调用都返回独立结果。

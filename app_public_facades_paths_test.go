@@ -5,13 +5,13 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/cache"
-	cacheDriver "github.com/zhuhanxin0308/thinkgo/framework/cache/driver"
-	"github.com/zhuhanxin0308/thinkgo/framework/cookie"
-	"github.com/zhuhanxin0308/thinkgo/framework/db"
-	"github.com/zhuhanxin0308/thinkgo/framework/filesystem"
-	"github.com/zhuhanxin0308/thinkgo/framework/session"
-	"github.com/zhuhanxin0308/thinkgo/framework/view"
+	"github.com/zhuhanxin0308/thinkgo/v3/cache"
+	cacheDriver "github.com/zhuhanxin0308/thinkgo/v3/cache/driver"
+	"github.com/zhuhanxin0308/thinkgo/v3/cookie"
+	"github.com/zhuhanxin0308/thinkgo/v3/db"
+	"github.com/zhuhanxin0308/thinkgo/v3/filesystem"
+	"github.com/zhuhanxin0308/thinkgo/v3/session"
+	"github.com/zhuhanxin0308/thinkgo/v3/view"
 )
 
 // TestAppCoreFacadesHideContainerDetails 验证业务可以通过 App 直接取得所有

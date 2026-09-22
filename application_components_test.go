@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/middleware"
+	"github.com/zhuhanxin0308/thinkgo/v3/middleware"
 )
 
 type componentTestController struct{}

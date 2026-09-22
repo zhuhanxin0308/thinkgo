@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	fwcontext "github.com/zhuhanxin0308/thinkgo/framework/context"
+	fwcontext "github.com/zhuhanxin0308/thinkgo/v3/context"
 )
 
 // newCSRFHandler 创建通过严格配置校验的 CSRF 测试中间件。

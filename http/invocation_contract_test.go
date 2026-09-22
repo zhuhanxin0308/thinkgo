@@ -6,9 +6,9 @@ import (
 	"testing"
 
 	"github.com/getkin/kin-openapi/openapi3"
-	fwcontext "github.com/zhuhanxin0308/thinkgo/framework/context"
-	"github.com/zhuhanxin0308/thinkgo/framework/openapi"
-	"github.com/zhuhanxin0308/thinkgo/framework/route"
+	fwcontext "github.com/zhuhanxin0308/thinkgo/v3/context"
+	"github.com/zhuhanxin0308/thinkgo/v3/openapi"
+	"github.com/zhuhanxin0308/thinkgo/v3/route"
 )
 
 type businessRepository interface{ UserName() string }

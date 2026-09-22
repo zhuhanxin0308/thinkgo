@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/db"
-	"github.com/zhuhanxin0308/thinkgo/framework/db/connector"
+	"github.com/zhuhanxin0308/thinkgo/v3/db"
+	"github.com/zhuhanxin0308/thinkgo/v3/db/connector"
 )
 
 // TestLiveSQLServerContract 将 SQL Server 的真实执行结果与现有查询、批量、事务和取消契约核对。

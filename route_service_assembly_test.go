@@ -5,8 +5,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	fwcontext "github.com/zhuhanxin0308/thinkgo/framework/context"
-	"github.com/zhuhanxin0308/thinkgo/framework/route"
+	fwcontext "github.com/zhuhanxin0308/thinkgo/v3/context"
+	"github.com/zhuhanxin0308/thinkgo/v3/route"
 )
 
 // TestRouteAssemblyUsesContainerRouter 验证路由配置装配到容器中的路由器，而不是固定写入旧的公开字段。

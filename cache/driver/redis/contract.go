@@ -3,7 +3,7 @@ package redis
 import (
 	"time"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/cache/contract"
+	"github.com/zhuhanxin0308/thinkgo/v3/cache/contract"
 )
 
 const cacheFenceMetadataPrefix = contract.FenceMetadataPrefix

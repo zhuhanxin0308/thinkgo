@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/db"
+	"github.com/zhuhanxin0308/thinkgo/v3/db"
 )
 
 // TestPaginationDialects 验证各方言生成正确的分页语法。

@@ -14,19 +14,6 @@ updates:
     labels:
       - dependencies
 
-  # 独立框架模块维护自己的依赖图，升级请求不能只覆盖宿主模块。
-  - package-ecosystem: gomod
-    directory: /framework
-    schedule:
-      interval: weekly
-      day: monday
-      time: "09:15"
-      timezone: Asia/Shanghai
-    open-pull-requests-limit: 5
-    rebase-strategy: auto
-    labels:
-      - dependencies
-
   # Action 固定到提交哈希，由升级请求显式审查新提交后再更新。
   - package-ecosystem: github-actions
     directory: /

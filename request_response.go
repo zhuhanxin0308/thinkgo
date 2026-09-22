@@ -1,6 +1,6 @@
 package framework
 
-import "github.com/zhuhanxin0308/thinkgo/framework/context"
+import "github.com/zhuhanxin0308/thinkgo/v3/context"
 
 // Request 是框架顶层请求类型，对应 ThinkPHP 的 think\Request。
 type Request = context.Request

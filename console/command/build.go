@@ -11,8 +11,8 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/zhuhanxin0308/thinkgo/framework"
-	"github.com/zhuhanxin0308/thinkgo/framework/console"
+	"github.com/zhuhanxin0308/thinkgo/v3"
+	"github.com/zhuhanxin0308/thinkgo/v3/console"
 )
 
 // SupportedBuildTargets 是经过框架验证的无 CGO 发布目标。

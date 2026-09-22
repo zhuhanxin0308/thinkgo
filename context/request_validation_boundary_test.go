@@ -10,7 +10,7 @@ import (
 	"sync"
 	"testing"
 
-	frameworkenv "github.com/zhuhanxin0308/thinkgo/framework/env"
+	frameworkenv "github.com/zhuhanxin0308/thinkgo/v3/env"
 )
 
 // TestRequestCoreReadsKeepCompatibilityLazy 验证常规请求及环境注入不会创建未使用的兼容状态。

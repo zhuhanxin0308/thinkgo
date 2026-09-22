@@ -20,7 +20,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/config"
+	"github.com/zhuhanxin0308/thinkgo/v3/config"
 )
 
 type tlsTestLeafOptions struct {

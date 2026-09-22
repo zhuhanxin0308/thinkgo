@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/db"
+	"github.com/zhuhanxin0308/thinkgo/v3/db"
 )
 
 // TestDatabaseStoreReadOnlyStatePathsWithoutCGO 覆盖不依赖真实 SQLite 驱动的只读状态读取路径。

@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 
-	fwcontext "github.com/zhuhanxin0308/thinkgo/framework/context"
+	fwcontext "github.com/zhuhanxin0308/thinkgo/v3/context"
 )
 
 // ReportAndRender 统一异常上报和渲染顺序，并将处理器自身的 panic 交回宿主处理。

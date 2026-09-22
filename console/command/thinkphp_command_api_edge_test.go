@@ -10,10 +10,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework"
-	"github.com/zhuhanxin0308/thinkgo/framework/console"
-	fwcontext "github.com/zhuhanxin0308/thinkgo/framework/context"
-	frameworkRoute "github.com/zhuhanxin0308/thinkgo/framework/route"
+	"github.com/zhuhanxin0308/thinkgo/v3"
+	"github.com/zhuhanxin0308/thinkgo/v3/console"
+	fwcontext "github.com/zhuhanxin0308/thinkgo/v3/context"
+	frameworkRoute "github.com/zhuhanxin0308/thinkgo/v3/route"
 )
 
 // TestOptimizeBuildsConsumedStartupCache 验证 optimize 只生成具有启动消费方的配置缓存。

@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework"
+	"github.com/zhuhanxin0308/thinkgo/v3"
 )
 
 // TestControllerDiscoveryBatchRejectsStagingFailureWithoutChanges 验证全部临时文件

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	cacheDriver "github.com/zhuhanxin0308/thinkgo/framework/cache/driver"
+	cacheDriver "github.com/zhuhanxin0308/thinkgo/v3/cache/driver"
 )
 
 // TestNamespaceDriverAppliesThinkPHPPrefixes 验证普通键、标签元数据键、

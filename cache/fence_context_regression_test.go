@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	cacheDriver "github.com/zhuhanxin0308/thinkgo/framework/cache/driver"
+	cacheDriver "github.com/zhuhanxin0308/thinkgo/v3/cache/driver"
 )
 
 type fenceContextBackend struct {

@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/getkin/kin-openapi/openapi3"
-	"github.com/zhuhanxin0308/thinkgo/framework/route"
+	"github.com/zhuhanxin0308/thinkgo/v3/route"
 )
 
 // TestHandleBoundariesRetainRegistrationState 验证宿主错误、路由域名及不支持的方法不会留下契约。

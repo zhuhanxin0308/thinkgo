@@ -9,8 +9,8 @@ import (
 	"go/format"
 	"os"
 
-	"github.com/zhuhanxin0308/thinkgo/framework"
-	"github.com/zhuhanxin0308/thinkgo/framework/console"
+	"github.com/zhuhanxin0308/thinkgo/v3"
+	"github.com/zhuhanxin0308/thinkgo/v3/console"
 )
 
 const (
@@ -151,7 +151,7 @@ package apidoc
 import (
 	_ "embed"
 	"github.com/getkin/kin-openapi/openapi3"
-	"github.com/zhuhanxin0308/thinkgo/framework/openapi"
+	"github.com/zhuhanxin0308/thinkgo/v3/openapi"
 )
 
 //go:generate go -C ../.. run ./cmd/think openapi:generate

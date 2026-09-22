@@ -11,11 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/cache"
-	cacheDriver "github.com/zhuhanxin0308/thinkgo/framework/cache/driver"
-	frameworkContext "github.com/zhuhanxin0308/thinkgo/framework/context"
-	"github.com/zhuhanxin0308/thinkgo/framework/debug"
-	"github.com/zhuhanxin0308/thinkgo/framework/view"
+	"github.com/zhuhanxin0308/thinkgo/v3/cache"
+	cacheDriver "github.com/zhuhanxin0308/thinkgo/v3/cache/driver"
+	frameworkContext "github.com/zhuhanxin0308/thinkgo/v3/context"
+	"github.com/zhuhanxin0308/thinkgo/v3/debug"
+	"github.com/zhuhanxin0308/thinkgo/v3/view"
 )
 
 type controllerDebugViewDriver struct{}

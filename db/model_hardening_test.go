@@ -11,7 +11,7 @@ import (
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/db/builder"
+	"github.com/zhuhanxin0308/thinkgo/v3/db/builder"
 )
 
 type modelHardeningUser struct {

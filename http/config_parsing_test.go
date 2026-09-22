@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zhuhanxin0308/thinkgo/framework"
-	frameworkconfig "github.com/zhuhanxin0308/thinkgo/framework/config"
+	"github.com/zhuhanxin0308/thinkgo/v3"
+	frameworkconfig "github.com/zhuhanxin0308/thinkgo/v3/config"
 )
 
 type httpConfigEnvironment map[string]string
@@ -179,7 +179,7 @@ func TestRequestEndTimeoutConfig(t *testing.T) {
 // 请求收尾超时叶子，因此严格环境合并可以识别对应的 APP_SERVER 覆盖键。
 func TestProjectTemplateDeclaresRequestEndTimeoutOverride(t *testing.T) {
 	configuration := frameworkconfig.NewConfig()
-	if err := configuration.LoadAll(filepath.Join("..", "..", "config")); err != nil {
+	if err := configuration.LoadAll(filepath.Join("..", "testdata", "project", "config")); err != nil {
 		t.Fatalf("加载项目配置模板失败: %v", err)
 	}
 	if milliseconds := configuration.GetInt("app.server.request_end_timeout_ms"); milliseconds != 2000 {

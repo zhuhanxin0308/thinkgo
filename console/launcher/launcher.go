@@ -13,10 +13,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/zhuhanxin0308/thinkgo/framework"
-	"github.com/zhuhanxin0308/thinkgo/framework/console"
-	"github.com/zhuhanxin0308/thinkgo/framework/console/command"
-	"github.com/zhuhanxin0308/thinkgo/framework/db/connector"
+	"github.com/zhuhanxin0308/thinkgo/v3"
+	"github.com/zhuhanxin0308/thinkgo/v3/console"
+	"github.com/zhuhanxin0308/thinkgo/v3/console/command"
+	"github.com/zhuhanxin0308/thinkgo/v3/db/connector"
 	_ "time/tzdata" // 内置时区数据，保证 Windows CLI 制品可加载配置中的时区。
 )
 

@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	fwcontext "github.com/zhuhanxin0308/thinkgo/framework/context"
-	"github.com/zhuhanxin0308/thinkgo/framework/exception"
-	"github.com/zhuhanxin0308/thinkgo/framework/validate"
+	fwcontext "github.com/zhuhanxin0308/thinkgo/v3/context"
+	"github.com/zhuhanxin0308/thinkgo/v3/exception"
+	"github.com/zhuhanxin0308/thinkgo/v3/validate"
 )
 
 type TreeInput struct {

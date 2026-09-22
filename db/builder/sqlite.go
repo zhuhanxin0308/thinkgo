@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/db/internal/contract"
+	"github.com/zhuhanxin0308/thinkgo/v3/db/internal/contract"
 )
 
 // Sqlite builder（SQLite 方言，使用 ? 占位符与双引号标识符）

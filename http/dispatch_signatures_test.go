@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	fwcontext "github.com/zhuhanxin0308/thinkgo/framework/context"
-	"github.com/zhuhanxin0308/thinkgo/framework/log"
+	fwcontext "github.com/zhuhanxin0308/thinkgo/v3/context"
+	"github.com/zhuhanxin0308/thinkgo/v3/log"
 )
 
 type dispatchErrorLogDriver struct {

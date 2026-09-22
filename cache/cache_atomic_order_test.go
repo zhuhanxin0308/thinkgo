@@ -7,9 +7,9 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
-	"github.com/zhuhanxin0308/thinkgo/framework/cache/contract"
-	cacheDriver "github.com/zhuhanxin0308/thinkgo/framework/cache/driver"
-	redisDriver "github.com/zhuhanxin0308/thinkgo/framework/cache/driver/redis"
+	"github.com/zhuhanxin0308/thinkgo/v3/cache/contract"
+	cacheDriver "github.com/zhuhanxin0308/thinkgo/v3/cache/driver"
+	redisDriver "github.com/zhuhanxin0308/thinkgo/v3/cache/driver/redis"
 )
 
 // reorderedAtomicDriver 在领票后、进入真实后端原子边界前安排另一个合法提交。

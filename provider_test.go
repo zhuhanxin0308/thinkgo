@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/event"
+	"github.com/zhuhanxin0308/thinkgo/v3/event"
 )
 
 // mockProvider 模拟服务提供者

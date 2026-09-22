@@ -12,8 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"github.com/getkin/kin-openapi/openapi3"
-	"github.com/zhuhanxin0308/thinkgo/framework"
-	fwhttp "github.com/zhuhanxin0308/thinkgo/framework/http"
+	"github.com/zhuhanxin0308/thinkgo/v3"
+	fwhttp "github.com/zhuhanxin0308/thinkgo/v3/http"
 	"example.com/project/app/index/api"
 	"example.com/project/internal/apidoc"
 )

@@ -3,7 +3,7 @@ package framework
 import (
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/debug"
+	"github.com/zhuhanxin0308/thinkgo/v3/debug"
 )
 
 // TestCreateAppTraceMatchesThinkPHPConfig 验证 Html 默认值和 Console 类型均来自 trace 配置。

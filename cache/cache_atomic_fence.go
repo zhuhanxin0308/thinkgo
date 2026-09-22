@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/cache/contract"
+	"github.com/zhuhanxin0308/thinkgo/v3/cache/contract"
 )
 
 var errCacheAtomicFenceStale = errors.New("缓存原子操作需要重新分配提交代际")

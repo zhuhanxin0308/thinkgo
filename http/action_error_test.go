@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	fwcontext "github.com/zhuhanxin0308/thinkgo/framework/context"
-	"github.com/zhuhanxin0308/thinkgo/framework/exception"
-	"github.com/zhuhanxin0308/thinkgo/framework/route"
+	fwcontext "github.com/zhuhanxin0308/thinkgo/v3/context"
+	"github.com/zhuhanxin0308/thinkgo/v3/exception"
+	"github.com/zhuhanxin0308/thinkgo/v3/route"
 )
 
 // TestActionReturnedExceptionsKeepHTTPMeaning 验证返回的异常与抛出的异常使用同一响应边界。

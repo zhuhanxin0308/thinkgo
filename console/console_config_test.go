@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework"
-	"github.com/zhuhanxin0308/thinkgo/framework/config"
+	"github.com/zhuhanxin0308/thinkgo/v3"
+	"github.com/zhuhanxin0308/thinkgo/v3/config"
 )
 
 // TestConsoleAppliesConfiguredMetadata 验证控制台元数据会从应用配置服务加载。

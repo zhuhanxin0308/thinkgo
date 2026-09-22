@@ -10,7 +10,7 @@ import (
 	backend "github.com/hibiken/asynq"
 	"github.com/redis/go-redis/v9"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/queue"
+	"github.com/zhuhanxin0308/thinkgo/v3/queue"
 )
 
 // Producer 把任务持久化到 Asynq Redis 队列。

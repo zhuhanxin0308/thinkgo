@@ -4,13 +4,13 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/cache"
-	"github.com/zhuhanxin0308/thinkgo/framework/context"
-	"github.com/zhuhanxin0308/thinkgo/framework/debug"
-	"github.com/zhuhanxin0308/thinkgo/framework/exception"
-	"github.com/zhuhanxin0308/thinkgo/framework/log"
-	"github.com/zhuhanxin0308/thinkgo/framework/validate"
-	"github.com/zhuhanxin0308/thinkgo/framework/view"
+	"github.com/zhuhanxin0308/thinkgo/v3/cache"
+	"github.com/zhuhanxin0308/thinkgo/v3/context"
+	"github.com/zhuhanxin0308/thinkgo/v3/debug"
+	"github.com/zhuhanxin0308/thinkgo/v3/exception"
+	"github.com/zhuhanxin0308/thinkgo/v3/log"
+	"github.com/zhuhanxin0308/thinkgo/v3/validate"
+	"github.com/zhuhanxin0308/thinkgo/v3/view"
 )
 
 // ControllerMiddleware 定义控制器级中间件配置项。

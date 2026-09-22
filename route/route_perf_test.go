@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	fwcontext "github.com/zhuhanxin0308/thinkgo/framework/context"
+	fwcontext "github.com/zhuhanxin0308/thinkgo/v3/context"
 )
 
 // TestDynamicRoutesIndexedByMethod 验证冻结后只扫描当前方法和通配方法的动态路由。

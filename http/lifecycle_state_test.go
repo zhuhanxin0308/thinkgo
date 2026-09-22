@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zhuhanxin0308/thinkgo/framework"
-	"github.com/zhuhanxin0308/thinkgo/framework/metrics"
+	"github.com/zhuhanxin0308/thinkgo/v3"
+	"github.com/zhuhanxin0308/thinkgo/v3/metrics"
 )
 
 // lifecycleStartWriter 在真实监听器完成绑定后通知测试协程。

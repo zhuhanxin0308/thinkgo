@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/db/builder"
+	"github.com/zhuhanxin0308/thinkgo/v3/db/builder"
 )
 
 type rollbackFailureDriver struct{ rollbackErr error }

@@ -7,7 +7,7 @@ import (
 	"reflect"
 	"testing"
 
-	frameworkContext "github.com/zhuhanxin0308/thinkgo/framework/context"
+	frameworkContext "github.com/zhuhanxin0308/thinkgo/v3/context"
 )
 
 type discoveredAlphaModel struct {

@@ -5,7 +5,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/db"
+	"github.com/zhuhanxin0308/thinkgo/v3/db"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 

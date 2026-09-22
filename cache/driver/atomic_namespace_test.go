@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
-	redisDriver "github.com/zhuhanxin0308/thinkgo/framework/cache/driver/redis"
+	redisDriver "github.com/zhuhanxin0308/thinkgo/v3/cache/driver/redis"
 )
 
 type atomicCacheDriver interface {

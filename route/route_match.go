@@ -8,8 +8,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/context"
-	"github.com/zhuhanxin0308/thinkgo/framework/middleware"
+	"github.com/zhuhanxin0308/thinkgo/v3/context"
+	"github.com/zhuhanxin0308/thinkgo/v3/middleware"
 )
 
 // Match 在冻结后的只读索引中匹配请求，并区分未找到、方法不允许和非法请求路径。

@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/middleware"
-	"github.com/zhuhanxin0308/thinkgo/framework/ratelimit"
+	"github.com/zhuhanxin0308/thinkgo/v3/middleware"
+	"github.com/zhuhanxin0308/thinkgo/v3/ratelimit"
 )
 
 const (

@@ -1,9 +1,12 @@
-name: Framework Release
+name: Framework CI and Release
 
 on:
   push:
+    branches:
+      - main
     tags:
-      - 'framework/v[0-9]+.[0-9]+.[0-9]+'
+      - 'v3.[0-9]+.[0-9]+'
+  pull_request:
 
 permissions:
   contents: read
@@ -88,8 +91,8 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
-          go-version-file: framework/go.mod
-          cache-dependency-path: framework/go.sum
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
           check-latest: false
 
       - name: Verify framework release metadata
@@ -98,14 +101,20 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          version="${RELEASE_TAG#framework/v}"
-          [[ "$RELEASE_TAG" =~ ^framework/v[0-9]+\.[0-9]+\.[0-9]+$ ]]
-          test -f framework/LICENSE
-          test -f framework/README.md
+          test -f LICENSE
+          test -f README.md
           test -f RELEASING.md
-          test "$(awk '$1 == "module" { print $2; exit }' framework/go.mod)" = 'github.com/zhuhanxin0308/thinkgo/framework'
-          declared="$(sed -n 's/^[[:space:]]*Number = "\([^"]*\)"/\1/p' framework/version/version.go)"
-          test "$declared" = "$version"
+          test "$(awk '$1 == "module" { print $2; exit }' go.mod)" = 'github.com/zhuhanxin0308/thinkgo/v3'
+          declared="$(sed -n 's/^[[:space:]]*Number = "\([^"]*\)"/\1/p' version/version.go)"
+          [[ "$declared" =~ ^3\.[0-9]+\.[0-9]+$ ]]
+          if [[ "$GITHUB_REF_TYPE" == 'tag' ]]; then
+            test "$RELEASE_TAG" = "v$declared"
+          fi
+          test ! -d app
+          test ! -d public
+          test ! -d framework
+          test ! -f main.go
+          test ! -f go.work
           if git ls-files | grep -E '(^|/)(\.env|.*\.(pem|key|p12|pfx))$'; then
             echo '发布提交包含环境文件或凭据文件' >&2
             exit 1
@@ -116,22 +125,22 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          unformatted="$(git ls-files -z -- 'framework/*.go' 'framework/**/*.go' | xargs -0 gofmt -l)"
+          unformatted="$(git ls-files -z -- '*.go' | xargs -0 gofmt -l)"
           if [[ -n "$unformatted" ]]; then
             printf 'Unformatted framework Go files:\n%s\n' "$unformatted" >&2
             exit 1
           fi
-          (cd framework && GOWORK=off go mod verify)
-          (cd framework && GOWORK=off go mod tidy -diff)
-          (cd framework && GOWORK=off go build ./...)
-          (cd framework && GOWORK=off go vet ./...)
-          (cd framework && CGO_ENABLED=0 GOWORK=off go run -mod=readonly honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...)
+          GOWORK=off go mod verify
+          GOWORK=off go mod tidy -diff
+          GOWORK=off go build ./...
+          GOWORK=off go vet ./...
+          CGO_ENABLED=0 GOWORK=off go run -mod=readonly honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...
           GOWORK=off go run -mod=readonly github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
-          (cd framework && CGO_ENABLED=0 GOWORK=off go run -mod=readonly github.com/securego/gosec/v2/cmd/gosec@v2.25.0 -quiet -exclude-dir=tmp -exclude-dir=bin ./...)
-          (cd framework && CGO_ENABLED=1 GOWORK=off go test -mod=readonly -shuffle=on -count=1 ./...)
-          (cd framework && CGO_ENABLED=0 GOWORK=off go test -mod=readonly -shuffle=on -count=1 ./...)
-          (cd framework && CGO_ENABLED=1 GOWORK=off go test -tags oracle -mod=readonly -count=1 ./db/builder ./db/connector)
-          (cd framework && CGO_ENABLED=1 GOWORK=off go test -race -mod=readonly -shuffle=on -count=1 ./...)
+          CGO_ENABLED=0 GOWORK=off go run -mod=readonly github.com/securego/gosec/v2/cmd/gosec@v2.25.0 -quiet -exclude-dir=tmp -exclude-dir=bin ./...
+          CGO_ENABLED=1 GOWORK=off go test -mod=readonly -shuffle=on -count=1 ./...
+          CGO_ENABLED=0 GOWORK=off go test -mod=readonly -shuffle=on -count=1 ./...
+          CGO_ENABLED=1 GOWORK=off go test -tags oracle -mod=readonly -count=1 ./db/builder ./db/connector
+          CGO_ENABLED=1 GOWORK=off go test -race -mod=readonly -shuffle=on -count=1 ./...
 
       - name: Verify HTTP performance gates exist and execute
         shell: bash
@@ -144,13 +153,13 @@ jobs:
             "BenchmarkMultiAppHTTP"
           )
           for symbol in "${required_http_symbols[@]}"; do
-            if ! (cd framework && GOWORK=off go test -list "^${symbol}$" ./http) | grep -Fxq "$symbol"; then
+            if ! GOWORK=off go test -list "^${symbol}$" ./http | grep -Fxq "$symbol"; then
               printf '缺少必须执行的 HTTP 测试或基准: %s\n' "$symbol" >&2
               exit 1
             fi
           done
-          (cd framework && GOWORK=off go test -run '^TestHTTPHealthAllocationBudgets$' -count=1 ./http)
-          (cd framework && GOWORK=off go test -run '^$' -bench '^Benchmark(NativeHTTP|SingleAppHTTP|MultiAppHTTP)$' -benchmem -benchtime=100ms -count=1 ./http)
+          GOWORK=off go test -run '^TestHTTPHealthAllocationBudgets$' -count=1 ./http
+          GOWORK=off go test -run '^$' -bench '^Benchmark(NativeHTTP|SingleAppHTTP|MultiAppHTTP)$' -benchmem -benchtime=100ms -count=1 ./http
 
       - name: Run framework live service contracts
         shell: bash
@@ -200,17 +209,17 @@ jobs:
             "TestLiveNeoStrictAndDetachDelete"
           )
           for symbol in "${required_live_symbols[@]}"; do
-            listed="$(cd framework && GOWORK=off go test -tags integration -run '^$' -list "^${symbol}$" . ./cache ./cache/driver/redis ./session/driver ./db ./migration ./queue/asynq)"
+            listed="$(GOWORK=off go test -tags integration -run '^$' -list "^${symbol}$" . ./cache ./cache/driver/redis ./session/driver ./db ./migration ./queue/asynq)"
             if ! grep -Fxq "$symbol" <<<"$listed"; then
               printf '缺少必须执行的真实服务测试: %s\n' "$symbol" >&2
               exit 1
             fi
           done
-          (cd framework && GOWORK=off go test -tags integration -race -run '^TestLive(RedisOperationContract|RedisConditionalClear|RedisScopedInvalidation|RedisAtomicReservationOrder|RedisAtomicTTLPolicy|RedisSessionDriver|RedisQueueRetriesFailedTask|RedisQueueShutdownRestartPreservesTask|MySQLQueryAndTransactionContract|MySQLColdStatementIsolation|MySQLReadinessRecovery|MySQLMigrationRecovery|PostgreSQLQueryAndTransactionContract|MongoOperationContract|MongoStreamingContract|NeoStrictAndDetachDelete)$' -shuffle=on -count=1 . ./cache ./cache/driver/redis ./session/driver ./db ./migration ./queue/asynq)
+          GOWORK=off go test -tags integration -race -run '^TestLive(RedisOperationContract|RedisConditionalClear|RedisScopedInvalidation|RedisAtomicReservationOrder|RedisAtomicTTLPolicy|RedisSessionDriver|RedisQueueRetriesFailedTask|RedisQueueShutdownRestartPreservesTask|MySQLQueryAndTransactionContract|MySQLColdStatementIsolation|MySQLReadinessRecovery|MySQLMigrationRecovery|PostgreSQLQueryAndTransactionContract|MongoOperationContract|MongoStreamingContract|NeoStrictAndDetachDelete)$' -shuffle=on -count=1 . ./cache ./cache/driver/redis ./session/driver ./db ./migration ./queue/asynq
 
       - name: Fuzz route index parity
         shell: bash
-        run: (cd framework && GOWORK=off go test -run '^$' -fuzz '^FuzzRouteIndexParity$' -fuzztime=20s ./route)
+        run: GOWORK=off go test -run '^$' -fuzz '^FuzzRouteIndexParity$' -fuzztime=20s ./route
 
       - name: Enforce framework coverage
         shell: bash
@@ -222,7 +231,7 @@ jobs:
           trap 'rm -rf "$coverage_dir"' EXIT
           while IFS= read -r package; do
             profile="$coverage_dir/${package//\//_}.out"
-            (cd framework && GOWORK=off go test -count=1 -coverprofile="$profile" "$package")
+            GOWORK=off go test -count=1 -coverprofile="$profile" "$package"
             statements="$(awk 'NR > 1 { count++ } END { print count + 0 }' "$profile")"
             if [[ "$statements" == '0' ]]; then
               printf '%s has no executable statements; coverage check skipped\n' "$package"
@@ -233,7 +242,7 @@ jobs:
               printf '%s coverage %s%% is below 80%%\n' "$package" "$coverage" >&2
               exit 1
             }
-          done < <(cd framework && GOWORK=off go list ./... | sort -u)
+          done < <(GOWORK=off go list ./... | sort -u)
 
       - name: Run framework vulnerability scan
         shell: bash
@@ -241,11 +250,11 @@ jobs:
           CGO_ENABLED: '0'
         run: |
           set -euo pipefail
-          if (cd framework && GOWORK=off go list -deps ./... | grep -qx 'golang.org/x/crypto/openpgp'); then
+          if GOWORK=off go list -deps ./... | grep -qx 'golang.org/x/crypto/openpgp'; then
             echo 'golang.org/x/crypto/openpgp entered the framework dependency graph' >&2
             exit 1
           fi
-          (cd framework && GOWORK=off go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...)
+          GOWORK=off go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
 
   windows:
     name: Windows framework gate
@@ -260,10 +269,8 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
-          go-version-file: framework/go.mod
-          cache-dependency-path: |
-            go.sum
-            framework/go.sum
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
           check-latest: false
 
       - name: Verify Windows framework
@@ -272,15 +279,10 @@ jobs:
           CGO_ENABLED: '0'
           GOWORK: 'off'
         run: |
-          Push-Location framework
-          try {
-            go vet ./...
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            go test -p 1 -mod=readonly -shuffle=on -count=1 ./...
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          } finally {
-            Pop-Location
-          }
+          go vet ./...
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go test -p 1 -mod=readonly -shuffle=on -count=1 ./...
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Test Windows race and process contention
         shell: pwsh
@@ -294,19 +296,19 @@ jobs:
             $env:PATH = "$compilerDirectory;$env:PATH"
           }
           Get-Command gcc -ErrorAction Stop
-          Push-Location framework
-          try {
-            go test -race -p 1 -mod=readonly -shuffle=on -count=1 ./...
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            go test -race -mod=readonly -run '^TestFileSessionProcessAtomicCounter$' -count=10 -timeout=5m ./session/driver
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          } finally {
-            Pop-Location
-          }
+          go test -race -p 1 -mod=readonly -shuffle=on -count=1 ./...
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go test -race -mod=readonly -run '^TestFileSessionProcessAtomicCounter$' -count=10 -timeout=5m ./session/driver
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Verify Windows build entrypoint
-        shell: cmd
-        run: build.bat windows/amd64
+      - name: Verify Windows CLI entrypoint
+        shell: pwsh
+        env:
+          CGO_ENABLED: '0'
+          GOWORK: 'off'
+        run: |
+          go run -mod=readonly ./cmd/thinkgo --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   macos:
     name: macOS framework gate
@@ -321,10 +323,8 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
-          go-version-file: framework/go.mod
-          cache-dependency-path: |
-            go.sum
-            framework/go.sum
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
           check-latest: false
 
       - name: Verify macOS framework
@@ -334,9 +334,9 @@ jobs:
           GOWORK: 'off'
         run: |
           set -euo pipefail
-          (cd framework && go vet ./...)
-          (cd framework && go test -mod=readonly -shuffle=on -count=1 ./...)
-          /bin/bash ./build.sh darwin/arm64
+          go vet ./...
+          go test -mod=readonly -shuffle=on -count=1 ./...
+          go run -mod=readonly ./cmd/thinkgo --version
 
   support-matrix:
     name: Cross-build ${{ matrix.target }}${{ matrix.goarm_label }}
@@ -401,9 +401,7 @@ jobs:
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
           go-version-file: go.mod
-          cache-dependency-path: |
-            go.sum
-            framework/go.sum
+          cache-dependency-path: go.sum
           check-latest: false
 
       - name: Cross-build supported target
@@ -416,16 +414,11 @@ jobs:
           THINKGO_MATRIX_GOARM: ${{ matrix.goarm }}
         run: |
           set -euo pipefail
-          if [[ -n "$THINKGO_MATRIX_GOARM" ]]; then
-            ./build.sh "$THINKGO_MATRIX_GOOS" "$THINKGO_MATRIX_GOARCH" "$THINKGO_MATRIX_GOARM"
-            (cd framework && env GOOS="$THINKGO_MATRIX_GOOS" GOARCH="$THINKGO_MATRIX_GOARCH" GOARM="$THINKGO_MATRIX_GOARM" go build -mod=readonly ./...)
-          else
-            ./build.sh "$THINKGO_MATRIX_GOOS/$THINKGO_MATRIX_GOARCH"
-            (cd framework && env GOOS="$THINKGO_MATRIX_GOOS" GOARCH="$THINKGO_MATRIX_GOARCH" go build -mod=readonly ./...)
-          fi
+          env GOOS="$THINKGO_MATRIX_GOOS" GOARCH="$THINKGO_MATRIX_GOARCH" GOARM="$THINKGO_MATRIX_GOARM" go build -mod=readonly ./...
 
   publish:
     name: Publish framework module
+    if: startsWith(github.ref, 'refs/tags/v3.')
     needs: [linux, windows, macos, support-matrix]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -444,8 +437,8 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
-          go-version-file: framework/go.mod
-          cache-dependency-path: framework/go.sum
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
           check-latest: false
 
       - name: Build framework release metadata
@@ -454,15 +447,15 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          version="${RELEASE_TAG#framework/v}"
+          version="${RELEASE_TAG#v}"
           mkdir -p dist
           GOWORK=off go run ./cmd/sbom \
-            -directory framework \
+            -directory . \
             -component-type library \
-            -module github.com/zhuhanxin0308/thinkgo/framework \
+            -module github.com/zhuhanxin0308/thinkgo/v3 \
             -version "$version" \
             -output "dist/thinkgo-framework-${version}-sbom.json"
-          cp framework/LICENSE "dist/thinkgo-framework-${version}-LICENSE"
+          cp LICENSE "dist/thinkgo-framework-${version}-LICENSE"
           (cd dist && sha256sum thinkgo-framework-* > SHA256SUMS)
 
       - name: Verify tag through an isolated module
@@ -471,19 +464,19 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          version="v${RELEASE_TAG#framework/v}"
+          version="$RELEASE_TAG"
           isolated="$(mktemp -d)"
           trap 'rm -rf "$isolated"' EXIT
           cd "$isolated"
           GOWORK=off go mod init example.com/thinkgo-framework-release-check
-          GOPROXY=direct GOWORK=off go get "github.com/zhuhanxin0308/thinkgo/framework@${version}"
+          GOPROXY=direct GOWORK=off go get "github.com/zhuhanxin0308/thinkgo/v3@${version}"
           cat > framework_test.go <<'EOF'
           package releasecheck
 
           import (
             "testing"
 
-            framework "github.com/zhuhanxin0308/thinkgo/framework"
+            framework "github.com/zhuhanxin0308/thinkgo/v3"
           )
 
           func registerApplication(*framework.App) error { return nil }
@@ -508,6 +501,12 @@ jobs:
           }
           EOF
           GOPROXY=direct GOWORK=off go test ./...
+          GOPROXY=direct GOWORK=off go install "github.com/zhuhanxin0308/thinkgo/v3/cmd/thinkgo@${version}"
+          "$(go env GOPATH)/bin/thinkgo" create release-smoke
+          cd release-smoke
+          GOWORK=off go test ./...
+          "$(go env GOPATH)/bin/thinkgo" build linux/amd64
+          docker compose -f dist/linux-amd64/docker-compose.yml config --quiet
 
       - name: Attest framework release metadata
         uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
@@ -518,4 +517,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
-        run: gh release create "$RELEASE_TAG" dist/* --verify-tag --generate-notes --title "ThinkGo Framework ${RELEASE_TAG#framework/}"
+        run: gh release create "$RELEASE_TAG" dist/* --verify-tag --generate-notes --title "ThinkGo Framework ${RELEASE_TAG}"

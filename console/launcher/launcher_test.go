@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework"
-	"github.com/zhuhanxin0308/thinkgo/framework/console"
+	"github.com/zhuhanxin0308/thinkgo/v3"
+	"github.com/zhuhanxin0308/thinkgo/v3/console"
 )
 
 // TestLauncherToolsWorkOutsideProjects 验证独立工具在无项目及配置损坏目录中仍能展示帮助、版本与源码命令。

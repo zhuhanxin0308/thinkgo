@@ -6,7 +6,7 @@ import (
 	"go/token"
 	"strconv"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/binding"
+	"github.com/zhuhanxin0308/thinkgo/v3/binding"
 )
 
 type commentSourceFile struct {

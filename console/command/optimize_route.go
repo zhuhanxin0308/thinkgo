@@ -3,9 +3,9 @@ package command
 import (
 	"path/filepath"
 
-	"github.com/zhuhanxin0308/thinkgo/framework"
-	"github.com/zhuhanxin0308/thinkgo/framework/console"
-	"github.com/zhuhanxin0308/thinkgo/framework/route"
+	"github.com/zhuhanxin0308/thinkgo/v3"
+	"github.com/zhuhanxin0308/thinkgo/v3/console"
+	"github.com/zhuhanxin0308/thinkgo/v3/route"
 )
 
 // OptimizeRoute 构建后续 URL 生成实际读取的命名路由缓存。

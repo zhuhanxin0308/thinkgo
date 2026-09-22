@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/cache"
-	cacheDriver "github.com/zhuhanxin0308/thinkgo/framework/cache/driver"
-	frameworkCookie "github.com/zhuhanxin0308/thinkgo/framework/cookie"
-	frameworkSession "github.com/zhuhanxin0308/thinkgo/framework/session"
+	"github.com/zhuhanxin0308/thinkgo/v3/cache"
+	cacheDriver "github.com/zhuhanxin0308/thinkgo/v3/cache/driver"
+	frameworkCookie "github.com/zhuhanxin0308/thinkgo/v3/cookie"
+	frameworkSession "github.com/zhuhanxin0308/thinkgo/v3/session"
 )
 
 type expiringCacheSessionLockDriver struct {

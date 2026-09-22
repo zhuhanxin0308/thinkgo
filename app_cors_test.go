@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	frameworkcontext "github.com/zhuhanxin0308/thinkgo/framework/context"
+	frameworkcontext "github.com/zhuhanxin0308/thinkgo/v3/context"
 )
 
 // TestCreateAppCorsStrictConfiguration 验证应用层 CORS 配置严格解析并在禁用时仍完成校验。

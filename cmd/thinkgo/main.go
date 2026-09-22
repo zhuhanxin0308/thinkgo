@@ -8,7 +8,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/console/launcher"
+	"github.com/zhuhanxin0308/thinkgo/v3/console/launcher"
 )
 
 // main 提供可以通过 go install 安装的独立命令入口。

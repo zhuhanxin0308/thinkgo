@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework"
+	"github.com/zhuhanxin0308/thinkgo/v3"
 )
 
 // TestValidateApplicationImportPathRejectsCommandPayloads 验证外部包路径只接受
@@ -74,7 +74,7 @@ func TestDiscoverApplicationStructTypesUsesGoTypes(t *testing.T) {
 	basePath := prepareSemanticDiscoveryModule(t)
 	writeDiscoveryFixture(t, basePath, "app/index/controller/types.go", `package controller
 
-import framework "github.com/zhuhanxin0308/thinkgo/framework"
+import framework "github.com/zhuhanxin0308/thinkgo/v3"
 
 var serviceName = framework.ServiceApp
 
@@ -165,10 +165,10 @@ import (
 	"net/http"
 
 	base "example.com/semantic/internal/foundation"
-	framework "github.com/zhuhanxin0308/thinkgo/framework"
-	frameworkcache "github.com/zhuhanxin0308/thinkgo/framework/cache"
-	"github.com/zhuhanxin0308/thinkgo/framework/event"
-	"github.com/zhuhanxin0308/thinkgo/framework/middleware"
+	framework "github.com/zhuhanxin0308/thinkgo/v3"
+	frameworkcache "github.com/zhuhanxin0308/thinkgo/v3/cache"
+	"github.com/zhuhanxin0308/thinkgo/v3/event"
+	"github.com/zhuhanxin0308/thinkgo/v3/middleware"
 )
 
 type Local = base.Record
@@ -204,7 +204,7 @@ func TestSemanticDiscoveryRequiresFrameworkFromTargetModule(t *testing.T) {
 	writeDiscoveryFixture(t, basePath, "go.mod", moduleSource)
 	writeDiscoveryFixture(t, basePath, "app/index/controller/index.go", `package controller
 
-import framework "github.com/zhuhanxin0308/thinkgo/framework"
+import framework "github.com/zhuhanxin0308/thinkgo/v3"
 
 type Index = framework.ApplicationDefinition
 `)
@@ -233,7 +233,7 @@ func TestSemanticDiscoveryIgnoresAmbientWorkspace(t *testing.T) {
 	t.Setenv("GOWORK", invalidWorkspace)
 	writeDiscoveryFixture(t, basePath, "app/index/controller/types.go", `package controller
 
-import framework "github.com/zhuhanxin0308/thinkgo/framework"
+import framework "github.com/zhuhanxin0308/thinkgo/v3"
 
 type Definition = framework.ApplicationDefinition
 `)
@@ -318,8 +318,8 @@ func TestDiscoverApplicationEntryPointsAcceptsTypeAliases(t *testing.T) {
 	writeDiscoveryFixture(t, basePath, "app/index/entry.go", `package index
 
 import (
-	fw "github.com/zhuhanxin0308/thinkgo/framework"
-	mw "github.com/zhuhanxin0308/thinkgo/framework/middleware"
+	fw "github.com/zhuhanxin0308/thinkgo/v3"
+	mw "github.com/zhuhanxin0308/thinkgo/v3/middleware"
 )
 
 type ServicesResult = []interface{}
@@ -378,7 +378,7 @@ func TestApplicationPackageExistsValidatesRouteLoader(t *testing.T) {
 			name: "类型别名",
 			source: `package route
 
-import fw "github.com/zhuhanxin0308/thinkgo/framework"
+import fw "github.com/zhuhanxin0308/thinkgo/v3"
 
 type Route = fw.Route
 

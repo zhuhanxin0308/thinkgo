@@ -13,15 +13,15 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/zhuhanxin0308/thinkgo/framework"
-	"github.com/zhuhanxin0308/thinkgo/framework/context"
-	"github.com/zhuhanxin0308/thinkgo/framework/event"
-	"github.com/zhuhanxin0308/thinkgo/framework/exception"
-	frameworkLog "github.com/zhuhanxin0308/thinkgo/framework/log"
-	"github.com/zhuhanxin0308/thinkgo/framework/metrics"
-	"github.com/zhuhanxin0308/thinkgo/framework/middleware"
-	"github.com/zhuhanxin0308/thinkgo/framework/route"
-	"github.com/zhuhanxin0308/thinkgo/framework/telemetry"
+	"github.com/zhuhanxin0308/thinkgo/v3"
+	"github.com/zhuhanxin0308/thinkgo/v3/context"
+	"github.com/zhuhanxin0308/thinkgo/v3/event"
+	"github.com/zhuhanxin0308/thinkgo/v3/exception"
+	frameworkLog "github.com/zhuhanxin0308/thinkgo/v3/log"
+	"github.com/zhuhanxin0308/thinkgo/v3/metrics"
+	"github.com/zhuhanxin0308/thinkgo/v3/middleware"
+	"github.com/zhuhanxin0308/thinkgo/v3/route"
+	"github.com/zhuhanxin0308/thinkgo/v3/telemetry"
 )
 
 // Http 是框架 HTTP 内核，启动后配置和路由均保持只读。

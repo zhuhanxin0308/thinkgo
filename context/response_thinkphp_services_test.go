@@ -5,9 +5,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	frameworkcookie "github.com/zhuhanxin0308/thinkgo/framework/cookie"
-	frameworksession "github.com/zhuhanxin0308/thinkgo/framework/session"
-	sessiondriver "github.com/zhuhanxin0308/thinkgo/framework/session/driver"
+	frameworkcookie "github.com/zhuhanxin0308/thinkgo/v3/cookie"
+	frameworksession "github.com/zhuhanxin0308/thinkgo/v3/session"
+	sessiondriver "github.com/zhuhanxin0308/thinkgo/v3/session/driver"
 )
 
 // TestResponseThinkPHPCookieAndSessionServicesAPI 验证 GetCookie 返回隔离快照，

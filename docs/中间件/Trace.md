@@ -1,6 +1,6 @@
 # Trace
 
-`framework/middleware.Trace` 在开发调试时把请求信息、SQL、缓存、日志、加载文件和调试变量渲染成 HTML 调试面板。它的输出门禁比“调试开关已打开”更严格，避免把内部信息暴露给远程客户端。
+框架的 `middleware.Trace` 在开发调试时把请求信息、SQL、缓存、日志、加载文件和调试变量渲染成 HTML 调试面板。它的输出门禁比“调试开关已打开”更严格，避免把内部信息暴露给远程客户端。
 
 Trace 使用 `debug.NewRequestDebug(true)` 为每个请求创建私有 collector，并在请求结束时清理；不会把当前请求写入全局 Debug 单例。collector 对日志、SQL、缓存、文件和变量分别设置固定上限（分别为 200、100、200、200、100），超过上限只标记对应类别的 `truncated` 状态，不继续分配内存。视图和缓存通过 `RenderWithDebug`、`FetchWithDebug`、`WithDebug` 接收显式 collector，旧的构造级入口继续保留兼容行为。
 

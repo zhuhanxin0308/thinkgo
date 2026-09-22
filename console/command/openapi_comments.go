@@ -9,8 +9,8 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/binding"
-	"github.com/zhuhanxin0308/thinkgo/framework/openapi"
+	"github.com/zhuhanxin0308/thinkgo/v3/binding"
+	"github.com/zhuhanxin0308/thinkgo/v3/openapi"
 )
 
 // collectOpenAPIComments 保留函数、方法、类型及字段声明的真实符号，错误定位到原始源码行。

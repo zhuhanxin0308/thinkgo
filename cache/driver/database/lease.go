@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/cache/contract"
-	"github.com/zhuhanxin0308/thinkgo/framework/db"
+	"github.com/zhuhanxin0308/thinkgo/v3/cache/contract"
+	"github.com/zhuhanxin0308/thinkgo/v3/db"
 )
 
 // 临时值只存在于未提交事务，且与任何合法 JSON 字符串 owner 不同，保证影响行数可判断。

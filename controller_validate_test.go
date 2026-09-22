@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/validate"
+	"github.com/zhuhanxin0308/thinkgo/v3/validate"
 )
 
 // TestControllerValidateSeparatesDataAndConfigurationErrors 验证控制器便捷方法保留新验证 API 的错误边界。

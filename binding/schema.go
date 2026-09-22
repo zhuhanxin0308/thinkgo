@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/validate"
+	"github.com/zhuhanxin0308/thinkgo/v3/validate"
 )
 
 const schemaDigestBytes = 8

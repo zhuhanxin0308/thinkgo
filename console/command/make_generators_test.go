@@ -13,8 +13,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework"
-	"github.com/zhuhanxin0308/thinkgo/framework/console"
+	"github.com/zhuhanxin0308/thinkgo/v3"
+	"github.com/zhuhanxin0308/thinkgo/v3/console"
 )
 
 // TestWriteGeneratedSourceConfinesAndExclusivelyCreates 验证生成源码只能写入应用根目录，
@@ -270,7 +270,7 @@ func TestMakeEventAndListenerImplementFrameworkInterfaces(t *testing.T) {
 	}
 
 	listenerContent := readGeneratedFile(t, basePath, "app", "index", "listener", "sendwelcomemail.go")
-	if !strings.Contains(listenerContent, `"github.com/zhuhanxin0308/thinkgo/framework/event"`) ||
+	if !strings.Contains(listenerContent, `"github.com/zhuhanxin0308/thinkgo/v3/event"`) ||
 		!strings.Contains(listenerContent, "Handle(currentEvent event.Event) error") {
 		t.Fatalf("监听器模板应使用 event.Event 接口，实际为:\n%s", listenerContent)
 	}

@@ -3,7 +3,7 @@ package http
 import (
 	"net/http"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/exception"
+	"github.com/zhuhanxin0308/thinkgo/v3/exception"
 )
 
 // actionParameterError 仅暴露字段与错误类别，避免解析器将原始输入带入响应。

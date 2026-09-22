@@ -1,6 +1,6 @@
 package db
 
-import "github.com/zhuhanxin0308/thinkgo/framework/db/internal/contract"
+import "github.com/zhuhanxin0308/thinkgo/v3/db/internal/contract"
 
 type LockMode = contract.LockMode
 

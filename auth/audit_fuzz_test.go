@@ -5,7 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	fwcontext "github.com/zhuhanxin0308/thinkgo/framework/context"
+	fwcontext "github.com/zhuhanxin0308/thinkgo/v3/context"
 )
 
 // FuzzBearerRequestIsolation 验证任意未知 token 和重复头均不能取得已授权主体，也不能污染下一请求。

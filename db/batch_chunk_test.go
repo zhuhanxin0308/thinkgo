@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/db/builder"
+	"github.com/zhuhanxin0308/thinkgo/v3/db/builder"
 )
 
 // TestAccumulateAffectedRowsRejectsNegativeAndOverflow 验证批量写入累计数量

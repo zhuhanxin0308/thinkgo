@@ -3,7 +3,7 @@ package neo4j
 import (
 	"reflect"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/db"
+	"github.com/zhuhanxin0308/thinkgo/v3/db"
 )
 
 // 驱动复用核心的请求、能力和错误身份，不定义另一套数据库协议。

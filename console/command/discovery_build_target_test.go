@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework"
+	"github.com/zhuhanxin0308/thinkgo/v3"
 )
 
 // TestDiscoveryHonorsCustomBuildTagsInDownstream 验证自定义标签中的控制器真实进入独立宿主注册表。
@@ -27,8 +27,8 @@ func TestDiscoveryHonorsCustomBuildTagsInDownstream(t *testing.T) {
 
 import (
 	"testing"
-	framework "github.com/zhuhanxin0308/thinkgo/framework"
-	"github.com/zhuhanxin0308/thinkgo/framework/testkit"
+	framework "github.com/zhuhanxin0308/thinkgo/v3"
+	"github.com/zhuhanxin0308/thinkgo/v3/testkit"
 )
 
 // TestTaggedControllerRegistration 检查真实生成的装配函数，避免只校验源码字符串。

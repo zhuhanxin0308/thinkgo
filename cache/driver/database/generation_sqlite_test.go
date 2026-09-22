@@ -12,8 +12,8 @@ import (
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
-	"github.com/zhuhanxin0308/thinkgo/framework/db"
-	"github.com/zhuhanxin0308/thinkgo/framework/db/builder"
+	"github.com/zhuhanxin0308/thinkgo/v3/db"
+	"github.com/zhuhanxin0308/thinkgo/v3/db/builder"
 )
 
 // TestSQLiteCountersAndGenerationCleanup 使用两个真实连接池验证跨实例计数和旧代清理。

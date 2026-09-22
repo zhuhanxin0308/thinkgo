@@ -9,8 +9,8 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/db"
-	"github.com/zhuhanxin0308/thinkgo/framework/db/builder"
+	"github.com/zhuhanxin0308/thinkgo/v3/db"
+	"github.com/zhuhanxin0308/thinkgo/v3/db/builder"
 
 	"github.com/godror/godror"
 )

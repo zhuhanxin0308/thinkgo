@@ -11,8 +11,8 @@ import (
 	"strings"
 	"sync"
 
-	fwcontext "github.com/zhuhanxin0308/thinkgo/framework/context"
-	"github.com/zhuhanxin0308/thinkgo/framework/validate"
+	fwcontext "github.com/zhuhanxin0308/thinkgo/v3/context"
+	"github.com/zhuhanxin0308/thinkgo/v3/validate"
 	"golang.org/x/net/http/httpguts"
 )
 

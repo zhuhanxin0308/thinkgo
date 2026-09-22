@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/binding"
-	"github.com/zhuhanxin0308/thinkgo/framework/openapi"
+	"github.com/zhuhanxin0308/thinkgo/v3/binding"
+	"github.com/zhuhanxin0308/thinkgo/v3/openapi"
 )
 
 // TestAPICommentDirectivesPreserveProse 验证普通 Markdown、显式覆盖、分组和弃用原因按约定保留。

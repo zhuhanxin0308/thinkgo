@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	requestbinding "github.com/zhuhanxin0308/thinkgo/framework/binding"
+	requestbinding "github.com/zhuhanxin0308/thinkgo/v3/binding"
 )
 
 type invalidControllerInput struct {

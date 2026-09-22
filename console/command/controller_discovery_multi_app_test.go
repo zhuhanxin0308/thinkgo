@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework"
+	"github.com/zhuhanxin0308/thinkgo/v3"
 )
 
 // TestRefreshControllerDiscoveryGeneratesNativeApplications 验证服务发现按
@@ -18,13 +18,13 @@ func TestRefreshControllerDiscoveryGeneratesNativeApplications(t *testing.T) {
 	writeDiscoveryFixture(t, basePath, "app/provider.go", "package app\n\nfunc Providers() map[string]interface{} { return nil }\n")
 	writeDiscoveryFixture(t, basePath, "app/event.go", `package app
 
-import framework "github.com/zhuhanxin0308/thinkgo/framework"
+import framework "github.com/zhuhanxin0308/thinkgo/v3"
 
 func Events() framework.EventDefinition { return framework.EventDefinition{} }
 `)
 	writeDiscoveryFixture(t, basePath, "app/middleware.go", `package app
 
-import "github.com/zhuhanxin0308/thinkgo/framework/middleware"
+import "github.com/zhuhanxin0308/thinkgo/v3/middleware"
 
 func Middleware() []middleware.Handler { return nil }
 `)
@@ -33,19 +33,19 @@ func Middleware() []middleware.Handler { return nil }
 	writeDiscoveryFixture(t, basePath, "app/index/validate/user.go", "package validate\n\ntype User struct{}\n")
 	writeDiscoveryFixture(t, basePath, "app/index/route/app.go", `package route
 
-import framework "github.com/zhuhanxin0308/thinkgo/framework"
+import framework "github.com/zhuhanxin0308/thinkgo/v3"
 
 func Load(route *framework.Route) {}
 `)
 	writeDiscoveryFixture(t, basePath, "app/index/event.go", `package index
 
-import framework "github.com/zhuhanxin0308/thinkgo/framework"
+import framework "github.com/zhuhanxin0308/thinkgo/v3"
 
 func Events() framework.EventDefinition { return framework.EventDefinition{} }
 `)
 	writeDiscoveryFixture(t, basePath, "app/index/middleware.go", `package index
 
-import "github.com/zhuhanxin0308/thinkgo/framework/middleware"
+import "github.com/zhuhanxin0308/thinkgo/v3/middleware"
 
 func Middleware() []middleware.Handler { return nil }
 `)
@@ -54,7 +54,7 @@ func Middleware() []middleware.Handler { return nil }
 	writeDiscoveryFixture(t, basePath, "app/admin/controller/user.go", "package controller\n\ntype User struct{}\n")
 	writeDiscoveryFixture(t, basePath, "app/admin/route/app.go", `package route
 
-import framework "github.com/zhuhanxin0308/thinkgo/framework"
+import framework "github.com/zhuhanxin0308/thinkgo/v3"
 
 func Load(route *framework.Route) {}
 `)

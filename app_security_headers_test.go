@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/middleware"
+	"github.com/zhuhanxin0308/thinkgo/v3/middleware"
 )
 
 // TestCreateAppSecurityHeadersStrictConfiguration 验证启用、安全默认值、未知字段和类型错误契约。

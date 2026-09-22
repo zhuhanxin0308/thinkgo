@@ -5,8 +5,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/exception"
-	"github.com/zhuhanxin0308/thinkgo/framework/validate"
+	"github.com/zhuhanxin0308/thinkgo/v3/exception"
+	"github.com/zhuhanxin0308/thinkgo/v3/validate"
 )
 
 // TestControllerOnlyExposesThinkPHPInitializeHook 验证基础控制器不会要求业务层

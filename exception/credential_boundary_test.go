@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	frameworkLog "github.com/zhuhanxin0308/thinkgo/framework/log"
-	logDriver "github.com/zhuhanxin0308/thinkgo/framework/log/driver"
+	frameworkLog "github.com/zhuhanxin0308/thinkgo/v3/log"
+	logDriver "github.com/zhuhanxin0308/thinkgo/v3/log/driver"
 )
 
 // TestExceptionCredentialBoundaries 覆盖独立异常日志路径，避免只测试 log 上下文字段而漏掉主消息。

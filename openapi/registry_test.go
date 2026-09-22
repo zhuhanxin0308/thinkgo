@@ -10,7 +10,7 @@ import (
 
 	"github.com/getkin/kin-openapi/openapi3"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/route"
+	"github.com/zhuhanxin0308/thinkgo/v3/route"
 )
 
 // TestRegistryValidatesFreezesAndServesDocument 验证路由转换、完整校验、防御性复制和 HTTP 缓存语义。

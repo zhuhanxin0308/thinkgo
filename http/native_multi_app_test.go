@@ -11,9 +11,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework"
-	fwcontext "github.com/zhuhanxin0308/thinkgo/framework/context"
-	"github.com/zhuhanxin0308/thinkgo/framework/event"
+	"github.com/zhuhanxin0308/thinkgo/v3"
+	fwcontext "github.com/zhuhanxin0308/thinkgo/v3/context"
+	"github.com/zhuhanxin0308/thinkgo/v3/event"
 )
 
 // TestHttpNativelyDispatchesMultipleApplications 验证普通 Http 入口原生完成

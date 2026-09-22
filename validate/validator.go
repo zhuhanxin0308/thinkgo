@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/lang"
+	"github.com/zhuhanxin0308/thinkgo/v3/lang"
 )
 
 const maxSceneNameBytes = 256

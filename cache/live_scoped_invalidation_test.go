@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	redisDriver "github.com/zhuhanxin0308/thinkgo/framework/cache/driver/redis"
+	redisDriver "github.com/zhuhanxin0308/thinkgo/v3/cache/driver/redis"
 )
 
 func liveScopedRedis(tb testing.TB) (*Cache, *Cache) {

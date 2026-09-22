@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/context"
-	"github.com/zhuhanxin0308/thinkgo/framework/session"
+	"github.com/zhuhanxin0308/thinkgo/v3/context"
+	"github.com/zhuhanxin0308/thinkgo/v3/session"
 )
 
 // Session 管理每个请求独立的会话初始化、上下文注入和持久化。

@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/db"
+	"github.com/zhuhanxin0308/thinkgo/v3/db"
 )
 
 // TestAppStartsWithoutDatabaseConfiguration 验证数据库配置完全缺失时，

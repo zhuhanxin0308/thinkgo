@@ -8,9 +8,9 @@ import (
 	"strings"
 
 	"github.com/getkin/kin-openapi/openapi3"
-	"github.com/zhuhanxin0308/thinkgo/framework/binding"
-	"github.com/zhuhanxin0308/thinkgo/framework/middleware"
-	"github.com/zhuhanxin0308/thinkgo/framework/route"
+	"github.com/zhuhanxin0308/thinkgo/v3/binding"
+	"github.com/zhuhanxin0308/thinkgo/v3/middleware"
+	"github.com/zhuhanxin0308/thinkgo/v3/route"
 )
 
 // Operation 声明接口元信息；请求字段与响应结构始终从真实处理器推导。

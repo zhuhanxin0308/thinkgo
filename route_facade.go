@@ -6,10 +6,10 @@ import (
 	"strings"
 	"sync"
 
-	frameworkContext "github.com/zhuhanxin0308/thinkgo/framework/context"
-	"github.com/zhuhanxin0308/thinkgo/framework/debug"
-	"github.com/zhuhanxin0308/thinkgo/framework/middleware"
-	frameworkRoute "github.com/zhuhanxin0308/thinkgo/framework/route"
+	frameworkContext "github.com/zhuhanxin0308/thinkgo/v3/context"
+	"github.com/zhuhanxin0308/thinkgo/v3/debug"
+	"github.com/zhuhanxin0308/thinkgo/v3/middleware"
+	frameworkRoute "github.com/zhuhanxin0308/thinkgo/v3/route"
 )
 
 // Route 是面向业务代码的 ThinkPHP 风格路由门面。

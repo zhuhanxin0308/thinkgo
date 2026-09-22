@@ -22,7 +22,7 @@ import (
 	"time"
 
 	"github.com/quic-go/quic-go/http3"
-	fwcontext "github.com/zhuhanxin0308/thinkgo/framework/context"
+	fwcontext "github.com/zhuhanxin0308/thinkgo/v3/context"
 )
 
 const protocolTestTimeout = 5 * time.Second

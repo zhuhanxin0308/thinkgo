@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/db"
-	"github.com/zhuhanxin0308/thinkgo/framework/db/connector"
+	"github.com/zhuhanxin0308/thinkgo/v3/db"
+	"github.com/zhuhanxin0308/thinkgo/v3/db/connector"
 )
 
 // liveDatabaseProxy 只中断本测试创建的连接，用真实 MySQL 验证断连恢复而不停止用户数据库。

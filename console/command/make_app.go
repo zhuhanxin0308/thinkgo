@@ -10,8 +10,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/zhuhanxin0308/thinkgo/framework"
-	"github.com/zhuhanxin0308/thinkgo/framework/console"
+	"github.com/zhuhanxin0308/thinkgo/v3"
+	"github.com/zhuhanxin0308/thinkgo/v3/console"
 )
 
 // MakeApp 创建原生业务应用骨架，发布构建由独立的 build 命令负责。
@@ -266,7 +266,7 @@ func nativeApplicationBuildSources(name string) map[string]string {
 	return map[string]string{
 		filepath.Join(baseDirectory, "controller", "base_controller.go"): `package controller
 
-import framework "github.com/zhuhanxin0308/thinkgo/framework"
+import framework "github.com/zhuhanxin0308/thinkgo/v3"
 
 // BaseController 是当前应用控制器的公共基础类型。
 type BaseController struct {
@@ -296,7 +296,7 @@ func (controller *Index) Hello(names ...string) string {
 `,
 		filepath.Join(baseDirectory, "event.go"): `package ` + name + `
 
-import framework "github.com/zhuhanxin0308/thinkgo/framework"
+import framework "github.com/zhuhanxin0308/thinkgo/v3"
 
 // Events 定义当前应用的事件监听关系。
 func Events() framework.EventDefinition {
@@ -305,7 +305,7 @@ func Events() framework.EventDefinition {
 `,
 		filepath.Join(baseDirectory, "middleware.go"): `package ` + name + `
 
-import "github.com/zhuhanxin0308/thinkgo/framework/middleware"
+import "github.com/zhuhanxin0308/thinkgo/v3/middleware"
 
 // Middleware 返回当前应用中间件，执行顺序位于全局中间件之内。
 func Middleware() []middleware.Handler {
@@ -328,7 +328,7 @@ func Services() []interface{} {
 `,
 		filepath.Join(baseDirectory, "route", "app.go"): `package route
 
-import framework "github.com/zhuhanxin0308/thinkgo/framework"
+import framework "github.com/zhuhanxin0308/thinkgo/v3"
 
 // Load 注册当前应用路由。
 func Load(route *framework.Route) {

@@ -9,8 +9,8 @@ import (
 	"testing"
 
 	"github.com/getkin/kin-openapi/openapi3"
-	"github.com/zhuhanxin0308/thinkgo/framework/binding"
-	"github.com/zhuhanxin0308/thinkgo/framework/route"
+	"github.com/zhuhanxin0308/thinkgo/v3/binding"
+	"github.com/zhuhanxin0308/thinkgo/v3/route"
 )
 
 // TestSourceCommentsJSONBoundary 验证清单解析拒绝未知字段、尾随值、坏路径与递归字段图。

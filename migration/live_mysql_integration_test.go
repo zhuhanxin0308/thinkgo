@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/db"
-	"github.com/zhuhanxin0308/thinkgo/framework/db/connector"
+	"github.com/zhuhanxin0308/thinkgo/v3/db"
+	"github.com/zhuhanxin0308/thinkgo/v3/db/connector"
 )
 
 // newLiveMySQLMigrationStore 只允许独立测试库，且拒绝接管已有迁移表。

@@ -14,10 +14,10 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework"
-	"github.com/zhuhanxin0308/thinkgo/framework/config"
-	"github.com/zhuhanxin0308/thinkgo/framework/db"
-	fwhttp "github.com/zhuhanxin0308/thinkgo/framework/http"
+	"github.com/zhuhanxin0308/thinkgo/v3"
+	"github.com/zhuhanxin0308/thinkgo/v3/config"
+	"github.com/zhuhanxin0308/thinkgo/v3/db"
+	fwhttp "github.com/zhuhanxin0308/thinkgo/v3/http"
 )
 
 const (

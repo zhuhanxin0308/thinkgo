@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/cookie"
+	"github.com/zhuhanxin0308/thinkgo/v3/cookie"
 )
 
 // countingDriver 提供线程安全的可观测原子存储，专门验证 Session 的持久化协议。

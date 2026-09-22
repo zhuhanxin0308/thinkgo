@@ -8,11 +8,11 @@ import (
 	"strings"
 	"testing"
 
-	frameworkContext "github.com/zhuhanxin0308/thinkgo/framework/context"
-	"github.com/zhuhanxin0308/thinkgo/framework/cookie"
-	"github.com/zhuhanxin0308/thinkgo/framework/middleware"
-	frameworkSession "github.com/zhuhanxin0308/thinkgo/framework/session"
-	sessionDriver "github.com/zhuhanxin0308/thinkgo/framework/session/driver"
+	frameworkContext "github.com/zhuhanxin0308/thinkgo/v3/context"
+	"github.com/zhuhanxin0308/thinkgo/v3/cookie"
+	"github.com/zhuhanxin0308/thinkgo/v3/middleware"
+	frameworkSession "github.com/zhuhanxin0308/thinkgo/v3/session"
+	sessionDriver "github.com/zhuhanxin0308/thinkgo/v3/session/driver"
 )
 
 func newHTTPCommitSessionManager(t *testing.T, backend frameworkSession.Driver) *frameworkSession.Session {

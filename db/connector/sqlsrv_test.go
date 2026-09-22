@@ -4,7 +4,7 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/db"
+	"github.com/zhuhanxin0308/thinkgo/v3/db"
 )
 
 // TestBuildSqlsrvDSNEscapesCredentialsAndEncrypts 验证 SQL Server DSN 不会被分号注入并默认启用加密。

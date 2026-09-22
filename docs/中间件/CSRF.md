@@ -1,6 +1,6 @@
 # CSRF
 
-`framework/middleware` 提供签名双重提交 Cookie CSRF 中间件。它不依赖 Session：Cookie 中保存完整签名 token，状态变更请求必须同时提交同一个 token，框架使用 HMAC-SHA256 和常量时间比较校验。
+框架的 `middleware` 包提供签名双重提交 Cookie CSRF 中间件。它不依赖 Session：Cookie 中保存完整签名 token，状态变更请求必须同时提交同一个 token，框架使用 HMAC-SHA256 和常量时间比较校验。
 
 ## 创建
 

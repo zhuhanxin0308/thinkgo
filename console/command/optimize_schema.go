@@ -7,9 +7,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/zhuhanxin0308/thinkgo/framework"
-	"github.com/zhuhanxin0308/thinkgo/framework/console"
-	"github.com/zhuhanxin0308/thinkgo/framework/db"
+	"github.com/zhuhanxin0308/thinkgo/v3"
+	"github.com/zhuhanxin0308/thinkgo/v3/console"
+	"github.com/zhuhanxin0308/thinkgo/v3/db"
 )
 
 // OptimizeSchema 将真实数据库字段结构缓存到各应用运行目录。

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	frameworkContext "github.com/zhuhanxin0308/thinkgo/framework/context"
+	frameworkContext "github.com/zhuhanxin0308/thinkgo/v3/context"
 )
 
 // TestMemStatsSamplerCachesWithinInterval 验证内存采样器会在采样窗口内复用最近一次结果，避免每次请求都读取运行时内存统计。

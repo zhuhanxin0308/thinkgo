@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	fwcontext "github.com/zhuhanxin0308/thinkgo/framework/context"
+	fwcontext "github.com/zhuhanxin0308/thinkgo/v3/context"
 )
 
 // TestContainerContextFactoryAllocationBudget 防止首层解析状态与唯一栈帧重新拆为两次分配。

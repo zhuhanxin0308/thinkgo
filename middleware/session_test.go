@@ -7,10 +7,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/context"
-	"github.com/zhuhanxin0308/thinkgo/framework/cookie"
-	"github.com/zhuhanxin0308/thinkgo/framework/session"
-	"github.com/zhuhanxin0308/thinkgo/framework/session/driver"
+	"github.com/zhuhanxin0308/thinkgo/v3/context"
+	"github.com/zhuhanxin0308/thinkgo/v3/cookie"
+	"github.com/zhuhanxin0308/thinkgo/v3/session"
+	"github.com/zhuhanxin0308/thinkgo/v3/session/driver"
 )
 
 const middlewareKnownSessionID = "0123456789abcdef0123456789abcdef"

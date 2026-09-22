@@ -11,11 +11,11 @@ import (
 	"strings"
 	"testing"
 	"github.com/getkin/kin-openapi/openapi3"
-	"github.com/zhuhanxin0308/thinkgo/framework"
-	"github.com/zhuhanxin0308/thinkgo/framework/db"
-	"github.com/zhuhanxin0308/thinkgo/framework/db/connector"
-	"github.com/zhuhanxin0308/thinkgo/framework/openapi"
-	"github.com/zhuhanxin0308/thinkgo/framework/testkit"
+	"github.com/zhuhanxin0308/thinkgo/v3"
+	"github.com/zhuhanxin0308/thinkgo/v3/db"
+	"github.com/zhuhanxin0308/thinkgo/v3/db/connector"
+	"github.com/zhuhanxin0308/thinkgo/v3/openapi"
+	"github.com/zhuhanxin0308/thinkgo/v3/testkit"
 	model "example.com/project/app/index/model"
 )
 

@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/db"
-	"github.com/zhuhanxin0308/thinkgo/framework/env"
-	frameworkLog "github.com/zhuhanxin0308/thinkgo/framework/log"
+	"github.com/zhuhanxin0308/thinkgo/v3/db"
+	"github.com/zhuhanxin0308/thinkgo/v3/env"
+	frameworkLog "github.com/zhuhanxin0308/thinkgo/v3/log"
 )
 
 type secretFailureDatabaseConnector struct{}

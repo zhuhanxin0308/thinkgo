@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/db"
+	"github.com/zhuhanxin0308/thinkgo/v3/db"
 )
 
 // WithMigrationLock 在同一物理 SQL 会话中完成加锁、schema/journal 初始化、fencing 和全部迁移操作。

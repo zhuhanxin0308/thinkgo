@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/event"
-	"github.com/zhuhanxin0308/thinkgo/framework/migration"
+	"github.com/zhuhanxin0308/thinkgo/v3/event"
+	"github.com/zhuhanxin0308/thinkgo/v3/migration"
 )
 
 const eventRegistrationTestTimeout = time.Second

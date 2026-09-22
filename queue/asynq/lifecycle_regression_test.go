@@ -12,7 +12,7 @@ import (
 	backend "github.com/hibiken/asynq"
 	"github.com/redis/go-redis/v9"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/queue"
+	"github.com/zhuhanxin0308/thinkgo/v3/queue"
 )
 
 // TestBorrowedProducerClosePreservesClient 验证关闭借用型生产者不会报错或关闭外部客户端。

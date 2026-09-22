@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/log"
+	"github.com/zhuhanxin0308/thinkgo/v3/log"
 )
 
 // TestFileDriverDefaultsToUTC 验证日志轮转日期不依赖部署机器时区。

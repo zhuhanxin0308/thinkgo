@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	frameworkenv "github.com/zhuhanxin0308/thinkgo/framework/env"
-	frameworksession "github.com/zhuhanxin0308/thinkgo/framework/session"
+	frameworkenv "github.com/zhuhanxin0308/thinkgo/v3/env"
+	frameworksession "github.com/zhuhanxin0308/thinkgo/v3/session"
 )
 
 const defaultRequestTokenName = "__token__"

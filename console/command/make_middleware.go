@@ -3,7 +3,7 @@ package command
 import (
 	"fmt"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/console"
+	"github.com/zhuhanxin0308/thinkgo/v3/console"
 )
 
 // MakeMiddleware command
@@ -30,8 +30,8 @@ func (c *MakeMiddleware) Execute(input *console.Input, output *console.Output) e
 
 import (
 	"net/http"
-	"github.com/zhuhanxin0308/thinkgo/framework/context"
-	"github.com/zhuhanxin0308/thinkgo/framework/middleware"
+	"github.com/zhuhanxin0308/thinkgo/v3/context"
+	"github.com/zhuhanxin0308/thinkgo/v3/middleware"
 )
 
 // %s 中间件。

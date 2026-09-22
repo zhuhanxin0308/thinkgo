@@ -10,7 +10,7 @@ import (
 	"sync"
 	"unicode"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/middleware"
+	"github.com/zhuhanxin0308/thinkgo/v3/middleware"
 )
 
 var (

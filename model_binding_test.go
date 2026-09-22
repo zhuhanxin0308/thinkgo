@@ -9,8 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	frameworkContext "github.com/zhuhanxin0308/thinkgo/framework/context"
-	"github.com/zhuhanxin0308/thinkgo/framework/db"
+	frameworkContext "github.com/zhuhanxin0308/thinkgo/v3/context"
+	"github.com/zhuhanxin0308/thinkgo/v3/db"
 )
 
 type automaticUserModel struct {

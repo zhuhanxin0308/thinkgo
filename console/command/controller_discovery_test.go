@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework"
-	"github.com/zhuhanxin0308/thinkgo/framework/console"
+	"github.com/zhuhanxin0308/thinkgo/v3"
+	"github.com/zhuhanxin0308/thinkgo/v3/console"
 )
 
 // TestRefreshControllerDiscoveryGeneratesApplicationAssembly 验证一个业务应用的
@@ -29,7 +29,7 @@ func TestRefreshControllerDiscoveryGeneratesApplicationAssembly(t *testing.T) {
 	writeDiscoveryFixture(t, basePath, "app/index/model/user.go", "package model\n\ntype User struct { ID int64 }\n")
 	writeDiscoveryFixture(t, basePath, "app/index/route/app.go", `package route
 
-import framework "github.com/zhuhanxin0308/thinkgo/framework"
+import framework "github.com/zhuhanxin0308/thinkgo/v3"
 
 func Load(route *framework.Route) {}
 `)
@@ -79,25 +79,25 @@ func TestGeneratedApplicationAssemblyCompilesAndResolvesValidator(t *testing.T) 
 	writeDiscoveryFixture(t, basePath, "app/provider.go", "package app\n\nfunc Providers() map[string]interface{} { return nil }\n")
 	writeDiscoveryFixture(t, basePath, "app/event.go", `package app
 
-import framework "github.com/zhuhanxin0308/thinkgo/framework"
+import framework "github.com/zhuhanxin0308/thinkgo/v3"
 
 func Events() framework.EventDefinition { return framework.EventDefinition{} }
 `)
 	writeDiscoveryFixture(t, basePath, "app/middleware.go", `package app
 
-import "github.com/zhuhanxin0308/thinkgo/framework/middleware"
+import "github.com/zhuhanxin0308/thinkgo/v3/middleware"
 
 func Middleware() []middleware.Handler { return nil }
 `)
 	writeDiscoveryFixture(t, basePath, "app/index/event.go", `package index
 
-import framework "github.com/zhuhanxin0308/thinkgo/framework"
+import framework "github.com/zhuhanxin0308/thinkgo/v3"
 
 func Events() framework.EventDefinition { return framework.EventDefinition{} }
 `)
 	writeDiscoveryFixture(t, basePath, "app/index/middleware.go", `package index
 
-import "github.com/zhuhanxin0308/thinkgo/framework/middleware"
+import "github.com/zhuhanxin0308/thinkgo/v3/middleware"
 
 func Middleware() []middleware.Handler { return nil }
 `)
@@ -105,7 +105,7 @@ func Middleware() []middleware.Handler { return nil }
 	writeDiscoveryFixture(t, basePath, "app/index/controller/index.go", "package controller\n\ntype Index struct{}\n")
 	writeDiscoveryFixture(t, basePath, "app/index/validate/user.go", `package validate
 
-import frameworkvalidate "github.com/zhuhanxin0308/thinkgo/framework/validate"
+import frameworkvalidate "github.com/zhuhanxin0308/thinkgo/v3/validate"
 
 type User struct { frameworkvalidate.Validator }
 
@@ -117,7 +117,7 @@ func NewUser() *User {
 `)
 	writeDiscoveryFixture(t, basePath, "app/index/route/app.go", `package route
 
-import framework "github.com/zhuhanxin0308/thinkgo/framework"
+import framework "github.com/zhuhanxin0308/thinkgo/v3"
 
 func Load(route *framework.Route) {}
 `)
@@ -140,8 +140,8 @@ import (
 	"errors"
 	"testing"
 
-	framework "github.com/zhuhanxin0308/thinkgo/framework"
-	"github.com/zhuhanxin0308/thinkgo/framework/db"
+	framework "github.com/zhuhanxin0308/thinkgo/v3"
+	"github.com/zhuhanxin0308/thinkgo/v3/db"
 	applicationModel "example.com/downstream/app/index/model"
 	applicationValidate "example.com/downstream/app/index/validate"
 )
@@ -234,9 +234,9 @@ func writeDiscoveryModuleFixture(t *testing.T, basePath, modulePath string) {
 
 go 1.26.6
 
-require github.com/zhuhanxin0308/thinkgo/framework v1.0.0
+require github.com/zhuhanxin0308/thinkgo/v3 v3.0.0
 
-replace github.com/zhuhanxin0308/thinkgo/framework => %s
+replace github.com/zhuhanxin0308/thinkgo/v3 => %s
 `, modulePath, filepath.ToSlash(frameworkPath))
 	writeDiscoveryFixture(t, basePath, "go.mod", moduleFile)
 	frameworkSum, err := os.ReadFile(filepath.Join(frameworkPath, "go.sum"))

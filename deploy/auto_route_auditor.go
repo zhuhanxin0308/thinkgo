@@ -3,8 +3,8 @@ package deploy
 import (
 	"context"
 
-	"github.com/zhuhanxin0308/thinkgo/framework"
-	"github.com/zhuhanxin0308/thinkgo/framework/route"
+	"github.com/zhuhanxin0308/thinkgo/v3"
+	"github.com/zhuhanxin0308/thinkgo/v3/route"
 )
 
 // checkAutomaticDispatch 读取正式加载后的路由器，避免仅检查配置文件而遗漏业务覆写。

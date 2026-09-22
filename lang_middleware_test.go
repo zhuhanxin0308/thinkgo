@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	frameworkcontext "github.com/zhuhanxin0308/thinkgo/framework/context"
-	"github.com/zhuhanxin0308/thinkgo/framework/lang"
+	frameworkcontext "github.com/zhuhanxin0308/thinkgo/v3/context"
+	"github.com/zhuhanxin0308/thinkgo/v3/lang"
 )
 
 func newLanguageMiddlewareApp(t *testing.T, config map[string]interface{}) *App {

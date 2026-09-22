@@ -1,8 +1,8 @@
 package framework
 
 import (
-	"github.com/zhuhanxin0308/thinkgo/framework/debug"
-	frameworkVersion "github.com/zhuhanxin0308/thinkgo/framework/version"
+	"github.com/zhuhanxin0308/thinkgo/v3/debug"
+	frameworkVersion "github.com/zhuhanxin0308/thinkgo/v3/version"
 )
 
 const (

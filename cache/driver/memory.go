@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/cache/contract"
+	"github.com/zhuhanxin0308/thinkgo/v3/cache/contract"
 )
 
 const memorySweepInterval = time.Minute

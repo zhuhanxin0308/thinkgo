@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/context"
-	"github.com/zhuhanxin0308/thinkgo/framework/debug"
-	frameworkVersion "github.com/zhuhanxin0308/thinkgo/framework/version"
+	"github.com/zhuhanxin0308/thinkgo/v3/context"
+	"github.com/zhuhanxin0308/thinkgo/v3/debug"
+	frameworkVersion "github.com/zhuhanxin0308/thinkgo/v3/version"
 )
 
 // Trace 按 ThinkPHP Debug 状态和 trace.type 创建请求级调试 collector。

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"unicode"
 
-	frameworkVersion "github.com/zhuhanxin0308/thinkgo/framework/version"
+	frameworkVersion "github.com/zhuhanxin0308/thinkgo/v3/version"
 )
 
 // Debug 设置应用调试模式并返回当前 App，对应 ThinkPHP App::debug。

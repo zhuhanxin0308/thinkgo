@@ -16,6 +16,6 @@
 - [CORS](CORS.md)：通用跨域中间件的来源、预检和凭证行为。
 - [中间件安全边界](中间件安全边界.md)：静态资源、短路、错误和敏感信息边界。
 
-文档中的 API 以当前源码为准。`config/middleware.json` 的 `alias` 和 `priority` 会在应用装配阶段应用到 `framework/middleware.Pipeline`，但只能引用代码中已经注册的中间件别名，不能通过 JSON 反射构造 Go 中间件。
+文档中的 API 以当前源码为准。`config/middleware.json` 的 `alias` 和 `priority` 会在应用装配阶段应用到框架的 `middleware.Pipeline`，但只能引用代码中已经注册的中间件别名，不能通过 JSON 反射构造 Go 中间件。
 
 兼容代码继续使用 `PipeByName`（缺失别名静默忽略）；安全敏感的装配使用 `PipeByNameStrict`，缺失别名会返回 `ErrMiddlewareAliasNotFound`。代理协议和 Session Secure Cookie 只接受 HTTP 内核经过 `trusted_proxies` 校验后的结论，详见[中间件安全边界](中间件安全边界.md)。

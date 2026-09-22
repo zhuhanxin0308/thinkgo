@@ -8,8 +8,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/log"
-	logDriver "github.com/zhuhanxin0308/thinkgo/framework/log/driver"
+	"github.com/zhuhanxin0308/thinkgo/v3/log"
+	logDriver "github.com/zhuhanxin0308/thinkgo/v3/log/driver"
 )
 
 // createAppLogChannel 严格解析单个日志通道，配置错误在启动阶段立即返回。

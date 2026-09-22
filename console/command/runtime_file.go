@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/zhuhanxin0308/thinkgo/framework"
+	"github.com/zhuhanxin0308/thinkgo/v3"
 )
 
 // writeProjectFileAtomically 在项目根目录约束内原子替换单个文件，

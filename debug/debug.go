@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/context"
+	"github.com/zhuhanxin0308/thinkgo/v3/context"
 )
 
 const (

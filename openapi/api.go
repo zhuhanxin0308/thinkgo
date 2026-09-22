@@ -3,7 +3,7 @@ package openapi
 import (
 	"net/http"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/middleware"
+	"github.com/zhuhanxin0308/thinkgo/v3/middleware"
 )
 
 // API 将一个实际路由作用域与注册表关联，接口只需声明路径和真实处理器。

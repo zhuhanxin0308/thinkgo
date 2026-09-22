@@ -1,6 +1,6 @@
 # Session
 
-`framework/middleware.Session` 把应用级 `*session.Session` 管理器转换为请求级会话中间件。它负责从请求 Cookie 初始化隔离的 Session，在下游完成后保存变更，并把保存产生的 Cookie 头提交到框架响应。
+框架的 `middleware.Session` 把应用级 `*session.Session` 管理器转换为请求级会话中间件。它负责从请求 Cookie 初始化隔离的 Session，在下游完成后保存变更，并把保存产生的 Cookie 头提交到框架响应。
 
 ## 装配与请求数据
 

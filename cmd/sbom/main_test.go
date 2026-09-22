@@ -24,16 +24,16 @@ func TestRunValidatesArguments(t *testing.T) {
 	}
 }
 
-// TestRunGeneratesFrameworkLibraryBOM 验证发布命令从 framework 子模块读取
+// TestRunGeneratesFrameworkLibraryBOM 验证发布命令从根目录框架模块读取
 // 依赖，并把主组件标记为带 Apache-2.0 许可证的 library。
 func TestRunGeneratesFrameworkLibraryBOM(t *testing.T) {
 	output := filepath.Join(t.TempDir(), "framework-bom.json")
 	var stderr strings.Builder
 	err := run([]string{
-		"-directory", "../../framework",
+		"-directory", "../..",
 		"-component-type", "library",
-		"-module", "github.com/zhuhanxin0308/thinkgo/framework",
-		"-version", "1.0.0",
+		"-module", "github.com/zhuhanxin0308/thinkgo/v3",
+		"-version", "3.0.0",
 		"-output", output,
 	}, &stderr)
 	if err != nil {
@@ -47,7 +47,7 @@ func TestRunGeneratesFrameworkLibraryBOM(t *testing.T) {
 	if err := json.Unmarshal(content, &result); err != nil {
 		t.Fatalf("解析框架 SBOM 失败: %v", err)
 	}
-	if result.Metadata.Component.Type != "library" || result.Metadata.Component.Name != "github.com/zhuhanxin0308/thinkgo/framework" {
+	if result.Metadata.Component.Type != "library" || result.Metadata.Component.Name != "github.com/zhuhanxin0308/thinkgo/v3" {
 		t.Fatalf("框架主组件身份错误: %#v", result.Metadata.Component)
 	}
 	if len(result.Metadata.Component.Licenses) != 1 || result.Metadata.Component.Licenses[0].License.ID != "Apache-2.0" {

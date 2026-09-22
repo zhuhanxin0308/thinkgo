@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/context"
+	"github.com/zhuhanxin0308/thinkgo/v3/context"
 )
 
 // TestAutoRouteEnabledByDefault 验证 ThinkPHP 默认 url_route_must=false。

@@ -6,9 +6,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/config"
-	"github.com/zhuhanxin0308/thinkgo/framework/cookie"
-	"github.com/zhuhanxin0308/thinkgo/framework/log"
+	"github.com/zhuhanxin0308/thinkgo/v3/config"
+	"github.com/zhuhanxin0308/thinkgo/v3/cookie"
+	"github.com/zhuhanxin0308/thinkgo/v3/log"
 )
 
 type securityWarningDriver struct {

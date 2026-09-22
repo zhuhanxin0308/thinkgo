@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/zhuhanxin0308/thinkgo/framework"
-	cacheDriver "github.com/zhuhanxin0308/thinkgo/framework/cache/driver"
-	"github.com/zhuhanxin0308/thinkgo/framework/console"
+	"github.com/zhuhanxin0308/thinkgo/v3"
+	cacheDriver "github.com/zhuhanxin0308/thinkgo/v3/cache/driver"
+	"github.com/zhuhanxin0308/thinkgo/v3/console"
 )
 
 // Clear 默认清理当前应用缓存，显式选项才允许清理日志或指定目录。

@@ -3,7 +3,7 @@ package driver
 import (
 	"time"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/cache/contract"
+	"github.com/zhuhanxin0308/thinkgo/v3/cache/contract"
 )
 
 // 驱动兼容名称引用同一组中立错误值，保证 errors.Is 在核心和各后端之间一致。

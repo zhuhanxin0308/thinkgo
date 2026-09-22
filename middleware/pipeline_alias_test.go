@@ -7,7 +7,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/context"
+	"github.com/zhuhanxin0308/thinkgo/v3/context"
 )
 
 // TestPipeByNameStrictPreservesLegacyAliasBehavior 验证旧别名入口继续静默兼容，严格入口只在缺失时失败。

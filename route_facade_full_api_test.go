@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	frameworkContext "github.com/zhuhanxin0308/thinkgo/framework/context"
-	"github.com/zhuhanxin0308/thinkgo/framework/middleware"
-	frameworkRoute "github.com/zhuhanxin0308/thinkgo/framework/route"
+	frameworkContext "github.com/zhuhanxin0308/thinkgo/v3/context"
+	"github.com/zhuhanxin0308/thinkgo/v3/middleware"
+	frameworkRoute "github.com/zhuhanxin0308/thinkgo/v3/route"
 )
 
 // TestRouteFacadeCoversThinkPHPDefinitionAPI 验证 Route 门面的全部 HTTP

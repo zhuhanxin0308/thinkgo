@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/binding"
+	"github.com/zhuhanxin0308/thinkgo/v3/binding"
 )
 
 type invalidRouteInput struct {

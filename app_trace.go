@@ -6,8 +6,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/debug"
-	"github.com/zhuhanxin0308/thinkgo/framework/middleware"
+	"github.com/zhuhanxin0308/thinkgo/v3/debug"
+	"github.com/zhuhanxin0308/thinkgo/v3/middleware"
 )
 
 // createAppTrace 把 trace.php 的 type 和 channel 原样转换为 Trace 中间件配置。

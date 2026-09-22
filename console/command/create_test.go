@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework"
+	"github.com/zhuhanxin0308/thinkgo/v3"
 )
 
 // TestCreateProjectRequiresEmptyTarget 验证隐藏文件也会阻止创建，且已有内容保持原样。
@@ -49,7 +49,7 @@ func TestCreatedProjectBuildsAndHandlesRequests(t *testing.T) {
 	}
 	base := t.TempDir()
 	prepare := func(ctx context.Context, directory, module string) error {
-		content := fmt.Sprintf("module %s\n\ngo %s\n\nrequire %s v0.0.0\nreplace %s => %q\n", module, scaffoldGoVersion, scaffoldFrameworkModule, scaffoldFrameworkModule, filepath.ToSlash(frameworkRoot))
+		content := fmt.Sprintf("module %s\n\ngo %s\n\nrequire %s v3.0.0\nreplace %s => %q\n", module, scaffoldGoVersion, scaffoldFrameworkModule, scaffoldFrameworkModule, filepath.ToSlash(frameworkRoot))
 		if err := os.WriteFile(filepath.Join(directory, "go.mod"), []byte(content), 0644); err != nil {
 			return err
 		}

@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/neo4j/neo4j-go-driver/v5/neo4j"
-	"github.com/zhuhanxin0308/thinkgo/framework/db"
+	"github.com/zhuhanxin0308/thinkgo/v3/db"
 )
 
 // TestNeo4jTemporalValuesAndDefaults 验证有时区、墙上时间、嵌套属性与默认 UTC 的不同契约。

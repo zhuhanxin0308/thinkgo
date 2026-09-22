@@ -9,8 +9,8 @@ import (
 	"sync"
 	"unicode"
 
-	requestbinding "github.com/zhuhanxin0308/thinkgo/framework/binding"
-	"github.com/zhuhanxin0308/thinkgo/framework/middleware"
+	requestbinding "github.com/zhuhanxin0308/thinkgo/v3/binding"
+	"github.com/zhuhanxin0308/thinkgo/v3/middleware"
 )
 
 const maxRegistrationNameBytes = 256

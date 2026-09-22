@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"sort"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/db"
+	"github.com/zhuhanxin0308/thinkgo/v3/db"
 )
 
 const modelServicePrefix = "model."

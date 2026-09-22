@@ -4,12 +4,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/config"
-	"github.com/zhuhanxin0308/thinkgo/framework/context"
-	"github.com/zhuhanxin0308/thinkgo/framework/debug"
-	"github.com/zhuhanxin0308/thinkgo/framework/env"
-	"github.com/zhuhanxin0308/thinkgo/framework/metrics"
-	"github.com/zhuhanxin0308/thinkgo/framework/middleware"
+	"github.com/zhuhanxin0308/thinkgo/v3/config"
+	"github.com/zhuhanxin0308/thinkgo/v3/context"
+	"github.com/zhuhanxin0308/thinkgo/v3/debug"
+	"github.com/zhuhanxin0308/thinkgo/v3/env"
+	"github.com/zhuhanxin0308/thinkgo/v3/metrics"
+	"github.com/zhuhanxin0308/thinkgo/v3/middleware"
 )
 
 // TestApplicationRuntimeConfigAppliesAllApplicationFields 验证 app.json 的应用名称、环境和开关字段均落入运行时状态。

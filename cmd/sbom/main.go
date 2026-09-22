@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	defaultModuleName = "github.com/zhuhanxin0308/thinkgo"
+	defaultModuleName = "github.com/zhuhanxin0308/thinkgo/v3"
 	cycloneDXFormat   = "CycloneDX"
 	cycloneDXVersion  = "1.5"
 )

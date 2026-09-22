@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	fwcontext "github.com/zhuhanxin0308/thinkgo/framework/context"
+	fwcontext "github.com/zhuhanxin0308/thinkgo/v3/context"
 )
 
 // testDispatchController 用于验证控制器分发计划缓存。

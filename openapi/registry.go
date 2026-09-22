@@ -17,7 +17,7 @@ import (
 
 	"github.com/getkin/kin-openapi/openapi3"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/route"
+	"github.com/zhuhanxin0308/thinkgo/v3/route"
 )
 
 const (

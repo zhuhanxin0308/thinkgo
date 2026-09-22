@@ -4,9 +4,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/context"
-	"github.com/zhuhanxin0308/thinkgo/framework/exception"
-	frameworkLog "github.com/zhuhanxin0308/thinkgo/framework/log"
+	"github.com/zhuhanxin0308/thinkgo/v3/context"
+	"github.com/zhuhanxin0308/thinkgo/v3/exception"
+	frameworkLog "github.com/zhuhanxin0308/thinkgo/v3/log"
 )
 
 // Recovery panic 恢复中间件。

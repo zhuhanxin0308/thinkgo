@@ -9,12 +9,12 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/zhuhanxin0308/thinkgo/framework"
-	"github.com/zhuhanxin0308/thinkgo/framework/binding"
-	"github.com/zhuhanxin0308/thinkgo/framework/context"
-	frameworkLog "github.com/zhuhanxin0308/thinkgo/framework/log"
-	"github.com/zhuhanxin0308/thinkgo/framework/middleware"
-	"github.com/zhuhanxin0308/thinkgo/framework/route"
+	"github.com/zhuhanxin0308/thinkgo/v3"
+	"github.com/zhuhanxin0308/thinkgo/v3/binding"
+	"github.com/zhuhanxin0308/thinkgo/v3/context"
+	frameworkLog "github.com/zhuhanxin0308/thinkgo/v3/log"
+	"github.com/zhuhanxin0308/thinkgo/v3/middleware"
+	"github.com/zhuhanxin0308/thinkgo/v3/route"
 )
 
 var (

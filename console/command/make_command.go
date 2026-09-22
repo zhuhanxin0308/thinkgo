@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/console"
+	"github.com/zhuhanxin0308/thinkgo/v3/console"
 )
 
 // MakeCommand 创建可以注册到应用控制台的命令类型。
@@ -38,7 +38,7 @@ func (c *MakeCommand) Execute(input *console.Input, output *console.Output) erro
 	content := fmt.Sprintf(`package command
 
 import (
-	"github.com/zhuhanxin0308/thinkgo/framework/console"
+	"github.com/zhuhanxin0308/thinkgo/v3/console"
 )
 
 // %s 是应用自定义命令。

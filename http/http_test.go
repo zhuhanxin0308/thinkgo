@@ -15,14 +15,14 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework"
-	"github.com/zhuhanxin0308/thinkgo/framework/config"
-	fwcontext "github.com/zhuhanxin0308/thinkgo/framework/context"
-	"github.com/zhuhanxin0308/thinkgo/framework/log"
-	"github.com/zhuhanxin0308/thinkgo/framework/metrics"
-	"github.com/zhuhanxin0308/thinkgo/framework/middleware"
-	"github.com/zhuhanxin0308/thinkgo/framework/route"
-	fwtelemetry "github.com/zhuhanxin0308/thinkgo/framework/telemetry"
+	"github.com/zhuhanxin0308/thinkgo/v3"
+	"github.com/zhuhanxin0308/thinkgo/v3/config"
+	fwcontext "github.com/zhuhanxin0308/thinkgo/v3/context"
+	"github.com/zhuhanxin0308/thinkgo/v3/log"
+	"github.com/zhuhanxin0308/thinkgo/v3/metrics"
+	"github.com/zhuhanxin0308/thinkgo/v3/middleware"
+	"github.com/zhuhanxin0308/thinkgo/v3/route"
+	fwtelemetry "github.com/zhuhanxin0308/thinkgo/v3/telemetry"
 
 	"go.opentelemetry.io/otel/propagation"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -265,7 +265,7 @@ func TestServeHTTPExportsRouteAwareOpenTelemetrySpan(t *testing.T) {
 		Enabled:                true,
 		Provider:               provider,
 		Propagator:             propagation.TraceContext{},
-		InstrumentationName:    "github.com/zhuhanxin0308/thinkgo/framework/http-test",
+		InstrumentationName:    "github.com/zhuhanxin0308/thinkgo/v3/http-test",
 		InstrumentationVersion: "2.0.0",
 	})
 	if err != nil {

@@ -3,7 +3,7 @@ package console
 import (
 	"fmt"
 
-	"github.com/zhuhanxin0308/thinkgo/framework"
+	"github.com/zhuhanxin0308/thinkgo/v3"
 )
 
 // ICommand interface

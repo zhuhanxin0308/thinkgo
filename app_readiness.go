@@ -8,11 +8,11 @@ import (
 	"net/netip"
 	"strings"
 
-	fwcontext "github.com/zhuhanxin0308/thinkgo/framework/context"
-	"github.com/zhuhanxin0308/thinkgo/framework/db"
-	"github.com/zhuhanxin0308/thinkgo/framework/health"
-	"github.com/zhuhanxin0308/thinkgo/framework/metrics"
-	"github.com/zhuhanxin0308/thinkgo/framework/route"
+	fwcontext "github.com/zhuhanxin0308/thinkgo/v3/context"
+	"github.com/zhuhanxin0308/thinkgo/v3/db"
+	"github.com/zhuhanxin0308/thinkgo/v3/health"
+	"github.com/zhuhanxin0308/thinkgo/v3/metrics"
+	"github.com/zhuhanxin0308/thinkgo/v3/route"
 )
 
 const (

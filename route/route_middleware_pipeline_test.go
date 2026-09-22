@@ -5,7 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	fwcontext "github.com/zhuhanxin0308/thinkgo/framework/context"
+	fwcontext "github.com/zhuhanxin0308/thinkgo/v3/context"
 )
 
 // TestRouteMiddlewarePipelineReuse 验证路由管道在注册阶段装配并保持中间件执行顺序。

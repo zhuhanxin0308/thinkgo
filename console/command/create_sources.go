@@ -50,9 +50,9 @@ import (
     _ "time/tzdata" // 内置时区，发布包无需依赖系统时区文件。
 
     businessapp "%s/app"
-    "github.com/zhuhanxin0308/thinkgo/framework"
-    "github.com/zhuhanxin0308/thinkgo/framework/db/connector"
-    fwhttp "github.com/zhuhanxin0308/thinkgo/framework/http"
+    "github.com/zhuhanxin0308/thinkgo/v3"
+    "github.com/zhuhanxin0308/thinkgo/v3/db/connector"
+    fwhttp "github.com/zhuhanxin0308/thinkgo/v3/http"
 )
 
 func main() {
@@ -104,8 +104,8 @@ import (
     "os"
     "os/signal"
     "syscall"
-    "github.com/zhuhanxin0308/thinkgo/framework"
-    "github.com/zhuhanxin0308/thinkgo/framework/console/launcher"
+    "github.com/zhuhanxin0308/thinkgo/v3"
+    "github.com/zhuhanxin0308/thinkgo/v3/console/launcher"
 )
 
 // registerBusiness 由运行时标签入口提供，源码命令不提前加载业务。
@@ -140,8 +140,8 @@ import (
     "strings"
     "testing"
     businessapp "%s/app"
-    "github.com/zhuhanxin0308/thinkgo/framework"
-    fwhttp "github.com/zhuhanxin0308/thinkgo/framework/http"
+    "github.com/zhuhanxin0308/thinkgo/v3"
+    fwhttp "github.com/zhuhanxin0308/thinkgo/v3/http"
 )
 
 // TestWelcome 验证真实路由与默认控制器，不启动网络监听服务。

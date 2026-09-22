@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/log"
+	"github.com/zhuhanxin0308/thinkgo/v3/log"
 )
 
 const defaultAppLogChannel = "file"

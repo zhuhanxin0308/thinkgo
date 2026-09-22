@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/internal/winfile"
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/winfile"
 )
 
 var errConditionalClearPreserved = errors.New("条件清理保留当前缓存值")

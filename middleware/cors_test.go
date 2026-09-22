@@ -5,7 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	fwcontext "github.com/zhuhanxin0308/thinkgo/framework/context"
+	fwcontext "github.com/zhuhanxin0308/thinkgo/v3/context"
 )
 
 func newCorsRequest(t *testing.T, method, origin string) *fwcontext.Request {

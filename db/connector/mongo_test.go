@@ -7,8 +7,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/db"
-	mongodriver "github.com/zhuhanxin0308/thinkgo/framework/db/driver/mongo"
+	"github.com/zhuhanxin0308/thinkgo/v3/db"
+	mongodriver "github.com/zhuhanxin0308/thinkgo/v3/db/driver/mongo"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"

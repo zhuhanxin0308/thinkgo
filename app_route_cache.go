@@ -7,7 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
-	frameworkRoute "github.com/zhuhanxin0308/thinkgo/framework/route"
+	frameworkRoute "github.com/zhuhanxin0308/thinkgo/v3/route"
 )
 
 // loadRouteNameCache 让后续应用进程消费命名路由优化产物，缺失缓存时继续使用编译路由。

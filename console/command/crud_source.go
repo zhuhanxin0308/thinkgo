@@ -57,11 +57,11 @@ const crudSourceTemplate = `package api
 
 import (
 	"net/http"
-	"github.com/zhuhanxin0308/thinkgo/framework"
-	"github.com/zhuhanxin0308/thinkgo/framework/binding"
-	"github.com/zhuhanxin0308/thinkgo/framework/db"
-	"github.com/zhuhanxin0308/thinkgo/framework/exception"
-	"github.com/zhuhanxin0308/thinkgo/framework/openapi"
+	"github.com/zhuhanxin0308/thinkgo/v3"
+	"github.com/zhuhanxin0308/thinkgo/v3/binding"
+	"github.com/zhuhanxin0308/thinkgo/v3/db"
+	"github.com/zhuhanxin0308/thinkgo/v3/exception"
+	"github.com/zhuhanxin0308/thinkgo/v3/openapi"
 	model {{q .ModelImport}}
 	{{range .Imports}}{{.Alias}} {{q .Path}}
 	{{end}}
@@ -238,8 +238,8 @@ import (
 	"context"
 	"testing"
 	"github.com/getkin/kin-openapi/openapi3"
-	"github.com/zhuhanxin0308/thinkgo/framework/openapi"
-	"github.com/zhuhanxin0308/thinkgo/framework/route"
+	"github.com/zhuhanxin0308/thinkgo/v3/openapi"
+	"github.com/zhuhanxin0308/thinkgo/v3/route"
 )
 
 // Test{{.Name}}Routes 验证模型字段演进后，请求绑定、路由与响应文档仍可以完整注册。

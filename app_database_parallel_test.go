@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/db"
-	"github.com/zhuhanxin0308/thinkgo/framework/env"
+	"github.com/zhuhanxin0308/thinkgo/v3/db"
+	"github.com/zhuhanxin0308/thinkgo/v3/env"
 )
 
 // parallelDatabaseConnector 在所有连接器进入后才放行，用于证明初始化不会被首个连接串行阻塞。

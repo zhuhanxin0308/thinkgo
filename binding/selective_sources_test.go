@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	fwcontext "github.com/zhuhanxin0308/thinkgo/framework/context"
-	"github.com/zhuhanxin0308/thinkgo/framework/exception"
-	"github.com/zhuhanxin0308/thinkgo/framework/validate"
+	fwcontext "github.com/zhuhanxin0308/thinkgo/v3/context"
+	"github.com/zhuhanxin0308/thinkgo/v3/exception"
+	"github.com/zhuhanxin0308/thinkgo/v3/validate"
 )
 
 // TestBindIgnoresUnselectedSnapshotCost 验证业务未声明的元数据数量不会增加重复绑定的快照分配。

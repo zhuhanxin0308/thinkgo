@@ -7,7 +7,7 @@ import (
 	"sync"
 	"testing"
 
-	fwcontext "github.com/zhuhanxin0308/thinkgo/framework/context"
+	fwcontext "github.com/zhuhanxin0308/thinkgo/v3/context"
 )
 
 // TestStaticPrefixMatchKeepsFrozenIndexBackingImmutable 验证匹配器不会写入冻结索引切片的备用容量。

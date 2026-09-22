@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/lang"
+	"github.com/zhuhanxin0308/thinkgo/v3/lang"
 )
 
 // appLangProvider 负责在配置完成后装配多语言配置和语言包。

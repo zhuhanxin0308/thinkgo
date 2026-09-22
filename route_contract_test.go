@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/route"
+	"github.com/zhuhanxin0308/thinkgo/v3/route"
 )
 
 // TestRouteFacadeContractPreservesScope 验证现有应用路由门面可以原子注册契约并保留分组前缀。

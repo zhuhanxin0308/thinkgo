@@ -9,10 +9,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework"
-	"github.com/zhuhanxin0308/thinkgo/framework/config"
-	"github.com/zhuhanxin0308/thinkgo/framework/console"
-	fwhttp "github.com/zhuhanxin0308/thinkgo/framework/http"
+	"github.com/zhuhanxin0308/thinkgo/v3"
+	"github.com/zhuhanxin0308/thinkgo/v3/config"
+	"github.com/zhuhanxin0308/thinkgo/v3/console"
+	fwhttp "github.com/zhuhanxin0308/thinkgo/v3/http"
 )
 
 // TestIsValidPort 校验端口校验逻辑：仅接受 1-65535 的整数。

@@ -3,8 +3,8 @@ package http
 import (
 	"reflect"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/binding"
-	"github.com/zhuhanxin0308/thinkgo/framework/context"
+	"github.com/zhuhanxin0308/thinkgo/v3/binding"
+	"github.com/zhuhanxin0308/thinkgo/v3/context"
 )
 
 // compileActionCall 将共享签名计划映射为 HTTP 注入动作，应用与请求身份只在这里分类。

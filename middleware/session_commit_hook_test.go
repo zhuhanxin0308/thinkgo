@@ -6,9 +6,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/context"
-	"github.com/zhuhanxin0308/thinkgo/framework/session"
-	"github.com/zhuhanxin0308/thinkgo/framework/session/driver"
+	"github.com/zhuhanxin0308/thinkgo/v3/context"
+	"github.com/zhuhanxin0308/thinkgo/v3/session"
+	"github.com/zhuhanxin0308/thinkgo/v3/session/driver"
 )
 
 type middlewareCommitHookWriter struct {

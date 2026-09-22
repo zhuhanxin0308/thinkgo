@@ -8,11 +8,11 @@ import (
 	"path/filepath"
 	"testing"
 
-	fwcontext "github.com/zhuhanxin0308/thinkgo/framework/context"
-	"github.com/zhuhanxin0308/thinkgo/framework/event"
-	"github.com/zhuhanxin0308/thinkgo/framework/middleware"
-	fwroute "github.com/zhuhanxin0308/thinkgo/framework/route"
-	frameworkVersion "github.com/zhuhanxin0308/thinkgo/framework/version"
+	fwcontext "github.com/zhuhanxin0308/thinkgo/v3/context"
+	"github.com/zhuhanxin0308/thinkgo/v3/event"
+	"github.com/zhuhanxin0308/thinkgo/v3/middleware"
+	fwroute "github.com/zhuhanxin0308/thinkgo/v3/route"
+	frameworkVersion "github.com/zhuhanxin0308/thinkgo/v3/version"
 )
 
 // TestThinkPHPTopLevelRequestAndResponseTypes 验证控制器可使用与 think.Request、

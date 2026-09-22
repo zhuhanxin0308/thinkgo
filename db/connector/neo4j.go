@@ -7,8 +7,8 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/db"
-	neodriver "github.com/zhuhanxin0308/thinkgo/framework/db/driver/neo4j"
+	"github.com/zhuhanxin0308/thinkgo/v3/db"
+	neodriver "github.com/zhuhanxin0308/thinkgo/v3/db/driver/neo4j"
 
 	"github.com/neo4j/neo4j-go-driver/v5/neo4j"
 )

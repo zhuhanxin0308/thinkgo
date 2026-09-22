@@ -8,7 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	fwcontext "github.com/zhuhanxin0308/thinkgo/framework/context"
+	fwcontext "github.com/zhuhanxin0308/thinkgo/v3/context"
 )
 
 // TestIdentityRejectsNormalizedClaimAndAttributeCollisions 验证规范化后的重复声明不会被静默合并或覆盖。

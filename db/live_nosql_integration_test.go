@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/db"
-	"github.com/zhuhanxin0308/thinkgo/framework/db/connector"
-	mongodriver "github.com/zhuhanxin0308/thinkgo/framework/db/driver/mongo"
-	neodriver "github.com/zhuhanxin0308/thinkgo/framework/db/driver/neo4j"
+	"github.com/zhuhanxin0308/thinkgo/v3/db"
+	"github.com/zhuhanxin0308/thinkgo/v3/db/connector"
+	mongodriver "github.com/zhuhanxin0308/thinkgo/v3/db/driver/mongo"
+	neodriver "github.com/zhuhanxin0308/thinkgo/v3/db/driver/neo4j"
 
 	"github.com/neo4j/neo4j-go-driver/v5/neo4j"
 	"go.mongodb.org/mongo-driver/v2/bson"

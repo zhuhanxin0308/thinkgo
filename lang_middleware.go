@@ -3,8 +3,8 @@ package framework
 import (
 	"net/http"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/context"
-	"github.com/zhuhanxin0308/thinkgo/framework/lang"
+	"github.com/zhuhanxin0308/thinkgo/v3/context"
+	"github.com/zhuhanxin0308/thinkgo/v3/lang"
 )
 
 // LangMiddleware 按显式查询参数、Cookie、自定义请求头和浏览器偏好的顺序选择请求语言。

@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	frameworkVersion "github.com/zhuhanxin0308/thinkgo/framework/version"
+	frameworkVersion "github.com/zhuhanxin0308/thinkgo/v3/version"
 )
 
 type mockExceptionApp struct {

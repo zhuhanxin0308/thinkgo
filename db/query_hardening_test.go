@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/db/builder"
+	"github.com/zhuhanxin0308/thinkgo/v3/db/builder"
 )
 
 // queryHardeningConnection 记录查询层传给驱动的数据，验证框架不会污染调用方输入。

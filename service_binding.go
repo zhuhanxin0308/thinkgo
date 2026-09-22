@@ -7,9 +7,9 @@ import (
 	"reflect"
 	"strings"
 
-	frameworkContext "github.com/zhuhanxin0308/thinkgo/framework/context"
-	"github.com/zhuhanxin0308/thinkgo/framework/exception"
-	frameworkLog "github.com/zhuhanxin0308/thinkgo/framework/log"
+	frameworkContext "github.com/zhuhanxin0308/thinkgo/v3/context"
+	"github.com/zhuhanxin0308/thinkgo/v3/exception"
+	frameworkLog "github.com/zhuhanxin0308/thinkgo/v3/log"
 )
 
 // ServiceName 是应用容器中服务绑定的稳定名称。

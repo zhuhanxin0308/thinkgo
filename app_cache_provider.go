@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/cache"
+	"github.com/zhuhanxin0308/thinkgo/v3/cache"
 )
 
 // appCacheProvider 负责在配置加载完成后装配应用级缓存服务。

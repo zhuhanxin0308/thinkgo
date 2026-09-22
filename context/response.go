@@ -13,7 +13,7 @@ import (
 	"strconv"
 	"strings"
 
-	frameworksession "github.com/zhuhanxin0308/thinkgo/framework/session"
+	frameworksession "github.com/zhuhanxin0308/thinkgo/v3/session"
 )
 
 var jsonpCallbackPattern = regexp.MustCompile(`^[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*$`)

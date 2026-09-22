@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/cache"
+	"github.com/zhuhanxin0308/thinkgo/v3/cache"
 )
 
 const cacheSessionNamespacePrefix = "thinkgo-session:"

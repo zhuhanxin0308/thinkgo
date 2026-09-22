@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/context"
-	"github.com/zhuhanxin0308/thinkgo/framework/ratelimit"
+	"github.com/zhuhanxin0308/thinkgo/v3/context"
+	"github.com/zhuhanxin0308/thinkgo/v3/ratelimit"
 )
 
 // RateLimitKey 从已经完成可信代理解析的请求中生成稳定键。

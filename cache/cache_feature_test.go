@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	cacheDriver "github.com/zhuhanxin0308/thinkgo/framework/cache/driver"
-	redisDriver "github.com/zhuhanxin0308/thinkgo/framework/cache/driver/redis"
-	"github.com/zhuhanxin0308/thinkgo/framework/debug"
+	cacheDriver "github.com/zhuhanxin0308/thinkgo/v3/cache/driver"
+	redisDriver "github.com/zhuhanxin0308/thinkgo/v3/cache/driver/redis"
+	"github.com/zhuhanxin0308/thinkgo/v3/debug"
 )
 
 // TestCacheStoresTagsAndLocks 验证多存储、标签、计数和锁的成功路径均保留明确错误边界。

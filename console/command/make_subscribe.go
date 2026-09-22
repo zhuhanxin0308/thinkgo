@@ -3,7 +3,7 @@ package command
 import (
 	"fmt"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/console"
+	"github.com/zhuhanxin0308/thinkgo/v3/console"
 )
 
 // MakeSubscribe 生成事件订阅者源码。
@@ -31,7 +31,7 @@ func (c *MakeSubscribe) Execute(input *console.Input, output *console.Output) er
 	content := fmt.Sprintf(`package subscribe
 
 import (
-	"github.com/zhuhanxin0308/thinkgo/framework/event"
+	"github.com/zhuhanxin0308/thinkgo/v3/event"
 )
 
 // %s 订阅者。

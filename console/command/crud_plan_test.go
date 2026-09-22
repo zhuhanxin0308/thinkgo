@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework"
-	"github.com/zhuhanxin0308/thinkgo/framework/console"
+	"github.com/zhuhanxin0308/thinkgo/v3"
+	"github.com/zhuhanxin0308/thinkgo/v3/console"
 )
 
 // TestCRUDKeepsEmbeddedAndImportedTypes 验证匿名嵌入、类型别名、外部类型及保留名冲突都生成可编译契约。
@@ -18,7 +18,7 @@ func TestCRUDKeepsEmbeddedAndImportedTypes(t *testing.T) {
 	writeDiscoveryFixture(t, basePath, "app/admin/model/account.go", `package model
 import (
 	"time"
-	"github.com/zhuhanxin0308/thinkgo/framework/db"
+	"github.com/zhuhanxin0308/thinkgo/v3/db"
 )
 type AccountID int64
 type DisplayName = string
@@ -61,7 +61,7 @@ func TestCRUDRejectsAmbiguousModelMetadata(t *testing.T) {
 	basePath := t.TempDir()
 	writeGeneratorTestModule(t, basePath)
 	writeDiscoveryFixture(t, basePath, "app/index/model/invalid.go", `package model
-import "github.com/zhuhanxin0308/thinkgo/framework/db"
+import "github.com/zhuhanxin0308/thinkgo/v3/db"
 type Missing struct { ID int64 }
 type Value struct { db.Model; ID int64 }
 type Named struct { Base *db.Model; ID int64 }

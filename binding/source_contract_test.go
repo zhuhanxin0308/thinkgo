@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	fwcontext "github.com/zhuhanxin0308/thinkgo/framework/context"
+	fwcontext "github.com/zhuhanxin0308/thinkgo/v3/context"
 )
 
 // TestBindingUsesRequestOverrides 验证中间件覆盖值和自动绑定使用相同来源。

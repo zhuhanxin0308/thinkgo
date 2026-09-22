@@ -1,8 +1,8 @@
 package command
 
 import (
-	"github.com/zhuhanxin0308/thinkgo/framework/console"
-	frameworkVersion "github.com/zhuhanxin0308/thinkgo/framework/version"
+	"github.com/zhuhanxin0308/thinkgo/v3/console"
+	frameworkVersion "github.com/zhuhanxin0308/thinkgo/v3/version"
 )
 
 // Version command

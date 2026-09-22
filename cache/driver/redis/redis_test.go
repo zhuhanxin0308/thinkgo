@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/cache/contract"
+	"github.com/zhuhanxin0308/thinkgo/v3/cache/contract"
 )
 
 // TestNewRedisStrictConfig 验证 Redis 地址、索引、超时、前缀和未知字段都在创建阶段严格校验。

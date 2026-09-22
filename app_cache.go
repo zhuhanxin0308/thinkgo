@@ -12,9 +12,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/cache"
-	cacheDriver "github.com/zhuhanxin0308/thinkgo/framework/cache/driver"
-	redisDriver "github.com/zhuhanxin0308/thinkgo/framework/cache/driver/redis"
+	"github.com/zhuhanxin0308/thinkgo/v3/cache"
+	cacheDriver "github.com/zhuhanxin0308/thinkgo/v3/cache/driver"
+	redisDriver "github.com/zhuhanxin0308/thinkgo/v3/cache/driver/redis"
 )
 
 const maxConfiguredCacheStores = 64

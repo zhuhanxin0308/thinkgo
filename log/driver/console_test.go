@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/log"
+	"github.com/zhuhanxin0308/thinkgo/v3/log"
 )
 
 type consoleFailingWriter struct {

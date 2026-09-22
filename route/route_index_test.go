@@ -8,7 +8,7 @@ import (
 	"reflect"
 	"testing"
 
-	fwcontext "github.com/zhuhanxin0308/thinkgo/framework/context"
+	fwcontext "github.com/zhuhanxin0308/thinkgo/v3/context"
 )
 
 // newRouteIndexParityRouter 构造覆盖方法、域名、可选参数、正则和扩展名的固定路由集合。

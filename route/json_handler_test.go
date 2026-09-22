@@ -6,8 +6,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/binding"
-	"github.com/zhuhanxin0308/thinkgo/framework/context"
+	"github.com/zhuhanxin0308/thinkgo/v3/binding"
+	"github.com/zhuhanxin0308/thinkgo/v3/context"
 )
 
 // TestJSONHandlerValidatesContractBeforeRegistration 验证错误状态与返回签名不会进入运行期。

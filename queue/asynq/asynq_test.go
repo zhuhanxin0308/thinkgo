@@ -11,7 +11,7 @@ import (
 	backend "github.com/hibiken/asynq"
 	"github.com/redis/go-redis/v9"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/queue"
+	"github.com/zhuhanxin0308/thinkgo/v3/queue"
 )
 
 // TestProducerPersistsOptionsAndRejectsDuplicates 验证负载、Header、重试/超时和唯一性真实写入 Redis。

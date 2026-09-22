@@ -3,7 +3,7 @@ package framework
 import (
 	"fmt"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/migration"
+	"github.com/zhuhanxin0308/thinkgo/v3/migration"
 )
 
 // RegisterMigration 在当前应用实例中注册数据库迁移。

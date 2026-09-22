@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/session/driver"
+	"github.com/zhuhanxin0308/thinkgo/v3/session/driver"
 )
 
 func TestCommitResponseSealsEverySessionMutationAPI(t *testing.T) {

@@ -3,7 +3,7 @@ package database
 import (
 	"time"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/cache/contract"
+	"github.com/zhuhanxin0308/thinkgo/v3/cache/contract"
 )
 
 // 数据库缓存复用中立错误与精确计数规则，不依赖其他缓存后端。

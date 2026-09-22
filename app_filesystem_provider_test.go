@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/filesystem"
+	"github.com/zhuhanxin0308/thinkgo/v3/filesystem"
 )
 
 // TestAppFilesystemMatchesThinkPHPDefaults 验证应用无需业务装配代码即可使用

@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/zhuhanxin0308/thinkgo/framework"
-	fwcontext "github.com/zhuhanxin0308/thinkgo/framework/context"
+	"github.com/zhuhanxin0308/thinkgo/v3"
+	fwcontext "github.com/zhuhanxin0308/thinkgo/v3/context"
 )
 
 // acquireRequestTask 在任何业务执行和请求资源构造之前预约后台收尾容量。

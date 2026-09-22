@@ -5,7 +5,7 @@ import (
 	"reflect"
 
 	"github.com/getkin/kin-openapi/openapi3"
-	"github.com/zhuhanxin0308/thinkgo/framework/binding"
+	"github.com/zhuhanxin0308/thinkgo/v3/binding"
 )
 
 // RegisterTyped 使用请求与返回类型注册完整接口契约，字段来源和约束与绑定器一致。

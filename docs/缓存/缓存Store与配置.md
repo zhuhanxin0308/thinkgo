@@ -56,4 +56,4 @@ if err := applicationCache.RegisterStore("secondary", driver.NewMemory()); err !
 
 未知字段、未知驱动、默认 store 缺失、文件路径越界和 Redis 类型错误会在启动阶段记录为 `StartupError`。初始化失败时应用会安装一个没有隐式驱动的缓存管理器；后续调用返回 `ErrCacheDriverNotConfigured`，不会静默换成文件缓存。
 
-`framework/cache/driver/database.DB` 可以直接构造用于数据库缓存，但当前应用配置工厂不接受 `type: "db"`；需要 DB 驱动时应在应用服务的 `Register` 或 `Boot` 阶段显式创建并注册。
+框架 `cache/driver/database` 包的 `DB` 可以直接构造用于数据库缓存，但当前应用配置工厂不接受 `type: "db"`；需要 DB 驱动时应在应用服务的 `Register` 或 `Boot` 阶段显式创建并注册。

@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
-	cacheDriver "github.com/zhuhanxin0308/thinkgo/framework/cache/driver"
-	redisDriver "github.com/zhuhanxin0308/thinkgo/framework/cache/driver/redis"
+	cacheDriver "github.com/zhuhanxin0308/thinkgo/v3/cache/driver"
+	redisDriver "github.com/zhuhanxin0308/thinkgo/v3/cache/driver/redis"
 )
 
 // TestLeaseCommitBackendContracts 验证内置后端与命名空间包装的 owner 校验、失败原子性和删除语义。

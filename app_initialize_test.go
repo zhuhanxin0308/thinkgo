@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/cache"
-	"github.com/zhuhanxin0308/thinkgo/framework/config"
-	"github.com/zhuhanxin0308/thinkgo/framework/db"
-	frameworkenv "github.com/zhuhanxin0308/thinkgo/framework/env"
+	"github.com/zhuhanxin0308/thinkgo/v3/cache"
+	"github.com/zhuhanxin0308/thinkgo/v3/config"
+	"github.com/zhuhanxin0308/thinkgo/v3/db"
+	frameworkenv "github.com/zhuhanxin0308/thinkgo/v3/env"
 )
 
 // TestNormalizeViewPathHandlesEmptyValue 验证空视图路径不会导致初始化阶段 panic。
@@ -299,12 +299,12 @@ func TestEnvironmentExampleMatchesDeclaredConfigStructure(t *testing.T) {
 	t.Setenv("APP_SERVER_PORT", "39091")
 	t.Setenv("APP_PUBLIC_PATH", "web")
 	configuration := config.NewConfig()
-	if err := configuration.LoadAll(filepath.Join("..", "config")); err != nil {
+	if err := configuration.LoadAll(filepath.Join("testdata", "project", "config")); err != nil {
 		t.Fatalf("加载项目配置结构失败: %v", err)
 	}
 	environment := frameworkenv.NewEnv()
 	// Git 中的公开模板为 0644；实际环境文件必须以 0600 落盘后才能通过安全校验。
-	example, err := os.ReadFile(filepath.Join("..", ".env.example"))
+	example, err := os.ReadFile(filepath.Join("testdata", "project", ".env.example"))
 	if err != nil {
 		t.Fatalf("读取环境变量模板失败: %v", err)
 	}

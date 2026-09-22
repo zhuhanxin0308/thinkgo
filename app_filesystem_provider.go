@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/filesystem"
+	"github.com/zhuhanxin0308/thinkgo/v3/filesystem"
 )
 
 // appFilesystemProvider 在 Cache 之后装配 ThinkPHP 文件系统管理器。

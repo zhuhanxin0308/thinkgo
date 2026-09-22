@@ -9,8 +9,8 @@ import (
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
-	"github.com/zhuhanxin0308/thinkgo/framework/db"
-	"github.com/zhuhanxin0308/thinkgo/framework/db/builder"
+	"github.com/zhuhanxin0308/thinkgo/v3/db"
+	"github.com/zhuhanxin0308/thinkgo/v3/db/builder"
 )
 
 // TestSQLiteLeaseCommitAndRollback 使用真实 SQL 事务验证提交、回滚、owner 恢复及丢锁拒绝。

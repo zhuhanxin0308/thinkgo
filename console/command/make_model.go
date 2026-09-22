@@ -3,8 +3,8 @@ package command
 import (
 	"fmt"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/console"
-	modeldb "github.com/zhuhanxin0308/thinkgo/framework/db"
+	"github.com/zhuhanxin0308/thinkgo/v3/console"
+	modeldb "github.com/zhuhanxin0308/thinkgo/v3/db"
 )
 
 // MakeModel 生成可由应用容器自动解析的数据模型。
@@ -35,7 +35,7 @@ func (c *MakeModel) Execute(input *console.Input, output *console.Output) error 
 import (
 	"context"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/db"
+	"github.com/zhuhanxin0308/thinkgo/v3/db"
 )
 
 // %s 数据模型

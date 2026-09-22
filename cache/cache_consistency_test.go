@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	cacheDriver "github.com/zhuhanxin0308/thinkgo/framework/cache/driver"
+	cacheDriver "github.com/zhuhanxin0308/thinkgo/v3/cache/driver"
 )
 
 // blockingDeleteDriver 只阻塞指定业务键的删除，用于稳定复现标签失效与并发写入的交错。

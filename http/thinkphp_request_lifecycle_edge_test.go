@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	fwcontext "github.com/zhuhanxin0308/thinkgo/framework/context"
+	fwcontext "github.com/zhuhanxin0308/thinkgo/v3/context"
 )
 
 // TestHttpRunCreatesThinkPHPDefaultRequest 验证 Http.Run 省略 Request 时会创建

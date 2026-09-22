@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"reflect"
 
-	fwcontext "github.com/zhuhanxin0308/thinkgo/framework/context"
+	fwcontext "github.com/zhuhanxin0308/thinkgo/v3/context"
 )
 
 // factoryPlan 仅属于当前绑定代际；重绑定直接替换，不维护跨绑定的全局可变缓存。

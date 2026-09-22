@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	fwcontext "github.com/zhuhanxin0308/thinkgo/framework/context"
+	fwcontext "github.com/zhuhanxin0308/thinkgo/v3/context"
 )
 
 // TestRouterRegistrationSurface 验证公开注册方法、嵌套作用域和快照使用同一套严格契约。

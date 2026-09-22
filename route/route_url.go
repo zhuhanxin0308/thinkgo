@@ -8,7 +8,7 @@ import (
 	"sort"
 	"strconv"
 
-	fwcontext "github.com/zhuhanxin0308/thinkgo/framework/context"
+	fwcontext "github.com/zhuhanxin0308/thinkgo/v3/context"
 )
 
 // URL 根据命名路由生成路径，并严格拒绝复杂对象和非有限数值。

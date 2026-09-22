@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/log"
+	"github.com/zhuhanxin0308/thinkgo/v3/log"
 )
 
 // TestReadLogOverflowPolicy 验证日志溢出策略配置只接受明确的 sync/drop 值，并保持缺省同步语义。

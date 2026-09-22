@@ -4,7 +4,7 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/db"
+	"github.com/zhuhanxin0308/thinkgo/v3/db"
 )
 
 // TestBuildPgsqlDSNEscapesCredentialsAndRequiresTLS 验证 PostgreSQL DSN 不能被特殊字符注入，并默认启用 TLS。

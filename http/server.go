@@ -18,7 +18,7 @@ import (
 	"time"
 
 	"github.com/quic-go/quic-go/http3"
-	"github.com/zhuhanxin0308/thinkgo/framework"
+	"github.com/zhuhanxin0308/thinkgo/v3"
 )
 
 type serverResult struct {

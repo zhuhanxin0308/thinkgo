@@ -20,9 +20,9 @@ import (
 	"strconv"
 	"strings"
 
-	frameworkContext "github.com/zhuhanxin0308/thinkgo/framework/context"
-	frameworkLog "github.com/zhuhanxin0308/thinkgo/framework/log"
-	frameworkVersion "github.com/zhuhanxin0308/thinkgo/framework/version"
+	frameworkContext "github.com/zhuhanxin0308/thinkgo/v3/context"
+	frameworkLog "github.com/zhuhanxin0308/thinkgo/v3/log"
+	frameworkVersion "github.com/zhuhanxin0308/thinkgo/v3/version"
 )
 
 const (

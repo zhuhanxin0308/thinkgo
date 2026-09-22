@@ -8,8 +8,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/view"
-	"github.com/zhuhanxin0308/thinkgo/framework/view/driver"
+	"github.com/zhuhanxin0308/thinkgo/v3/view"
+	"github.com/zhuhanxin0308/thinkgo/v3/view/driver"
 )
 
 // appViewProvider 负责在语言服务完成后装配模板视图。

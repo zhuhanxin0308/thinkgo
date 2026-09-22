@@ -5,7 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	fwcontext "github.com/zhuhanxin0308/thinkgo/framework/context"
+	fwcontext "github.com/zhuhanxin0308/thinkgo/v3/context"
 )
 
 // TestSecurityHeadersApplyBeforeAndAfterHandler 验证安全头在下游前写入原生 Writer，并覆盖框架响应中的弱值。

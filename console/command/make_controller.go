@@ -3,7 +3,7 @@ package command
 import (
 	"fmt"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/console"
+	"github.com/zhuhanxin0308/thinkgo/v3/console"
 )
 
 // MakeController 生成控制器源码。
@@ -103,7 +103,7 @@ func (controller *%[1]s) Delete%[2]s(id int) {}
 	}
 	return fmt.Sprintf(`package controller
 
-import framework "github.com/zhuhanxin0308/thinkgo/framework"
+import framework "github.com/zhuhanxin0308/thinkgo/v3"
 
 // %s 控制器。
 type %s struct {

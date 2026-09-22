@@ -3,7 +3,7 @@ package framework
 import (
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/db"
+	"github.com/zhuhanxin0308/thinkgo/v3/db"
 )
 
 // TestReadDatabaseConfigReadsTimestampValueType 验证数据库配置文件中的时间戳值类型能正确读入。

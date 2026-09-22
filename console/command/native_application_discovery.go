@@ -11,7 +11,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/zhuhanxin0308/thinkgo/framework"
+	"github.com/zhuhanxin0308/thinkgo/v3"
 )
 
 type generatedApplicationSource struct {
@@ -290,7 +290,7 @@ func buildNativeApplicationCatalogSource(modulePath, applicationDirectory string
 	if entryPoints.services || entryPoints.events || entryPoints.middleware || entryPoints.providers {
 		source.WriteString("\n")
 	}
-	source.WriteString("\tframework \"github.com/zhuhanxin0308/thinkgo/framework\"\n")
+	source.WriteString("\tframework \"github.com/zhuhanxin0308/thinkgo/v3\"\n")
 	for _, application := range applications {
 		source.WriteString(fmt.Sprintf("\t%s %q\n", application.importAlias, applicationImport+"/"+application.name))
 	}
@@ -335,7 +335,7 @@ func buildNativeApplicationSource(modulePath string, application discoveredNativ
 	source.WriteString("// 此文件由 service:discover 根据当前业务应用生成，不需要开发者手工维护。\n\n")
 	source.WriteString("package " + application.packageName + "\n\n")
 	source.WriteString("import (\n")
-	source.WriteString("\tframework \"github.com/zhuhanxin0308/thinkgo/framework\"\n")
+	source.WriteString("\tframework \"github.com/zhuhanxin0308/thinkgo/v3\"\n")
 	if len(application.controllerTypes) > 0 {
 		source.WriteString(fmt.Sprintf("\tapplicationController %q\n", applicationImport+"/controller"))
 	}

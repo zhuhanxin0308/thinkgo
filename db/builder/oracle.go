@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/db/internal/contract"
+	"github.com/zhuhanxin0308/thinkgo/v3/db/internal/contract"
 )
 
 // Oracle builder（Oracle 方言）

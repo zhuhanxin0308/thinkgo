@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework"
-	"github.com/zhuhanxin0308/thinkgo/framework/console"
+	"github.com/zhuhanxin0308/thinkgo/v3"
+	"github.com/zhuhanxin0308/thinkgo/v3/console"
 )
 
 // TestBuildConfiguredResourcesAndNonLinux 验证自定义目录和 ARM 参数，不给其他平台生成不可运行的 Docker 文件。

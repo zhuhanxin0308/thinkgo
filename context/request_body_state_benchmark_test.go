@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	fwcontext "github.com/zhuhanxin0308/thinkgo/framework/context"
+	fwcontext "github.com/zhuhanxin0308/thinkgo/v3/context"
 )
 
 // BenchmarkRequestBodyState 单独观察正文同步对空 GET、不透明正文和表单解析的影响。

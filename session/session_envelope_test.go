@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/cookie"
+	"github.com/zhuhanxin0308/thinkgo/v3/cookie"
 )
 
 // TestDecodeSessionEnvelopeRejectsEveryInvalidState 验证版本、字段、墓碑和 JSON 边界都严格收敛。

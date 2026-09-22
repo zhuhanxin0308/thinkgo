@@ -8,9 +8,9 @@ import (
 	"sync"
 	"testing"
 
-	frameworkContext "github.com/zhuhanxin0308/thinkgo/framework/context"
-	"github.com/zhuhanxin0308/thinkgo/framework/view"
-	viewDriver "github.com/zhuhanxin0308/thinkgo/framework/view/driver"
+	frameworkContext "github.com/zhuhanxin0308/thinkgo/v3/context"
+	"github.com/zhuhanxin0308/thinkgo/v3/view"
+	viewDriver "github.com/zhuhanxin0308/thinkgo/v3/view/driver"
 )
 
 // TestControllerViewUsesRequestLanguage 验证缓存模板在并发请求中使用各自语言且不会串请求。

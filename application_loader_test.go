@@ -7,7 +7,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/event"
+	"github.com/zhuhanxin0308/thinkgo/v3/event"
 )
 
 type applicationLoaderService struct {

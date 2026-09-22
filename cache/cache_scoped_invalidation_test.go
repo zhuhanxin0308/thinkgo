@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	cacheDriver "github.com/zhuhanxin0308/thinkgo/framework/cache/driver"
+	cacheDriver "github.com/zhuhanxin0308/thinkgo/v3/cache/driver"
 )
 
 // UpdatePreserveTTL 让计数测试在真实原子提交前暂停，同时保留原有 TTL 契约。

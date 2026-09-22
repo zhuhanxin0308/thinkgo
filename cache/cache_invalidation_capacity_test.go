@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	cacheDriver "github.com/zhuhanxin0308/thinkgo/framework/cache/driver"
+	cacheDriver "github.com/zhuhanxin0308/thinkgo/v3/cache/driver"
 )
 
 // TestInvalidationCapacityFailsBeforeDeletingBusinessData 验证新范围达到上限即失败，已有范围仍可更新且全量失效可安全回收。

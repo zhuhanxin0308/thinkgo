@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/migration"
+	"github.com/zhuhanxin0308/thinkgo/v3/migration"
 )
 
 // TestApplicationMigrationRegistriesAreIsolated 验证独立 App 实例的迁移定义互不共享，并通过稳定服务边界解析。

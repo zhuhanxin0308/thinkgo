@@ -6,7 +6,7 @@ import (
 	"reflect"
 	"sync"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/debug"
+	"github.com/zhuhanxin0308/thinkgo/v3/debug"
 )
 
 var (

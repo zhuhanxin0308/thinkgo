@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	frameworkImportPath           = "github.com/zhuhanxin0308/thinkgo/framework"
+	frameworkImportPath           = "github.com/zhuhanxin0308/thinkgo/v3"
 	frameworkMiddlewareImportPath = frameworkImportPath + "/middleware"
 )
 

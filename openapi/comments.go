@@ -10,7 +10,7 @@ import (
 	"io/fs"
 	"strings"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/binding"
+	"github.com/zhuhanxin0308/thinkgo/v3/binding"
 )
 
 // SourceCommentsVersion 标识生成器与运行时共享的元数据格式版本。

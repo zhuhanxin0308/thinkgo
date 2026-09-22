@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/config"
+	"github.com/zhuhanxin0308/thinkgo/v3/config"
 )
 
 // TestApplicationContainerDirectMutationsHonorLifecycle 验证公开容器指针不能绕过应用运行态和关闭态门禁。

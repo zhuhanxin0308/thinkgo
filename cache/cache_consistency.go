@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/zhuhanxin0308/thinkgo/framework/cache/contract"
+	"github.com/zhuhanxin0308/thinkgo/v3/cache/contract"
 )
 
 // getCacheValueAndRepairContext 在未命中时检查反向元数据，并在代际锁内二次读取后修复幽灵关系。
