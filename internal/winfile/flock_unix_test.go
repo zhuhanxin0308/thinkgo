@@ -79,7 +79,16 @@ func TestFlockPreservesExclusiveOwnership(t *testing.T) {
 		t.Fatalf("解锁后仍无法获取所有权: %v", err)
 	}
 	const invalidLockOperation = 0
-	if err := Flock(second, invalidLockOperation); !errors.Is(err, unix.EINVAL) {
-		t.Fatalf("无效锁操作未保留系统错误: %v", err)
+	descriptor, err := unixFileDescriptor(second.Fd())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Linux 与 macOS 对无效操作返回不同错误，以当前内核的原始结果验证包装层没有改写错误。
+	expectedErr := unix.Flock(descriptor, invalidLockOperation)
+	if expectedErr == nil {
+		t.Fatal("系统未拒绝无效锁操作")
+	}
+	if err := Flock(second, invalidLockOperation); !errors.Is(err, expectedErr) {
+		t.Fatalf("无效锁操作未保留系统错误: actual=%v expected=%v", err, expectedErr)
 	}
 }
