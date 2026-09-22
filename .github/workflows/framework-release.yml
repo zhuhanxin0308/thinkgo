@@ -166,7 +166,8 @@ jobs:
             "BenchmarkMultiAppHTTP"
           )
           for symbol in "${required_http_symbols[@]}"; do
-            if ! GOWORK=off go test -list "^${symbol}$" ./http | grep -Fxq "$symbol"; then
+            listed="$(GOWORK=off go test -list "^${symbol}$" ./http)"
+            if ! grep -Fxq "$symbol" <<<"$listed"; then
               printf '缺少必须执行的 HTTP 测试或基准: %s\n' "$symbol" >&2
               exit 1
             fi
@@ -263,7 +264,8 @@ jobs:
           CGO_ENABLED: '0'
         run: |
           set -euo pipefail
-          if GOWORK=off go list -deps ./... | grep -qx 'golang.org/x/crypto/openpgp'; then
+          dependencies="$(GOWORK=off go list -deps ./...)"
+          if grep -qx 'golang.org/x/crypto/openpgp' <<<"$dependencies"; then
             echo 'golang.org/x/crypto/openpgp entered the framework dependency graph' >&2
             exit 1
           fi
