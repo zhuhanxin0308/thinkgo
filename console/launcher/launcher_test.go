@@ -44,6 +44,7 @@ func TestLauncherLifecycleFailures(t *testing.T) {
 	if err := Run(ctx, base, nil, io.Discard, io.Discard, nil); !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
 	}
+	//lint:ignore SA1012 验证公开入口拒绝空上下文，此处必须显式传入 nil。
 	if err := Run(nil, base, nil, io.Discard, io.Discard, nil); !errors.Is(err, console.ErrInvalidInput) {
 		t.Fatal(err)
 	}

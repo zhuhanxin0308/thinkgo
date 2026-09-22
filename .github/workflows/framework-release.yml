@@ -502,7 +502,7 @@ jobs:
           EOF
           GOPROXY=direct GOWORK=off go test ./...
           GOPROXY=direct GOWORK=off go install "github.com/zhuhanxin0308/thinkgo/v3/cmd/thinkgo@${version}"
-          "$(go env GOPATH)/bin/thinkgo" create release-smoke
+          GOPROXY=direct GOWORK=off "$(go env GOPATH)/bin/thinkgo" create release-smoke
           cd release-smoke
           GOWORK=off go test ./...
           "$(go env GOPATH)/bin/thinkgo" build linux/amd64
