@@ -9,6 +9,7 @@ import (
 	"github.com/zhuhanxin0308/thinkgo/v3"
 	"github.com/zhuhanxin0308/thinkgo/v3/console"
 	"github.com/zhuhanxin0308/thinkgo/v3/route"
+	fwversion "github.com/zhuhanxin0308/thinkgo/v3/version"
 )
 
 // TestBuiltInCommandDefinitions 验证内置命令公开签名及参数声明，
@@ -106,7 +107,7 @@ func TestVersionAndListCommandsWriteExpectedOutput(t *testing.T) {
 	if err := version.Execute(console.NewInput(), output); err != nil {
 		t.Fatalf("执行版本命令失败: %v", err)
 	}
-	if strings.TrimSpace(stdout.String()) != "ThinkGo Framework v3.0.0" {
+	if strings.TrimSpace(stdout.String()) != fwversion.Console {
 		t.Fatalf("版本输出错误: %q", stdout.String())
 	}
 	if err := version.Execute(console.NewInput(), nil); !errors.Is(err, console.ErrInvalidOutput) {
