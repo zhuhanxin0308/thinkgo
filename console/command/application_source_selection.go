@@ -83,7 +83,7 @@ func loadApplicationSourcePackages(basePath string) (map[string]commentPackage, 
 }
 
 func decodeApplicationSourcePackages(basePath string, output []byte) (map[string]commentPackage, error) {
-	base, err := filepath.Abs(basePath)
+	base, err := resolveApplicationSourceDirectory(basePath)
 	if err != nil {
 		return nil, err
 	}
@@ -97,9 +97,9 @@ func decodeApplicationSourcePackages(basePath string, output []byte) (map[string
 			}
 			return nil, fmt.Errorf("解析应用构建源码清单失败: %w", err)
 		}
-		directory, err := filepath.Rel(base, pkg.Dir)
-		if err != nil || !filepath.IsLocal(directory) {
-			return nil, fmt.Errorf("应用源码目录 %q 不属于当前模块", pkg.Dir)
+		directory, err := relativeApplicationSourceDirectory(base, pkg.Dir)
+		if err != nil {
+			return nil, fmt.Errorf("应用源码目录 %q 不属于当前模块: %w", pkg.Dir, err)
 		}
 		packages[filepath.Clean(directory)] = pkg
 	}

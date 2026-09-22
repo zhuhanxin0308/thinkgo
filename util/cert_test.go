@@ -162,6 +162,39 @@ func TestGenerateCertSupportsSeparatedAbsoluteTargets(t *testing.T) {
 	}
 }
 
+// TestGenerateCertSupportsRelativeTargets 验证有效工作目录中的相对目标及混合目标
+// 均落在调用方指定的位置，工作目录校验不会拒绝正常证书生成。
+func TestGenerateCertSupportsRelativeTargets(t *testing.T) {
+	testCases := []struct {
+		name                string
+		absoluteCertificate bool
+		absolutePrivateKey  bool
+	}{
+		{name: "两个相对目标"},
+		{name: "绝对证书和相对私钥", absoluteCertificate: true},
+		{name: "相对证书和绝对私钥", absolutePrivateKey: true},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			basePath := t.TempDir()
+			t.Chdir(basePath)
+			certificate := "cert.pem"
+			privateKey := "key.pem"
+			if testCase.absoluteCertificate {
+				certificate = filepath.Join(basePath, certificate)
+			}
+			if testCase.absolutePrivateKey {
+				privateKey = filepath.Join(basePath, privateKey)
+			}
+			if err := GenerateCert(certificate, privateKey); err != nil {
+				t.Fatalf("有效工作目录中的证书生成失败: %v", err)
+			}
+			readTestCertificate(t, filepath.Join(basePath, "cert.pem"))
+			readTestPrivateKey(t, filepath.Join(basePath, "key.pem"))
+		})
+	}
+}
+
 // TestGenerateCertInRootRejectsInvalidBoundaries 验证空根目录、绝对目标、
 // 同名目标及不可创建的父目录均在写入前失败。
 func TestGenerateCertInRootRejectsInvalidBoundaries(t *testing.T) {

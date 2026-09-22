@@ -49,7 +49,7 @@ func scanOpenAPIComments(ctx context.Context, basePath string) (openapi.SourceCo
 		return source, err
 	}
 	defer root.Close()
-	base, err := filepath.Abs(basePath)
+	base, err := resolveApplicationSourceDirectory(basePath)
 	if err != nil {
 		return source, err
 	}
@@ -71,9 +71,9 @@ func scanOpenAPIComments(ctx context.Context, basePath string) (openapi.SourceCo
 		if pkg.ImportPath != module && !strings.HasPrefix(pkg.ImportPath, module+"/") {
 			continue
 		}
-		directory, err := filepath.Rel(base, pkg.Dir)
-		if err != nil || !filepath.IsLocal(directory) {
-			return source, fmt.Errorf("API 源码目录 %q 不属于当前模块", pkg.Dir)
+		directory, err := relativeApplicationSourceDirectory(base, pkg.Dir)
+		if err != nil {
+			return source, fmt.Errorf("API 源码目录 %q 不属于当前模块: %w", pkg.Dir, err)
 		}
 		if filepath.ToSlash(directory) == openAPICommentsDirectory {
 			continue

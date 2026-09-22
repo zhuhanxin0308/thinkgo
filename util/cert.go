@@ -24,6 +24,11 @@ const developmentCertificateClockSkew = 5 * time.Minute
 // GenerateCert 在证书和私钥的共同父目录约束内生成开发证书。
 // 已存在任一目标时返回 fs.ErrExist，禁止静默轮换成不匹配的文件对。
 func GenerateCert(certFile, keyFile string) error {
+	if !filepath.IsAbs(certFile) || !filepath.IsAbs(keyFile) {
+		if err := validateCertificateWorkingDirectory(); err != nil {
+			return fmt.Errorf("验证证书工作目录失败: %w", err)
+		}
+	}
 	certAbsolute, err := filepath.Abs(certFile)
 	if err != nil {
 		return fmt.Errorf("解析证书路径失败: %w", err)
@@ -45,6 +50,27 @@ func GenerateCert(certFile, keyFile string) error {
 		return fmt.Errorf("解析私钥相对路径失败: %w", err)
 	}
 	return GenerateCertInRoot(rootPath, certRelative, keyRelative)
+}
+
+// validateCertificateWorkingDirectory 核实相对目标依赖的工作目录仍可按路径访问。
+// 某些系统可能返回失效的目录路径，必须在创建共同根目录的子目录前拒绝它。
+func validateCertificateWorkingDirectory() error {
+	workingDirectory, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	currentInfo, err := os.Stat(".")
+	if err != nil {
+		return err
+	}
+	workingInfo, err := os.Stat(workingDirectory)
+	if err != nil {
+		return err
+	}
+	if !os.SameFile(currentInfo, workingInfo) {
+		return &os.PathError{Op: "stat", Path: workingDirectory, Err: fs.ErrNotExist}
+	}
+	return nil
 }
 
 // GenerateCertInRoot 在指定根目录中成对独占创建自签名 ECDSA 开发证书和私钥。
