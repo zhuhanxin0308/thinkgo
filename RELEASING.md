@@ -16,7 +16,7 @@ ThinkGo 只发布根目录框架模块 `github.com/zhuhanxin0308/thinkgo/v3`。�
 
 在仓库根目录使用 `GOWORK=off`，至少完成：
 
-1. `go mod verify`、`go mod tidy -diff`、`go build ./...` 和 `go vet ./...`。
+1. `go mod verify`、`go mod tidy -diff`、`go build ./...` 和 `go vet ./...`；先执行 `go test -run '^TestModuleReleaseArchive$' -count=1 .`，确认文件名、目录和版本能够生成合法 Go 模块归档。
 2. Staticcheck、Gosec、Govulncheck 与 Actionlint。
 3. `CGO_ENABLED=1` 和 `CGO_ENABLED=0` 两套全量测试。
 4. Oracle build tag、Race Detector 和逐包不低于 80% 的有效覆盖率。
