@@ -6,11 +6,13 @@
 
 ```json
 {
-    "view_path": "./app/view",
+    "view_path": "view",
     "view_suffix": "html",
     "cache": true
 }
 ```
+
+应用配置中的相对值 `view` 会解析为当前应用的 `app/<应用名>/view`；需要使用其它目录时应传入项目根目录内的明确路径。
 
 驱动只接受这三个配置键：
 
@@ -25,10 +27,7 @@
 ## 模板函数
 
 ```go
-viewManager, err := framework.ResolveServiceAs[*view.View](app, framework.ServiceView)
-if err != nil {
-	return err
-}
+viewManager := app.View()
 if err := viewManager.SetFuncMap(map[string]interface{}{
 	"upper": strings.ToUpper,
 }); err != nil {

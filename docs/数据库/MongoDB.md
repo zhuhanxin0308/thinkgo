@@ -1,6 +1,6 @@
 # MongoDB
 
-MongoDB 通过 `db.Connection` 接口接入，使用 `DB.Name` 的短名称作为集合名。业务代码通过 `framework.ServiceDB` 解析数据库服务。它复用安全条件、分页、写入保护和上下文入口，但不提供 SQL 的 JOIN、GROUP、HAVING、悲观锁或原生 SQL。
+MongoDB 通过 `db.Connection` 接口接入，使用 `DB.Name` 的短名称作为集合名。业务代码通过 `app.DB()` 取得数据库服务。它复用安全条件、分页、写入保护和上下文入口，但不提供 SQL 的 JOIN、GROUP、HAVING、悲观锁或原生 SQL。
 
 ## 配置
 
@@ -30,10 +30,7 @@ URI 使用标准 URL 构造，凭据、数据库名和参数会转义。默认�
 ## 查询
 
 ```go
-database, err := framework.ResolveServiceAs[*db.DB](app, framework.ServiceDB)
-if err != nil {
-	return err
-}
+database := app.DB()
 rows, err := database.Name("users").
 	WhereField("status", "=", 1).
 	WhereLike("name", "%go%").

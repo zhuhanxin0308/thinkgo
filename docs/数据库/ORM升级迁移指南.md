@@ -26,10 +26,7 @@ MongoDB 返回真实 `InsertedID`，Neo4j 只在写入数据带应用主键时�
 Query 的 `Save` 与 ThinkPHP 风格一致：没有 WHERE 时新增，有 WHERE 时更新；`Save(data, true)` 强制新增。
 
 ```go
-database, err := framework.ResolveServiceAs[*db.DB](app, framework.ServiceDB)
-if err != nil {
-	return err
-}
+database := app.DB()
 affected, err := database.Name("users").Save(data)
 updated, err := database.Name("users").WhereField("id", "=", 7).Save(data)
 inserted, err := database.Name("users").WhereField("id", "=", 7).Save(data, true)
@@ -120,8 +117,10 @@ ConnectionID() db.ConnectionID
 裸 `GetConnection` 已移除。需要官方驱动 API 时只在 `WithConnection` callback 内使用，不得保存到 callback 外，也不得关闭框架托管连接：
 
 ```go
+import mongoDriver "github.com/zhuhanxin0308/thinkgo/framework/db/driver/mongo"
+
 err = database.WithConnection(func(connection db.Connection) error {
-	mongoConnection, ok := connection.(*db.MongoConnection)
+	mongoConnection, ok := connection.(*mongoDriver.MongoConnection)
 	if !ok {
 		return db.ErrUnsupportedFeature
 	}
@@ -130,6 +129,8 @@ err = database.WithConnection(func(connection db.Connection) error {
 ```
 
 `DB.Close` 会冻结新租约并等待活动查询/事务；多个 wrapper 共享同一底层连接时按 `ConnectionID` 去重关闭。
+
+MongoDB 与 Neo4j 连接实现分别位于 `db/driver/mongo` 和 `db/driver/neo4j`。`db` 核心不再编译这些可选后端；`connector.RegisterBuiltins()` 继续提供完整框架的显式连接器注册。
 
 ## 游标与大表遍历
 

@@ -1,9 +1,0 @@
-{
-    "default_lang": "zh-cn",
-    "auto_detect_browser": true,
-    "allow_lang_list": [],
-    "detect_var": "lang",
-    "use_cookie": true,
-    "cookie_var": "think_lang",
-    "header_var": "think-lang"
-}

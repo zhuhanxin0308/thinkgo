@@ -3,10 +3,7 @@
 ## Remember
 
 ```go
-applicationCache, err := framework.ResolveServiceAs[*cache.Cache](app, framework.ServiceCache)
-if err != nil {
-	return err
-}
+applicationCache := app.Cache()
 value, err := applicationCache.Remember("user:1", 10*time.Minute, func() (interface{}, error) {
 	return loadUser(ctx, 1)
 })
@@ -28,7 +25,7 @@ value, err := applicationCache.RememberWithLock("user:1", 10*time.Minute, 30*tim
 })
 ```
 
-该 API 会在未命中后等待并获取 `Lock`，获得锁后再次检查缓存，再执行回调并写入结果。锁等待有界；无法及时获取返回 `ErrCacheLockBusy`，临界区结束时锁已过期或被替换返回 `ErrCacheLockLost`。Memory、File、Redis 和 DB 都支持该能力；自定义驱动必须同时实现 `DistributedLocker` 和 `LockRenewer`，支持续租的驱动会在回调和写入期间自动续租，仅实现基础锁接口的驱动会在执行回调前返回 `ErrCacheLockUnsupported`。
+该 API 会在未命中后等待并获取 `Lock`，获得锁后再次检查缓存，再执行回调并写入结果。锁等待有界；无法及时获取返回 `ErrCacheLockBusy`，提交时锁已过期或被替换返回 `ErrCacheLockLost`。Memory、File、Redis 和 DB 都支持该能力；自定义驱动必须同时实现 `DistributedLocker`、`LockRenewer` 和 `LockGuardedUpdater`，在回调期间自动续租，并在后端同一原子操作内检查 owner 与提交结果，避免丢锁后覆盖新持有者的值。缺少任一能力时会在执行加载回调前返回 `ErrCacheLockUnsupported`；普通 `Lock` API 不受此要求影响。
 
 ## 计数
 

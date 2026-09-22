@@ -1,6 +1,6 @@
 # Neo4j
 
-Neo4j 通过 `db.Connection` 接口接入。业务代码通过 `framework.ServiceDB` 解析数据库服务；`DB.Name("User")` 代表 Neo4j Label `User`，查询构造器将安全条件转换为参数化 Cypher。
+Neo4j 通过 `db.Connection` 接口接入。业务代码通过 `app.DB()` 取得数据库服务；`DB.Name("User")` 代表 Neo4j Label `User`，查询构造器将安全条件转换为参数化 Cypher。
 
 ## 配置
 
@@ -30,10 +30,7 @@ Neo4j 通过 `db.Connection` 接口接入。业务代码通过 `framework.Servic
 ## 查询
 
 ```go
-database, err := framework.ResolveServiceAs[*db.DB](app, framework.ServiceDB)
-if err != nil {
-	return err
-}
+database := app.DB()
 rows, err := database.Name("User").
 	WhereField("status", "=", 1).
 	Field("name,email").

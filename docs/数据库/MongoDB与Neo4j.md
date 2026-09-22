@@ -40,10 +40,7 @@ MongoDB URI 由标准 URL 结构构造，用户名、密码、数据库名和参
 ## MongoDB 查询
 
 ```go
-database, err := framework.ResolveServiceAs[*db.DB](app, framework.ServiceDB)
-if err != nil {
-	return err
-}
+database := app.DB()
 rows, err := database.Name("users").
 	WhereField("status", "=", 1).
 	WhereLike("name", "%go%").

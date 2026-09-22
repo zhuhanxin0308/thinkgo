@@ -1,8 +1,15 @@
 # 环境变量（包含敏感信息）
 .env
+.env.*
+!.env.example
+!.env.*.example
 
 # 运行时目录
 runtime/
+
+# 本地审计与性能验证产物，源码和可复用测试仍保留在各自目录。
+/audit/
+/benchmark-results/
 
 # IDE 配置
 .idea/
@@ -23,6 +30,25 @@ runtime/
 # 测试输出
 *.test
 *.out
+*.coverage
+*.coverprofile
+*.pprof
+*.prof
+*.cpu
+*.mem
+/coverage/
+/coverage.html
+
+# 日志、编辑备份与临时文件
+*.log
+*.tmp
+*.temp
+*.bak
+*.orig
+*.rej
+*~
+/tmp/
+/temp/
 
 # Go 依赖缓存
 vendor/

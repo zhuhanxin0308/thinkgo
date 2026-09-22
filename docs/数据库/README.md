@@ -10,7 +10,7 @@ Controller -> Validator -> Service -> Model/ORM -> Database
 
 ## 应用层约定
 
-- 所有业务模型直接放在所属应用的 `app/<应用名>/model`，不在 `model` 目录下继续创建业务子目录。
+- 所有业务模型直接放在 `app/<应用名>/model`，不在该应用的 `model` 目录下继续创建业务子目录。
 - 一张真实表对应一个模型文件，文件使用真实表名命名，不增加 `Model`、`Entity` 等后缀；例如 `users.go`、`order_items.go`。
 - 优先使用 `db.NewModelAuto` 自动推断表名。它只把具名结构体名转换为小写蛇形，不自动复数化；推断结果和真实表名不一致时，使用 `db.NewModel` 或 `Model.Table` 显式绑定。
 - 模型查询和写入放在服务或仓储层，服务通过 `WithContext` 传递请求上下文。
@@ -35,6 +35,7 @@ Controller -> Validator -> Service -> Model/ORM -> Database
 - [写入更新删除](写入更新删除.md)：单行插入、更新、删除和增减表达式。
 - [批量写入](批量写入.md)：`InsertAll`、字段一致性、自动分批和原子性。
 - [事务](事务.md)：闭包事务、手动事务、上下文、隔离级别和事务内查询。
+- [数据库迁移](数据库迁移.md)：应用级迁移注册、校验和、批次、状态和回滚命令。
 - [原生 SQL](原生SQL.md)：`Query`、`Execute`、`WhereRaw`、占位符和事务原生写入边界。
 
 ## 模型

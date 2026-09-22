@@ -4,22 +4,13 @@
 
 ## 装配与请求数据
 
-应用配置 `app.session_enable=true` 时，框架创建：
+应用配置 `app.session_enable=true` 时，框架读取 `config/session.json`，创建 Session 管理器并自动加入全局管道：
 
 ```go
-sessionManager, err := framework.ResolveServiceAs[*session.Session](app, framework.ServiceSession)
-if err != nil {
-    return err
-}
-sessionMiddleware := &middleware.Session{Manager: sessionManager}
-pipeline, err := framework.ResolveServiceAs[*middleware.Pipeline](app, framework.ServiceMiddleware)
-if err != nil {
-    return err
-}
-if err := pipeline.Pipe(sessionMiddleware.Handle); err != nil {
-    return err
-}
+sessionManager := app.Session()
 ```
+
+普通业务不需要手工创建中间件或修改管道。
 
 中间件为每个请求调用 `NewRequestSession`，并以 `_session` 键写入 `context.Request`。控制器或服务应使用这个请求级对象，不要解析 Session 文件或复用另一个请求的 Session 实例。
 
@@ -52,7 +43,7 @@ if err := pipeline.Pipe(sessionMiddleware.Handle); err != nil {
 
 ## 配置边界
 
-`config/session.json` 支持 `name`、`type`、`storage_path`、`redis`、`cookie_path`、`expire`、`domain`、`secure`、`httponly`、`samesite` 和 `max_data_bytes`。驱动支持 `memory`、`file` 和 `redis`，默认使用 `memory`；文件驱动必须显式选择，不适合高并发请求。Redis 驱动必须配置独立非空 `prefix`，使用原生 TTL 和按 Session ID 的分布式锁，适合多实例共享会话。Session Cookie 强制要求 `HttpOnly=true`；`SameSite` 必须是规范形式 `Lax`、`Strict` 或 `None`；未知字段、类型错误和越界数值会形成启动错误。
+`config/session.json` 使用 ThinkPHP 默认字段 `name`、`var_session_id`、`type`、`store`、`expire` 和 `prefix`，并支持 `storage_path`、`redis`、`cookie_path`、`domain`、`secure`、`httponly`、`samesite`、`max_data_bytes` 等 Go 服务扩展。驱动支持 `file`、`cache`、`memory` 和 `redis`，默认配置为 `file`。Redis 驱动必须配置独立非空 `prefix`，使用原生 TTL 和按 Session ID 的分布式锁，适合多实例共享会话。Session Cookie 强制要求 `HttpOnly=true`；`SameSite` 必须是规范形式 `Lax`、`Strict` 或 `None`；未知字段、类型错误和越界数值会形成启动错误。
 
 请求级 Session 的 `Set`、`Delete`、`Clear`、`Regenerate` 和 `Destroy` 都应处理返回的错误。键、JSON 值、单项大小和完整持久化信封大小都经过校验；并发保存按字段合并，遇到撤销或无法稳定快照时返回冲突。
 

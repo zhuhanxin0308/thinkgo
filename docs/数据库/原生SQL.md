@@ -5,10 +5,7 @@
 ## 查询与执行
 
 ```go
-database, err := framework.ResolveServiceAs[*db.DB](app, framework.ServiceDB)
-if err != nil {
-	return err
-}
+database := app.DB()
 rows, err := database.Query(
 	"SELECT id, name FROM users WHERE status = ?",
 	1,

@@ -1,0 +1,521 @@
+name: Framework Release
+
+on:
+  push:
+    tags:
+      - 'framework/v[0-9]+.[0-9]+.[0-9]+'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: framework-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  GOTOOLCHAIN: local
+
+jobs:
+  linux:
+    name: Linux framework gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    services:
+      redis:
+        image: redis:8.6.6-alpine3.23@sha256:75934ddb37bfaebe3b4082ba673cac39f66495244134f33dd0a502ce03cdcd36
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      mysql:
+        image: mysql:8.4.11@sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb
+        env:
+          MYSQL_ROOT_PASSWORD: thinkgo-live-root-password
+          MYSQL_DATABASE: thinkgo_live
+          MYSQL_USER: thinkgo
+          MYSQL_PASSWORD: thinkgo-live-password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uthinkgo -pthinkgo-live-password"
+          --health-interval 10s
+          --health-timeout 10s
+          --health-retries 18
+      postgres:
+        image: postgres:18.6-alpine3.23@sha256:697c180dbf244d3ce4a8f4cbc0156cde840af055c1bf8b76aebe422a4822086f
+        env:
+          POSTGRES_DB: thinkgo_live
+          POSTGRES_USER: thinkgo
+          POSTGRES_PASSWORD: thinkgo-live-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U thinkgo -d thinkgo_live"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 12
+      mongo:
+        image: mongo:8.0.29-noble@sha256:021b2d5ae9d253f2cca17491cc8d03aed8df3c840f3252066aa62d3277fc406e
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'quit(db.runCommand({ ping: 1 }).ok ? 0 : 2)'"
+          --health-interval 10s
+          --health-timeout 10s
+          --health-retries 12
+      neo4j:
+        image: neo4j:5.26.30-community-trixie@sha256:037cf5756f0135cbfd66b739b6df7c7c4bb100f9ce11602f6f9538e17e02c74d
+        env:
+          NEO4J_AUTH: neo4j/thinkgo-live-password
+        ports:
+          - 7687:7687
+        options: >-
+          --health-cmd "cypher-shell -u neo4j -p thinkgo-live-password 'RETURN 1;'"
+          --health-interval 10s
+          --health-timeout 10s
+          --health-retries 18
+    steps:
+      # 固定第三方 Action 到完整提交，避免框架发布构建漂移。
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: framework/go.mod
+          cache-dependency-path: framework/go.sum
+          check-latest: false
+
+      - name: Verify framework release metadata
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#framework/v}"
+          [[ "$RELEASE_TAG" =~ ^framework/v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          test -f framework/LICENSE
+          test -f framework/README.md
+          test -f RELEASING.md
+          test "$(awk '$1 == "module" { print $2; exit }' framework/go.mod)" = 'github.com/zhuhanxin0308/thinkgo/framework'
+          declared="$(sed -n 's/^[[:space:]]*Number = "\([^"]*\)"/\1/p' framework/version/version.go)"
+          test "$declared" = "$version"
+          if git ls-files | grep -E '(^|/)(\.env|.*\.(pem|key|p12|pfx))$'; then
+            echo '发布提交包含环境文件或凭据文件' >&2
+            exit 1
+          fi
+          test -z "$(git status --porcelain)"
+
+      - name: Verify framework module
+        shell: bash
+        run: |
+          set -euo pipefail
+          unformatted="$(git ls-files -z -- 'framework/*.go' 'framework/**/*.go' | xargs -0 gofmt -l)"
+          if [[ -n "$unformatted" ]]; then
+            printf 'Unformatted framework Go files:\n%s\n' "$unformatted" >&2
+            exit 1
+          fi
+          (cd framework && GOWORK=off go mod verify)
+          (cd framework && GOWORK=off go mod tidy -diff)
+          (cd framework && GOWORK=off go build ./...)
+          (cd framework && GOWORK=off go vet ./...)
+          (cd framework && CGO_ENABLED=0 GOWORK=off go run -mod=readonly honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...)
+          GOWORK=off go run -mod=readonly github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          (cd framework && CGO_ENABLED=0 GOWORK=off go run -mod=readonly github.com/securego/gosec/v2/cmd/gosec@v2.25.0 -quiet -exclude-dir=tmp -exclude-dir=bin ./...)
+          (cd framework && CGO_ENABLED=1 GOWORK=off go test -mod=readonly -shuffle=on -count=1 ./...)
+          (cd framework && CGO_ENABLED=0 GOWORK=off go test -mod=readonly -shuffle=on -count=1 ./...)
+          (cd framework && CGO_ENABLED=1 GOWORK=off go test -tags oracle -mod=readonly -count=1 ./db/builder ./db/connector)
+          (cd framework && CGO_ENABLED=1 GOWORK=off go test -race -mod=readonly -shuffle=on -count=1 ./...)
+
+      - name: Verify HTTP performance gates exist and execute
+        shell: bash
+        run: |
+          set -euo pipefail
+          required_http_symbols=(
+            "TestHTTPHealthAllocationBudgets"
+            "BenchmarkNativeHTTP"
+            "BenchmarkSingleAppHTTP"
+            "BenchmarkMultiAppHTTP"
+          )
+          for symbol in "${required_http_symbols[@]}"; do
+            if ! (cd framework && GOWORK=off go test -list "^${symbol}$" ./http) | grep -Fxq "$symbol"; then
+              printf '缺少必须执行的 HTTP 测试或基准: %s\n' "$symbol" >&2
+              exit 1
+            fi
+          done
+          (cd framework && GOWORK=off go test -run '^TestHTTPHealthAllocationBudgets$' -count=1 ./http)
+          (cd framework && GOWORK=off go test -run '^$' -bench '^Benchmark(NativeHTTP|SingleAppHTTP|MultiAppHTTP)$' -benchmem -benchtime=100ms -count=1 ./http)
+
+      - name: Run framework live service contracts
+        shell: bash
+        env:
+          CGO_ENABLED: "1"
+          THINKGO_LIVE_REDIS_HOST: 127.0.0.1
+          THINKGO_LIVE_REDIS_PORT: "6379"
+          THINKGO_LIVE_REDIS_DB: "0"
+          THINKGO_LIVE_MYSQL_HOST: 127.0.0.1
+          THINKGO_LIVE_MYSQL_PORT: "3306"
+          THINKGO_LIVE_MYSQL_DATABASE: thinkgo_live
+          THINKGO_LIVE_MYSQL_USER: thinkgo
+          THINKGO_LIVE_MYSQL_PASSWORD: thinkgo-live-password
+          THINKGO_LIVE_PGSQL_HOST: 127.0.0.1
+          THINKGO_LIVE_PGSQL_PORT: "5432"
+          THINKGO_LIVE_PGSQL_DATABASE: thinkgo_live
+          THINKGO_LIVE_PGSQL_USER: thinkgo
+          THINKGO_LIVE_PGSQL_PASSWORD: thinkgo-live-password
+          THINKGO_LIVE_MONGO_HOST: 127.0.0.1
+          THINKGO_LIVE_MONGO_PORT: "27017"
+          THINKGO_LIVE_MONGO_DATABASE: thinkgo_live
+          THINKGO_LIVE_MONGO_TLS: "false"
+          THINKGO_LIVE_NEO4J_HOST: 127.0.0.1
+          THINKGO_LIVE_NEO4J_PORT: "7687"
+          THINKGO_LIVE_NEO4J_DATABASE: neo4j
+          THINKGO_LIVE_NEO4J_USER: neo4j
+          THINKGO_LIVE_NEO4J_PASSWORD: thinkgo-live-password
+          THINKGO_LIVE_NEO4J_SCHEME: bolt
+        run: |
+          set -euo pipefail
+          required_live_symbols=(
+            "TestLiveRedisOperationContract"
+            "TestLiveRedisConditionalClear"
+            "TestLiveRedisScopedInvalidation"
+            "TestLiveRedisAtomicReservationOrder"
+            "TestLiveRedisAtomicTTLPolicy"
+            "TestLiveRedisSessionDriver"
+            "TestLiveRedisQueueRetriesFailedTask"
+            "TestLiveRedisQueueShutdownRestartPreservesTask"
+            "TestLiveMySQLQueryAndTransactionContract"
+            "TestLiveMySQLColdStatementIsolation"
+            "TestLiveMySQLReadinessRecovery"
+            "TestLiveMySQLMigrationRecovery"
+            "TestLivePostgreSQLQueryAndTransactionContract"
+            "TestLiveMongoOperationContract"
+            "TestLiveMongoStreamingContract"
+            "TestLiveNeoStrictAndDetachDelete"
+          )
+          for symbol in "${required_live_symbols[@]}"; do
+            listed="$(cd framework && GOWORK=off go test -tags integration -run '^$' -list "^${symbol}$" . ./cache ./cache/driver/redis ./session/driver ./db ./migration ./queue/asynq)"
+            if ! grep -Fxq "$symbol" <<<"$listed"; then
+              printf '缺少必须执行的真实服务测试: %s\n' "$symbol" >&2
+              exit 1
+            fi
+          done
+          (cd framework && GOWORK=off go test -tags integration -race -run '^TestLive(RedisOperationContract|RedisConditionalClear|RedisScopedInvalidation|RedisAtomicReservationOrder|RedisAtomicTTLPolicy|RedisSessionDriver|RedisQueueRetriesFailedTask|RedisQueueShutdownRestartPreservesTask|MySQLQueryAndTransactionContract|MySQLColdStatementIsolation|MySQLReadinessRecovery|MySQLMigrationRecovery|PostgreSQLQueryAndTransactionContract|MongoOperationContract|MongoStreamingContract|NeoStrictAndDetachDelete)$' -shuffle=on -count=1 . ./cache ./cache/driver/redis ./session/driver ./db ./migration ./queue/asynq)
+
+      - name: Fuzz route index parity
+        shell: bash
+        run: (cd framework && GOWORK=off go test -run '^$' -fuzz '^FuzzRouteIndexParity$' -fuzztime=20s ./route)
+
+      - name: Enforce framework coverage
+        shell: bash
+        env:
+          CGO_ENABLED: '1'
+        run: |
+          set -euo pipefail
+          coverage_dir="$(mktemp -d)"
+          trap 'rm -rf "$coverage_dir"' EXIT
+          while IFS= read -r package; do
+            profile="$coverage_dir/${package//\//_}.out"
+            (cd framework && GOWORK=off go test -count=1 -coverprofile="$profile" "$package")
+            statements="$(awk 'NR > 1 { count++ } END { print count + 0 }' "$profile")"
+            if [[ "$statements" == '0' ]]; then
+              printf '%s has no executable statements; coverage check skipped\n' "$package"
+              continue
+            fi
+            coverage="$(go tool cover -func="$profile" | awk '/^total:/ {gsub(/%/, "", $3); print $3}')"
+            awk -v actual="$coverage" 'BEGIN { exit !(actual + 0 >= 80) }' || {
+              printf '%s coverage %s%% is below 80%%\n' "$package" "$coverage" >&2
+              exit 1
+            }
+          done < <(cd framework && GOWORK=off go list ./... | sort -u)
+
+      - name: Run framework vulnerability scan
+        shell: bash
+        env:
+          CGO_ENABLED: '0'
+        run: |
+          set -euo pipefail
+          if (cd framework && GOWORK=off go list -deps ./... | grep -qx 'golang.org/x/crypto/openpgp'); then
+            echo 'golang.org/x/crypto/openpgp entered the framework dependency graph' >&2
+            exit 1
+          fi
+          (cd framework && GOWORK=off go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...)
+
+  windows:
+    name: Windows framework gate
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: framework/go.mod
+          cache-dependency-path: |
+            go.sum
+            framework/go.sum
+          check-latest: false
+
+      - name: Verify Windows framework
+        shell: pwsh
+        env:
+          CGO_ENABLED: '0'
+          GOWORK: 'off'
+        run: |
+          Push-Location framework
+          try {
+            go vet ./...
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            go test -p 1 -mod=readonly -shuffle=on -count=1 ./...
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          } finally {
+            Pop-Location
+          }
+
+      - name: Test Windows race and process contention
+        shell: pwsh
+        env:
+          CGO_ENABLED: '1'
+          GOWORK: 'off'
+        # 发布门禁保留与日常 CI 相同的真实文件锁竞争验证。
+        run: |
+          $compilerDirectory = 'C:\msys64\ucrt64\bin'
+          if (Test-Path -LiteralPath "$compilerDirectory\gcc.exe") {
+            $env:PATH = "$compilerDirectory;$env:PATH"
+          }
+          Get-Command gcc -ErrorAction Stop
+          Push-Location framework
+          try {
+            go test -race -p 1 -mod=readonly -shuffle=on -count=1 ./...
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            go test -race -mod=readonly -run '^TestFileSessionProcessAtomicCounter$' -count=10 -timeout=5m ./session/driver
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          } finally {
+            Pop-Location
+          }
+
+      - name: Verify Windows build entrypoint
+        shell: cmd
+        run: build.bat windows/amd64
+
+  macos:
+    name: macOS framework gate
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: framework/go.mod
+          cache-dependency-path: |
+            go.sum
+            framework/go.sum
+          check-latest: false
+
+      - name: Verify macOS framework
+        shell: bash
+        env:
+          CGO_ENABLED: '0'
+          GOWORK: 'off'
+        run: |
+          set -euo pipefail
+          (cd framework && go vet ./...)
+          (cd framework && go test -mod=readonly -shuffle=on -count=1 ./...)
+          /bin/bash ./build.sh darwin/arm64
+
+  support-matrix:
+    name: Cross-build ${{ matrix.target }}${{ matrix.goarm_label }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux/amd64
+            goos: linux
+            goarch: amd64
+            goarm: ''
+            goarm_label: ''
+          - target: linux/arm64
+            goos: linux
+            goarch: arm64
+            goarm: ''
+            goarm_label: ''
+          - target: linux/arm
+            goos: linux
+            goarch: arm
+            goarm: "5"
+            goarm_label: /v5
+          - target: linux/arm
+            goos: linux
+            goarch: arm
+            goarm: "6"
+            goarm_label: /v6
+          - target: linux/arm
+            goos: linux
+            goarch: arm
+            goarm: "7"
+            goarm_label: /v7
+          - target: windows/amd64
+            goos: windows
+            goarch: amd64
+            goarm: ''
+            goarm_label: ''
+          - target: windows/arm64
+            goos: windows
+            goarch: arm64
+            goarm: ''
+            goarm_label: ''
+          - target: darwin/amd64
+            goos: darwin
+            goarch: amd64
+            goarm: ''
+            goarm_label: ''
+          - target: darwin/arm64
+            goos: darwin
+            goarch: arm64
+            goarm: ''
+            goarm_label: ''
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            framework/go.sum
+          check-latest: false
+
+      - name: Cross-build supported target
+        shell: bash
+        env:
+          CGO_ENABLED: '0'
+          GOWORK: 'off'
+          THINKGO_MATRIX_GOOS: ${{ matrix.goos }}
+          THINKGO_MATRIX_GOARCH: ${{ matrix.goarch }}
+          THINKGO_MATRIX_GOARM: ${{ matrix.goarm }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$THINKGO_MATRIX_GOARM" ]]; then
+            ./build.sh "$THINKGO_MATRIX_GOOS" "$THINKGO_MATRIX_GOARCH" "$THINKGO_MATRIX_GOARM"
+            (cd framework && env GOOS="$THINKGO_MATRIX_GOOS" GOARCH="$THINKGO_MATRIX_GOARCH" GOARM="$THINKGO_MATRIX_GOARM" go build -mod=readonly ./...)
+          else
+            ./build.sh "$THINKGO_MATRIX_GOOS/$THINKGO_MATRIX_GOARCH"
+            (cd framework && env GOOS="$THINKGO_MATRIX_GOOS" GOARCH="$THINKGO_MATRIX_GOARCH" go build -mod=readonly ./...)
+          fi
+
+  publish:
+    name: Publish framework module
+    needs: [linux, windows, macos, support-matrix]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: framework/go.mod
+          cache-dependency-path: framework/go.sum
+          check-latest: false
+
+      - name: Build framework release metadata
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#framework/v}"
+          mkdir -p dist
+          GOWORK=off go run ./cmd/sbom \
+            -directory framework \
+            -component-type library \
+            -module github.com/zhuhanxin0308/thinkgo/framework \
+            -version "$version" \
+            -output "dist/thinkgo-framework-${version}-sbom.json"
+          cp framework/LICENSE "dist/thinkgo-framework-${version}-LICENSE"
+          (cd dist && sha256sum thinkgo-framework-* > SHA256SUMS)
+
+      - name: Verify tag through an isolated module
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="v${RELEASE_TAG#framework/v}"
+          isolated="$(mktemp -d)"
+          trap 'rm -rf "$isolated"' EXIT
+          cd "$isolated"
+          GOWORK=off go mod init example.com/thinkgo-framework-release-check
+          GOPROXY=direct GOWORK=off go get "github.com/zhuhanxin0308/thinkgo/framework@${version}"
+          cat > framework_test.go <<'EOF'
+          package releasecheck
+
+          import (
+            "testing"
+
+            framework "github.com/zhuhanxin0308/thinkgo/framework"
+          )
+
+          func registerApplication(*framework.App) error { return nil }
+
+          func TestPublishedFrameworkModule(t *testing.T) {
+            application := framework.NewAppUninitialized(t.TempDir())
+            t.Cleanup(func() {
+              if err := application.Close(); err != nil {
+                t.Errorf("关闭框架应用失败: %v", err)
+              }
+            })
+            err := application.RegisterApplications(
+              registerApplication,
+              framework.ApplicationDefinition{Name: "index", Register: registerApplication},
+            )
+            if err != nil {
+              t.Fatalf("注册下游应用失败: %v", err)
+            }
+            if names := application.ApplicationNames(); len(names) != 1 || names[0] != "index" {
+              t.Fatalf("下游应用清单错误: %#v", names)
+            }
+          }
+          EOF
+          GOPROXY=direct GOWORK=off go test ./...
+
+      - name: Attest framework release metadata
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        with:
+          subject-checksums: dist/SHA256SUMS
+
+      - name: Publish framework GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: gh release create "$RELEASE_TAG" dist/* --verify-tag --generate-notes --title "ThinkGo Framework ${RELEASE_TAG#framework/}"

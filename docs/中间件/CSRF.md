@@ -11,11 +11,7 @@ handler, err := middleware.CsrfWithConfig(config)
 if err != nil {
     return err
 }
-pipeline, err := framework.ResolveServiceAs[*middleware.Pipeline](app, framework.ServiceMiddleware)
-if err != nil {
-    return err
-}
-pipeline.Alias("csrf", handler)
+app.Middleware().Alias("csrf", handler)
 ```
 
 `Csrf()` 使用默认配置并生成进程级随机密钥。`CsrfWithConfig` 会复制 `SafeMethods`，创建后修改调用方切片不会改变中间件策略。应用初始化通过 `ParseCSRFConfig` 读取 `config/csrf.json`；若配置没有 Secret，框架优先复用 Cookie 工厂密钥，否则生成随机密钥。

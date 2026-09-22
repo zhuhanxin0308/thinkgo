@@ -1,0 +1,15 @@
+{
+    "default": "local",
+    "disks": {
+        "local": {
+            "type": "local",
+            "root": "./runtime/storage"
+        },
+        "public": {
+            "type": "local",
+            "root": "./public/storage",
+            "url": "/storage",
+            "visibility": "public"
+        }
+    }
+}

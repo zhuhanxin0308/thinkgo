@@ -1,6 +1,6 @@
 # 日志
 
-`framework.ServiceLog` 是应用日志入口，解析结果为 `*log.Log`。`framework/log` 提供级别过滤、上下文快照、多驱动、命名通道、调用位置、异步批量刷盘和关闭错误聚合；文件和控制台驱动位于 `framework/log/driver`。
+`app.Log()` 是业务日志入口，返回 `*log.Log`。`framework/log` 提供级别过滤、上下文快照、多驱动、命名通道、调用位置、异步批量刷盘和关闭错误聚合；文件和控制台驱动位于 `framework/log/driver`。
 
 本目录按能力拆分：
 
