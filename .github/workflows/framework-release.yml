@@ -137,7 +137,19 @@ jobs:
           GOWORK=off go vet ./...
           CGO_ENABLED=0 GOWORK=off go run -mod=readonly honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...
           GOWORK=off go run -mod=readonly github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
-          CGO_ENABLED=0 GOWORK=off go run -mod=readonly github.com/securego/gosec/v2/cmd/gosec@v2.25.0 -quiet -exclude-dir=tmp -exclude-dir=bin ./...
+          gosec_report="$RUNNER_TEMP/gosec-framework.json"
+          CGO_ENABLED=0 GOWORK=off go run -mod=readonly github.com/securego/gosec/v2/cmd/gosec@v2.25.0 -quiet -fmt=json -out="$gosec_report" -exclude-dir=tmp -exclude-dir=bin ./...
+          python3 - "$gosec_report" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as report:
+              result = json.load(report)
+          stats = result["Stats"]
+          if stats["files"] <= 0 or stats["found"] != 0 or result.get("Golang errors"):
+              raise SystemExit("安全扫描未覆盖源码或存在错误，拒绝发布")
+          print(f"安全扫描覆盖 {stats['files']} 个源码文件，未发现问题")
+          PY
           CGO_ENABLED=1 GOWORK=off go test -mod=readonly -shuffle=on -count=1 ./...
           CGO_ENABLED=0 GOWORK=off go test -mod=readonly -shuffle=on -count=1 ./...
           CGO_ENABLED=1 GOWORK=off go test -tags oracle -mod=readonly -count=1 ./db/builder ./db/connector
