@@ -63,7 +63,7 @@ type runEnvironmentTransaction struct {
 // Configure 配置服务启动命令及端口选项。
 func (c *Run) Configure() {
 	c.Signature = "run"
-	c.Description = "Go Development Server for ThinkPHP"
+	c.Description = "Go Development Server for ThinkGo"
 	c.AddOption("host", "H", "The host to serve the application on", defaultRunHost)
 	c.AddOption("port", "p", "The port to serve the application on", defaultRunPort)
 	c.AddOption("root", "r", "The document root of the application", "")

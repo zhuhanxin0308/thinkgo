@@ -415,6 +415,7 @@ func writeInformationalOptions(output *Output) {
 	output.Writeln("Global options:")
 	output.Writeln("  -h, --help           Show help")
 	output.Writeln("  -V, --version        Show framework version")
+	output.Writeln("  -v                   Show framework version before the command name")
 }
 
 func isNilCommand(command ICommand) bool {

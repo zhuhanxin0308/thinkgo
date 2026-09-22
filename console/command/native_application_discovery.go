@@ -85,6 +85,11 @@ func nativeApplicationDiscoverySources(app *framework.App) ([]generatedApplicati
 		relativePath: filepath.Join(applicationDirectory, applicationDiscoveryFilename),
 		source:       rootSource,
 	})
+	commandSource, err := projectCommandDiscoverySource(semanticContext)
+	if err != nil {
+		return nil, err
+	}
+	sources = append(sources, commandSource)
 	comments, err := existingOpenAPICommentSources(app.BasePath)
 	if err != nil {
 		return nil, err
@@ -155,6 +160,7 @@ func nativeApplicationDirectoryHasSource(root *os.Root, relativeDirectory string
 		filepath.Join(relativeDirectory, "model"),
 		filepath.Join(relativeDirectory, "route"),
 		filepath.Join(relativeDirectory, "validate"),
+		filepath.Join(relativeDirectory, "command"),
 	}
 	for _, directoryPath := range directories {
 		directory, err := root.Open(directoryPath)

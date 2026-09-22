@@ -31,7 +31,12 @@ const (
 )
 
 // Run 为独立工具、项目入口及嵌入宿主提供一致的可取消命令生命周期。
-func Run(ctx context.Context, basePath string, args []string, stdout, stderr io.Writer, register func(*framework.App) error) (returnErr error) {
+func Run(ctx context.Context, basePath string, args []string, stdout, stderr io.Writer, register func(*framework.App) error) error {
+	return RunWithCommands(ctx, basePath, args, stdout, stderr, register)
+}
+
+// RunWithCommands 在原有生命周期中接收编译期命令实例，保留 Run 的函数类型兼容性。
+func RunWithCommands(ctx context.Context, basePath string, args []string, stdout, stderr io.Writer, register func(*framework.App) error, projectCommands ...console.ICommand) (returnErr error) {
 	if ctx == nil {
 		return fmt.Errorf("%w: 控制台执行上下文不能为空", console.ErrInvalidInput)
 	}
@@ -42,10 +47,44 @@ func Run(ctx context.Context, basePath string, args []string, stdout, stderr io.
 		return console.ErrInvalidOutput
 	}
 	args = console.NormalizeInformationalArguments(args)
+	preflight, err := projectCommandConsole(nil, io.Discard, io.Discard, nil)
+	if err != nil {
+		return err
+	}
+	if projectCommands == nil && needsProjectCommands(args, preflight) {
+		commands, err := command.DiscoverProjectCommands(projectCommandBasePath(basePath))
+		if err != nil {
+			return fmt.Errorf("发现项目命令失败: %w", err)
+		}
+		if len(commands) > 0 {
+			return runProjectCommandHost(ctx, basePath, args, stdout, stderr, commands, false)
+		}
+	}
+	for _, current := range projectCommands {
+		if err := preflight.Register(current); err != nil {
+			return fmt.Errorf("注册项目命令失败: %w", err)
+		}
+	}
+	if err := preflight.SetOutput(console.NewOutputWithAutoColor(stdout, stderr)); err != nil {
+		return err
+	}
+	custom, err := projectCommandForExecution(ctx, args, projectCommands)
+	if err != nil {
+		return err
+	}
+	if isProjectCommandInformation(args) {
+		return preflight.RunContext(ctx, args...)
+	}
+	if custom == nil && !isBuiltinCommand(args[0]) {
+		return preflight.RunContext(ctx, args...)
+	}
+	if custom != nil && register == nil {
+		return ErrProjectCommandRequiresBusiness
+	}
 	if register == nil && NeedsBusiness(args) {
 		return RunRuntime(ctx, basePath, args, stdout, stderr)
 	}
-	application, err := BuildApplication(basePath, args, register)
+	application, err := buildApplication(basePath, args, register, custom)
 	if err != nil {
 		return err
 	}
@@ -53,11 +92,8 @@ func Run(ctx context.Context, basePath string, args []string, stdout, stderr io.
 		returnErr = errors.Join(returnErr, application.Close())
 	}()
 
-	cli := console.NewConsole(application)
-	if err := cli.SetOutput(console.NewOutputWithAutoColor(stdout, stderr)); err != nil {
-		return err
-	}
-	if err := RegisterCommands(cli); err != nil {
+	cli, err := projectCommandConsole(application, stdout, stderr, projectCommands)
+	if err != nil {
 		return err
 	}
 	return cli.RunContext(ctx, args...)
@@ -65,7 +101,14 @@ func Run(ctx context.Context, basePath string, args []string, stdout, stderr io.
 
 // BuildApplication 构造并初始化与 HTTP 入口相同的项目 App。
 func BuildApplication(basePath string, args []string, register func(*framework.App) error) (*framework.App, error) {
+	return buildApplication(basePath, args, register, nil)
+}
+
+func buildApplication(basePath string, args []string, register func(*framework.App) error, custom console.ICommand) (*framework.App, error) {
 	skipDatabase := !NeedsDatabase(args)
+	if dependency, ok := custom.(interface{ RequiresDatabase() bool }); ok {
+		skipDatabase = !dependency.RequiresDatabase()
+	}
 	if !skipDatabase {
 		connector.RegisterBuiltins()
 	}
@@ -87,7 +130,7 @@ func BuildApplication(basePath string, args []string, register func(*framework.A
 	if NeedsOnlySource(args) {
 		return application, nil
 	}
-	if NeedsBusiness(args) {
+	if NeedsBusiness(args) || custom != nil {
 		if register == nil {
 			return nil, errors.Join(fmt.Errorf("业务命令需要 %s 构建标签", runtimeBuildTag), application.Close())
 		}

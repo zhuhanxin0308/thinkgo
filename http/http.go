@@ -254,10 +254,10 @@ func (h *Http) applyHTTPServiceSnapshot(snapshot httpServiceSnapshot) {
 
 // ServeHTTP 依次执行入口校验、结构化输入解析、静态资源、路由与中间件流水线。
 func (h *Http) ServeHTTP(originalWriter http.ResponseWriter, raw *http.Request) {
-	h.serveHTTP(originalWriter, raw)
+	h.serveHTTP(originalWriter, raw, false)
 }
 
-func (h *Http) serveHTTP(originalWriter http.ResponseWriter, raw *http.Request) {
+func (h *Http) serveHTTP(originalWriter http.ResponseWriter, raw *http.Request, publicOnly bool) {
 	if isNilHTTPResponseWriter(originalWriter) {
 		return
 	}
@@ -372,7 +372,7 @@ func (h *Http) serveHTTP(originalWriter http.ResponseWriter, raw *http.Request) 
 	if application, exists := resolvedApplication(raw); exists {
 		req.SetApplicationContext(application)
 	}
-	state.response = h.Run(req)
+	state.response = h.run(req, publicOnly)
 	// ServeContent 可能依据条件请求返回 206/304；把真实状态回写到同一
 	// Response，确保随后 Http.End 收到的状态与客户端一致。
 	if state.response != nil && state.response.Committed() && state.statusWriter.Written() {

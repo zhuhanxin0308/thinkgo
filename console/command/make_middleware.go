@@ -6,7 +6,7 @@ import (
 	"github.com/zhuhanxin0308/thinkgo/v3/console"
 )
 
-// MakeMiddleware command
+// MakeMiddleware 生成符合当前框架调用链契约的中间件。
 type MakeMiddleware struct {
 	console.Command
 }
@@ -25,20 +25,19 @@ func (c *MakeMiddleware) Execute(input *console.Input, output *console.Output) e
 	}
 	name := target.name
 
-	// Content
+	// 使用函数签名直接匹配 middleware.Handler 的下游参数。
 	content := fmt.Sprintf(`package middleware
 
 import (
 	"net/http"
 	"github.com/zhuhanxin0308/thinkgo/v3/context"
-	"github.com/zhuhanxin0308/thinkgo/v3/middleware"
 )
 
 // %s 中间件。
 type %s struct{}
 
 // Handle 处理请求链路，并在 next 缺失时返回明确错误响应。
-func (m *%s) Handle(req *context.Request, next middleware.Next) *context.Response {
+func (m *%s) Handle(req *context.Request, next func(*context.Request) *context.Response) *context.Response {
 	if next == nil {
 		return context.NewResponse().Code(http.StatusInternalServerError).Content(http.StatusText(http.StatusInternalServerError))
 	}

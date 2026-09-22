@@ -25,7 +25,7 @@ type ServiceDiscover struct {
 // Configure 配置服务发现命令。
 func (command *ServiceDiscover) Configure() {
 	command.Signature = "service:discover"
-	command.Description = "Discover Services for ThinkPHP"
+	command.Description = "Discover Services for ThinkGo"
 }
 
 // Execute 扫描全部原生应用目录并生成稳定注册代码。

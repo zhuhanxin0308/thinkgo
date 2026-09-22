@@ -31,6 +31,11 @@ func (h *Http) Run(requests ...*fwcontext.Request) (response *fwcontext.Response
 	if len(requests) == 1 {
 		request = requests[0]
 	}
+	return h.run(request, false)
+}
+
+// run 复用完整请求生命周期；仅静态模式禁止缺失文件继续进入业务应用。
+func (h *Http) run(request *fwcontext.Request, publicOnly bool) (response *fwcontext.Response) {
 	delegated := false
 
 	defer func() {
@@ -97,6 +102,9 @@ func (h *Http) Run(requests ...*fwcontext.Request) (response *fwcontext.Response
 		}
 		if staticResponse := h.responseForPublicFile(current); staticResponse != nil {
 			return staticResponse
+		}
+		if publicOnly {
+			return responseForApplicationResolutionError(errApplicationNotFound)
 		}
 		if err := current.ApplyApplicationContext(); err != nil {
 			h.logHTTPError("切换请求应用上下文失败", err)

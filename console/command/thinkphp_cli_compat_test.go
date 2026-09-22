@@ -45,6 +45,7 @@ func TestListFiltersNamespaceAndSupportsRaw(t *testing.T) {
 // TestMakeCommandAcceptsExplicitSignature 验证命令类型名与执行签名分别设置。
 func TestMakeCommandAcceptsExplicitSignature(t *testing.T) {
 	base := t.TempDir()
+	writeDiscoveryModuleFixture(t, base, "example.com/commands")
 	app := framework.NewConsoleAppUninitialized(base)
 	t.Cleanup(func() { _ = app.Close() })
 	cli := console.NewConsole(app)

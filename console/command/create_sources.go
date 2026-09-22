@@ -105,15 +105,19 @@ import (
     "os/signal"
     "syscall"
     "github.com/zhuhanxin0308/thinkgo/v3"
+    "github.com/zhuhanxin0308/thinkgo/v3/console"
     "github.com/zhuhanxin0308/thinkgo/v3/console/launcher"
 )
 
 // registerBusiness 由运行时标签入口提供，源码命令不提前加载业务。
 var registerBusiness func(*framework.App) error
 
+// projectCommands 在运行时入口中加载静态清单，普通源码入口保留自动发现能力。
+var projectCommands []console.ICommand
+
 func main() {
     ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-    err := launcher.Run(ctx, "", os.Args[1:], os.Stdout, os.Stderr, registerBusiness)
+    err := launcher.RunWithCommands(ctx, "", os.Args[1:], os.Stdout, os.Stderr, registerBusiness, projectCommands...)
     stop()
     if err != nil {
         fmt.Fprintf(os.Stderr, "ThinkGo command failed: %q\n", err.Error())
@@ -126,10 +130,16 @@ const projectRuntimeConsoleSource = `//go:build thinkgo_runtime
 
 package main
 
-import businessapp "%s/app"
+import (
+    businessapp "%[1]s/app"
+    "%[1]s/cmd/think/commandautoload"
+)
 
 // init 只在需要业务装配的命令宿主中注册应用。
-func init() { registerBusiness = businessapp.Register }
+func init() {
+    registerBusiness = businessapp.Register
+    projectCommands = commandautoload.Commands()
+}
 `
 
 const projectTestSource = `package main

@@ -279,6 +279,7 @@ func TestMakeEventAndListenerImplementFrameworkInterfaces(t *testing.T) {
 // TestMakeCommandGeneratesNonPlaceholderImplementation 验证命令模板不再输出占位描述和伪执行文案。
 func TestMakeCommandGeneratesNonPlaceholderImplementation(t *testing.T) {
 	basePath := t.TempDir()
+	writeDiscoveryModuleFixture(t, basePath, "example.com/commands")
 	cmd := &MakeCommand{}
 	cmd.SetApp(&framework.App{BasePath: basePath})
 

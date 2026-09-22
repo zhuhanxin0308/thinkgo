@@ -199,7 +199,8 @@ func (r *Route) matchRequestPartsWithOptions(requestParts []string, trailingSlas
 		return false, nil
 	}
 	if isStaticRouteParts(r.pathParts) {
-		if r.jsonContract || r.router == nil || r.router.completeMatch {
+		// 根路由没有可消费的路径段，只能匹配首页，不能成为所有路径的空前缀。
+		if len(r.pathParts) == 0 || r.jsonContract || r.router == nil || r.router.completeMatch {
 			if len(parts) != len(r.pathParts) {
 				return false, nil
 			}

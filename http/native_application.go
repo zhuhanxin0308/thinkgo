@@ -609,12 +609,46 @@ func (host *nativeApplicationHost) lifecycleHandlers() []*Http {
 	return handlers
 }
 
+// resolveRequest 允许无应用前缀的公共文件进入全局管道，但不开放默认应用路由。
+// 已被映射隐藏的应用名、禁止应用和非法请求继续使用原来的拒绝结果。
+func (host *nativeApplicationHost) resolveRequest(request *stdhttp.Request) (applicationResolution, bool, error) {
+	resolution, err := host.resolver.resolve(request)
+	if !errors.Is(err, errApplicationNotFound) || request == nil || request.URL == nil ||
+		(request.Method != stdhttp.MethodGet && request.Method != stdhttp.MethodHead) {
+		return resolution, false, err
+	}
+	segment, _ := firstApplicationPathSegment(request.URL.Path)
+	if host.resolver.isReservedPublicPrefix(segment) {
+		return resolution, false, err
+	}
+	return host.resolver.defaultResolution(request.URL.Path), true, nil
+}
+
+// isReservedPublicPrefix 只收紧静态适配边界，避免大小写不敏感的文件系统
+// 把未知前缀重新映射到被禁止或隐藏的应用目录；普通应用解析仍保持原有规则。
+func (resolver *applicationResolver) isReservedPublicPrefix(segment string) bool {
+	for name := range resolver.denied {
+		if strings.EqualFold(segment, name) {
+			return true
+		}
+	}
+	for alias, target := range resolver.appMap {
+		if strings.EqualFold(segment, target) {
+			return true
+		}
+		if _, denied := resolver.denied[target]; denied && strings.EqualFold(segment, alias) {
+			return true
+		}
+	}
+	return false
+}
+
 func (host *nativeApplicationHost) serveHTTP(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
 	if host == nil || host.resolver == nil || request == nil || request.URL == nil {
 		stdhttp.Error(writer, stdhttp.StatusText(stdhttp.StatusBadRequest), stdhttp.StatusBadRequest)
 		return
 	}
-	resolution, err := host.resolver.resolve(request)
+	resolution, publicOnly, err := host.resolveRequest(request)
 	if err != nil {
 		writeApplicationResolutionError(writer, err)
 		return
@@ -624,7 +658,7 @@ func (host *nativeApplicationHost) serveHTTP(writer stdhttp.ResponseWriter, requ
 		writeApplicationResolutionError(writer, fmt.Errorf("%w: %q", errApplicationNotFound, resolution.name))
 		return
 	}
-	handler.serveHTTP(writer, withResolvedApplication(request, resolution.requestContext(request.Host)))
+	handler.serveHTTP(writer, withResolvedApplication(request, resolution.requestContext(request.Host)), publicOnly)
 }
 
 // run 返回的布尔值表示响应结束阶段是否已由目标应用接管。
@@ -644,7 +678,7 @@ func (host *nativeApplicationHost) run(request *fwcontext.Request) (*fwcontext.R
 			return internalServerErrorResponse(), false
 		}
 	}
-	resolution, err := host.resolver.resolve(raw)
+	resolution, publicOnly, err := host.resolveRequest(raw)
 	if err != nil {
 		return responseForApplicationResolutionError(err), false
 	}
@@ -671,7 +705,7 @@ func (host *nativeApplicationHost) run(request *fwcontext.Request) (*fwcontext.R
 		request.WithEnv(handler.app.Env())
 	}
 	request.SetApplicationContext(resolution.requestContext(raw.Host))
-	response := handler.Run(request)
+	response := handler.run(request, publicOnly)
 	if identity := response.Identity(); identity != nil {
 		host.endMu.Lock()
 		host.endHandlers[identity] = handler

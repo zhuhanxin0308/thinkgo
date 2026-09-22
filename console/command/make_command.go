@@ -57,7 +57,7 @@ func (c *%s) Execute(input *console.Input, output *console.Output) error {
 }
 `, name, name, name, signature, name, name)
 
-	if err := writeGeneratedAppSource(c.App, target, "command", lowerGoFilename(name), []byte(content)); err != nil {
+	if err := writeAndRefreshGeneratedApplicationSource(c.App, target, "command", lowerGoFilename(name), []byte(content)); err != nil {
 		return fmt.Errorf("create command %s: %w", name, err)
 	}
 
