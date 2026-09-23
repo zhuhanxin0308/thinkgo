@@ -1,6 +1,7 @@
 package command
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"go/format"
@@ -22,6 +23,17 @@ type ProjectCommandType struct {
 // DiscoverProjectCommands 从各应用的 command 包及其子包发现真实 ICommand 实现。
 // 非项目目录返回空清单；项目源码或依赖损坏时明确失败，不读取旧生成结果兜底。
 func DiscoverProjectCommands(basePath string) ([]ProjectCommandType, error) {
+	return DiscoverProjectCommandsContext(context.Background(), basePath)
+}
+
+// DiscoverProjectCommandsContext 将调用方取消信号传递至源码选择和依赖类型检查。
+func DiscoverProjectCommandsContext(ctx context.Context, basePath string) ([]ProjectCommandType, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("项目命令发现上下文不能为空")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	root, err := os.OpenRoot(basePath)
 	if err != nil {
 		return nil, err
@@ -36,7 +48,7 @@ func DiscoverProjectCommands(basePath string) ([]ProjectCommandType, error) {
 	if err != nil {
 		return nil, err
 	}
-	return discoverProjectCommandsWithContext(newApplicationSemanticContext(basePath, modulePath))
+	return discoverProjectCommandsWithContext(newApplicationSemanticContextWithContext(ctx, basePath, modulePath))
 }
 
 func discoverProjectCommandsWithContext(semantic *applicationSemanticContext) ([]ProjectCommandType, error) {
@@ -51,6 +63,9 @@ func discoverProjectCommandsWithContext(semantic *applicationSemanticContext) ([
 	}
 	var result []ProjectCommandType
 	for _, entry := range entries {
+		if err := semantic.runContext.Err(); err != nil {
+			return nil, err
+		}
 		if !entry.IsDir() || entry.Name() == "internal" || entry.Name() == "testdata" {
 			continue
 		}

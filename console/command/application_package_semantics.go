@@ -2,6 +2,7 @@ package command
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,6 +26,7 @@ const (
 )
 
 type applicationSemanticContext struct {
+	runContext       context.Context
 	basePath         string
 	modulePath       string
 	fileSet          *token.FileSet
@@ -48,8 +50,13 @@ type applicationPackageSemantics struct {
 // newApplicationSemanticContext 创建一次发现批次共享的类型上下文，保证跨包比较
 // 使用同一组类型对象，并复用外部包导入缓存。
 func newApplicationSemanticContext(basePath, modulePath string) *applicationSemanticContext {
+	return newApplicationSemanticContextWithContext(context.Background(), basePath, modulePath)
+}
+
+func newApplicationSemanticContextWithContext(ctx context.Context, basePath, modulePath string) *applicationSemanticContext {
 	fileSet := token.NewFileSet()
 	context := &applicationSemanticContext{
+		runContext: ctx,
 		basePath:   basePath,
 		modulePath: strings.TrimSuffix(modulePath, "/"),
 		fileSet:    fileSet,
@@ -71,6 +78,9 @@ func newApplicationSemanticContextFromModule(basePath string) (*applicationSeman
 // inspectApplicationPackage 解析当前目标有效的非测试源码，并交给 go/types
 // 建立包级对象关系；生成文件被排除，避免旧结果反向影响新发现。
 func (context *applicationSemanticContext) inspectApplicationPackage(directory, packageName string) (applicationPackageSemantics, error) {
+	if err := context.runContext.Err(); err != nil {
+		return applicationPackageSemantics{}, err
+	}
 	files, hasSource, err := context.parseApplicationFiles(directory, packageName)
 	if err != nil || !hasSource {
 		return applicationPackageSemantics{hasSource: hasSource}, err
@@ -267,7 +277,7 @@ type applicationExportPackage struct {
 
 // loadExportFiles 使用固定参数一次性枚举框架公共类型及其完整依赖图。
 func (context *applicationSemanticContext) loadExportFiles() (map[string]string, error) {
-	command := exec.Command(
+	command := exec.CommandContext(context.runContext,
 		"go", "list", "-mod=readonly", "-deps", "-export", "-json", "--",
 		frameworkImportPath, frameworkMiddlewareImportPath,
 	)
@@ -280,7 +290,7 @@ func (context *applicationSemanticContext) loadNamedExportFiles(importPath strin
 	if err := validateApplicationImportPath(importPath); err != nil {
 		return nil, err
 	}
-	command := exec.Command("go", "list", "-mod=readonly", "-deps", "-export", "-json")
+	command := exec.CommandContext(context.runContext, "go", "list", "-mod=readonly", "-deps", "-export", "-json")
 	command.Args = append(command.Args, "--", importPath)
 	return context.executeExportList(command)
 }
@@ -290,6 +300,9 @@ func (context *applicationSemanticContext) executeExportList(command *exec.Cmd) 
 	command.Env = append(os.Environ(), "GOWORK=off")
 	output, err := command.Output()
 	if err != nil {
+		if canceled := context.runContext.Err(); canceled != nil {
+			return nil, canceled
+		}
 		var exitError *exec.ExitError
 		details := ""
 		if errors.As(err, &exitError) {

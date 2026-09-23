@@ -337,6 +337,11 @@ func (s *Session) Delete(name string) error {
 	if s.destroying {
 		return ErrSessionBusy
 	}
+	s.deleteLocked(name)
+	return nil
+}
+
+func (s *Session) deleteLocked(name string) {
 	s.version++
 	if previous, found := s.data[name]; found {
 		entryBytes := sessionJSONKeyBytes(name) + 1 + len(previous)
@@ -349,7 +354,6 @@ func (s *Session) Delete(name string) error {
 	}
 	s.mutations[name] = sessionMutation{Delete: true, Version: s.version}
 	s.dirty = true
-	return nil
 }
 
 // Clear 原子清除保存时后端的最新状态，并允许随后 Set 新值。

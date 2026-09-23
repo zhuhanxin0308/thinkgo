@@ -3,6 +3,7 @@
 package db_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -222,4 +223,57 @@ func TestLiveMySQLQueryAndTransactionContract(t *testing.T) {
 // TestLivePostgreSQLQueryAndTransactionContract 验证真实 PostgreSQL 的 RETURNING、批量写入、类型映射、流式读取与事务语义。
 func TestLivePostgreSQLQueryAndTransactionContract(t *testing.T) {
 	assertLiveSQLQueryAndTransactionContract(t, "pgsql")
+}
+
+// TestLivePostgreSQLGeneratedColumnSchema 验证序列列和身份列都能被识别为自动生成。
+func TestLivePostgreSQLGeneratedColumnSchema(t *testing.T) {
+	database := connectLiveSQL(t, "pgsql")
+	serialTable := createLiveSQLTable(t, database, "pgsql")
+	identityTable := liveSQLTableName()
+	if _, err := database.Execute("CREATE TABLE " + identityTable + " (id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, ordinary BIGINT NOT NULL)"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if _, err := database.Execute("DROP TABLE IF EXISTS " + identityTable); err != nil {
+			t.Error(err)
+		}
+	})
+	for _, table := range []string{serialTable, identityTable} {
+		schema, err := database.GetSchemaInfo(context.Background(), table, true)
+		if err != nil {
+			t.Fatalf("读取 %s 结构失败: %v", table, err)
+		}
+		foundID := false
+		for _, column := range schema.Columns {
+			if column.Name == "id" {
+				foundID = true
+				if !column.AutoIncrement {
+					t.Errorf("%s.id 未标记为自动生成", table)
+				}
+			} else if column.AutoIncrement {
+				t.Errorf("%s.%s 误标记为自动生成", table, column.Name)
+			}
+		}
+		if !foundID {
+			t.Errorf("%s 未返回 id 字段", table)
+		}
+	}
+	const cacheIdentity = "live-postgresql-generated-columns"
+	content, err := database.ExportSchemaCache(context.Background(), cacheIdentity, []string{serialTable, identityTable})
+	if err != nil {
+		t.Fatalf("导出 PostgreSQL 结构缓存失败: %v", err)
+	}
+	reopened := connectLiveSQL(t, "pgsql")
+	if err := reopened.LoadSchemaCache(content, cacheIdentity); err != nil {
+		t.Fatalf("导入 PostgreSQL 结构缓存失败: %v", err)
+	}
+	for _, table := range []string{serialTable, identityTable} {
+		cached, err := reopened.GetSchemaInfo(context.Background(), table, false)
+		if err != nil {
+			t.Fatalf("读取 %s 缓存失败: %v", table, err)
+		}
+		if len(cached.Columns) == 0 || cached.Columns[0].Name != "id" || !cached.Columns[0].AutoIncrement {
+			t.Errorf("%s 自动生成列未保留在结构缓存中: %#v", table, cached.Columns)
+		}
+	}
 }

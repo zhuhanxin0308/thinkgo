@@ -1,13 +1,12 @@
 package context
 
 import (
-	"crypto/md5" // #nosec G501 -- 与 ThinkPHP buildToken 默认算法保持一致，令牌仍使用常量时间比较并一次性销毁。
-	"crypto/subtle"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"mime/multipart"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -16,7 +15,10 @@ import (
 	frameworksession "github.com/zhuhanxin0308/thinkgo/v3/session"
 )
 
-const defaultRequestTokenName = "__token__"
+const (
+	defaultRequestTokenName = "__token__"
+	requestTokenBytes       = 32
+)
 
 // RequestFilter 是 Go 对 ThinkPHP 请求过滤回调的强类型表达。
 type RequestFilter func(string) string
@@ -47,6 +49,7 @@ type requestThinkPHPState struct {
 	inputSet     bool
 	inputParsed  bool
 	inputMedia   string
+	inputLimit   int64
 	inputValues  map[string]interface{}
 	inputErr     error
 
@@ -393,7 +396,7 @@ func (r *Request) FilterValue(value string) string {
 	return r.applyRequestFilters(value)
 }
 
-// BuildToken 使用当前请求时间生成并写入 Session 的 ThinkPHP 表单令牌。
+// BuildToken 使用密码学安全随机数生成并写入 Session 的表单令牌。
 func (r *Request) BuildToken(names ...string) string {
 	name := defaultRequestTokenName
 	if len(names) > 0 && strings.TrimSpace(names[0]) != "" {
@@ -404,9 +407,12 @@ func (r *Request) BuildToken(names ...string) string {
 		r.setTokenError(errorsRequestSessionUnavailable())
 		return ""
 	}
-	requestTime, _ := r.Time(true).(float64)
-	sum := md5.Sum([]byte(strconv.FormatFloat(requestTime, 'f', -1, 64))) // #nosec G401 -- 与 ThinkPHP buildToken 默认 md5 行为保持一致。
-	token := fmt.Sprintf("%x", sum)
+	random := make([]byte, requestTokenBytes)
+	if _, err := rand.Read(random); err != nil {
+		r.setTokenError(err)
+		return ""
+	}
+	token := hex.EncodeToString(random)
 	if err := current.Set(name, token); err != nil {
 		r.setTokenError(err)
 		return ""
@@ -431,16 +437,7 @@ func (r *Request) CheckToken(arguments ...interface{}) bool {
 		data, _ = arguments[1].(map[string]interface{})
 	}
 	current := r.requestSession()
-	if current == nil || !current.Has(name) {
-		return false
-	}
-	stored, exists := current.Get(name)
-	if !exists {
-		return false
-	}
-	want, valid := stringifyRequestValue(stored)
-	if !valid {
-		_ = current.Delete(name)
+	if current == nil {
 		return false
 	}
 	submitted := r.headerValue("X-CSRF-TOKEN")
@@ -453,12 +450,9 @@ func (r *Request) CheckToken(arguments ...interface{}) bool {
 			submitted, _ = stringifyRequestValue(value)
 		}
 	}
-	deleteErr := current.Delete(name)
-	r.setTokenError(deleteErr)
-	if deleteErr != nil || len(submitted) != len(want) {
-		return false
-	}
-	return subtle.ConstantTimeCompare([]byte(submitted), []byte(want)) == 1
+	accepted, err := current.ConsumeString(name, submitted)
+	r.setTokenError(err)
+	return err == nil && accepted
 }
 
 // TokenError 返回最近一次表单令牌 Session 操作错误。

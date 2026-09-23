@@ -176,6 +176,15 @@ func TestMultipartBodyLimitPreservesTooLargeError(t *testing.T) {
 	}
 }
 
+// TestRequestOptionsUseFinalBodyLimit 验证构造期重复设置上限时由最后一个选项生效。
+func TestRequestOptionsUseFinalBodyLimit(t *testing.T) {
+	raw := httptest.NewRequest(http.MethodPost, "http://example.com/form", bytes.NewReader(bytes.Repeat([]byte("x"), 8)))
+	request := newRequestForTest(t, raw, WithMaxBodyBytes(4), WithMaxBodyBytes(16))
+	if err := request.Parse(); err != nil {
+		t.Fatalf("最终请求体上限应允许 8 字节正文: %v", err)
+	}
+}
+
 func newRequestForTest(t *testing.T, raw *http.Request, options ...RequestOption) *Request {
 	t.Helper()
 	req, err := NewRequest(raw, options...)

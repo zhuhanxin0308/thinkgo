@@ -52,7 +52,7 @@ func RunWithCommands(ctx context.Context, basePath string, args []string, stdout
 		return err
 	}
 	if projectCommands == nil && needsProjectCommands(args, preflight) {
-		commands, err := command.DiscoverProjectCommands(projectCommandBasePath(basePath))
+		commands, err := command.DiscoverProjectCommandsContext(ctx, projectCommandBasePath(basePath))
 		if err != nil {
 			return fmt.Errorf("发现项目命令失败: %w", err)
 		}

@@ -31,11 +31,11 @@ func (h *Http) Run(requests ...*fwcontext.Request) (response *fwcontext.Response
 	if len(requests) == 1 {
 		request = requests[0]
 	}
-	return h.run(request, false)
+	return h.run(request, false, request == nil)
 }
 
 // run 复用完整请求生命周期；仅静态模式禁止缺失文件继续进入业务应用。
-func (h *Http) run(request *fwcontext.Request, publicOnly bool) (response *fwcontext.Response) {
+func (h *Http) run(request *fwcontext.Request, publicOnly, defaultRequest bool) (response *fwcontext.Response) {
 	delegated := false
 
 	defer func() {
@@ -70,6 +70,9 @@ func (h *Http) run(request *fwcontext.Request, publicOnly bool) (response *fwcon
 		return internalServerErrorResponse()
 	}
 	if h.applicationHost != nil {
+		if !defaultRequest && request != nil && request.Raw() != nil && !h.isAllowedHost(request.Raw().Host) {
+			return fwcontext.NewResponse().Code(http.StatusMisdirectedRequest).Content(http.StatusText(http.StatusMisdirectedRequest))
+		}
 		response, delegated = h.applicationHost.run(request)
 		return response
 	}
@@ -85,6 +88,21 @@ func (h *Http) run(request *fwcontext.Request, publicOnly bool) (response *fwcon
 	raw := request.Raw()
 	if raw == nil || raw.URL == nil {
 		return fwcontext.NewResponse().Code(http.StatusBadRequest).Content(http.StatusText(http.StatusBadRequest))
+	}
+	if !defaultRequest && !h.requestTaskHostManaged(request) {
+		if !h.isAllowedHost(raw.Host) {
+			return fwcontext.NewResponse().Code(http.StatusMisdirectedRequest).Content(http.StatusText(http.StatusMisdirectedRequest))
+		}
+		for _, option := range []fwcontext.RequestOption{
+			fwcontext.WithTrustedProxySet(h.srvConf.TrustedProxySet),
+			fwcontext.WithMultipartMemoryLimit(h.srvConf.MultipartMemory),
+			fwcontext.WithMaxBodyBytes(h.srvConf.MaxBodyBytes),
+		} {
+			if err := option(request); err != nil {
+				h.logHTTPError("应用直接请求安全配置失败", err)
+				return internalServerErrorResponse()
+			}
+		}
 	}
 	if err := h.ensureRequestTask(request); err != nil {
 		return fwcontext.NewResponse().Code(http.StatusServiceUnavailable).Header("Retry-After", "1").Content(http.StatusText(http.StatusServiceUnavailable))

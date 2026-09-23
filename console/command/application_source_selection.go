@@ -21,7 +21,7 @@ const applicationSourceSelectionTimeout = 2 * time.Minute
 // 每次发现事务只枚举一次，不修改进程环境；已有生成文件仍由语义解析层排除。
 func (semantic *applicationSemanticContext) selectedApplicationFiles(directory, packageName string) (map[string]bool, error) {
 	semantic.sourceFilesOnce.Do(func() {
-		semantic.sourcePackages, semantic.sourceSizes, semantic.sourceFilesErr = loadApplicationSourcePackages(semantic.basePath)
+		semantic.sourcePackages, semantic.sourceSizes, semantic.sourceFilesErr = loadApplicationSourcePackages(semantic.runContext, semantic.basePath)
 	})
 	if semantic.sourceFilesErr != nil {
 		return nil, semantic.sourceFilesErr
@@ -30,7 +30,7 @@ func (semantic *applicationSemanticContext) selectedApplicationFiles(directory, 
 	pkg, exists := semantic.sourcePackages[key]
 	if !exists {
 		// ./... 会跳过下划线目录；业务发现已显式选中的合法目录必须由 Go 单独检查。
-		ctx, cancel := context.WithTimeout(context.Background(), applicationSourceSelectionTimeout)
+		ctx, cancel := context.WithTimeout(semantic.runContext, applicationSourceSelectionTimeout)
 		defer cancel()
 		output, err := listBuildSourcePackages(ctx, semantic.basePath, "./"+filepath.ToSlash(key))
 		if err != nil {
@@ -56,8 +56,8 @@ func (semantic *applicationSemanticContext) selectedApplicationFiles(directory, 
 	return selected, nil
 }
 
-func loadApplicationSourcePackages(basePath string) (map[string]commentPackage, types.Sizes, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), applicationSourceSelectionTimeout)
+func loadApplicationSourcePackages(parent context.Context, basePath string) (map[string]commentPackage, types.Sizes, error) {
+	ctx, cancel := context.WithTimeout(parent, applicationSourceSelectionTimeout)
 	defer cancel()
 	output, err := listOpenAPICommentPackages(ctx, basePath)
 	if err != nil {
@@ -73,6 +73,9 @@ func loadApplicationSourcePackages(basePath string) (map[string]commentPackage, 
 	process.Env = append(os.Environ(), "GOWORK=off")
 	architecture, err := process.Output()
 	if err != nil {
+		if canceled := ctx.Err(); canceled != nil {
+			return nil, nil, canceled
+		}
 		return nil, nil, fmt.Errorf("读取应用编译目标失败: %w", err)
 	}
 	sizes := types.SizesFor("gc", strings.TrimSpace(string(architecture)))

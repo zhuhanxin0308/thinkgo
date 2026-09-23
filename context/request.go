@@ -48,6 +48,7 @@ var (
 // Request 封装原生 HTTP 请求，并为参数解析、上传清理和代理解析提供并发安全边界。
 type Request struct {
 	raw               *http.Request
+	constructing      bool
 	responseWriter    http.ResponseWriter
 	serviceMu         sync.RWMutex
 	serviceResolver   ServiceResolver
@@ -85,8 +86,10 @@ type Request struct {
 
 	routeMu sync.RWMutex
 
-	bodyOnce  sync.Once
-	bodyCache []byte
+	bodyOnce      sync.Once
+	bodyCache     []byte
+	bodyLimit     *bodyLimitReadCloser
+	bodyCacheSize atomic.Int64
 
 	queryMu    sync.Mutex
 	queryText  string
@@ -129,6 +132,7 @@ type Request struct {
 func NewRequest(raw *http.Request, options ...RequestOption) (*Request, error) {
 	req := &Request{
 		raw:                  raw,
+		constructing:         true,
 		createdAt:            time.Now(),
 		multipartMemoryLimit: DefaultMultipartMemoryLimit,
 		maxBodyBytes:         DefaultMaxBodyBytes,
@@ -142,9 +146,11 @@ func NewRequest(raw *http.Request, options ...RequestOption) (*Request, error) {
 			return nil, fmt.Errorf("应用第 %d 个请求选项失败: %w", index+1, err)
 		}
 	}
+	req.constructing = false
 
 	if raw != nil && raw.Body != nil && raw.Body != http.NoBody {
-		raw.Body = newBodyLimitReadCloser(raw.Body, req.maxBodyBytes)
+		req.bodyLimit = newBodyLimitReadCloser(raw.Body, req.maxBodyBytes)
+		raw.Body = req.bodyLimit
 	}
 	return req, nil
 }
@@ -447,6 +453,11 @@ func (r *Request) ValidateBody() error {
 func (r *Request) parseBody(materialize bool) error {
 	if r == nil {
 		return nil
+	}
+	if r.bodyCacheSize.Load() > r.maxBodyBytes || r.bodyLimit != nil && r.bodyLimit.consumed.Load() > r.maxBodyBytes {
+		err := fmt.Errorf("%w: 上限 %d 字节", ErrRequestBodyTooLarge, r.maxBodyBytes)
+		r.setBodyError(err)
+		return err
 	}
 	if _, err, overridden := r.inputOverrideState(materialize); overridden {
 		return err
@@ -790,6 +801,7 @@ func (r *Request) readOriginalBody() ([]byte, error) {
 			return
 		}
 		r.bodyCache = body
+		r.bodyCacheSize.Store(int64(len(body)))
 		r.replaceOriginalBody(io.NopCloser(bytes.NewReader(body)))
 	})
 	r.errorMu.RLock()
@@ -917,9 +929,10 @@ func normalizeBodyReadError(err error, limit int64) error {
 type bodyLimitReadCloser struct {
 	source    io.ReadCloser
 	remaining int64
+	consumed  atomic.Int64
 }
 
-func newBodyLimitReadCloser(source io.ReadCloser, limit int64) io.ReadCloser {
+func newBodyLimitReadCloser(source io.ReadCloser, limit int64) *bodyLimitReadCloser {
 	return &bodyLimitReadCloser{source: source, remaining: limit}
 }
 
@@ -930,6 +943,7 @@ func (r *bodyLimitReadCloser) Read(buffer []byte) (int, error) {
 	if r.remaining <= 0 {
 		var probe [1]byte
 		read, err := r.source.Read(probe[:])
+		r.consumed.Add(int64(read))
 		if read > 0 {
 			return 0, ErrRequestBodyTooLarge
 		}
@@ -939,6 +953,7 @@ func (r *bodyLimitReadCloser) Read(buffer []byte) (int, error) {
 		buffer = buffer[:r.remaining+1]
 	}
 	read, err := r.source.Read(buffer)
+	r.consumed.Add(int64(read))
 	if int64(read) > r.remaining {
 		allowed := int(r.remaining)
 		r.remaining = 0

@@ -85,7 +85,7 @@ func (r *Request) inputOverrideState(materialize bool) (map[string]any, error, b
 
 // parseInputOverrideLocked 的调用方必须持有状态锁，保证校验与物化针对同一版本输入。
 func (r *Request) parseInputOverrideLocked(state *requestThinkPHPState, media string, materialize bool) {
-	if !state.inputParsed || state.inputMedia != media {
+	if !state.inputParsed || state.inputMedia != media || state.inputLimit != r.maxBodyBytes {
 		state.inputValues, state.inputErr = nil, nil
 		switch {
 		case int64(len(state.inputValue)) > r.maxBodyBytes:
@@ -107,7 +107,7 @@ func (r *Request) parseInputOverrideLocked(state *requestThinkPHPState, media st
 		case media == "multipart/form-data":
 			state.inputErr = fmt.Errorf("%w: multipart 输入必须通过原始请求流提供", ErrInvalidFormBody)
 		}
-		state.inputMedia, state.inputParsed = media, true
+		state.inputMedia, state.inputParsed, state.inputLimit = media, true, r.maxBodyBytes
 	}
 	if materialize && state.inputErr == nil && state.inputValues == nil && isJSONMediaType(media) {
 		reader := strictJSONReader{body: []byte(state.inputValue), buildValues: true, keysValidated: true}

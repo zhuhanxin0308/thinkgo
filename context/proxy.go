@@ -78,6 +78,20 @@ func WithMaxBodyBytes(limit int64) RequestOption {
 			return fmt.Errorf("%w: %d", ErrInvalidMaxBodyBytes, limit)
 		}
 		r.maxBodyBytes = limit
+		if !r.constructing && r.raw != nil && r.raw.Body != nil && r.raw.Body != http.NoBody {
+			remaining := limit
+			if r.bodyLimit != nil {
+				remaining -= r.bodyLimit.consumed.Load()
+			}
+			if remaining < 0 {
+				remaining = 0
+			}
+			limited := newBodyLimitReadCloser(r.raw.Body, remaining)
+			r.raw.Body = limited
+			if r.bodyLimit == nil {
+				r.bodyLimit = limited
+			}
+		}
 		return nil
 	}
 }

@@ -686,7 +686,8 @@ func (host *nativeApplicationHost) run(request *fwcontext.Request) (*fwcontext.R
 	if handler == nil {
 		return responseForApplicationResolutionError(errApplicationNotFound), false
 	}
-	if request == nil {
+	defaultRequest := request == nil
+	if defaultRequest {
 		request, err = handler.newDefaultRequest()
 		if err != nil {
 			handler.logHTTPError("创建目标应用默认请求失败", err)
@@ -705,7 +706,7 @@ func (host *nativeApplicationHost) run(request *fwcontext.Request) (*fwcontext.R
 		request.WithEnv(handler.app.Env())
 	}
 	request.SetApplicationContext(resolution.requestContext(raw.Host))
-	response := handler.run(request, publicOnly)
+	response := handler.run(request, publicOnly, defaultRequest)
 	if identity := response.Identity(); identity != nil {
 		host.endMu.Lock()
 		host.endHandlers[identity] = handler
