@@ -1,6 +1,6 @@
 # 命令行
 
-框架根目录的 `cmd/thinkgo` 是可安装 CLI，命令系统位于 `console/`。使用 `go install github.com/zhuhanxin0308/thinkgo/v3/cmd/thinkgo@v3.0.1` 安装，再用 `thinkgo create <项目名称>` 创建完整项目。目标目录必须不存在或为空。
+框架根目录的 `cmd/thinkgo` 是可安装 CLI，命令系统位于 `console/`。使用 `go install github.com/zhuhanxin0308/thinkgo/v3/cmd/thinkgo@v3.0.2` 安装，再用 `thinkgo create <项目名称>` 创建完整项目。目标目录必须不存在或为空。
 
 以下命令在生成的业务项目目录运行，项目 `cmd/think` 与已安装的 `thinkgo` 共用命令实现。CLI 与 HTTP 共享同一份编译期应用清单；应用级命令通过 `--app/-a` 选择独立 `framework.App`，省略时使用项目 `app.default_app`。
 

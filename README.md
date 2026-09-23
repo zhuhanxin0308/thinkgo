@@ -7,7 +7,7 @@
 需要 Go 1.26.6 或更新版本，并将 Go 的可执行文件安装目录加入 PATH：
 
 ```bash
-go install github.com/zhuhanxin0308/thinkgo/v3/cmd/thinkgo@v3.0.1
+go install github.com/zhuhanxin0308/thinkgo/v3/cmd/thinkgo@v3.0.2
 thinkgo create my-project
 cd my-project
 go test ./...
@@ -17,7 +17,7 @@ thinkgo build linux/amd64
 
 `create` 在当前目录下生成指定项目目录，包含 HTTP 和 CLI 入口、默认 index 应用、配置 JSON、语言包、模板、静态资源及测试。目标必须不存在或为空；隐藏文件和子目录也会使创建被拒绝。进入项目后可用 `thinkgo run` 启动服务，或用 `thinkgo make:app admin` 添加应用。
 
-`go get github.com/zhuhanxin0308/thinkgo/v3@v3.0.1` 用于已有 Go 项目添加依赖；安装 CLI 使用上面的 `go install`。下游项目直接依赖公开版本，不需要克隆框架或添加本地 `replace`。
+`go get github.com/zhuhanxin0308/thinkgo/v3@v3.0.2` 用于已有 Go 项目添加依赖；安装 CLI 使用上面的 `go install`。下游项目直接依赖公开版本，不需要克隆框架或添加本地 `replace`。
 
 `build` 将二进制、配置 JSON、语言包、模板和静态资源写入 `dist/<平台>`，再次构建同一平台会覆盖该平台产物。Linux 产物还包含 `Dockerfile` 和 `docker-compose.yml`，可进入产物目录执行 `docker compose up -d --build`。发布包不包含 `.env` 和运行数据，数据库、端口等部署配置应在部署环境核对。
 

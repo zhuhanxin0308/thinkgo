@@ -33,8 +33,8 @@ CI 验证生成器、框架集成、SQLite 业务路径、Windows/macOS 以及�
 3. 创建不可移动的根模块标签，例如：
 
    ```bash
-   git tag -a v3.0.1 -m "ThinkGo Framework v3.0.1"
-   git push origin v3.0.1
+   git tag -a v3.0.2 -m "ThinkGo Framework v3.0.2"
+   git push origin v3.0.2
    ```
 
    是否使用 `-s` 签名标签由仓库治理策略决定；已经发布的标签不得移动或覆盖，原 v1、v2 标签保留。
@@ -50,12 +50,12 @@ CI 验证生成器、框架集成、SQLite 业务路径、Windows/macOS 以及�
 
    ```bash
    go mod init example.com/thinkgo-consumer
-   go get github.com/zhuhanxin0308/thinkgo/v3@v3.0.1
+   go get github.com/zhuhanxin0308/thinkgo/v3@v3.0.2
    # 写入实际业务入口或测试代码并导入框架公开 API
    go test ./...
    ```
 
-3. 将示例中的版本替换为目标版本，分别验证模块代理与 `GOPROXY=direct`；代理同步可能存在延迟，未能解析目标版本时不能宣称公共发布完成。使用 `go install github.com/zhuhanxin0308/thinkgo/v3/cmd/thinkgo@v3.0.1` 安装同版本 CLI，执行 `thinkgo create release-smoke`，在生成工程内完成 `go test ./...`、`thinkgo build linux/amd64` 和产物的 Docker Compose 配置校验；发布工作流也执行此链路。
+3. 将示例中的版本替换为目标版本，分别验证模块代理与 `GOPROXY=direct`；代理同步可能存在延迟，未能解析目标版本时不能宣称公共发布完成。使用 `go install github.com/zhuhanxin0308/thinkgo/v3/cmd/thinkgo@v3.0.2` 安装同版本 CLI，执行 `thinkgo create release-smoke`，在生成工程内完成 `go test ./...`、`thinkgo build linux/amd64` 和产物的 Docker Compose 配置校验；发布工作流也执行此链路。
 4. 下游验收至少覆盖单应用兼容、两个应用的路径/域名分发、错误应用启动阻断、配置与容器隔离、优雅关闭，以及所需数据库和外部服务。
 5. 发布门禁中的 MySQL、PostgreSQL、Redis、MongoDB 和 Neo4j 容器用于验证框架基础契约，不代表用户的具体版本、TLS、鉴权、拓扑或容量配置已经验收。SQL Server、Oracle、生产数据库与 Redis、反向代理、文件权限、生产容量、告警和回滚演练仍属于环境验收；本地测试和 GitHub Actions 不能替代这些证据。
 
