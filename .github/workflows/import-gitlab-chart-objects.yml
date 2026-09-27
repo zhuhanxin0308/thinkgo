@@ -1,0 +1,113 @@
+name: One-time verified GitLab chart object import
+
+on:
+  push:
+    branches: [migration/stage-charts-20260927]
+    paths:
+      - .migration/svg-transfer.json.xz
+      - .github/workflows/import-gitlab-chart-objects.yml
+
+permissions: {}
+
+jobs:
+  import-objects:
+    if: github.repository == 'zhuhanxin0308/thinkgo'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout staging data only
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Validate exact source bytes and import immutable blobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64
+          import hashlib
+          import json
+          import lzma
+          import os
+          import pathlib
+          import time
+          import urllib.error
+          import urllib.request
+
+          # This staging workflow imports data objects only. It never changes a ref,
+          # opens a PR, runs source code, changes settings, or touches main/tags.
+          if os.environ['GITHUB_REPOSITORY'] != 'zhuhanxin0308/thinkgo':
+              raise SystemExit('Unexpected repository')
+          if os.environ['GITHUB_REF'] != 'refs/heads/migration/stage-charts-20260927':
+              raise SystemExit('Unexpected staging branch')
+          expected = {
+              '01-business-throughput.svg': '3736e9582d04bb442ac819fe582d95ecbbe8f1fe',
+              '05-transaction-throughput.svg': '1b71235c8533de89580536583332e3000c109474',
+              '07-concurrency-throughput.svg': 'f8381919324b0432ec6207b1cf1c55015aa9ebbb',
+              '08-concurrency-p99.svg': 'cd96822816eed40f9c2c810348500874fa3f11e7',
+              '10-cpu-utilization.svg': '23eb90f52276061a1b595f9475ade07186befe15',
+              '12-latency-percentiles.svg': 'ec7f771b52caa52153a39fb4ba0f7cd54497a9ec',
+              '13-throughput-latency-tradeoff.svg': '9d5d1ef0e798c7fa3fba0e1c60ff2690f9f38f43',
+              '15-container-readiness.svg': '25837f9432c746b483d030925fe1f9236da8cdfd',
+              '16-open-arrival-drops.svg': '426cb4a025f9a1e101493aaf807026f9730d9bd3',
+          }
+          compressed = pathlib.Path('.migration/svg-transfer.json.xz').read_bytes()
+          if len(compressed) != 18804:
+              raise SystemExit('Invalid transfer size')
+          decoder = lzma.LZMADecompressor(memlimit=128 * 1024 * 1024)
+          data = decoder.decompress(compressed, max_length=262144)
+          if not decoder.eof or decoder.unused_data:
+              raise SystemExit('Invalid or oversized transfer archive')
+          if hashlib.sha256(data).hexdigest() != '507b520b206f54993425839bc90c303fc54790787832c18c198d65f84142ceae':
+              raise SystemExit('Transfer SHA-256 mismatch')
+          rows = json.loads(data)
+          if not isinstance(rows, list) or len(rows) != len(expected):
+              raise SystemExit('Unexpected file count')
+          verified = []
+          seen = set()
+          for row in rows:
+              if set(row) != {'name', 'sha', 'content'}:
+                  raise SystemExit('Unexpected transfer fields')
+              name, sha = row['name'], row['sha']
+              if name in seen or expected.get(name) != sha:
+                  raise SystemExit('Unexpected or duplicate source file')
+              content = row['content'].encode('utf-8')
+              actual = hashlib.sha1(b'blob ' + str(len(content)).encode() + b'\0' + content).hexdigest()
+              if actual != sha:
+                  raise SystemExit('Source Git blob mismatch: ' + name)
+              verified.append((name, sha, content))
+              seen.add(name)
+          if seen != set(expected):
+              raise SystemExit('Missing source file')
+
+          # The only network writes are immutable Git blob creations in this repo.
+          endpoint = 'https://api.github.com/repos/zhuhanxin0308/thinkgo/git/blobs'
+          headers = {
+              'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+              'Accept': 'application/vnd.github+json',
+              'Content-Type': 'application/json',
+              'X-GitHub-Api-Version': '2022-11-28',
+              'User-Agent': 'ThinkGo-verified-snapshot-migration',
+          }
+          for name, sha, content in verified:
+              body = json.dumps({'encoding': 'base64', 'content': base64.b64encode(content).decode('ascii')}).encode()
+              for attempt in range(3):
+                  try:
+                      request = urllib.request.Request(endpoint, data=body, headers=headers, method='POST')
+                      with urllib.request.urlopen(request, timeout=30) as response:
+                          result = json.load(response)
+                      break
+                  except urllib.error.HTTPError as error:
+                      if error.code not in (429, 500, 502, 503, 504) or attempt == 2:
+                          raise SystemExit('GitHub blob creation failed: HTTP ' + str(error.code))
+                      time.sleep(2 ** (attempt + 1))
+              if result.get('sha') != sha:
+                  raise SystemExit('Remote Git blob mismatch: ' + name)
+              print(name + ': ' + sha + ' verified')
+          summary = pathlib.Path(os.environ['GITHUB_STEP_SUMMARY'])
+          summary.write_text('## Verified immutable source objects\n\nSource: GitLab `21f423326d4106a4511304084f03bf6ecd87010d`.\n\nAll 9 imported blobs match the source Git object IDs. No branch ref was changed by this workflow.\n\n' + '\n'.join('- `' + name + '` — `' + sha + '`' for name, sha, _ in verified) + '\n', encoding='utf-8')
+          PY
