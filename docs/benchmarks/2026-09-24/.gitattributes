@@ -1,0 +1,3 @@
+# 原始导出清单的 SHA-256 包含 CRLF；禁止 Git 自动规范化，保持来源字节。
+# 仅此文件例外，其他 JSON/Go/Markdown 继续遵循仓库根目录的 LF 规则。
+manifest.json -text
