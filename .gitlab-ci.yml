@@ -1,0 +1,121 @@
+# GitHub 的跨平台发布工作流继续保留；本文件提供 GitLab 合并请求的 Linux 门禁。
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS && $CI_PIPELINE_SOURCE == "push"'
+      when: never
+    - if: '$CI_COMMIT_BRANCH'
+    - if: '$CI_COMMIT_TAG'
+
+stages:
+  - verify
+  - test
+
+default:
+  image: golang:1.26.6
+  interruptible: true
+  timeout: 1h
+  cache:
+    key:
+      prefix: 'go1.26.6-$CI_COMMIT_REF_SLUG-$CI_JOB_NAME_SLUG'
+      files:
+        - go.sum
+    paths:
+      - .cache/go-mod/
+      - .cache/go-build/
+  artifacts:
+    when: always
+    expire_in: 7 days
+    paths:
+      - .ci-reports/
+
+variables:
+  GOTOOLCHAIN: local
+  GOWORK: 'off'
+  GOMODCACHE: '$CI_PROJECT_DIR/.cache/go-mod'
+  GOCACHE: '$CI_PROJECT_DIR/.cache/go-build'
+  CGO_ENABLED: '1'
+
+verify:
+  stage: verify
+  script:
+    - bash .gitlab/ci/check.sh verify
+
+unit:
+  stage: test
+  parallel:
+    matrix:
+      - CGO_ENABLED: ['0', '1']
+  script:
+    - bash .gitlab/ci/check.sh unit
+
+race:
+  stage: test
+  script:
+    - bash .gitlab/ci/check.sh race
+
+coverage:
+  stage: test
+  script:
+    - bash .gitlab/ci/check.sh coverage
+
+security:
+  stage: test
+  variables:
+    CGO_ENABLED: '0'
+  script:
+    - bash .gitlab/ci/check.sh security
+
+protocol-and-performance:
+  stage: test
+  script:
+    - bash .gitlab/ci/check.sh protocol
+
+live-services:
+  stage: test
+  # 仅用于本作业的临时服务，禁止复用生产凭据或生产数据库。
+  services:
+    - name: redis:8.6.6-alpine3.23@sha256:75934ddb37bfaebe3b4082ba673cac39f66495244134f33dd0a502ce03cdcd36
+      alias: redis
+    - name: mysql:8.4.11@sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb
+      alias: mysql
+    - name: postgres:18.6-alpine3.23@sha256:697c180dbf244d3ce4a8f4cbc0156cde840af055c1bf8b76aebe422a4822086f
+      alias: postgres
+    - name: mongo:8.0.29-noble@sha256:021b2d5ae9d253f2cca17491cc8d03aed8df3c840f3252066aa62d3277fc406e
+      alias: mongo
+    - name: neo4j:5.26.30-community-trixie@sha256:037cf5756f0135cbfd66b739b6df7c7c4bb100f9ce11602f6f9538e17e02c74d
+      alias: neo4j
+  variables:
+    MYSQL_ROOT_PASSWORD: thinkgo-live-root-password
+    MYSQL_DATABASE: thinkgo_live
+    MYSQL_USER: thinkgo
+    MYSQL_PASSWORD: thinkgo-live-password
+    POSTGRES_DB: thinkgo_live
+    POSTGRES_USER: thinkgo
+    POSTGRES_PASSWORD: thinkgo-live-password
+    NEO4J_AUTH: neo4j/thinkgo-live-password
+    THINKGO_LIVE_REDIS_HOST: redis
+    THINKGO_LIVE_REDIS_PORT: '6379'
+    THINKGO_LIVE_REDIS_DB: '0'
+    THINKGO_LIVE_MYSQL_HOST: mysql
+    THINKGO_LIVE_MYSQL_PORT: '3306'
+    THINKGO_LIVE_MYSQL_DATABASE: thinkgo_live
+    THINKGO_LIVE_MYSQL_USER: thinkgo
+    THINKGO_LIVE_MYSQL_PASSWORD: thinkgo-live-password
+    THINKGO_LIVE_PGSQL_HOST: postgres
+    THINKGO_LIVE_PGSQL_PORT: '5432'
+    THINKGO_LIVE_PGSQL_DATABASE: thinkgo_live
+    THINKGO_LIVE_PGSQL_USER: thinkgo
+    THINKGO_LIVE_PGSQL_PASSWORD: thinkgo-live-password
+    THINKGO_LIVE_MONGO_HOST: mongo
+    THINKGO_LIVE_MONGO_PORT: '27017'
+    THINKGO_LIVE_MONGO_DATABASE: thinkgo_live
+    THINKGO_LIVE_MONGO_TLS: 'false'
+    THINKGO_LIVE_NEO4J_HOST: neo4j
+    THINKGO_LIVE_NEO4J_PORT: '7687'
+    THINKGO_LIVE_NEO4J_DATABASE: neo4j
+    THINKGO_LIVE_NEO4J_USER: neo4j
+    THINKGO_LIVE_NEO4J_PASSWORD: thinkgo-live-password
+    THINKGO_LIVE_NEO4J_SCHEME: bolt
+  script:
+    - bash .gitlab/ci/check.sh live
