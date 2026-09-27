@@ -1,0 +1,181 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1224pt" height="604.8pt" font-family="Microsoft YaHei,Noto Sans CJK SC,sans-serif" version="1.1" viewBox="0 0 1224 604.8" role="img">
+<title>每个成功请求的应用 CPU 开销</title>
+<style>*{stroke-linejoin: round; stroke-linecap: butt}:root{--c0:#ffffff;--c1:#f6f8fa;--c2:#d8dee4;--c3:#59636e;--c4:#1f2328;--c5:#0969da;--c6:#008579;--c7:#8250df;--c8:#bc4c00;--c9:#bf3989;--c10:#3b5b92;--c11:#607b09;--c12:#9a6700;}@media(prefers-color-scheme:dark){:root{--c0:#0d1117;--c1:#161b22;--c2:#30363d;--c3:#b1bac4;--c4:#f0f6fc;--c5:#58a6ff;--c6:#39d3bb;--c7:#bc8cff;--c8:#ffa657;--c9:#f778ba;--c10:#9bbcf5;--c11:#b2ce65;--c12:#e3b341;}}.s0{fill:var(--c1);}.s1{fill:none;stroke:var(--c2);stroke-linecap:square;stroke-opacity:.7;stroke-width:0.8;}.s3{fill:var(--c3);font-size:11;}.s4{fill:var(--c4);font-size:11;}.s6{fill:var(--c5);}.s7{fill:var(--c6);}.s8{fill:var(--c7);}.s9{fill:var(--c8);}.s10{fill:var(--c9);}.s11{fill:var(--c10);}.s12{fill:var(--c11);}.s13{fill:var(--c12);}.s14{fill:none;stroke:var(--c2);stroke-linecap:square;stroke-width:0.8;}.s15{fill:var(--c4);font-size:10;}.s16{fill:var(--c4);font-size:14;font-weight:bold;}.s17{font-size:9.5;}</style>
+<path d="m0 604.8h1224v-604.8h-1224z" fill="var(--c0)"/>
+<path d="m79.56 368.928h309.4v-235.872h-309.4z" class="s0"/>
+<path d="m79.56 368.928v-235.872" clip-path="url(#c)" class="s1"/>
+<text x="71.785" y="384.86" class="s3">0.0</text>
+<path d="m116.457 368.928v-235.872" clip-path="url(#c)" class="s1"/>
+<text x="108.682" y="384.86" class="s3">0.2</text>
+<path d="m153.353 368.928v-235.872" clip-path="url(#c)" class="s1"/>
+<text x="145.578" y="384.86" class="s3">0.4</text>
+<path d="m190.25 368.928v-235.872" clip-path="url(#c)" class="s1"/>
+<text x="182.475" y="384.86" class="s3">0.6</text>
+<path d="m227.146 368.928v-235.872" clip-path="url(#c)" class="s1"/>
+<text x="219.371" y="384.86" class="s3">0.8</text>
+<path d="m264.043 368.928v-235.872" clip-path="url(#c)" class="s1"/>
+<text x="256.268" y="384.86" class="s3">1.0</text>
+<path d="m300.939 368.928v-235.872" clip-path="url(#c)" class="s1"/>
+<text x="293.165" y="384.86" class="s3">1.2</text>
+<path d="m337.836 368.928v-235.872" clip-path="url(#c)" class="s1"/>
+<text x="330.061" y="384.86" class="s3">1.4</text>
+<path d="m374.732 368.928v-235.872" clip-path="url(#c)" class="s1"/>
+<text x="366.958" y="384.86" class="s3">1.6</text>
+<text x="149.877" y="406.871" class="s4">CPU 毫秒 / 成功请求（越低越好）</text>
+<text x="54.675" y="156.967" class="s4">Gin</text>
+<text x="46.322" y="185.107" class="s4">Fiber</text>
+<text x="47.229" y="213.248" class="s4">Echo</text>
+<text x="55.501" y="241.388" class="s4">Chi</text>
+<text x="39.146" y="269.528" class="s4">Beego</text>
+<text x="28.613" y="297.669" class="s4">ThinkGo</text>
+<text x="21.817" y="325.809" class="s4">ThinkPHP</text>
+<text x="35.682" y="353.949" class="s4">Laravel</text>
+<g clip-path="url(#c)">
+<path d="m79.56 143.777h60.337v17.447h-60.337z" class="s6"/>
+<path d="m79.56 171.918h47.529v17.447h-47.529z" class="s7"/>
+<path d="m79.56 200.058h57.833v17.447h-57.833z" class="s8"/>
+<path d="m79.56 228.198h59.099v17.447h-59.099z" class="s9"/>
+<path d="m79.56 256.339h60.522v17.447h-60.522z" class="s10"/>
+<path d="m79.56 284.479h73.599v17.447h-73.599z" class="s11"/>
+<path d="m79.56 312.619h112.773v17.447h-112.773z" class="s12"/>
+<path d="m79.56 340.76h238v17.447h-238z" class="s13"/>
+</g>
+<path d="m79.56 368.928h309.4" class="s14"/>
+<text x="145.847" y="155.294" class="s15">0.327</text>
+<text x="133.039" y="183.434" class="s15">0.258</text>
+<text x="143.343" y="211.575" class="s15">0.313</text>
+<text x="144.609" y="239.715" class="s15">0.320</text>
+<text x="146.032" y="267.855" class="s15">0.328</text>
+<text x="159.109" y="295.995" class="s15">0.399</text>
+<text x="198.283" y="324.136" class="s15">0.611</text>
+<text x="323.51" y="352.276" class="s15">1.290</text>
+<text x="79.56" y="119.056" class="s16">博客</text>
+<path d="m481.78 368.928h309.4v-235.872h-309.4z" class="s0"/>
+<path d="m481.78 368.928v-235.872" clip-path="url(#d)" class="s1"/>
+<text x="474.005" y="384.86" class="s3">0.0</text>
+<path d="m524.853 368.928v-235.872" clip-path="url(#d)" class="s1"/>
+<text x="517.079" y="384.86" class="s3">0.2</text>
+<path d="m567.927 368.928v-235.872" clip-path="url(#d)" class="s1"/>
+<text x="560.152" y="384.86" class="s3">0.4</text>
+<path d="m611 368.928v-235.872" clip-path="url(#d)" class="s1"/>
+<text x="603.225" y="384.86" class="s3">0.6</text>
+<path d="m654.074 368.928v-235.872" clip-path="url(#d)" class="s1"/>
+<text x="646.299" y="384.86" class="s3">0.8</text>
+<path d="m697.147 368.928v-235.872" clip-path="url(#d)" class="s1"/>
+<text x="689.372" y="384.86" class="s3">1.0</text>
+<path d="m740.22 368.928v-235.872" clip-path="url(#d)" class="s1"/>
+<text x="732.446" y="384.86" class="s3">1.2</text>
+<path d="m783.294 368.928v-235.872" clip-path="url(#d)" class="s1"/>
+<text x="775.519" y="384.86" class="s3">1.4</text>
+<text x="552.097" y="406.871" class="s4">CPU 毫秒 / 成功请求（越低越好）</text>
+<text x="456.895" y="156.967" class="s4">Gin</text>
+<text x="448.542" y="185.107" class="s4">Fiber</text>
+<text x="449.449" y="213.248" class="s4">Echo</text>
+<text x="457.721" y="241.388" class="s4">Chi</text>
+<text x="441.366" y="269.528" class="s4">Beego</text>
+<text x="430.833" y="297.669" class="s4">ThinkGo</text>
+<text x="424.037" y="325.809" class="s4">ThinkPHP</text>
+<text x="437.902" y="353.949" class="s4">Laravel</text>
+<g clip-path="url(#d)">
+<path d="m481.78 143.777h42.834v17.447h-42.834z" class="s6"/>
+<path d="m481.78 171.918h37.718v17.447h-37.718z" class="s7"/>
+<path d="m481.78 200.058h42.314v17.447h-42.314z" class="s8"/>
+<path d="m481.78 228.198h43.326v17.447h-43.326z" class="s9"/>
+<path d="m481.78 256.339h44.21v17.447h-44.21z" class="s10"/>
+<path d="m481.78 284.479h54.92v17.447h-54.92z" class="s11"/>
+<path d="m481.78 312.619h114.596v17.447h-114.596z" class="s12"/>
+<path d="m481.78 340.76h238v17.447h-238z" class="s13"/>
+</g>
+<path d="m481.78 368.928h309.4" class="s14"/>
+<text x="530.564" y="155.294" class="s15">0.199</text>
+<text x="525.448" y="183.434" class="s15">0.175</text>
+<text x="530.044" y="211.575" class="s15">0.196</text>
+<text x="531.056" y="239.715" class="s15">0.201</text>
+<text x="531.94" y="267.855" class="s15">0.205</text>
+<text x="542.65" y="295.995" class="s15">0.255</text>
+<text x="602.326" y="324.136" class="s15">0.532</text>
+<text x="725.73" y="352.276" class="s15">1.105</text>
+<text x="481.78" y="119.056" class="s16">商城</text>
+<path d="m884 368.928h309.4v-235.872h-309.4z" class="s0"/>
+<path d="m884 368.928v-235.872" clip-path="url(#e)" class="s1"/>
+<text x="876.225" y="384.86" class="s3">0.0</text>
+<path d="m923.745 368.928v-235.872" clip-path="url(#e)" class="s1"/>
+<text x="915.97" y="384.86" class="s3">0.2</text>
+<path d="m963.49 368.928v-235.872" clip-path="url(#e)" class="s1"/>
+<text x="955.715" y="384.86" class="s3">0.4</text>
+<path d="m1003.24 368.928v-235.872" clip-path="url(#e)" class="s1"/>
+<text x="995.46" y="384.86" class="s3">0.6</text>
+<path d="m1042.98 368.928v-235.872" clip-path="url(#e)" class="s1"/>
+<text x="1035.2" y="384.86" class="s3">0.8</text>
+<path d="m1082.72 368.928v-235.872" clip-path="url(#e)" class="s1"/>
+<text x="1074.95" y="384.86" class="s3">1.0</text>
+<path d="m1122.47 368.928v-235.872" clip-path="url(#e)" class="s1"/>
+<text x="1114.69" y="384.86" class="s3">1.2</text>
+<path d="m1162.21 368.928v-235.872" clip-path="url(#e)" class="s1"/>
+<text x="1154.44" y="384.86" class="s3">1.4</text>
+<text x="954.317" y="406.871" class="s4">CPU 毫秒 / 成功请求（越低越好）</text>
+<text x="859.115" y="156.967" class="s4">Gin</text>
+<text x="850.762" y="185.107" class="s4">Fiber</text>
+<text x="851.669" y="213.248" class="s4">Echo</text>
+<text x="859.941" y="241.388" class="s4">Chi</text>
+<text x="843.586" y="269.528" class="s4">Beego</text>
+<text x="833.053" y="297.669" class="s4">ThinkGo</text>
+<text x="826.257" y="325.809" class="s4">ThinkPHP</text>
+<text x="840.122" y="353.949" class="s4">Laravel</text>
+<g clip-path="url(#e)">
+<path d="m884 143.777h52.552v17.447h-52.552z" class="s6"/>
+<path d="m884 171.918h46.791v17.447h-46.791z" class="s7"/>
+<path d="m884 200.058h52.542v17.447h-52.542z" class="s8"/>
+<path d="m884 228.198h51.709v17.447h-51.709z" class="s9"/>
+<path d="m884 256.339h54.55v17.447h-54.55z" class="s10"/>
+<path d="m884 284.479h65.272v17.447h-65.272z" class="s11"/>
+<path d="m884 312.619h122.344v17.447h-122.344z" class="s12"/>
+<path d="m884 340.76h238v17.447h-238z" class="s13"/>
+</g>
+<path d="m884 368.928h309.4" class="s14"/>
+<text x="942.502" y="155.294" class="s15">0.264</text>
+<text x="936.741" y="183.434" class="s15">0.235</text>
+<text x="942.492" y="211.575" class="s15">0.264</text>
+<text x="941.659" y="239.715" class="s15">0.260</text>
+<text x="944.5" y="267.855" class="s15">0.274</text>
+<text x="955.222" y="295.995" class="s15">0.328</text>
+<text x="1012.29" y="324.136" class="s15">0.616</text>
+<text x="1127.95" y="352.276" class="s15">1.198</text>
+<text x="884" y="119.056" class="s16">社区</text>
+<text x="30.6" font-weight="bold" fill="var(--c4)" font-size="24" y="47.29">每个成功请求的应用 CPU 开销</text>
+<text x="31.824" y="74.584" textLength="338.862" lengthAdjust="spacingAndGlyphs" class="s3">固定 64 VU · 每轮应用 CPU 时间 ÷ 业务成功请求数 · 再取三轮中位数</text>
+<g fill="var(--c3)">
+<text x="30.6" y="516.174" textLength="425.414" lengthAdjust="spacingAndGlyphs" class="s17">2026-09-24—25 实测 · WSL2 / i5-12600KF · 应用 4 逻辑 CPU / 2 GiB · 数据库 4 逻辑 CPU / 6 GiB</text>
+<text x="30.6" y="531.342" textLength="435.363" lengthAdjust="spacingAndGlyphs" class="s17">PostgreSQL 18.6 · 129 万行预热数据 · 本机 HTTP/1.1 · 相同原生 SQL，非 ORM · 每轮恢复种子数据库</text>
+<text x="30.6" y="547.395" textLength="479.438" lengthAdjust="spacingAndGlyphs" class="s17">Go 单进程（GOMAXPROCS=4）· ThinkPHP：Swoole 8 worker + JIT · Laravel：FrankenPHP 16 worker + JIT</text>
+<text x="30.6" y="563.239" textLength="403.787" lengthAdjust="spacingAndGlyphs" class="s17">PHP 均为 8.5.10；FrankenPHP 为 ZTS，Swoole 为 NTS；ThinkPHP 在应用层过滤弃用提示。</text>
+<text x="30.6" y="578.923" textLength="501.129" lengthAdjust="spacingAndGlyphs" class="s17">CPU 分子采用完整资源采样窗口，可能含负载启动/结束尾段；只计应用进程树，不是精确处理器函数耗时或整机成本。</text>
+</g>
+<path d="m408.784 434.998h10 10" fill="none" stroke="var(--c5)" stroke-linecap="square" stroke-width="3"/>
+<text x="436.784" y="438.498" class="s15">Gin 1.12.0</text>
+<path d="m408.784 450.652h10 10" fill="none" stroke="var(--c6)" stroke-linecap="square" stroke-width="3"/>
+<text x="436.784" y="454.152" class="s15">Fiber 3.5.0</text>
+<path d="m506.005 434.998h10 10" fill="none" stroke="var(--c7)" stroke-linecap="square" stroke-width="3"/>
+<text x="534.005" y="438.498" class="s15">Echo 5.3.1</text>
+<path d="m506.005 450.652h10 10" fill="none" stroke="var(--c8)" stroke-linecap="square" stroke-width="3"/>
+<text x="534.005" y="454.152" class="s15">Chi 5.3.2</text>
+<path d="m602.4 434.998h10 10" fill="none" stroke="var(--c9)" stroke-linecap="square" stroke-width="3"/>
+<text x="630.4" y="438.498" class="s15">Beego 2.3.10</text>
+<path d="m602.4 450.662h10 10" fill="none" stroke="var(--c10)" stroke-linecap="square" stroke-width="3"/>
+<text x="630.4" y="454.162" class="s15">ThinkGo 3.0.2</text>
+<path d="m715.719 434.998h10 10" fill="none" stroke="var(--c11)" stroke-linecap="square" stroke-width="3"/>
+<text x="743.719" y="438.498" class="s15">ThinkPHP 8.1.4</text>
+<path d="m715.719 450.652h10 10" fill="none" stroke="var(--c12)" stroke-linecap="square" stroke-width="3"/>
+<text x="743.719" y="454.152" class="s15">Laravel 13.33.0</text>
+<defs>
+<clipPath id="c">
+<rect x="79.56" y="133.056" width="309.4" height="235.872"/>
+</clipPath>
+<clipPath id="d">
+<rect x="481.78" y="133.056" width="309.4" height="235.872"/>
+</clipPath>
+<clipPath id="e">
+<rect x="884" y="133.056" width="309.4" height="235.872"/>
+</clipPath>
+</defs>
+</svg>

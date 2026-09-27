@@ -1,0 +1,209 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1224pt" height="604.8pt" font-family="Microsoft YaHei,Noto Sans CJK SC,sans-serif" version="1.1" viewBox="0 0 1224 604.8" role="img">
+<title>三类应用的 P99 尾延迟</title>
+<style>*{stroke-linejoin: round; stroke-linecap: butt}:root{--c0:#ffffff;--c1:#f6f8fa;--c2:#d8dee4;--c3:#59636e;--c4:#1f2328;--c5:#0969da;--c6:#008579;--c7:#8250df;--c8:#bc4c00;--c9:#bf3989;--c10:#3b5b92;--c11:#607b09;--c12:#9a6700;}@media(prefers-color-scheme:dark){:root{--c0:#0d1117;--c1:#161b22;--c2:#30363d;--c3:#b1bac4;--c4:#f0f6fc;--c5:#58a6ff;--c6:#39d3bb;--c7:#bc8cff;--c8:#ffa657;--c9:#f778ba;--c10:#9bbcf5;--c11:#b2ce65;--c12:#e3b341;}}.s0{fill:var(--c1);}.s1{fill:none;stroke:var(--c2);stroke-linecap:square;stroke-opacity:.7;stroke-width:0.8;}.s2{fill:var(--c3);stroke:var(--c3);stroke-width:0.8;}.s3{fill:var(--c3);font-size:11;}.s4{fill:var(--c4);font-size:11;}.s5{fill:var(--c4);stroke:var(--c4);stroke-width:0.8;}.s6{fill:var(--c5);}.s7{fill:var(--c6);}.s8{fill:var(--c7);}.s9{fill:var(--c8);}.s10{fill:var(--c9);}.s11{fill:var(--c10);}.s12{fill:var(--c11);}.s13{fill:var(--c12);}.s14{fill:none;stroke:var(--c2);stroke-linecap:square;stroke-width:0.8;}.s15{fill:var(--c4);font-size:10;}.s16{fill:var(--c4);font-size:14;font-weight:bold;}.s17{font-size:9.5;}</style>
+<path d="m0 604.8h1224v-604.8h-1224z" fill="var(--c0)"/>
+<path d="m79.56 368.928h309.4v-235.872h-309.4z" class="s0"/>
+<path d="m79.56 368.928v-235.872" clip-path="url(#c)" class="s1"/>
+<defs>
+<path id="b" d="m0 0v3.5" stroke="var(--c3)" stroke-width="0.8"/>
+</defs>
+<use x="79.56" y="368.928" xlink:href="#b" class="s2"/>
+<text x="76.335" y="384.86" textLength="6.451" lengthAdjust="spacingAndGlyphs" class="s3">0</text>
+<path d="m129.851 368.928v-235.872" clip-path="url(#c)" class="s1"/>
+<use x="129.851" y="368.928" xlink:href="#b" class="s2"/>
+<text x="123.401" y="384.86" textLength="12.901" lengthAdjust="spacingAndGlyphs" class="s3">50</text>
+<path d="m180.142 368.928v-235.872" clip-path="url(#c)" class="s1"/>
+<use x="180.142" y="368.928" xlink:href="#b" class="s2"/>
+<text x="170.467" y="384.86" textLength="19.351" lengthAdjust="spacingAndGlyphs" class="s3">100</text>
+<path d="m230.434 368.928v-235.872" clip-path="url(#c)" class="s1"/>
+<use x="230.434" y="368.928" xlink:href="#b" class="s2"/>
+<text x="220.758" y="384.86" textLength="19.351" lengthAdjust="spacingAndGlyphs" class="s3">150</text>
+<path d="m280.725 368.928v-235.872" clip-path="url(#c)" class="s1"/>
+<use x="280.725" y="368.928" xlink:href="#b" class="s2"/>
+<text x="271.049" y="384.86" textLength="19.351" lengthAdjust="spacingAndGlyphs" class="s3">200</text>
+<path d="m331.016 368.928v-235.872" clip-path="url(#c)" class="s1"/>
+<use x="331.016" y="368.928" xlink:href="#b" class="s2"/>
+<text x="321.34" y="384.86" textLength="19.351" lengthAdjust="spacingAndGlyphs" class="s3">250</text>
+<path d="m381.307 368.928v-235.872" clip-path="url(#c)" class="s1"/>
+<use x="381.307" y="368.928" xlink:href="#b" class="s2"/>
+<text x="371.631" y="384.86" textLength="19.351" lengthAdjust="spacingAndGlyphs" class="s3">300</text>
+<text x="178.817" y="406.871" textLength="110.887" lengthAdjust="spacingAndGlyphs" class="s4">P99 毫秒（越低越好）</text>
+<defs>
+<path id="a" d="m0 0h-3.5" stroke="var(--c4)" stroke-width="0.8"/>
+</defs>
+<use x="79.56" y="152.501" xlink:href="#a" class="s5"/>
+<text x="54.675" y="156.967" textLength="17.885" lengthAdjust="spacingAndGlyphs" class="s4">Gin</text>
+<use x="79.56" y="180.641" xlink:href="#a" class="s5"/>
+<text x="46.322" y="185.107" textLength="26.238" lengthAdjust="spacingAndGlyphs" class="s4">Fiber</text>
+<use x="79.56" y="208.782" xlink:href="#a" class="s5"/>
+<text x="47.229" y="213.248" textLength="25.331" lengthAdjust="spacingAndGlyphs" class="s4">Echo</text>
+<use x="79.56" y="236.922" xlink:href="#a" class="s5"/>
+<text x="55.501" y="241.388" textLength="17.059" lengthAdjust="spacingAndGlyphs" class="s4">Chi</text>
+<use x="79.56" y="265.062" xlink:href="#a" class="s5"/>
+<text x="39.146" y="269.528" textLength="33.414" lengthAdjust="spacingAndGlyphs" class="s4">Beego</text>
+<use x="79.56" y="293.202" xlink:href="#a" class="s5"/>
+<text x="28.613" y="297.669" textLength="43.947" lengthAdjust="spacingAndGlyphs" class="s4">ThinkGo</text>
+<use x="79.56" y="321.343" xlink:href="#a" class="s5"/>
+<text x="21.817" y="325.809" textLength="50.743" lengthAdjust="spacingAndGlyphs" class="s4">ThinkPHP</text>
+<use x="79.56" y="349.483" xlink:href="#a" class="s5"/>
+<text x="35.682" y="353.949" textLength="36.877" lengthAdjust="spacingAndGlyphs" class="s4">Laravel</text>
+<path d="m79.56 143.777h234.193v17.447h-234.193z" clip-path="url(#c)" class="s6"/>
+<path d="m79.56 171.918h226.142v17.447h-226.142z" clip-path="url(#c)" class="s7"/>
+<path d="m79.56 200.058h224.127v17.447h-224.127z" clip-path="url(#c)" class="s8"/>
+<path d="m79.56 228.198h238v17.447h-238z" clip-path="url(#c)" class="s9"/>
+<path d="m79.56 256.339h226.429v17.447h-226.429z" clip-path="url(#c)" class="s10"/>
+<path d="m79.56 284.479h229.133v17.447h-229.133z" clip-path="url(#c)" class="s11"/>
+<path d="m79.56 312.619h224.943v17.447h-224.943z" clip-path="url(#c)" class="s12"/>
+<path d="m79.56 340.76h55.69v17.447h-55.69z" clip-path="url(#c)" class="s13"/>
+<path d="m79.56 368.928h309.4" class="s14"/>
+<text x="319.703" y="155.294" textLength="31.728" lengthAdjust="spacingAndGlyphs" class="s15">232.84</text>
+<text x="311.652" y="183.434" textLength="31.728" lengthAdjust="spacingAndGlyphs" class="s15">224.83</text>
+<text x="309.637" y="211.575" textLength="31.728" lengthAdjust="spacingAndGlyphs" class="s15">222.83</text>
+<text x="323.51" y="239.715" textLength="31.728" lengthAdjust="spacingAndGlyphs" class="s15">236.62</text>
+<text x="311.939" y="267.855" textLength="31.728" lengthAdjust="spacingAndGlyphs" class="s15">225.12</text>
+<text x="314.643" y="295.995" textLength="31.728" lengthAdjust="spacingAndGlyphs" class="s15">227.81</text>
+<text x="310.453" y="324.136" textLength="31.728" lengthAdjust="spacingAndGlyphs" class="s15">223.64</text>
+<text x="141.2" y="352.276" textLength="25.864" lengthAdjust="spacingAndGlyphs" class="s15">55.37</text>
+<text x="79.56" y="119.056" textLength="28" lengthAdjust="spacingAndGlyphs" class="s16">博客</text>
+<path d="m481.78 368.928h309.4v-235.872h-309.4z" class="s0"/>
+<path d="m481.78 368.928v-235.872" clip-path="url(#d)" class="s1"/>
+<use x="481.78" y="368.928" xlink:href="#b" class="s2"/>
+<text x="478.555" y="384.86" textLength="6.451" lengthAdjust="spacingAndGlyphs" class="s3">0</text>
+<path d="m539.598 368.928v-235.872" clip-path="url(#d)" class="s1"/>
+<use x="539.598" y="368.928" xlink:href="#b" class="s2"/>
+<text x="533.148" y="384.86" textLength="12.901" lengthAdjust="spacingAndGlyphs" class="s3">10</text>
+<path d="m597.416 368.928v-235.872" clip-path="url(#d)" class="s1"/>
+<use x="597.416" y="368.928" xlink:href="#b" class="s2"/>
+<text x="590.966" y="384.86" textLength="12.901" lengthAdjust="spacingAndGlyphs" class="s3">20</text>
+<path d="m655.235 368.928v-235.872" clip-path="url(#d)" class="s1"/>
+<use x="655.235" y="368.928" xlink:href="#b" class="s2"/>
+<text x="648.784" y="384.86" textLength="12.901" lengthAdjust="spacingAndGlyphs" class="s3">30</text>
+<path d="m713.053 368.928v-235.872" clip-path="url(#d)" class="s1"/>
+<use x="713.053" y="368.928" xlink:href="#b" class="s2"/>
+<text x="706.602" y="384.86" textLength="12.901" lengthAdjust="spacingAndGlyphs" class="s3">40</text>
+<path d="m770.871 368.928v-235.872" clip-path="url(#d)" class="s1"/>
+<use x="770.871" y="368.928" xlink:href="#b" class="s2"/>
+<text x="764.42" y="384.86" textLength="12.901" lengthAdjust="spacingAndGlyphs" class="s3">50</text>
+<text x="581.037" y="406.871" textLength="110.887" lengthAdjust="spacingAndGlyphs" class="s4">P99 毫秒（越低越好）</text>
+<use x="481.78" y="152.501" xlink:href="#a" class="s5"/>
+<text x="456.895" y="156.967" textLength="17.885" lengthAdjust="spacingAndGlyphs" class="s4">Gin</text>
+<use x="481.78" y="180.641" xlink:href="#a" class="s5"/>
+<text x="448.542" y="185.107" textLength="26.238" lengthAdjust="spacingAndGlyphs" class="s4">Fiber</text>
+<use x="481.78" y="208.782" xlink:href="#a" class="s5"/>
+<text x="449.449" y="213.248" textLength="25.331" lengthAdjust="spacingAndGlyphs" class="s4">Echo</text>
+<use x="481.78" y="236.922" xlink:href="#a" class="s5"/>
+<text x="457.721" y="241.388" textLength="17.059" lengthAdjust="spacingAndGlyphs" class="s4">Chi</text>
+<use x="481.78" y="265.062" xlink:href="#a" class="s5"/>
+<text x="441.366" y="269.528" textLength="33.414" lengthAdjust="spacingAndGlyphs" class="s4">Beego</text>
+<use x="481.78" y="293.202" xlink:href="#a" class="s5"/>
+<text x="430.833" y="297.669" textLength="43.947" lengthAdjust="spacingAndGlyphs" class="s4">ThinkGo</text>
+<use x="481.78" y="321.343" xlink:href="#a" class="s5"/>
+<text x="424.037" y="325.809" textLength="50.743" lengthAdjust="spacingAndGlyphs" class="s4">ThinkPHP</text>
+<use x="481.78" y="349.483" xlink:href="#a" class="s5"/>
+<text x="437.902" y="353.949" textLength="36.877" lengthAdjust="spacingAndGlyphs" class="s4">Laravel</text>
+<path d="m481.78 143.777h170.608v17.447h-170.608z" clip-path="url(#d)" class="s6"/>
+<path d="m481.78 171.918h159.814v17.447h-159.814z" clip-path="url(#d)" class="s7"/>
+<path d="m481.78 200.058h162.458v17.447h-162.458z" clip-path="url(#d)" class="s8"/>
+<path d="m481.78 228.198h176.188v17.447h-176.188z" clip-path="url(#d)" class="s9"/>
+<path d="m481.78 256.339h171.489v17.447h-171.489z" clip-path="url(#d)" class="s10"/>
+<path d="m481.78 284.479h187.646v17.447h-187.646z" clip-path="url(#d)" class="s11"/>
+<path d="m481.78 312.619h238v17.447h-238z" clip-path="url(#d)" class="s12"/>
+<path d="m481.78 340.76h198.962v17.447h-198.962z" clip-path="url(#d)" class="s13"/>
+<path d="m481.78 368.928h309.4" class="s14"/>
+<text x="658.338" y="155.294" textLength="25.864" lengthAdjust="spacingAndGlyphs" class="s15">29.51</text>
+<text x="647.544" y="183.434" textLength="25.864" lengthAdjust="spacingAndGlyphs" class="s15">27.64</text>
+<text x="650.188" y="211.575" textLength="25.864" lengthAdjust="spacingAndGlyphs" class="s15">28.10</text>
+<text x="663.918" y="239.715" textLength="25.864" lengthAdjust="spacingAndGlyphs" class="s15">30.47</text>
+<text x="659.219" y="267.855" textLength="25.864" lengthAdjust="spacingAndGlyphs" class="s15">29.66</text>
+<text x="675.376" y="295.995" textLength="25.864" lengthAdjust="spacingAndGlyphs" class="s15">32.45</text>
+<text x="725.73" y="324.136" textLength="25.864" lengthAdjust="spacingAndGlyphs" class="s15">41.16</text>
+<text x="686.692" y="352.276" textLength="25.864" lengthAdjust="spacingAndGlyphs" class="s15">34.41</text>
+<text x="481.78" y="119.056" textLength="28" lengthAdjust="spacingAndGlyphs" class="s16">商城</text>
+<path d="m884 368.928h309.4v-235.872h-309.4z" class="s0"/>
+<path d="m884 368.928v-235.872" clip-path="url(#e)" class="s1"/>
+<use x="884" y="368.928" xlink:href="#b" class="s2"/>
+<text x="880.775" y="384.86" textLength="6.451" lengthAdjust="spacingAndGlyphs" class="s3">0</text>
+<path d="m950.827 368.928v-235.872" clip-path="url(#e)" class="s1"/>
+<use x="950.827" y="368.928" xlink:href="#b" class="s2"/>
+<text x="944.376" y="384.86" textLength="12.901" lengthAdjust="spacingAndGlyphs" class="s3">10</text>
+<path d="m1017.65 368.928v-235.872" clip-path="url(#e)" class="s1"/>
+<use x="1017.65" y="368.928" xlink:href="#b" class="s2"/>
+<text x="1011.2" y="384.86" textLength="12.901" lengthAdjust="spacingAndGlyphs" class="s3">20</text>
+<path d="m1084.48 368.928v-235.872" clip-path="url(#e)" class="s1"/>
+<use x="1084.48" y="368.928" xlink:href="#b" class="s2"/>
+<text x="1078.03" y="384.86" textLength="12.901" lengthAdjust="spacingAndGlyphs" class="s3">30</text>
+<path d="m1151.31 368.928v-235.872" clip-path="url(#e)" class="s1"/>
+<use x="1151.31" y="368.928" xlink:href="#b" class="s2"/>
+<text x="1144.86" y="384.86" textLength="12.901" lengthAdjust="spacingAndGlyphs" class="s3">40</text>
+<text x="983.257" y="406.871" textLength="110.887" lengthAdjust="spacingAndGlyphs" class="s4">P99 毫秒（越低越好）</text>
+<use x="884" y="152.501" xlink:href="#a" class="s5"/>
+<text x="859.115" y="156.967" textLength="17.885" lengthAdjust="spacingAndGlyphs" class="s4">Gin</text>
+<use x="884" y="180.641" xlink:href="#a" class="s5"/>
+<text x="850.762" y="185.107" textLength="26.238" lengthAdjust="spacingAndGlyphs" class="s4">Fiber</text>
+<use x="884" y="208.782" xlink:href="#a" class="s5"/>
+<text x="851.669" y="213.248" textLength="25.331" lengthAdjust="spacingAndGlyphs" class="s4">Echo</text>
+<use x="884" y="236.922" xlink:href="#a" class="s5"/>
+<text x="859.941" y="241.388" textLength="17.059" lengthAdjust="spacingAndGlyphs" class="s4">Chi</text>
+<use x="884" y="265.062" xlink:href="#a" class="s5"/>
+<text x="843.586" y="269.528" textLength="33.414" lengthAdjust="spacingAndGlyphs" class="s4">Beego</text>
+<use x="884" y="293.202" xlink:href="#a" class="s5"/>
+<text x="833.053" y="297.669" textLength="43.947" lengthAdjust="spacingAndGlyphs" class="s4">ThinkGo</text>
+<use x="884" y="321.343" xlink:href="#a" class="s5"/>
+<text x="826.257" y="325.809" textLength="50.743" lengthAdjust="spacingAndGlyphs" class="s4">ThinkPHP</text>
+<use x="884" y="349.483" xlink:href="#a" class="s5"/>
+<text x="840.122" y="353.949" textLength="36.877" lengthAdjust="spacingAndGlyphs" class="s4">Laravel</text>
+<path d="m884 143.777h171.487v17.447h-171.487z" clip-path="url(#e)" class="s6"/>
+<path d="m884 171.918h159.416v17.447h-159.416z" clip-path="url(#e)" class="s7"/>
+<path d="m884 200.058h167.028v17.447h-167.028z" clip-path="url(#e)" class="s8"/>
+<path d="m884 228.198h172.607v17.447h-172.607z" clip-path="url(#e)" class="s9"/>
+<path d="m884 256.339h174.207v17.447h-174.207z" clip-path="url(#e)" class="s10"/>
+<path d="m884 284.479h178.794v17.447h-178.794z" clip-path="url(#e)" class="s11"/>
+<path d="m884 312.619h202.045v17.447h-202.045z" clip-path="url(#e)" class="s12"/>
+<path d="m884 340.76h238v17.447h-238z" clip-path="url(#e)" class="s13"/>
+<path d="m884 368.928h309.4" class="s14"/>
+<text x="1061.44" y="155.294" textLength="25.864" lengthAdjust="spacingAndGlyphs" class="s15">25.66</text>
+<text x="1049.37" y="183.434" textLength="25.864" lengthAdjust="spacingAndGlyphs" class="s15">23.86</text>
+<text x="1056.98" y="211.575" textLength="25.864" lengthAdjust="spacingAndGlyphs" class="s15">24.99</text>
+<text x="1062.56" y="239.715" textLength="25.864" lengthAdjust="spacingAndGlyphs" class="s15">25.83</text>
+<text x="1064.16" y="267.855" textLength="25.864" lengthAdjust="spacingAndGlyphs" class="s15">26.07</text>
+<text x="1068.74" y="295.995" textLength="25.864" lengthAdjust="spacingAndGlyphs" class="s15">26.75</text>
+<text x="1091.99" y="324.136" textLength="25.864" lengthAdjust="spacingAndGlyphs" class="s15">30.23</text>
+<text x="1127.95" y="352.276" textLength="25.864" lengthAdjust="spacingAndGlyphs" class="s15">35.61</text>
+<text x="884" y="119.056" textLength="28" lengthAdjust="spacingAndGlyphs" class="s16">社区</text>
+<text x="30.6" font-weight="bold" fill="var(--c4)" font-size="24" y="47.29" textLength="251.67" lengthAdjust="spacingAndGlyphs">三类应用的 P99 尾延迟</text>
+<text x="31.824" y="74.584" textLength="301.73" lengthAdjust="spacingAndGlyphs" class="s3">相同业务配比 · 固定 64 个虚拟用户 · 完整且零错误的三次重复</text>
+<g fill="var(--c3)">
+<text x="30.6" y="516.174" textLength="425.414" lengthAdjust="spacingAndGlyphs" class="s17">2026-09-24—25 实测 · WSL2 / i5-12600KF · 应用 4 逻辑 CPU / 2 GiB · 数据库 4 逻辑 CPU / 6 GiB</text>
+<text x="30.6" y="531.342" textLength="435.363" lengthAdjust="spacingAndGlyphs" class="s17">PostgreSQL 18.6 · 129 万行预热数据 · 本机 HTTP/1.1 · 相同原生 SQL，非 ORM · 每轮恢复种子数据库</text>
+<text x="30.6" y="547.395" textLength="479.438" lengthAdjust="spacingAndGlyphs" class="s17">Go 单进程（GOMAXPROCS=4）· ThinkPHP：Swoole 8 worker + JIT · Laravel：FrankenPHP 16 worker + JIT</text>
+<text x="30.6" y="563.239" textLength="403.787" lengthAdjust="spacingAndGlyphs" class="s17">PHP 均为 8.5.10；FrankenPHP 为 ZTS，Swoole 为 NTS；ThinkPHP 在应用层过滤弃用提示。</text>
+<text x="30.6" y="578.9" textLength="323" lengthAdjust="spacingAndGlyphs" class="s17">分位数为各轮分位数的中位数，未合并全部请求；吞吐与尾延迟需同时阅读。</text>
+</g>
+<path d="m408.784 434.998h10 10" fill="none" stroke="var(--c5)" stroke-linecap="square" stroke-width="3"/>
+<text x="436.784" y="438.498" textLength="47.491" lengthAdjust="spacingAndGlyphs" class="s15">Gin 1.12.0</text>
+<path d="m408.784 450.652h10 10" fill="none" stroke="var(--c6)" stroke-linecap="square" stroke-width="3"/>
+<text x="436.784" y="454.152" textLength="49.22" lengthAdjust="spacingAndGlyphs" class="s15">Fiber 3.5.0</text>
+<path d="m506.005 434.998h10 10" fill="none" stroke="var(--c7)" stroke-linecap="square" stroke-width="3"/>
+<text x="534.005" y="438.498" textLength="48.395" lengthAdjust="spacingAndGlyphs" class="s15">Echo 5.3.1</text>
+<path d="m506.005 450.652h10 10" fill="none" stroke="var(--c8)" stroke-linecap="square" stroke-width="3"/>
+<text x="534.005" y="454.152" textLength="40.875" lengthAdjust="spacingAndGlyphs" class="s15">Chi 5.3.2</text>
+<path d="m602.4 434.998h10 10" fill="none" stroke="var(--c9)" stroke-linecap="square" stroke-width="3"/>
+<text x="630.4" y="438.498" textLength="61.608" lengthAdjust="spacingAndGlyphs" class="s15">Beego 2.3.10</text>
+<path d="m602.4 450.662h10 10" fill="none" stroke="var(--c10)" stroke-linecap="square" stroke-width="3"/>
+<text x="630.4" y="454.162" textLength="65.319" lengthAdjust="spacingAndGlyphs" class="s15">ThinkGo 3.0.2</text>
+<path d="m715.719 434.998h10 10" fill="none" stroke="var(--c11)" stroke-linecap="square" stroke-width="3"/>
+<text x="743.719" y="438.498" textLength="71.497" lengthAdjust="spacingAndGlyphs" class="s15">ThinkPHP 8.1.4</text>
+<path d="m715.719 450.652h10 10" fill="none" stroke="var(--c12)" stroke-linecap="square" stroke-width="3"/>
+<text x="743.719" y="454.152" textLength="70.62" lengthAdjust="spacingAndGlyphs" class="s15">Laravel 13.33.0</text>
+<defs>
+<clipPath id="c">
+<rect x="79.56" y="133.056" width="309.4" height="235.872"/>
+</clipPath>
+<clipPath id="d">
+<rect x="481.78" y="133.056" width="309.4" height="235.872"/>
+</clipPath>
+<clipPath id="e">
+<rect x="884" y="133.056" width="309.4" height="235.872"/>
+</clipPath>
+</defs>
+</svg>
