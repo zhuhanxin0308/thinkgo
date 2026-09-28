@@ -7,7 +7,7 @@ require (
 	github.com/andybalholm/brotli v1.2.2
 	github.com/getkin/kin-openapi v0.145.0
 	github.com/go-sql-driver/mysql v1.10.0
-	github.com/godror/godror v0.51.0
+	github.com/godror/godror v0.51.5
 	github.com/hibiken/asynq v0.26.0
 	github.com/klauspost/compress v1.20.0
 	github.com/lib/pq v1.12.3
