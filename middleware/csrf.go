@@ -223,16 +223,21 @@ func (m *csrfMiddleware) handle(req *context.Request, next func(*context.Request
 			)
 			valid = cookieErr == nil
 		}
-		response := next(req)
-		if response == nil || valid {
-			return response
+		if valid {
+			return next(req)
 		}
 		signed, err := m.newSignedToken()
 		if err != nil {
 			return csrfErrorResponse(http.StatusInternalServerError, "CSRF token 生成失败")
 		}
-		if err = setCSRFCookie(response, req, m.config, signed, m.now()); err != nil {
+		// 先准备提交钩子，再进入可能直接 WriteHeader/Write/Flush 的标准 Handler。
+		fallback, err := prepareCSRFCookie(req, m.config, signed, m.now())
+		if err != nil {
 			return csrfErrorResponse(http.StatusInternalServerError, "CSRF Cookie 写入失败")
+		}
+		response := next(req)
+		if response != nil && fallback != "" {
+			response.AddHeader("Set-Cookie", fallback)
 		}
 		return response
 	}

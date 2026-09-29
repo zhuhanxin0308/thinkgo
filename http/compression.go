@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/flate"
 	"compress/gzip"
+	"compress/zlib"
 	"errors"
 	"io"
 	"math"
@@ -521,7 +522,8 @@ func newPooledCompressionWriter(pool *compressionWriterPool, key compressionPool
 		compressor.reset = writer.Reset
 		compressor.flush = writer.Flush
 	case "deflate":
-		writer, err := flate.NewWriter(io.Discard, key.level)
+		// HTTP deflate requires a zlib wrapper (RFC 9110, section 8.4.1.2).
+		writer, err := zlib.NewWriterLevel(io.Discard, key.level)
 		if err != nil {
 			return nil, err
 		}

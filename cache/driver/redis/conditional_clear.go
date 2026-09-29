@@ -33,8 +33,6 @@ func (c *Redis) ClearPrefixIfContext(parent context.Context, prefix string, matc
 	ctx, cancel := context.WithTimeout(parent, c.opTimeout*5)
 	defer cancel()
 	physicalPrefix := c.withPrefix(prefix)
-	lockPrefix := c.withPrefix(managerLockKeyPrefix)
-	fencePrefix := c.withPrefix(cacheFenceMetadataPrefix)
 	var cursor uint64
 	for {
 		keys, next, err := c.client.Scan(ctx, cursor, redisScanPattern(physicalPrefix), 256).Result()
@@ -42,11 +40,15 @@ func (c *Redis) ClearPrefixIfContext(parent context.Context, prefix string, matc
 			return err
 		}
 		for _, key := range keys {
-			if !strings.HasPrefix(key, physicalPrefix) || strings.HasPrefix(key, lockPrefix) || strings.HasPrefix(key, fencePrefix) {
+			eligible, scopeErr := redisClearKeyEligible(key, c.prefix, physicalPrefix)
+			if !eligible && scopeErr == nil {
 				continue
 			}
 			if match != nil && !match(strings.TrimPrefix(key, c.prefix)) {
 				continue
+			}
+			if scopeErr != nil {
+				return scopeErr
 			}
 			err = c.updateAtomicContext(ctx, strings.TrimPrefix(key, c.prefix), 0, true, func(value interface{}, found bool) (interface{}, bool, error) {
 				if !found {

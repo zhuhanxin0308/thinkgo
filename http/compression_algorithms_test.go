@@ -2,8 +2,8 @@ package http
 
 import (
 	"bytes"
-	"compress/flate"
 	"compress/gzip"
+	"compress/zlib"
 	"errors"
 	"io"
 	"net/http"
@@ -57,7 +57,10 @@ func decodeCompressedTestBody(algorithm string, body []byte) ([]byte, error) {
 		}
 		reader, closer = decoded, decoded
 	case "deflate":
-		decoded := flate.NewReader(bytes.NewReader(body))
+		decoded, err := zlib.NewReader(bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
 		reader, closer = decoded, decoded
 	case "br":
 		reader = brotli.NewReader(bytes.NewReader(body))

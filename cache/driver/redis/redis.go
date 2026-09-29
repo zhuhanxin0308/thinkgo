@@ -510,34 +510,7 @@ func (c *Redis) ClearContext(parent context.Context) error {
 	if c.prefix == "" && !c.allowFlushDB {
 		return ErrUnsafeRedisFlush
 	}
-	ctx, cancel := context.WithTimeout(parent, c.opTimeout*5)
-	defer cancel()
-	var cursor uint64
-	pattern := redisScanPattern(c.prefix)
-	for {
-		keys, next, err := c.client.Scan(ctx, cursor, pattern, 256).Result()
-		if err != nil {
-			return err
-		}
-		// 锁与普通缓存共享 Redis DB，但 Flush 不能破坏仍在执行的临界区。
-		deletable := keys[:0]
-		lockPrefix := c.withPrefix(managerLockKeyPrefix)
-		fencePrefix := c.withPrefix(cacheFenceMetadataPrefix)
-		for _, key := range keys {
-			if !strings.HasPrefix(key, lockPrefix) && !strings.HasPrefix(key, fencePrefix) {
-				deletable = append(deletable, key)
-			}
-		}
-		if len(deletable) > 0 {
-			if err = c.client.Del(ctx, deletable...).Err(); err != nil {
-				return err
-			}
-		}
-		cursor = next
-		if cursor == 0 {
-			return nil
-		}
-	}
+	return c.clearPhysicalPrefixContext(parent, c.prefix)
 }
 
 // redisScanPattern 转义 Redis glob 元字符，确保前缀只按字面量匹配。

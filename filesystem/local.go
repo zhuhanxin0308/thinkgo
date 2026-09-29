@@ -684,7 +684,7 @@ func (disk *Local) Path(filePath string) (string, error) {
 	return filepath.Join(disk.rootPath, filepath.FromSlash(logicalPath)), nil
 }
 
-// URL 使用磁盘 url 前缀生成外部访问地址。
+// URL 将原始逻辑文件名编码为 URL 路径，保留磁盘前缀中的查询与片段。
 func (disk *Local) URL(filePath string) (string, error) {
 	logicalPath, err := normalizePath(filePath)
 	if err != nil {
@@ -698,7 +698,7 @@ func (disk *Local) URL(filePath string) (string, error) {
 	if disk.url == "" {
 		return "", ErrURLNotSupported
 	}
-	return strings.TrimRight(disk.url, "/") + "/" + strings.TrimLeft(logicalPath, "/"), nil
+	return localFileURL(disk.url, logicalPath)
 }
 
 // Close 幂等关闭根目录句柄。

@@ -66,6 +66,11 @@ func (middleware *RateLimit) Handle(request *context.Request, next func(*context
 	if err != nil || strings.TrimSpace(key) == "" {
 		return rateLimitErrorResponse(http.StatusBadRequest)
 	}
+	// 同一存储可服务多个限流器；策略必须参与键空间，不能切换策略后清空旧额度。
+	key, err = ratelimit.PolicyKey(key, middleware.limit)
+	if err != nil {
+		return rateLimitErrorResponse(http.StatusBadRequest)
+	}
 	result, err := middleware.store.Take(request.Context(), key, middleware.limit, middleware.clock())
 	if err != nil {
 		if errors.Is(err, ratelimit.ErrStoreCapacity) {
