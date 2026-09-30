@@ -5,7 +5,7 @@ go 1.26.6
 require (
 	github.com/alicebob/miniredis/v2 v2.37.0
 	github.com/andybalholm/brotli v1.2.5
-	github.com/getkin/kin-openapi v0.145.0
+	github.com/getkin/kin-openapi v0.149.0
 	github.com/go-sql-driver/mysql v1.10.0
 	github.com/godror/godror v0.51.5
 	github.com/hibiken/asynq v0.26.0
@@ -49,7 +49,7 @@ require (
 	github.com/oasdiff/yaml3 v0.0.14 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/robfig/cron/v3 v3.0.1 // indirect
-	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3 // indirect
 	github.com/shopspring/decimal v1.4.0 // indirect
 	github.com/spf13/cast v1.10.0 // indirect
 	github.com/xdg-go/pbkdf2 v1.0.0 // indirect
