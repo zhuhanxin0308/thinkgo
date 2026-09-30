@@ -12,7 +12,7 @@ require (
 	github.com/klauspost/compress v1.20.0
 	github.com/lib/pq v1.12.3
 	github.com/mattn/go-sqlite3 v1.14.52
-	github.com/microsoft/go-mssqldb v1.10.0
+	github.com/microsoft/go-mssqldb v1.11.2
 	github.com/neo4j/neo4j-go-driver/v5 v5.28.4
 	github.com/quic-go/quic-go v0.62.0
 	github.com/redis/go-redis/v9 v9.21.0
@@ -28,9 +28,6 @@ require (
 
 require (
 	filippo.io/edwards25519 v1.2.0 // indirect
-	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.22.0 // indirect
-	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.14.0 // indirect
-	github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azkeys v1.5.0 // indirect
 	github.com/UNO-SOFT/zlog v0.8.6 // indirect
 	github.com/VictoriaMetrics/easyproto v1.2.0 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
