@@ -3,7 +3,7 @@ module github.com/zhuhanxin0308/thinkgo/v3
 go 1.26.6
 
 require (
-	github.com/alicebob/miniredis/v2 v2.37.0
+	github.com/alicebob/miniredis/v2 v2.39.0
 	github.com/andybalholm/brotli v1.2.5
 	github.com/getkin/kin-openapi v0.145.0
 	github.com/go-sql-driver/mysql v1.10.0
