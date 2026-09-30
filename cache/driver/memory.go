@@ -405,6 +405,11 @@ func cloneMemoryReflect(value reflect.Value, visited map[memoryCloneVisit]reflec
 		}
 		result := reflect.MakeSlice(value.Type(), value.Len(), value.Len())
 		visited[visit] = result
+		// 字节元素不包含可变引用；批量复制保留命名类型和快照隔离，避免逐字节反射。
+		if value.Type().Elem().Kind() == reflect.Uint8 {
+			reflect.Copy(result, value)
+			return result
+		}
 		for index := 0; index < value.Len(); index++ {
 			result.Index(index).Set(cloneMemoryReflect(value.Index(index), visited))
 		}
