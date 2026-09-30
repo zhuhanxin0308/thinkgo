@@ -198,6 +198,7 @@ func (handler HandlerFunc) HandleTask(ctx context.Context, task Task) error {
 }
 
 // Router 对任务类型进行精确匹配，避免前缀模式意外接管其它业务任务。
+// 零值可直接用于注册；首次处理任务后仍会自动冻结。
 type Router struct {
 	mu       sync.RWMutex
 	handlers map[string]Handler
@@ -226,6 +227,9 @@ func (router *Router) Register(taskType string, handler Handler) error {
 	if _, exists := router.handlers[validated.Type()]; exists {
 		return fmt.Errorf("%w: %s", ErrDuplicateHandler, validated.Type())
 	}
+	if router.handlers == nil {
+		router.handlers = make(map[string]Handler)
+	}
 	router.handlers[validated.Type()] = handler
 	return nil
 }
@@ -245,7 +249,8 @@ func (router *Router) HandleTask(ctx context.Context, task Task) error {
 	if router == nil || ctx == nil {
 		return ErrInvalidTask
 	}
-	validated, err := NewTask(task.Type(), task.Payload(), task.Headers())
+	// 同包内直接读取不可变字段，由 NewTask 完成唯一一次校验和防御性复制。
+	validated, err := NewTask(task.taskType, task.payload, task.headers)
 	if err != nil {
 		return err
 	}

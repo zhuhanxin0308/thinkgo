@@ -1,0 +1,51 @@
+name: Temporary module audit snapshot
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    if: github.head_ref == 'codex/module-audit-20261001' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Export tracked source for the requested audit
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/thinkgo-audit-source"
+          git archive --format=tar.gz 26b1e9cf64bc115d98e538213c3560f8fbbf6eaa -o "$RUNNER_TEMP/thinkgo-audit-source/baseline.tar.gz"
+          git archive --format=tar.gz HEAD -o "$RUNNER_TEMP/thinkgo-audit-source/candidate.tar.gz"
+          git rev-parse HEAD > "$RUNNER_TEMP/thinkgo-audit-source/candidate-commit.txt"
+      - name: Upload source snapshot
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: thinkgo-module-audit-source
+          path: ${{ runner.temp }}/thinkgo-audit-source
+          retention-days: 1
+          if-no-files-found: error
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: go.mod
+          cache: false
+          check-latest: false
+      - name: Verify focused contracts on the declared Go version
+        shell: bash
+        env:
+          GOTOOLCHAIN: local
+          GOWORK: 'off'
+        run: |
+          set -euo pipefail
+          go version
+          go test -race -shuffle=on -count=20 ./queue ./metrics
+          go vet ./queue ./metrics
+          go test -run '^$' -bench '^BenchmarkAudit' -benchmem -benchtime=200ms -count=3 ./queue ./metrics
