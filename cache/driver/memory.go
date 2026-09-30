@@ -74,6 +74,16 @@ func NewMemoryWithMaxEntries(maxEntries int) (*Memory, error) {
 }
 
 func (c *Memory) Get(key string) (interface{}, bool, error) {
+	value, found, err := c.lookup(key)
+	if err != nil || !found {
+		return nil, false, err
+	}
+	return cloneMemoryValue(value), true, nil
+}
+
+// lookup 借用驱动内不可变值，仅限内部使用；公开 Get 必须复制后再交给调用方。
+// Has 只读取存在性，避免为丢弃的 payload 执行深拷贝。
+func (c *Memory) lookup(key string) (interface{}, bool, error) {
 	if c == nil {
 		return nil, false, fmt.Errorf("内存缓存驱动为空")
 	}
@@ -95,7 +105,7 @@ func (c *Memory) Get(key string) (interface{}, bool, error) {
 		c.lock.Unlock()
 		return nil, false, nil
 	}
-	return cloneMemoryValue(value), true, nil
+	return value, true, nil
 }
 
 func (c *Memory) Set(key string, value interface{}, ttl time.Duration) error {
@@ -121,7 +131,7 @@ func (c *Memory) Set(key string, value interface{}, ttl time.Duration) error {
 }
 
 func (c *Memory) Has(key string) (bool, error) {
-	_, found, err := c.Get(key)
+	_, found, err := c.lookup(key)
 	return found, err
 }
 

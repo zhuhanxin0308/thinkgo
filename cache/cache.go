@@ -906,14 +906,22 @@ func (s *cacheState) doRememberContext(ctx context.Context, key string, callback
 		return nil, err
 	}
 
+	callbackReturned := false
 	defer func() {
-		if recovered := recover(); recovered != nil {
-			s.finishRemember(key, call, nil, errors.New("Remember 回调发生 panic"))
+		recovered := recover()
+		if recovered != nil {
+			value, err = nil, errors.New("Remember 回调发生 panic")
+		} else if !callbackReturned {
+			// Goexit 没有返回值，必须通知等待者失败，不能永久保留共享加载状态。
+			value, err = nil, errors.New("Remember 回调异常退出")
+		}
+		s.finishRemember(key, call, value, err)
+		if recovered != nil {
 			panic(recovered)
 		}
 	}()
 	value, err = callback()
-	s.finishRemember(key, call, value, err)
+	callbackReturned = true
 	return value, err
 }
 

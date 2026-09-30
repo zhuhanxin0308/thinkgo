@@ -18,10 +18,13 @@ func (s *Session) ConsumeString(name, submitted string) (bool, error) {
 	}
 	s.saveMu.Lock()
 	defer s.saveMu.Unlock()
-	s.mu.Lock()
-	sessionID := s.id
-	accepted, err := s.consumeStringLocked(name, submitted)
-	s.mu.Unlock()
+	var sessionID string
+	accepted, err := func() (bool, error) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		sessionID = s.id
+		return s.consumeStringLocked(name, submitted)
+	}()
 	if err != nil {
 		return false, s.reportError("消费一次性 Session 值失败", err, map[string]interface{}{"session_id": sessionID})
 	}
