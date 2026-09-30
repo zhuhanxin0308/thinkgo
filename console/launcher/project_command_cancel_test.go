@@ -87,6 +87,9 @@ func assertProjectCommandDiscoveryCancellation(t *testing.T, stage string) {
 	if err := target.Close(); err != nil {
 		t.Fatal(err)
 	}
+	// fake Go 复用 race 测试二进制；真实 Go 工具没有 race runtime 的退出等待。
+	// 仅取消子进程的人工退出延迟，保留 race 检测、其它 GORACE 选项和原有取消时限。
+	t.Setenv("GORACE", os.Getenv("GORACE")+" atexit_sleep_ms=0")
 	t.Setenv("THINKGO_TEST_FAKE_GO", "1")
 	t.Setenv("THINKGO_TEST_FAKE_GO_STAGE", stage)
 	t.Setenv("THINKGO_TEST_GO_STARTED", started)
