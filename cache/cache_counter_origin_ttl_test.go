@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	cacheDriver "github.com/zhuhanxin0308/thinkgo/v3/cache/driver"
@@ -19,22 +20,24 @@ type legacyTTLAtomicDriver struct {
 func TestCounterDoesNotInheritInvalidatedTTL(t *testing.T) {
 	for _, kind := range []string{"memory", "file", "redis"} {
 		t.Run(kind, func(t *testing.T) {
-			var backend Driver
-			advance := time.Sleep
-			switch kind {
-			case "memory":
-				backend = cacheDriver.NewMemory()
-			case "file":
-				file, err := cacheDriver.NewFile(t.TempDir())
-				if err != nil {
-					t.Fatal(err)
-				}
-				backend = file
-			case "redis":
-				redis, clock := atomicOrderRedisWithClock(t)
-				backend, advance = redis, clock.FastForward
+			if kind == "redis" {
+				// 网络测试保留其已有服务端时钟，不放入 synctest 的隔离范围。
+				backend, clock := atomicOrderRedisWithClock(t)
+				assertCounterInvalidatedTTLAfter(t, backend, clock.FastForward)
+				return
 			}
-			assertCounterInvalidatedTTLAfter(t, backend, advance)
+			synctest.Test(t, func(t *testing.T) {
+				// 真实后端和失效流程不变；短 TTL 只能由测试显式推进。
+				var backend Driver = cacheDriver.NewMemory()
+				if kind == "file" {
+					file, err := cacheDriver.NewFile(t.TempDir())
+					if err != nil {
+						t.Fatal(err)
+					}
+					backend = file
+				}
+				assertCounterInvalidatedTTLAfter(t, backend, time.Sleep)
+			})
 		})
 	}
 }

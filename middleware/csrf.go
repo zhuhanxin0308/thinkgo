@@ -226,18 +226,35 @@ func (m *csrfMiddleware) handle(req *context.Request, next func(*context.Request
 		if valid {
 			return next(req)
 		}
+		// 下游可能直接提交响应，因此随机源和 Cookie 校验必须先完成。
 		signed, err := m.newSignedToken()
 		if err != nil {
 			return csrfErrorResponse(http.StatusInternalServerError, "CSRF token 生成失败")
 		}
-		// 先准备提交钩子，再进入可能直接 WriteHeader/Write/Flush 的标准 Handler。
-		fallback, err := prepareCSRFCookie(req, m.config, signed, m.now())
+		cookieHeader, err := csrfCookieHeader(req, m.config, signed, m.now())
 		if err != nil {
 			return csrfErrorResponse(http.StatusInternalServerError, "CSRF Cookie 写入失败")
 		}
+		if writer, exists := req.ResponseWriter(); exists {
+			if registrar, ok := writer.(interface {
+				BeforeCommit(func(http.Header) error) error
+			}); ok {
+				// 钩子仅捕获不可变头部字符串，不保留请求或可变 Response。
+				if err = registrar.BeforeCommit(func(header http.Header) error {
+					appendCSRFCookieHeader(header, cookieHeader)
+					return nil
+				}); err != nil {
+					return csrfErrorResponse(http.StatusInternalServerError, "CSRF 提交钩子注册失败")
+				}
+			} else {
+				// 独立使用中间件时，普通 ResponseWriter 必须在下游写出前设置头部。
+				appendCSRFCookieHeader(writer.Header(), cookieHeader)
+			}
+		}
 		response := next(req)
-		if response != nil && fallback != "" {
-			response.AddHeader("Set-Cookie", fallback)
+		if response != nil && !response.Committed() {
+			// 保留内存响应契约；最终提交钩子会对同一头部去重。
+			response.AddHeader("Set-Cookie", cookieHeader)
 		}
 		return response
 	}
@@ -492,8 +509,20 @@ func singleCSRFFormValue(values []string) (string, error) {
 }
 
 func setCSRFCookie(response *context.Response, req *context.Request, config CSRFConfig, token string, now time.Time) error {
-	if response == nil || len(token) == 0 || len(token) > maxCSRFTokenBytes {
+	if response == nil {
 		return ErrInvalidCSRFToken
+	}
+	header, err := csrfCookieHeader(req, config, token, now)
+	if err != nil {
+		return err
+	}
+	response.AddHeader("Set-Cookie", header)
+	return nil
+}
+
+func csrfCookieHeader(req *context.Request, config CSRFConfig, token string, now time.Time) (string, error) {
+	if req == nil || len(token) == 0 || len(token) > maxCSRFTokenBytes {
+		return "", ErrInvalidCSRFToken
 	}
 	sameSite := http.SameSiteLaxMode
 	if config.SameSite == "Strict" {
@@ -509,14 +538,23 @@ func setCSRFCookie(response *context.Response, req *context.Request, config CSRF
 		SameSite: sameSite,
 	}
 	if err := written.Valid(); err != nil {
-		return err
+		return "", err
 	}
 	header := written.String()
 	if header == "" || len(header) > maxCSRFCookieBytes {
-		return ErrInvalidCSRFToken
+		return "", ErrInvalidCSRFToken
 	}
-	response.AddHeader("Set-Cookie", header)
-	return nil
+	return header, nil
+}
+
+// 同一个 Cookie 可同时来自内存响应和提交钩子；只去重自身，不覆盖 Session 等其他 Cookie。
+func appendCSRFCookieHeader(header http.Header, value string) {
+	for _, existing := range header.Values("Set-Cookie") {
+		if existing == value {
+			return
+		}
+	}
+	header.Add("Set-Cookie", value)
 }
 
 func validateCSRFConfig(config CSRFConfig) error {

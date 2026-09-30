@@ -3,7 +3,6 @@ package http
 import (
 	"bufio"
 	"bytes"
-	"compress/flate"
 	"compress/gzip"
 	"compress/zlib"
 	"errors"
@@ -196,7 +195,7 @@ func (w *CompressionResponseWriter) WriteHeader(code int) {
 		w.ResponseWriter.WriteHeader(code)
 		return
 	}
-	if w.headerSet {
+	if w.closed || w.headerSet || w.wroteHeader {
 		return
 	}
 	w.headerSet = true
@@ -207,6 +206,10 @@ func (w *CompressionResponseWriter) WriteHeader(code int) {
 func (w *CompressionResponseWriter) Write(b []byte) (int, error) {
 	if w.closed {
 		return 0, io.ErrClosedPipe
+	}
+	// 首次 Write 即确定逻辑状态码，包括空写入；物理提交仍可延迟到阈值或 Flush。
+	if !w.headerSet {
+		w.WriteHeader(http.StatusOK)
 	}
 	w.ensureContentType(b)
 	if w.wroteHeader {
@@ -431,8 +434,8 @@ func (w *CompressionResponseWriter) startCompressedWriter() error {
 		}
 		compressor, err = getPooledCompressionWriter(w.encoding, level, w.ResponseWriter)
 	case "deflate":
-		level = flate.DefaultCompression
-		if l, ok := w.levels["deflate"]; ok && l >= flate.HuffmanOnly && l <= flate.BestCompression {
+		level = zlib.DefaultCompression
+		if l, ok := w.levels["deflate"]; ok && l >= zlib.HuffmanOnly && l <= zlib.BestCompression {
 			level = l
 		}
 		compressor, err = getPooledCompressionWriter(w.encoding, level, w.ResponseWriter)
@@ -522,7 +525,7 @@ func newPooledCompressionWriter(pool *compressionWriterPool, key compressionPool
 		compressor.reset = writer.Reset
 		compressor.flush = writer.Flush
 	case "deflate":
-		// HTTP deflate requires a zlib wrapper (RFC 9110, section 8.4.1.2).
+		// RFC 9110 的 deflate 编码要求 zlib 封装，而不是裸 DEFLATE 数据流。
 		writer, err := zlib.NewWriterLevel(io.Discard, key.level)
 		if err != nil {
 			return nil, err

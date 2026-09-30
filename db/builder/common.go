@@ -110,8 +110,9 @@ func sortedMapKeys(data map[string]interface{}) []string {
 }
 
 // rebindNumbered 仅替换 SQL 正文中的问号，保留引用、注释和 dollar quote 内容。
-// preservePostgresOperators 启用时还会还原 ??，并保留 ?|、?&、@? 操作符。
-func rebindNumbered(query, prefix string, preservePostgresOperators ...bool) string {
+// postgresSyntax 使用 standard_conforming_strings=on 的 PostgreSQL 词法规则。
+// E 字符串支持反斜杠转义；普通字符串和引用标识符不把反斜杠视为引号转义。
+func rebindNumbered(query, prefix string, postgresSyntax ...bool) string {
 	const (
 		stateNormal = iota
 		stateSingle
@@ -125,16 +126,30 @@ func rebindNumbered(query, prefix string, preservePostgresOperators ...bool) str
 	state := stateNormal
 	dollarDelimiter := ""
 	parameter := 0
-	preserveOperators := len(preservePostgresOperators) > 0 && preservePostgresOperators[0]
+	blockDepth := 0
+	stringEscapes := false
+	stringContinuation := false
+	continuationNewline := false
+	postgres := len(postgresSyntax) > 0 && postgresSyntax[0]
 	var output strings.Builder
 	output.Grow(len(query) + 8)
 	for index := 0; index < len(query); index++ {
 		current := query[index]
 		switch state {
 		case stateNormal:
+			if postgres && stringContinuation {
+				if current == '\n' || current == '\r' {
+					continuationNewline = true
+				}
+				startsComment := index+1 < len(query) &&
+					(current == '-' && query[index+1] == '-' || current == '/' && query[index+1] == '*')
+				if current != '\'' && !builderRebindWhitespace(current) && !startsComment {
+					stringContinuation = false
+				}
+			}
 			switch current {
 			case '?':
-				if preserveOperators {
+				if postgres {
 					if index+1 < len(query) && query[index+1] == '?' {
 						output.WriteByte('?')
 						index++
@@ -150,13 +165,21 @@ func rebindNumbered(query, prefix string, preservePostgresOperators ...bool) str
 				output.WriteString(strconv.Itoa(parameter))
 				continue
 			case '\'':
+				stringEscapes = !postgres || builderRebindEscapeString(query, index) ||
+					stringContinuation && continuationNewline && stringEscapes
+				stringContinuation = false
 				state = stateSingle
 			case '"':
 				state = stateDouble
 			case '`':
-				state = stateBacktick
+				if !postgres {
+					state = stateBacktick
+				}
 			case '[':
-				state = stateBracket
+				// PostgreSQL 数组构造、下标和切片中的参数仍属于 SQL 正文。
+				if !postgres {
+					state = stateBracket
+				}
 			case '-':
 				if index+1 < len(query) && query[index+1] == '-' {
 					state = stateLineComment
@@ -164,11 +187,23 @@ func rebindNumbered(query, prefix string, preservePostgresOperators ...bool) str
 			case '/':
 				if index+1 < len(query) && query[index+1] == '*' {
 					state = stateBlockComment
+					blockDepth = 1
+					// 一次消费整个起始符，禁止用其中的 * 与后续 / 重叠闭合。
+					output.WriteString("/*")
+					index++
+					continue
 				}
 			case '$':
+				if postgres && index > 0 && builderRebindIdentifierByte(query[index-1]) {
+					break
+				}
 				if delimiter := builderDollarDelimiter(query[index:]); delimiter != "" {
 					state = stateDollarQuote
 					dollarDelimiter = delimiter
+					// 起始分隔符不能同时成为结束分隔符的一部分（例如 $$$?$$）。
+					output.WriteString(delimiter)
+					index += len(delimiter) - 1
+					continue
 				}
 			}
 		case stateSingle, stateDouble, stateBacktick:
@@ -178,7 +213,7 @@ func rebindNumbered(query, prefix string, preservePostgresOperators ...bool) str
 			} else if state == stateBacktick {
 				closing = '`'
 			}
-			if current == '\\' && index+1 < len(query) {
+			if current == '\\' && index+1 < len(query) && (!postgres || state == stateSingle && stringEscapes) {
 				output.WriteByte(current)
 				index++
 				output.WriteByte(query[index])
@@ -191,6 +226,8 @@ func rebindNumbered(query, prefix string, preservePostgresOperators ...bool) str
 					output.WriteByte(query[index])
 					continue
 				}
+				stringContinuation = postgres && state == stateSingle
+				continuationNewline = false
 				state = stateNormal
 			}
 		case stateBracket:
@@ -205,14 +242,27 @@ func rebindNumbered(query, prefix string, preservePostgresOperators ...bool) str
 			}
 		case stateLineComment:
 			if current == '\n' || current == '\r' {
+				continuationNewline = true
 				state = stateNormal
 			}
 		case stateBlockComment:
+			if current == '\n' || current == '\r' {
+				continuationNewline = true
+			}
+			if postgres && current == '/' && index+1 < len(query) && query[index+1] == '*' {
+				blockDepth++
+				output.WriteString("/*")
+				index++
+				continue
+			}
 			if current == '*' && index+1 < len(query) && query[index+1] == '/' {
 				output.WriteByte(current)
 				index++
 				output.WriteByte(query[index])
-				state = stateNormal
+				blockDepth--
+				if blockDepth == 0 {
+					state = stateNormal
+				}
 				continue
 			}
 		case stateDollarQuote:
@@ -244,15 +294,44 @@ func builderDollarDelimiter(text string) string {
 	if len(text) < 2 || text[0] != '$' {
 		return ""
 	}
-	for index := 1; index < len(text); index++ {
+	if text[1] == '$' {
+		return "$$"
+	}
+	if !builderRebindIdentifierStart(text[1]) {
+		return ""
+	}
+	for index := 2; index < len(text); index++ {
 		current := text[index]
 		if current == '$' {
 			return text[:index+1]
 		}
-		if !((current >= 'a' && current <= 'z') || (current >= 'A' && current <= 'Z') ||
-			(current >= '0' && current <= '9') || current == '_') {
+		if !builderRebindIdentifierStart(current) && !(current >= '0' && current <= '9') {
 			return ""
 		}
 	}
 	return ""
+}
+
+func builderRebindEscapeString(query string, quote int) bool {
+	return quote > 0 && (query[quote-1] == 'E' || query[quote-1] == 'e') &&
+		(quote == 1 || !builderRebindIdentifierByte(query[quote-2]))
+}
+
+// PostgreSQL 允许非 ASCII 字节组成标识符；$ 可出现在标识符中，但不能出现在 dollar quote 标签中。
+func builderRebindIdentifierStart(character byte) bool {
+	return character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' ||
+		character == '_' || character >= 0x80
+}
+
+func builderRebindIdentifierByte(character byte) bool {
+	return builderRebindIdentifierStart(character) || character >= '0' && character <= '9' || character == '$'
+}
+
+func builderRebindWhitespace(character byte) bool {
+	switch character {
+	case ' ', '\t', '\n', '\r', '\f', '\v':
+		return true
+	default:
+		return false
+	}
 }

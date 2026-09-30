@@ -1,0 +1,290 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1296pt" height="705.6pt" font-family="Microsoft YaHei,Noto Sans CJK SC,sans-serif" version="1.1" viewBox="0 0 1296 705.6" role="img">
+<title>从典型请求到极端尾延迟</title>
+<style>*{stroke-linejoin: round; stroke-linecap: butt}:root{--c0:#ffffff;--c1:#f6f8fa;--c2:#59636e;--c3:#1f2328;--c4:#d8dee4;--c5:#0969da;--c6:#008579;--c7:#8250df;--c8:#bc4c00;--c9:#bf3989;--c10:#3b5b92;--c11:#607b09;--c12:#9a6700;}@media(prefers-color-scheme:dark){:root{--c0:#0d1117;--c1:#161b22;--c2:#b1bac4;--c3:#f0f6fc;--c4:#30363d;--c5:#58a6ff;--c6:#39d3bb;--c7:#bc8cff;--c8:#ffa657;--c9:#f778ba;--c10:#9bbcf5;--c11:#b2ce65;--c12:#e3b341;}}.s0{fill:var(--c1);}.s1{fill:#def2dd;}.s2{fill:#085799;}.s3{fill:#085395;}.s4{fill:#082e62;}.s5{fill:#e0f3db;}.s6{fill:#085c9f;}.s7{fill:#08306b;}.s8{fill:#dff3dc;}.s9{fill:#085496;}.s10{fill:#081d58;}.s11{fill:#08295f;}.s12{fill:#085ca0;}.s13{fill:#daf0d6;}.s14{fill:#bae4b5;}.s15{fill:var(--c2);font-size:11;}.s16{fill:var(--c3);font-size:11;}.s17{fill:none;stroke:var(--c4);stroke-linecap:square;stroke-width:0.8;}.s18{fill:#152321;font-size:10;}.s19{fill:#fff;font-size:10;}.s20{fill:var(--c3);font-size:14;font-weight:bold;}.s21{fill:#fcfed1;}.s22{fill:#ccebc5;}.s23{fill:#99d7b8;}.s24{fill:#78cbbc;}.s25{fill:#a4dcb7;}.s26{fill:#7ecebb;}.s27{fill:#ffffd9;}.s28{fill:#cef;c:0;}.s29{fill:#b6e2b6;}.s30{fill:#60c1c0;}.s31{fill:#35acc3;}.s32{fill:#ebf7b1;}.s33{fill:#edf8b1;}.s34{fill:#cfecce;}.s35{fill:#d5eed0;}.s36{fill:#a9ddb7;}.s37{fill:#dbf1da;}.s38{fill:#b0e0b6;}.s39{fill:#8ad1b9;}.s40{fill:#daf0d5;}.s41{fill:#b1e0b6;}.s42{fill:#ddf2dc;}.s43{fill:#78cbbc;}.s45{font-size:9.5;}.s46{fill:var(--c3);font-size:10;}</style>
+<path d="m0 705.6h1296v-705.6h-1296z" fill="var(--c0)"/>
+<path d="m84.24 465.696h304.564v-338.688h-304.564z" class="s0"/>
+<g clip-path="url(#b)">
+<path d="m84.24 127.008h76.141v42.336h-76.141v-42.336" class="s1"/>
+<path d="m160.381 127.008h76.141v42.336h-76.141v-42.336" class="s2"/>
+<path d="m236.522 127.008h76.141v42.336h-76.141v-42.336" class="s3"/>
+<path d="m312.663 127.008h76.141v42.336h-76.141v-42.336" class="s4"/>
+<path d="m84.24 169.344h76.141v42.336h-76.141v-42.336" class="s5"/>
+<path d="m160.381 169.344h76.141v42.336h-76.141v-42.336" class="s6"/>
+<path d="m236.522 169.344h76.141v42.336h-76.141v-42.336" fill="#08589a"/>
+<path d="m312.663 169.344h76.141v42.336h-76.141v-42.336" class="s7"/>
+<path d="m84.24 211.68h76.141v42.336h-76.141v-42.336" class="s8"/>
+<path d="m160.381 211.68h76.141v42.336h-76.141v-42.336" fill="#085fa2"/>
+<path d="m236.522 211.68h76.141v42.336h-76.141v-42.336" class="s9"/>
+<path d="m312.663 211.68h76.141v42.336h-76.141v-42.336" fill="#082b60"/>
+<path d="m84.24 254.016h76.141v42.336h-76.141v-42.336" class="s1"/>
+<path d="m160.381 254.016h76.141v42.336h-76.141v-42.336" fill="#085a9c"/>
+<path d="m236.522 254.016h76.141v42.336h-76.141v-42.336" fill="#085293"/>
+<path d="m312.663 254.016h76.141v42.336h-76.141v-42.336" fill="#082d62"/>
+<path d="m84.24 296.352h76.141v42.336h-76.141v-42.336" class="s8"/>
+<path d="m160.381 296.352h76.141v42.336h-76.141v-42.336" class="s12"/>
+<path d="m236.522 296.352h76.141v42.336h-76.141v-42.336" fill="#085799"/>
+<path d="m312.663 296.352h76.141v42.336h-76.141v-42.336" class="s7"/>
+<path d="m84.24 338.688h76.141v42.336h-76.141v-42.336" fill="#ddf2dc"/>
+<path d="m160.381 338.688h76.141v42.336h-76.141v-42.336" class="s2"/>
+<path d="m236.522 338.688h76.141v42.336h-76.141v-42.336" class="s9"/>
+<path d="m312.663 338.688h76.141v42.336h-76.141v-42.336" class="s7"/>
+<path d="m84.24 381.024h76.141v42.336h-76.141v-42.336" class="s13"/>
+<path d="m160.381 381.024h76.141v42.336h-76.141v-42.336" class="s12"/>
+<path d="m236.522 381.024h76.141v42.336h-76.141v-42.336" fill="#085a9c"/>
+<path d="m312.663 381.024h76.141v42.336h-76.141v-42.336" class="s11"/>
+<path d="m84.24 423.36h76.141v42.336h-76.141v-42.336" class="s14"/>
+<path d="m160.381 423.36h76.141v42.336h-76.141v-42.336" fill="#5cc0c0"/>
+<path d="m236.522 423.36h76.141v42.336h-76.141v-42.336" fill="#4bb9c2"/>
+<path d="m312.663 423.36h76.141v42.336h-76.141v-42.336" fill="#2ba2c2"/>
+</g>
+<text x="112.492" y="482.628" class="s15">P50</text>
+<text x="188.633" y="482.628" class="s15">P95</text>
+<text x="264.774" y="482.628" class="s15">P99</text>
+<text x="334.333" y="482.628" class="s15">P99.9</text>
+<text x="58.355" y="152.642" class="s16">Gin</text>
+<text x="50.002" y="194.978" class="s16">Fiber</text>
+<text x="50.909" y="237.314" class="s16">Echo</text>
+<text x="59.181" y="279.65" class="s16">Chi</text>
+<text x="42.826" y="321.986" class="s16">Beego</text>
+<text x="32.293" y="364.322" class="s16">ThinkGo</text>
+<text x="25.497" y="406.658" class="s16">ThinkPHP</text>
+<text x="39.362" y="448.994" class="s16">Laravel</text>
+<path d="m84.24 465.696h304.564" class="s17"/>
+<text x="112.311" y="150.969" class="s18">6.25</text>
+<text x="182.451" y="150.969" class="s19">211.47</text>
+<text x="258.592" y="150.969" class="s19">232.84</text>
+<text x="334.733" y="150.969" class="s19">332.57</text>
+<text x="112.311" y="193.305" class="s18">6.12</text>
+<text x="182.451" y="193.305" class="s19">206.11</text>
+<text x="258.592" y="193.305" class="s19">224.83</text>
+<text x="334.733" y="193.305" class="s19">312.37</text>
+<text x="112.311" y="235.641" class="s18">6.25</text>
+<text x="182.451" y="235.641" class="s19">207.57</text>
+<text x="258.592" y="235.641" class="s19">222.83</text>
+<text x="334.733" y="235.641" class="s19">345.24</text>
+<text x="112.311" y="277.977" class="s18">6.25</text>
+<text x="182.451" y="277.977" class="s19">211.06</text>
+<text x="258.592" y="277.977" class="s19">236.62</text>
+<text x="334.733" y="277.977" class="s19">337.51</text>
+<text x="112.311" y="320.313" class="s18">6.24</text>
+<text x="182.451" y="320.313" class="s19">206.61</text>
+<text x="258.592" y="320.313" class="s19">225.12</text>
+<text x="334.733" y="320.313" class="s19">319.64</text>
+<text x="112.311" y="362.649" class="s18">6.35</text>
+<text x="182.451" y="362.649" class="s19">211.54</text>
+<text x="258.592" y="362.649" class="s19">227.81</text>
+<text x="334.733" y="362.649" class="s19">316.90</text>
+<text x="112.311" y="404.985" class="s18">8.62</text>
+<text x="182.451" y="404.985" class="s19">208.49</text>
+<text x="258.592" y="404.985" class="s19">223.64</text>
+<text x="334.733" y="404.985" class="s19">320.15</text>
+<text x="106.31" y="447.321" class="s18">24.09</text>
+<text x="182.451" y="447.321" class="s18">48.32</text>
+<text x="258.592" y="447.321" class="s18">55.37</text>
+<text x="334.733" y="447.321" class="s18">74.16</text>
+<text x="84.24" y="113.008" class="s20">博客</text>
+<path d="m492.356 465.696h304.564v-338.688h-304.564z" class="s0"/>
+<g clip-path="url(#c)">
+<path d="m492.356 127.008h76.141v42.336h-76.141v-42.336" class="s21"/>
+<path d="m568.497 127.008h76.141v42.336h-76.141v-42.336" class="s22"/>
+<path d="m644.638 127.008h76.141v42.336h-76.141v-42.336" class="s23"/>
+<path d="m720.779 127.008h76.141v42.336h-76.141v-42.336" class="s24"/>
+<path d="m492.356 169.344h76.141v42.336h-76.141v-42.336" fill="#ffffd8"/>
+<path d="m568.497 169.344h76.141v42.336h-76.141v-42.336" fill="#d5eed0"/>
+<path d="m644.638 169.344h76.141v42.336h-76.141v-42.336" class="s25"/>
+<path d="m720.779 169.344h76.141v42.336h-76.141v-42.336" class="s26"/>
+<path d="m492.356 211.68h76.141v42.336h-76.141v-42.336" class="s27"/>
+<path d="m568.497 211.68h76.141v42.336h-76.141v-42.336" fill="#ceebc7"/>
+<path d="m644.638 211.68h76.141v42.336h-76.141v-42.336" fill="#a3dbb7"/>
+<path d="m720.779 211.68h76.141v42.336h-76.141v-42.336" fill="#7dcebb"/>
+<path d="m492.356 254.016h76.141v42.336h-76.141v-42.336" fill="#fbfdcf"/>
+<path d="m568.497 254.016h76.141v42.336h-76.141v-42.336" class="s22"/>
+<path d="m644.638 254.016h76.141v42.336h-76.141v-42.336" fill="#96d6b9"/>
+<path d="m720.779 254.016h76.141v42.336h-76.141v-42.336" fill="#77cabc"/>
+<path d="m492.356 296.352h76.141v42.336h-76.141v-42.336" class="s21"/>
+<path d="m568.497 296.352h76.141v42.336h-76.141v-42.336" fill="#cdebc6"/>
+<path d="m644.638 296.352h76.141v42.336h-76.141v-42.336" fill="#9ad7b8"/>
+<path d="m720.779 296.352h76.141v42.336h-76.141v-42.336" fill="#7ccebb"/>
+<path d="m492.356 338.688h76.141v42.336h-76.141v-42.336" fill="#f9fdcd"/>
+<path d="m568.497 338.688h76.141v42.336h-76.141v-42.336" class="s29"/>
+<path d="m644.638 338.688h76.141v42.336h-76.141v-42.336" fill="#85cfba"/>
+<path d="m720.779 338.688h76.141v42.336h-76.141v-42.336" fill="#6cc6be"/>
+<path d="m492.356 381.024h76.141v42.336h-76.141v-42.336" fill="#e5f5ce"/>
+<path d="m568.497 381.024h76.141v42.336h-76.141v-42.336" class="s23"/>
+<path d="m644.638 381.024h76.141v42.336h-76.141v-42.336" class="s30"/>
+<path d="m720.779 381.024h76.141v42.336h-76.141v-42.336" class="s31"/>
+<path d="m492.356 423.36h76.141v42.336h-76.141v-42.336" fill="#cbebc4"/>
+<path d="m568.497 423.36h76.141v42.336h-76.141v-42.336" fill="#a8ddb7"/>
+<path d="m644.638 423.36h76.141v42.336h-76.141v-42.336" fill="#88d1b9"/>
+<path d="m720.779 423.36h76.141v42.336h-76.141v-42.336" fill="#63c2bf"/>
+</g>
+<text x="520.608" y="482.628" class="s15">P50</text>
+<text x="596.749" y="482.628" class="s15">P95</text>
+<text x="672.89" y="482.628" class="s15">P99</text>
+<text x="742.449" y="482.628" class="s15">P99.9</text>
+<text x="466.471" y="152.642" class="s16">Gin</text>
+<text x="458.118" y="194.978" class="s16">Fiber</text>
+<text x="459.025" y="237.314" class="s16">Echo</text>
+<text x="467.297" y="279.65" class="s16">Chi</text>
+<text x="450.942" y="321.986" class="s16">Beego</text>
+<text x="440.409" y="364.322" class="s16">ThinkGo</text>
+<text x="433.613" y="406.658" class="s16">ThinkPHP</text>
+<text x="447.479" y="448.994" class="s16">Laravel</text>
+<path d="m492.356 465.696h304.564" class="s17"/>
+<text x="520.427" y="150.969" class="s18">3.22</text>
+<text x="590.567" y="150.969" class="s18">14.33</text>
+<text x="666.708" y="150.969" class="s18">29.51</text>
+<text x="742.849" y="150.969" class="s18">39.46</text>
+<text x="520.427" y="193.305" class="s18">2.97</text>
+<text x="590.567" y="193.305" class="s18">13.33</text>
+<text x="666.708" y="193.305" class="s18">27.64</text>
+<text x="742.849" y="193.305" class="s18">35.18</text>
+<text x="520.427" y="235.641" class="s18">3.04</text>
+<text x="590.567" y="235.641" class="s18">13.85</text>
+<text x="666.708" y="235.641" class="s18">28.10</text>
+<text x="742.849" y="235.641" class="s18">37.65</text>
+<text x="520.427" y="277.977" class="s18">3.30</text>
+<text x="590.567" y="277.977" class="s18">14.69</text>
+<text x="666.708" y="277.977" class="s18">30.47</text>
+<text x="742.849" y="277.977" class="s18">39.69</text>
+<text x="520.427" y="320.313" class="s18">3.25</text>
+<text x="590.567" y="320.313" class="s18">14.41</text>
+<text x="666.708" y="320.313" class="s18">29.66</text>
+<text x="742.849" y="320.313" class="s18">38.18</text>
+<text x="520.427" y="362.649" class="s18">3.59</text>
+<text x="590.567" y="362.649" class="s18">16.09</text>
+<text x="666.708" y="362.649" class="s18">32.45</text>
+<text x="742.849" y="362.649" class="s18">42.47</text>
+<text x="520.427" y="404.985" class="s18">5.80</text>
+<text x="590.567" y="404.985" class="s18">23.18</text>
+<text x="666.708" y="404.985" class="s18">41.16</text>
+<text x="742.849" y="404.985" class="s18">54.92</text>
+<text x="514.426" y="447.321" class="s18">18.43</text>
+<text x="590.567" y="447.321" class="s18">27.10</text>
+<text x="666.708" y="447.321" class="s18">34.41</text>
+<text x="742.849" y="447.321" class="s18">46.39</text>
+<text x="492.356" y="113.008" class="s20">商城</text>
+<path d="m900.472 465.696h304.564v-338.688h-304.564z" class="s0"/>
+<g clip-path="url(#a)">
+<path d="m900.472 127.008h76.141v42.336h-76.141v-42.336" class="s32"/>
+<path d="m976.613 127.008h76.141v42.336h-76.141v-42.336" fill="#c1e6b4"/>
+<path d="m1052.75 127.008h76.141v42.336h-76.141v-42.336" fill="#96d6b9"/>
+<path d="m1128.9 127.008h76.141v42.336h-76.141v-42.336" fill="#7ecebb"/>
+<path d="m900.472 169.344h76.141v42.336h-76.141v-42.336" class="s33"/>
+<path d="m976.613 169.344h76.141v42.336h-76.141v-42.336" fill="#c8eab4"/>
+<path d="m1052.75 169.344h76.141v42.336h-76.141v-42.336" fill="#a2dab8"/>
+<path d="m1128.9 169.344h76.141v42.336h-76.141v-42.336" fill="#88d1b9"/>
+<path d="m900.472 211.68h76.141v42.336h-76.141v-42.336" class="s33"/>
+<path d="m976.613 211.68h76.141v42.336h-76.141v-42.336" fill="#c3e7b4"/>
+<path d="m1052.75 211.68h76.141v42.336h-76.141v-42.336" fill="#9dd9b8"/>
+<path d="m1128.9 211.68h76.141v42.336h-76.141v-42.336" class="s26"/>
+<path d="m900.472 254.016h76.141v42.336h-76.141v-42.336" class="s32"/>
+<path d="m976.613 254.016h76.141v42.336h-76.141v-42.336" fill="#c2e6b4"/>
+<path d="m1052.75 254.016h76.141v42.336h-76.141v-42.336" fill="#97d6b9"/>
+<path d="m1128.9 254.016h76.141v42.336h-76.141v-42.336" class="s43"/>
+<path d="m900.472 296.352h76.141v42.336h-76.141v-42.336" class="s32"/>
+<path d="m976.613 296.352h76.141v42.336h-76.141v-42.336" fill="#c1e6b4"/>
+<path d="m1052.75 296.352h76.141v42.336h-76.141v-42.336" fill="#96d6b9"/>
+<path d="m1128.9 296.352h76.141v42.336h-76.141v-42.336" class="s43"/>
+<path d="m900.472 338.688h76.141v42.336h-76.141v-42.336" fill="#e8f6b1"/>
+<path d="m976.613 338.688h76.141v42.336h-76.141v-42.336" fill="#bce4b5"/>
+<path d="m1052.75 338.688h76.141v42.336h-76.141v-42.336" fill="#92d4b9"/>
+<path d="m1128.9 338.688h76.141v42.336h-76.141v-42.336" fill="#7bcebb"/>
+<path d="m900.472 381.024h76.141v42.336h-76.141v-42.336" fill="#dcf1d9"/>
+<path d="m976.613 381.024h76.141v42.336h-76.141v-42.336" fill="#a8ddb7"/>
+<path d="m1052.75 381.024h76.141v42.336h-76.141v-42.336" fill="#7dcebb"/>
+<path d="m1128.9 381.024h76.141v42.336h-76.141v-42.336" fill="#64c2bf"/>
+<path d="m900.472 423.36h76.141v42.336h-76.141v-42.336" fill="#c6e9b4"/>
+<path d="m976.613 423.36h76.141v42.336h-76.141v-42.336" fill="#a3dbb7"/>
+<path d="m1052.75 423.36h76.141v42.336h-76.141v-42.336" fill="#86d0b9"/>
+<path d="m1128.9 423.36h76.141v42.336h-76.141v-42.336" fill="#73c8bd"/>
+</g>
+<text x="928.724" y="482.628" class="s15">P50</text>
+<text x="1004.87" y="482.628" class="s15">P95</text>
+<text x="1081.01" y="482.628" class="s15">P99</text>
+<text x="1150.57" y="482.628" class="s15">P99.9</text>
+<text x="874.587" y="152.642" class="s16">Gin</text>
+<text x="866.234" y="194.978" class="s16">Fiber</text>
+<text x="867.141" y="237.314" class="s16">Echo</text>
+<text x="875.413" y="279.65" class="s16">Chi</text>
+<text x="859.058" y="321.986" class="s16">Beego</text>
+<text x="848.525" y="364.322" class="s16">ThinkGo</text>
+<text x="841.729" y="406.658" class="s16">ThinkPHP</text>
+<text x="855.595" y="448.994" class="s16">Laravel</text>
+<path d="m900.472 465.696h304.564" class="s17"/>
+<text x="928.543" y="150.969" class="s18">5.21</text>
+<text x="998.683" y="150.969" class="s18">16.72</text>
+<text x="1074.82" y="150.969" class="s18">25.66</text>
+<text x="1150.97" y="150.969" class="s18">33.55</text>
+<text x="928.543" y="193.305" class="s18">4.78</text>
+<text x="998.683" y="193.305" class="s18">15.70</text>
+<text x="1074.82" y="193.305" class="s18">23.86</text>
+<text x="1150.97" y="193.305" class="s18">30.99</text>
+<text x="928.543" y="235.641" class="s18">5.04</text>
+<text x="998.683" y="235.641" class="s18">16.29</text>
+<text x="1074.82" y="235.641" class="s18">24.99</text>
+<text x="1150.97" y="235.641" class="s18">33.20</text>
+<text x="928.543" y="277.977" class="s18">5.15</text>
+<text x="998.683" y="277.977" class="s18">16.67</text>
+<text x="1074.82" y="277.977" class="s18">25.83</text>
+<text x="1150.97" y="277.977" class="s18">35.06</text>
+<text x="928.543" y="320.313" class="s18">5.19</text>
+<text x="998.683" y="320.313" class="s18">16.78</text>
+<text x="1074.82" y="320.313" class="s18">26.07</text>
+<text x="1150.97" y="320.313" class="s18">34.71</text>
+<text x="928.543" y="362.649" class="s18">5.61</text>
+<text x="998.683" y="362.649" class="s18">17.39</text>
+<text x="1074.82" y="362.649" class="s18">26.75</text>
+<text x="1150.97" y="362.649" class="s18">34.05</text>
+<text x="928.543" y="404.985" class="s18">8.32</text>
+<text x="998.683" y="404.985" class="s18">22.34</text>
+<text x="1074.82" y="404.985" class="s18">30.23</text>
+<text x="1150.97" y="404.985" class="s18">38.59</text>
+<text x="922.542" y="447.321" class="s18">21.08</text>
+<text x="998.683" y="447.321" class="s18">29.51</text>
+<text x="1074.82" y="447.321" class="s18">35.61</text>
+<text x="1150.97" y="447.321" class="s18">42.17</text>
+<text x="900.472" y="113.008" class="s20">社区</text>
+<path d="m1237.44 453.845h15.552v-308.348h-15.552z" class="s0"/>
+<image x="1237.44" y="145.497" width="15.552" height="308.348" image-rendering="pixelated" preserveAspectRatio="none" xlink:href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAEACAIAAAD9XIvPAAAAvElEQVR42m2NORKDMBAEPTH/rMXx/zfPFeeWU07KlSkPGkvBsKHqmdmhZUzojd6VVJMhvtpz8Jwi29px/hepxmdr2+d+r1WHypYUhj+kHjd4TZufeePuLAKB68ejBXAJHy3sVlCRLFgfDBlvGRfgNmdaDO83PiO8/cGbu+wAXl/MZeHBWHtwTezUfW+M4Ix9SFuHIVICZhTZRvMSDjy4DhFlRMmIUZXZMqqMVytorSLHdNd8YWlLA0atDeCNpvLv+sHvsaUvIEJNp3wAAAAASUVORK5CYII="/>
+<text x="1259.99" y="379.439" class="s16">10</text>
+<text x="1259.99" y="230.007" class="s16">100</text>
+<text x="0" transform="translate(1293.84 393.871) rotate(-90)" y="0" class="s16">毫秒（对数色阶；文字为实际数值）</text>
+<path d="m1237.44 453.845h7.776 7.776v-308.348h-7.776-7.776v308.348z" class="s17"/>
+<text x="32.4" font-weight="bold" fill="var(--c3)" font-size="24" y="51.826">从典型请求到极端尾延迟</text>
+<text x="33.696" y="85.639" textLength="301.73" lengthAdjust="spacingAndGlyphs" class="s15">相同业务配比 · 固定 64 个虚拟用户 · 完整且零错误的三次重复</text>
+<g fill="var(--c2)">
+<text x="32.4" y="600.342" textLength="425.414" lengthAdjust="spacingAndGlyphs" class="s45">2026-09-24—25 实测 · WSL2 / i5-12600KF · 应用 4 逻辑 CPU / 2 GiB · 数据库 4 逻辑 CPU / 6 GiB</text>
+<text x="32.4" y="615.51" textLength="435.363" lengthAdjust="spacingAndGlyphs" class="s45">PostgreSQL 18.6 · 129 万行预热数据 · 本机 HTTP/1.1 · 相同原生 SQL，非 ORM · 每轮恢复种子数据库</text>
+<text x="32.4" y="631.563" textLength="479.438" lengthAdjust="spacingAndGlyphs" class="s45">Go 单进程（GOMAXPROCS=4）· ThinkPHP：Swoole 8 worker + JIT · Laravel：FrankenPHP 16 worker + JIT</text>
+<text x="32.4" y="647.407" textLength="403.787" lengthAdjust="spacingAndGlyphs" class="s45">PHP 均为 8.5.10；FrankenPHP 为 ZTS，Swoole 为 NTS；ThinkPHP 在应用层过滤弃用提示。</text>
+<text x="32.4" y="663.068" textLength="323" lengthAdjust="spacingAndGlyphs" class="s45">分位数为各轮分位数的中位数，未合并全部请求；吞吐与尾延迟需同时阅读。</text>
+</g>
+<path d="m444.784 512.614h10 10" fill="none" stroke="var(--c5)" stroke-linecap="square" stroke-width="3"/>
+<text x="472.784" y="516.114" class="s46">Gin 1.12.0</text>
+<path d="m444.784 528.268h10 10" fill="none" stroke="var(--c6)" stroke-linecap="square" stroke-width="3"/>
+<text x="472.784" y="531.768" class="s46">Fiber 3.5.0</text>
+<path d="m542.005 512.614h10 10" fill="none" stroke="var(--c7)" stroke-linecap="square" stroke-width="3"/>
+<text x="570.005" y="516.114" class="s46">Echo 5.3.1</text>
+<path d="m542.005 528.268h10 10" fill="none" stroke="var(--c8)" stroke-linecap="square" stroke-width="3"/>
+<text x="570.005" y="531.768" class="s46">Chi 5.3.2</text>
+<path d="m638.4 512.614h10 10" fill="none" stroke="var(--c9)" stroke-linecap="square" stroke-width="3"/>
+<text x="666.4" y="516.114" class="s46">Beego 2.3.10</text>
+<path d="m638.4 528.278h10 10" fill="none" stroke="var(--c10)" stroke-linecap="square" stroke-width="3"/>
+<text x="666.4" y="531.778" class="s46">ThinkGo 3.0.2</text>
+<path d="m751.719 512.614h10 10" fill="none" stroke="var(--c11)" stroke-linecap="square" stroke-width="3"/>
+<text x="779.719" y="516.114" class="s46">ThinkPHP 8.1.4</text>
+<path d="m751.719 528.268h10 10" fill="none" stroke="var(--c12)" stroke-linecap="square" stroke-width="3"/>
+<text x="779.719" y="531.768" class="s46">Laravel 13.33.0</text>
+<defs>
+<clipPath id="b">
+<rect x="84.24" y="127.008" width="304.564" height="338.688"/>
+</clipPath>
+<clipPath id="c">
+<rect x="492.356" y="127.008" width="304.564" height="338.688"/>
+</clipPath>
+<clipPath id="a">
+<rect x="900.472" y="127.008" width="304.564" height="338.688"/>
+</clipPath>
+</defs>
+</svg>

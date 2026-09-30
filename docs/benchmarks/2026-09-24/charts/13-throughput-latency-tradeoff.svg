@@ -1,0 +1,260 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1224pt" height="604.8pt" font-family="Microsoft YaHei,Noto Sans CJK SC,sans-serif" version="1.1" viewBox="0 0 1224 604.8" role="img">
+<title>吞吐与尾延迟，需要一起看</title>
+<style>*{stroke-linejoin: round; stroke-linecap: butt}:root{--c0:#ffffff;--c1:#f6f8fa;--c2:#0969da;--c3:#008579;--c4:#8250df;--c5:#bc4c00;--c6:#bf3989;--c7:#3b5b92;--c8:#607b09;--c9:#9a6700;--c10:#d8dee4;--c11:#59636e;--c12:#1f2328;}@media(prefers-color-scheme:dark){:root{--c0:#0d1117;--c1:#161b22;--c2:#58a6ff;--c3:#39d3bb;--c4:#bc8cff;--c5:#ffa657;--c6:#f778ba;--c7:#9bbcf5;--c8:#b2ce65;--c9:#e3b341;--c10:#30363d;--c11:#b1bac4;--c12:#f0f6fc;}}.s0{fill:var(--c1);}.s1{stroke:var(--c0);stroke-width:0.9;}.s2{fill:var(--c2);stroke:var(--c0);stroke-width:0.9;}.s3{fill:var(--c3);stroke:var(--c0);stroke-width:0.9;}.s4{fill:var(--c4);stroke:var(--c0);stroke-width:0.9;}.s5{fill:var(--c5);stroke:var(--c0);stroke-width:0.9;}.s6{fill:var(--c6);stroke:var(--c0);stroke-width:0.9;}.s7{fill:var(--c7);stroke:var(--c0);stroke-width:0.9;}.s8{fill:var(--c8);stroke:var(--c0);stroke-width:0.9;}.s9{fill:var(--c9);stroke:var(--c0);stroke-width:0.9;}.s10{fill:none;stroke:var(--c10);stroke-linecap:square;stroke-opacity:.45;stroke-width:0.8;}.s12{fill:var(--c11);font-size:11;}.s13{fill:var(--c12);font-size:11;}.s15{fill:none;stroke:var(--c10);stroke-linecap:square;stroke-width:0.8;}.s16{fill:var(--c12);font-size:14;font-weight:bold;}.s17{font-size:9.5;}.s18{fill:var(--c12);font-size:10;}</style>
+<path d="m0 604.8h1224v-604.8h-1224z" fill="var(--c0)"/>
+<path d="m79.56 368.928h309.4v-235.872h-309.4z" class="s0"/>
+<defs>
+<path id="i" d="m0 5.244c1.391 0 2.725-0.553 3.708-1.536 0.983-0.983 1.536-2.317 1.536-3.708s-0.553-2.725-1.536-3.708c-0.983-0.983-2.317-1.536-3.708-1.536s-2.725 0.553-3.708 1.536c-0.983 0.983-1.536 2.317-1.536 3.708s0.553 2.725 1.536 3.708c0.983 0.983 2.317 1.536 3.708 1.536z" class="s1"/>
+</defs>
+<g clip-path="url(#a)">
+<use x="348.753" y="168.843" xlink:href="#i" class="s2"/>
+</g>
+<defs>
+<path id="h" d="m-5.244 5.244h10.488v-10.488h-10.488z" class="s1"/>
+</defs>
+<g clip-path="url(#a)">
+<use x="355.81" y="175.721" xlink:href="#h" class="s3"/>
+</g>
+<defs>
+<path id="g" d="m0-5.244-5.244 10.488h10.488z" class="s1"/>
+</defs>
+<g clip-path="url(#a)">
+<use x="351.115" y="177.443" xlink:href="#g" class="s4"/>
+</g>
+<defs>
+<path id="l" d="M 0 7.416  L 7.416 0  L 0 -7.416  L -7.416 0  z " class="s1"/>
+</defs>
+<g clip-path="url(#a)">
+<use x="347.714" y="165.59" xlink:href="#l" class="s5"/>
+</g>
+<defs>
+<path id="f" d="m-0 5.244 5.244-10.488h-10.488z" class="s1"/>
+</defs>
+<g clip-path="url(#a)">
+<use x="351.734" y="175.476" xlink:href="#f" class="s6"/>
+</g>
+<defs>
+<path id="m" d="m-1.748 5.244h3.496v-3.496h3.496v-3.496h-3.496v-3.496h-3.496v3.496h-3.496v3.496h3.496z" class="s1"/>
+</defs>
+<g clip-path="url(#a)">
+<use x="348.623" y="173.166" xlink:href="#m" class="s7"/>
+</g>
+<defs>
+<path id="j" d="m-2.622 5.244 2.622-2.622 2.622 2.622 2.622-2.622-2.622-2.622 2.622-2.622-2.622-2.622-2.622 2.622-2.622-2.622-2.622 2.622 2.622 2.622-2.622 2.622z" class="s1"/>
+</defs>
+<g clip-path="url(#a)">
+<use x="328.975" y="176.745" xlink:href="#j" class="s8"/>
+</g>
+<defs>
+<path id="k" d="m0-5.244-1.177 3.624h-3.81l3.082 2.239-1.177 3.624 3.082-2.239 3.082 2.239-1.177-3.624 3.082-2.239h-3.81z" class="s1"/>
+</defs>
+<g clip-path="url(#a)">
+<use x="285.573" y="321.349" xlink:href="#k" class="s9"/>
+</g>
+<path d="m79.56 368.928v-235.872" clip-path="url(#a)" class="s10"/>
+<text x="76.335" y="384.86" class="s12">0</text>
+<path d="m120.94 368.928v-235.872" clip-path="url(#a)" class="s10"/>
+<text x="111.265" y="384.86" class="s12">500</text>
+<path d="m162.321 368.928v-235.872" clip-path="url(#a)" class="s10"/>
+<text x="148.096" y="384.86" class="s12">1,000</text>
+<path d="m203.701 368.928v-235.872" clip-path="url(#a)" class="s10"/>
+<text x="189.476" y="384.86" class="s12">1,500</text>
+<path d="m245.082 368.928v-235.872" clip-path="url(#a)" class="s10"/>
+<text x="230.857" y="384.86" class="s12">2,000</text>
+<path d="m286.462 368.928v-235.872" clip-path="url(#a)" class="s10"/>
+<text x="272.237" y="384.86" class="s12">2,500</text>
+<path d="m327.843 368.928v-235.872" clip-path="url(#a)" class="s10"/>
+<text x="313.618" y="384.86" class="s12">3,000</text>
+<path d="m369.223 368.928v-235.872" clip-path="url(#a)" class="s10"/>
+<text x="354.998" y="384.86" class="s12">3,500</text>
+<text x="183.028" y="400.914" class="s13">业务成功请求 / 秒 →</text>
+<path d="m79.56 368.928h309.4" clip-path="url(#a)" class="s10"/>
+<text x="66.11" y="373.394" class="s13">0</text>
+<path d="m79.56 325.961h309.4" clip-path="url(#a)" class="s10"/>
+<text x="59.659" y="330.427" class="s13">50</text>
+<path d="m79.56 282.994h309.4" clip-path="url(#a)" class="s10"/>
+<text x="53.209" y="287.46" class="s13">100</text>
+<path d="m79.56 240.028h309.4" clip-path="url(#a)" class="s10"/>
+<text x="53.209" y="244.494" class="s13">150</text>
+<path d="m79.56 197.061h309.4" clip-path="url(#a)" class="s10"/>
+<text x="53.209" y="201.527" class="s13">200</text>
+<path d="m79.56 154.094h309.4" clip-path="url(#a)" class="s10"/>
+<text x="53.209" y="158.56" class="s13">250</text>
+<text x="0" transform="translate(46.421 306.435) rotate(-90)" y="0" class="s13">P99 毫秒（越低越好）</text>
+<path d="m79.56 368.928h309.4" class="s15"/>
+<text x="79.56" y="119.056" class="s16">博客</text>
+<path d="m481.78 368.928h309.4v-235.872h-309.4z" class="s0"/>
+<g clip-path="url(#c)">
+<g>
+<use x="740.432" y="223.167" xlink:href="#i" class="s2"/>
+</g>
+<g>
+<use x="758.03" y="232.389" xlink:href="#h" class="s3"/>
+</g>
+<g>
+<use x="753.353" y="230.13" xlink:href="#g" class="s4"/>
+</g>
+<g>
+<use x="735.564" y="218.4" xlink:href="#l" class="s5"/>
+</g>
+<g>
+<use x="739.908" y="222.415" xlink:href="#f" class="s6"/>
+</g>
+<g>
+<use x="713.701" y="208.611" xlink:href="#m" class="s7"/>
+</g>
+<g>
+<use x="663.549" y="165.59" xlink:href="#j" class="s8"/>
+</g>
+<g>
+<use x="563.715" y="198.943" xlink:href="#k" class="s9"/>
+</g>
+<path d="m481.78 368.928v-235.872" class="s10"/>
+</g>
+<text x="478.555" y="384.86" class="s12">0</text>
+<path d="m531.9 368.928v-235.872" clip-path="url(#c)" class="s10"/>
+<text x="517.674" y="384.86" class="s12">2,000</text>
+<path d="m582.019 368.928v-235.872" clip-path="url(#c)" class="s10"/>
+<text x="567.794" y="384.86" class="s12">4,000</text>
+<path d="m632.139 368.928v-235.872" clip-path="url(#c)" class="s10"/>
+<text x="617.914" y="384.86" class="s12">6,000</text>
+<path d="m682.259 368.928v-235.872" clip-path="url(#c)" class="s10"/>
+<text x="668.034" y="384.86" class="s12">8,000</text>
+<path d="m732.379 368.928v-235.872" clip-path="url(#c)" class="s10"/>
+<text x="714.928" y="384.86" class="s12">10,000</text>
+<path d="m782.498 368.928v-235.872" clip-path="url(#c)" class="s10"/>
+<text x="765.048" y="384.86" class="s12">12,000</text>
+<text x="585.247" y="400.914" class="s13">业务成功请求 / 秒 →</text>
+<path d="m481.78 368.928h309.4" clip-path="url(#c)" class="s10"/>
+<text x="468.33" y="373.394" class="s13">0</text>
+<path d="m481.78 319.53h309.4" clip-path="url(#c)" class="s10"/>
+<text x="461.879" y="323.996" class="s13">10</text>
+<path d="m481.78 270.133h309.4" clip-path="url(#c)" class="s10"/>
+<text x="461.879" y="274.599" class="s13">20</text>
+<path d="m481.78 220.735h309.4" clip-path="url(#c)" class="s10"/>
+<text x="461.879" y="225.201" class="s13">30</text>
+<path d="m481.78 171.338h309.4" clip-path="url(#c)" class="s10"/>
+<text x="461.879" y="175.804" class="s13">40</text>
+<text x="0" transform="translate(455.091 306.435) rotate(-90)" y="0" class="s13">P99 毫秒（越低越好）</text>
+<path d="m481.78 368.928h309.4" class="s15"/>
+<text x="481.78" y="119.056" class="s16">商城</text>
+<path d="m884 368.928h309.4v-235.872h-309.4z" class="s0"/>
+<g clip-path="url(#b)">
+<g>
+<use x="1143.73" y="222.416" xlink:href="#i" class="s2"/>
+</g>
+<g>
+<use x="1160.25" y="232.729" xlink:href="#h" class="s3"/>
+</g>
+<g>
+<use x="1148.91" y="226.226" xlink:href="#g" class="s4"/>
+</g>
+<g>
+<use x="1144.07" y="221.459" xlink:href="#l" class="s5"/>
+</g>
+<g>
+<use x="1141.88" y="220.092" xlink:href="#f" class="s6"/>
+</g>
+<g>
+<use x="1128.85" y="216.174" xlink:href="#m" class="s7"/>
+</g>
+<g>
+<use x="1087.13" y="196.309" xlink:href="#j" class="s8"/>
+</g>
+<g>
+<use x="983.053" y="165.59" xlink:href="#k" class="s9"/>
+</g>
+<path d="m884 368.928v-235.872" class="s10"/>
+</g>
+<text x="880.775" y="384.86" class="s12">0</text>
+<path d="m952.645 368.928v-235.872" clip-path="url(#b)" class="s10"/>
+<text x="938.42" y="384.86" class="s12">2,000</text>
+<path d="m1021.29 368.928v-235.872" clip-path="url(#b)" class="s10"/>
+<text x="1007.06" y="384.86" class="s12">4,000</text>
+<path d="m1089.93 368.928v-235.872" clip-path="url(#b)" class="s10"/>
+<text x="1075.71" y="384.86" class="s12">6,000</text>
+<path d="m1158.58 368.928v-235.872" clip-path="url(#b)" class="s10"/>
+<text x="1144.35" y="384.86" class="s12">8,000</text>
+<text x="987.467" y="400.914" class="s13">业务成功请求 / 秒 →</text>
+<path d="m884 368.928h309.4" clip-path="url(#b)" class="s10"/>
+<text x="870.55" y="373.394" class="s13">0</text>
+<path d="m884 340.381h309.4" clip-path="url(#b)" class="s10"/>
+<text x="870.55" y="344.847" class="s13">5</text>
+<path d="m884 311.834h309.4" clip-path="url(#b)" class="s10"/>
+<text x="864.099" y="316.3" class="s13">10</text>
+<path d="m884 283.286h309.4" clip-path="url(#b)" class="s10"/>
+<text x="864.099" y="287.753" class="s13">15</text>
+<path d="m884 254.739h309.4" clip-path="url(#b)" class="s10"/>
+<text x="864.099" y="259.205" class="s13">20</text>
+<path d="m884 226.192h309.4" clip-path="url(#b)" class="s10"/>
+<text x="864.099" y="230.658" class="s13">25</text>
+<path d="m884 197.645h309.4" clip-path="url(#b)" class="s10"/>
+<text x="864.099" y="202.111" class="s13">30</text>
+<path d="m884 169.098h309.4" clip-path="url(#b)" class="s10"/>
+<text x="864.099" y="173.564" class="s13">35</text>
+<path d="m884 140.551h309.4" clip-path="url(#b)" class="s10"/>
+<text x="864.099" y="145.017" class="s13">40</text>
+<text x="0" transform="translate(857.311 306.435) rotate(-90)" y="0" class="s13">P99 毫秒（越低越好）</text>
+<path d="m884 368.928h309.4" class="s15"/>
+<text x="884" y="119.056" class="s16">社区</text>
+<text x="30.6" font-weight="bold" fill="var(--c12)" font-size="24" y="47.29">吞吐与尾延迟，需要一起看</text>
+<text x="31.824" y="74.605" textLength="354.523" lengthAdjust="spacingAndGlyphs" class="s12">固定 64 VU · 每点是一组独立三轮中位数 · 右侧吞吐更高，下方 P99 更低</text>
+<g fill="var(--c11)">
+<text x="30.6" y="516.174" textLength="425.414" lengthAdjust="spacingAndGlyphs" class="s17">2026-09-24—25 实测 · WSL2 / i5-12600KF · 应用 4 逻辑 CPU / 2 GiB · 数据库 4 逻辑 CPU / 6 GiB</text>
+<text x="30.6" y="531.342" textLength="435.363" lengthAdjust="spacingAndGlyphs" class="s17">PostgreSQL 18.6 · 129 万行预热数据 · 本机 HTTP/1.1 · 相同原生 SQL，非 ORM · 每轮恢复种子数据库</text>
+<text x="30.6" y="547.395" textLength="479.438" lengthAdjust="spacingAndGlyphs" class="s17">Go 单进程（GOMAXPROCS=4）· ThinkPHP：Swoole 8 worker + JIT · Laravel：FrankenPHP 16 worker + JIT</text>
+<text x="30.6" y="563.239" textLength="403.787" lengthAdjust="spacingAndGlyphs" class="s17">PHP 均为 8.5.10；FrankenPHP 为 ZTS，Swoole 为 NTS；ThinkPHP 在应用层过滤弃用提示。</text>
+<text x="30.6" y="578.923" textLength="446.64" lengthAdjust="spacingAndGlyphs" class="s17">固定 VU 不等于相同到达率；更低吞吐下的低延迟不能单独证明框架更快。接近或重叠的点请结合数值表。</text>
+</g>
+<defs>
+<path id="o" d="m0 4c1.061 0 2.078-0.421 2.828-1.172s1.172-1.768 1.172-2.828-0.421-2.078-1.172-2.828-1.768-1.172-2.828-1.172-2.078 0.421-2.828 1.172-1.172 1.768-1.172 2.828 0.421 2.078 1.172 2.828 1.768 1.172 2.828 1.172z" stroke="var(--c2)"/>
+</defs>
+<use x="418.784" y="434.998" fill="var(--c2)" stroke="var(--c2)" xlink:href="#o"/>
+<text x="436.784" y="438.498" class="s18">Gin 1.12.0</text>
+<defs>
+<path id="s" d="m-4 4h8v-8h-8z" stroke="var(--c3)"/>
+</defs>
+<use x="418.784" y="450.652" fill="var(--c3)" stroke="var(--c3)" xlink:href="#s"/>
+<text x="436.784" y="454.152" class="s18">Fiber 3.5.0</text>
+<defs>
+<path id="u" d="m0-4-4 8h8z" stroke="var(--c4)"/>
+</defs>
+<use x="516.005" y="434.998" fill="var(--c4)" stroke="var(--c4)" xlink:href="#u"/>
+<text x="534.005" y="438.498" class="s18">Echo 5.3.1</text>
+<defs>
+<path id="t" d="M 0 5.657  L 5.657 0  L 0 -5.657  L -5.657 0  z " stroke="var(--c5)"/>
+</defs>
+<use x="516.005" y="450.652" fill="var(--c5)" stroke="var(--c5)" xlink:href="#t"/>
+<text x="534.005" y="454.152" class="s18">Chi 5.3.2</text>
+<defs>
+<path id="r" d="m-0 4 4-8h-8z" stroke="var(--c6)"/>
+</defs>
+<use x="612.4" y="434.998" fill="var(--c6)" stroke="var(--c6)" xlink:href="#r"/>
+<text x="630.4" y="438.498" class="s18">Beego 2.3.10</text>
+<defs>
+<path id="p" d="m-1.333 4h2.667v-2.667h2.667v-2.667h-2.667v-2.667h-2.667v2.667h-2.667v2.667h2.667z" stroke="var(--c7)"/>
+</defs>
+<use x="612.4" y="450.662" fill="var(--c7)" stroke="var(--c7)" xlink:href="#p"/>
+<text x="630.4" y="454.162" class="s18">ThinkGo 3.0.2</text>
+<defs>
+<path id="n" d="m-2 4 2-2 2 2 2-2-2-2 2-2-2-2-2 2-2-2-2 2 2 2-2 2z" stroke="var(--c8)"/>
+</defs>
+<use x="725.719" y="434.998" fill="var(--c8)" stroke="var(--c8)" xlink:href="#n"/>
+<text x="743.719" y="438.498" class="s18">ThinkPHP 8.1.4</text>
+<defs>
+<path id="q" d="m0-4-0.898 2.764h-2.906l2.351 1.708-0.898 2.764 2.351-1.708 2.351 1.708-0.898-2.764 2.351-1.708h-2.906z" stroke="var(--c9)" stroke-linejoin="bevel"/>
+</defs>
+<use x="725.719" y="450.652" fill="var(--c9)" stroke="var(--c9)" stroke-linejoin="bevel" xlink:href="#q"/>
+<text x="743.719" y="454.152" class="s18">Laravel 13.33.0</text>
+<defs>
+<clipPath id="a">
+<rect x="79.56" y="133.056" width="309.4" height="235.872"/>
+</clipPath>
+<clipPath id="c">
+<rect x="481.78" y="133.056" width="309.4" height="235.872"/>
+</clipPath>
+<clipPath id="b">
+<rect x="884" y="133.056" width="309.4" height="235.872"/>
+</clipPath>
+</defs>
+</svg>
