@@ -1,0 +1,171 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1224pt" height="604.8pt" font-family="Microsoft YaHei,Noto Sans CJK SC,sans-serif" version="1.1" viewBox="0 0 1224 604.8" role="img">
+<title>三次重复测试的吞吐波动</title>
+<style>*{stroke-linejoin: round; stroke-linecap: butt}:root{--c0:#ffffff;--c1:#f6f8fa;--c2:#d8dee4;--c3:#59636e;--c4:#1f2328;--c5:#0969da;--c6:#008579;--c7:#8250df;--c8:#bc4c00;--c9:#bf3989;--c10:#3b5b92;--c11:#607b09;--c12:#9a6700;}@media(prefers-color-scheme:dark){:root{--c0:#0d1117;--c1:#161b22;--c2:#30363d;--c3:#b1bac4;--c4:#f0f6fc;--c5:#58a6ff;--c6:#39d3bb;--c7:#bc8cff;--c8:#ffa657;--c9:#f778ba;--c10:#9bbcf5;--c11:#b2ce65;--c12:#e3b341;}}.s0{fill:var(--c1);}.s1{fill:none;stroke:var(--c2);stroke-linecap:square;stroke-opacity:.7;stroke-width:0.8;}.s3{fill:var(--c3);font-size:11;}.s4{fill:var(--c4);font-size:11;}.s6{fill:var(--c5);}.s7{fill:var(--c6);}.s8{fill:var(--c7);}.s9{fill:var(--c8);}.s10{fill:var(--c9);}.s11{fill:var(--c10);}.s12{fill:var(--c11);}.s13{fill:var(--c12);}.s14{fill:none;stroke:var(--c2);stroke-linecap:square;stroke-width:0.8;}.s15{fill:var(--c4);font-size:10;}.s16{fill:var(--c4);font-size:14;font-weight:bold;}.s17{font-size:9.5;}</style>
+<path d="m0 604.8h1224v-604.8h-1224z" fill="var(--c0)"/>
+<path d="m79.56 368.928h309.4v-235.872h-309.4z" class="s0"/>
+<path d="m79.56 368.928v-235.872" clip-path="url(#d)" class="s1"/>
+<text x="76.335" y="384.86" class="s3">0</text>
+<path d="m131.145 368.928v-235.872" clip-path="url(#d)" class="s1"/>
+<text x="127.919" y="384.86" class="s3">1</text>
+<path d="m182.729 368.928v-235.872" clip-path="url(#d)" class="s1"/>
+<text x="179.504" y="384.86" class="s3">2</text>
+<path d="m234.314 368.928v-235.872" clip-path="url(#d)" class="s1"/>
+<text x="231.089" y="384.86" class="s3">3</text>
+<path d="m285.899 368.928v-235.872" clip-path="url(#d)" class="s1"/>
+<text x="282.673" y="384.86" class="s3">4</text>
+<path d="m337.483 368.928v-235.872" clip-path="url(#d)" class="s1"/>
+<text x="334.258" y="384.86" class="s3">5</text>
+<text x="168.251" y="406.934" class="s4">样本标准差 / 均值 × 100%</text>
+<text x="54.675" y="156.967" class="s4">Gin</text>
+<text x="46.322" y="185.107" class="s4">Fiber</text>
+<text x="47.229" y="213.248" class="s4">Echo</text>
+<text x="55.501" y="241.388" class="s4">Chi</text>
+<text x="39.146" y="269.528" class="s4">Beego</text>
+<text x="28.613" y="297.669" class="s4">ThinkGo</text>
+<text x="21.817" y="325.809" class="s4">ThinkPHP</text>
+<text x="35.682" y="353.949" class="s4">Laravel</text>
+<g clip-path="url(#d)">
+<path d="m79.56 143.777h148.705v17.447h-148.705z" class="s6"/>
+<path d="m79.56 171.918h64.342v17.447h-64.342z" class="s7"/>
+<path d="m79.56 200.058h89.219v17.447h-89.219z" class="s8"/>
+<path d="m79.56 228.198h238v17.447h-238z" class="s9"/>
+<path d="m79.56 256.339h41.392v17.447h-41.392z" class="s10"/>
+<path d="m79.56 284.479h104.32v17.447h-104.32z" class="s11"/>
+<path d="m79.56 312.619h45.384v17.447h-45.384z" class="s12"/>
+<path d="m79.56 340.76h74.064v17.447h-74.064z" class="s13"/>
+</g>
+<path d="m79.56 368.928h309.4" class="s14"/>
+<text x="234.215" y="155.294" class="s15">2.88</text>
+<text x="149.852" y="183.434" class="s15">1.25</text>
+<text x="174.729" y="211.575" class="s15">1.73</text>
+<text x="323.51" y="239.715" class="s15">4.61</text>
+<text x="126.902" y="267.855" class="s15">0.80</text>
+<text x="189.83" y="295.995" class="s15">2.02</text>
+<text x="130.894" y="324.136" class="s15">0.88</text>
+<text x="159.574" y="352.276" class="s15">1.44</text>
+<text x="79.56" y="119.056" class="s16">博客</text>
+<path d="m481.78 368.928h309.4v-235.872h-309.4z" class="s0"/>
+<path d="m481.78 368.928v-235.872" clip-path="url(#c)" class="s1"/>
+<text x="478.555" y="384.86" class="s3">0</text>
+<path d="m525.731 368.928v-235.872" clip-path="url(#c)" class="s1"/>
+<text x="522.505" y="384.86" class="s3">1</text>
+<path d="m569.681 368.928v-235.872" clip-path="url(#c)" class="s1"/>
+<text x="566.456" y="384.86" class="s3">2</text>
+<path d="m613.632 368.928v-235.872" clip-path="url(#c)" class="s1"/>
+<text x="610.406" y="384.86" class="s3">3</text>
+<path d="m657.582 368.928v-235.872" clip-path="url(#c)" class="s1"/>
+<text x="654.357" y="384.86" class="s3">4</text>
+<path d="m701.533 368.928v-235.872" clip-path="url(#c)" class="s1"/>
+<text x="698.307" y="384.86" class="s3">5</text>
+<path d="m745.483 368.928v-235.872" clip-path="url(#c)" class="s1"/>
+<text x="742.258" y="384.86" class="s3">6</text>
+<path d="m789.434 368.928v-235.872" clip-path="url(#c)" class="s1"/>
+<text x="786.208" y="384.86" class="s3">7</text>
+<text x="570.471" y="406.934" class="s4">样本标准差 / 均值 × 100%</text>
+<text x="456.895" y="156.967" class="s4">Gin</text>
+<text x="448.542" y="185.107" class="s4">Fiber</text>
+<text x="449.449" y="213.248" class="s4">Echo</text>
+<text x="457.721" y="241.388" class="s4">Chi</text>
+<text x="441.366" y="269.528" class="s4">Beego</text>
+<text x="430.833" y="297.669" class="s4">ThinkGo</text>
+<text x="424.037" y="325.809" class="s4">ThinkPHP</text>
+<text x="437.902" y="353.949" class="s4">Laravel</text>
+<g clip-path="url(#c)">
+<path d="m481.78 143.777h133.667v17.447h-133.667z" class="s6"/>
+<path d="m481.78 171.918h38.912v17.447h-38.912z" class="s7"/>
+<path d="m481.78 200.058h238v17.447h-238z" class="s8"/>
+<path d="m481.78 228.198h197.882v17.447h-197.882z" class="s9"/>
+<path d="m481.78 256.339h47.947v17.447h-47.947z" class="s10"/>
+<path d="m481.78 284.479h106.82v17.447h-106.82z" class="s11"/>
+<path d="m481.78 312.619h27.606v17.447h-27.606z" class="s12"/>
+<path d="m481.78 340.76h35.211v17.447h-35.211z" class="s13"/>
+</g>
+<path d="m481.78 368.928h309.4" class="s14"/>
+<text x="621.397" y="155.294" class="s15">3.04</text>
+<text x="526.642" y="183.434" class="s15">0.89</text>
+<text x="725.73" y="211.575" class="s15">5.42</text>
+<text x="685.612" y="239.715" class="s15">4.50</text>
+<text x="535.677" y="267.855" class="s15">1.09</text>
+<text x="594.55" y="295.995" class="s15">2.43</text>
+<text x="515.336" y="324.136" class="s15">0.63</text>
+<text x="522.941" y="352.276" class="s15">0.80</text>
+<text x="481.78" y="119.056" class="s16">商城</text>
+<path d="m884 368.928h309.4v-235.872h-309.4z" class="s0"/>
+<path d="m884 368.928v-235.872" clip-path="url(#e)" class="s1"/>
+<text x="880.775" y="384.86" class="s3">0</text>
+<path d="m945.555 368.928v-235.872" clip-path="url(#e)" class="s1"/>
+<text x="942.33" y="384.86" class="s3">1</text>
+<path d="m1007.11 368.928v-235.872" clip-path="url(#e)" class="s1"/>
+<text x="1003.88" y="384.86" class="s3">2</text>
+<path d="m1068.66 368.928v-235.872" clip-path="url(#e)" class="s1"/>
+<text x="1065.44" y="384.86" class="s3">3</text>
+<path d="m1130.22 368.928v-235.872" clip-path="url(#e)" class="s1"/>
+<text x="1126.99" y="384.86" class="s3">4</text>
+<path d="m1191.77 368.928v-235.872" clip-path="url(#e)" class="s1"/>
+<text x="1188.55" y="384.86" class="s3">5</text>
+<text x="972.691" y="406.934" class="s4">样本标准差 / 均值 × 100%</text>
+<text x="859.115" y="156.967" class="s4">Gin</text>
+<text x="850.762" y="185.107" class="s4">Fiber</text>
+<text x="851.669" y="213.248" class="s4">Echo</text>
+<text x="859.941" y="241.388" class="s4">Chi</text>
+<text x="843.586" y="269.528" class="s4">Beego</text>
+<text x="833.053" y="297.669" class="s4">ThinkGo</text>
+<text x="826.257" y="325.809" class="s4">ThinkPHP</text>
+<text x="840.122" y="353.949" class="s4">Laravel</text>
+<g clip-path="url(#e)">
+<path d="m884 143.777h134.556v17.447h-134.556z" class="s6"/>
+<path d="m884 171.918h107.719v17.447h-107.719z" class="s7"/>
+<path d="m884 200.058h48.003v17.447h-48.003z" class="s8"/>
+<path d="m884 228.198h23.388v17.447h-23.388z" class="s9"/>
+<path d="m884 256.339h146.899v17.447h-146.899z" class="s10"/>
+<path d="m884 284.479h238v17.447h-238z" class="s11"/>
+<path d="m884 312.619h142.709v17.447h-142.709z" class="s12"/>
+<path d="m884 340.76h209.225v17.447h-209.225z" class="s13"/>
+</g>
+<path d="m884 368.928h309.4" class="s14"/>
+<text x="1024.51" y="155.294" class="s15">2.19</text>
+<text x="997.669" y="183.434" class="s15">1.75</text>
+<text x="937.953" y="211.575" class="s15">0.78</text>
+<text x="913.338" y="239.715" class="s15">0.38</text>
+<text x="1036.85" y="267.855" class="s15">2.39</text>
+<text x="1127.95" y="295.995" class="s15">3.87</text>
+<text x="1032.66" y="324.136" class="s15">2.32</text>
+<text x="1099.17" y="352.276" class="s15">3.40</text>
+<text x="884" y="119.056" class="s16">社区</text>
+<text x="30.6" font-weight="bold" fill="var(--c4)" font-size="24" y="47.29">三次重复测试的吞吐波动</text>
+<text x="31.824" y="74.584" textLength="301.73" lengthAdjust="spacingAndGlyphs" class="s3">相同业务配比 · 固定 64 个虚拟用户 · 完整且零错误的三次重复</text>
+<g fill="var(--c3)">
+<text x="30.6" y="516.174" textLength="425.414" lengthAdjust="spacingAndGlyphs" class="s17">2026-09-24—25 实测 · WSL2 / i5-12600KF · 应用 4 逻辑 CPU / 2 GiB · 数据库 4 逻辑 CPU / 6 GiB</text>
+<text x="30.6" y="531.342" textLength="435.363" lengthAdjust="spacingAndGlyphs" class="s17">PostgreSQL 18.6 · 129 万行预热数据 · 本机 HTTP/1.1 · 相同原生 SQL，非 ORM · 每轮恢复种子数据库</text>
+<text x="30.6" y="547.395" textLength="479.438" lengthAdjust="spacingAndGlyphs" class="s17">Go 单进程（GOMAXPROCS=4）· ThinkPHP：Swoole 8 worker + JIT · Laravel：FrankenPHP 16 worker + JIT</text>
+<text x="30.6" y="563.239" textLength="403.787" lengthAdjust="spacingAndGlyphs" class="s17">PHP 均为 8.5.10；FrankenPHP 为 ZTS，Swoole 为 NTS；ThinkPHP 在应用层过滤弃用提示。</text>
+<text x="30.6" y="578.927" textLength="370.5" lengthAdjust="spacingAndGlyphs" class="s17">只有三次独立重复；变异系数是观测波动，不是置信度，也不证明差异具有统计显著性。</text>
+</g>
+<path d="m408.784 434.998h10 10" fill="none" stroke="var(--c5)" stroke-linecap="square" stroke-width="3"/>
+<text x="436.784" y="438.498" class="s15">Gin 1.12.0</text>
+<path d="m408.784 450.652h10 10" fill="none" stroke="var(--c6)" stroke-linecap="square" stroke-width="3"/>
+<text x="436.784" y="454.152" class="s15">Fiber 3.5.0</text>
+<path d="m506.005 434.998h10 10" fill="none" stroke="var(--c7)" stroke-linecap="square" stroke-width="3"/>
+<text x="534.005" y="438.498" class="s15">Echo 5.3.1</text>
+<path d="m506.005 450.652h10 10" fill="none" stroke="var(--c8)" stroke-linecap="square" stroke-width="3"/>
+<text x="534.005" y="454.152" class="s15">Chi 5.3.2</text>
+<path d="m602.4 434.998h10 10" fill="none" stroke="var(--c9)" stroke-linecap="square" stroke-width="3"/>
+<text x="630.4" y="438.498" class="s15">Beego 2.3.10</text>
+<path d="m602.4 450.662h10 10" fill="none" stroke="var(--c10)" stroke-linecap="square" stroke-width="3"/>
+<text x="630.4" y="454.162" class="s15">ThinkGo 3.0.2</text>
+<path d="m715.719 434.998h10 10" fill="none" stroke="var(--c11)" stroke-linecap="square" stroke-width="3"/>
+<text x="743.719" y="438.498" class="s15">ThinkPHP 8.1.4</text>
+<path d="m715.719 450.652h10 10" fill="none" stroke="var(--c12)" stroke-linecap="square" stroke-width="3"/>
+<text x="743.719" y="454.152" class="s15">Laravel 13.33.0</text>
+<defs>
+<clipPath id="d">
+<rect x="79.56" y="133.056" width="309.4" height="235.872"/>
+</clipPath>
+<clipPath id="c">
+<rect x="481.78" y="133.056" width="309.4" height="235.872"/>
+</clipPath>
+<clipPath id="e">
+<rect x="884" y="133.056" width="309.4" height="235.872"/>
+</clipPath>
+</defs>
+</svg>

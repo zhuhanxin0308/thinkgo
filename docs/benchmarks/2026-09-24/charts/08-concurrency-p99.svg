@@ -1,0 +1,312 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1224pt" height="604.8pt" font-family="Microsoft YaHei,Noto Sans CJK SC,sans-serif" version="1.1" viewBox="0 0 1224 604.8" role="img">
+<title>增加并发，尾延迟如何变化</title>
+<style>*{stroke-linejoin: round; stroke-linecap: butt}:root{--c0:#ffffff;--c1:#f6f8fa;--c2:#d8dee4;--c3:#59636e;--c4:#1f2328;--c5:#0969da;--c6:#008579;--c7:#8250df;--c8:#bc4c00;--c9:#bf3989;--c10:#3b5b92;--c11:#607b09;--c12:#9a6700;}@media(prefers-color-scheme:dark){:root{--c0:#0d1117;--c1:#161b22;--c2:#30363d;--c3:#b1bac4;--c4:#f0f6fc;--c5:#58a6ff;--c6:#39d3bb;--c7:#bc8cff;--c8:#ffa657;--c9:#f778ba;--c10:#9bbcf5;--c11:#b2ce65;--c12:#e3b341;}}.s0{fill:var(--c1);}.s1{fill:none;stroke:var(--c2);stroke-linecap:square;stroke-opacity:.45;stroke-width:0.8;}.s3{fill:var(--c3);font-size:11;}.s4{fill:var(--c4);font-size:11;}.s6{stroke:var(--c5);}.s7{stroke:var(--c6);}.s8{stroke:var(--c7);}.s9{stroke:var(--c8);}.s10{stroke:var(--c9);}.s11{stroke:var(--c10);}.s12{stroke:var(--c11);}.s13{stroke:var(--c12);}.s14{fill:none;stroke:var(--c2);stroke-linecap:square;stroke-width:0.8;}.s15{fill:var(--c4);font-size:14;font-weight:bold;}.s16{fill:none;stroke-linecap:square;stroke-width:2.2;}.s17{fill:var(--c5);}.s18{fill:var(--c6);}.s19{fill:var(--c7);}.s20{fill:var(--c8);}.s21{fill:var(--c9);}.s22{fill:var(--c10);}.s23{fill:var(--c11);}.s24{fill:var(--c12);}.s25{font-size:9.5;}.s26{fill:var(--c4);font-size:10;}</style>
+<path d="m0 604.8h1224v-604.8h-1224z" fill="var(--c0)"/>
+<path d="m79.56 368.928h309.4v-235.872h-309.4z" class="s0"/>
+<path d="m93.624 368.928v-235.872" clip-path="url(#a)" class="s1"/>
+<text x="87.173" y="384.86" class="s3">16</text>
+<path d="m234.26 368.928v-235.872" clip-path="url(#a)" class="s1"/>
+<text x="227.81" y="384.86" class="s3">64</text>
+<path d="m374.896 368.928v-235.872" clip-path="url(#a)" class="s1"/>
+<text x="365.221" y="384.86" class="s3">256</text>
+<text x="176.935" y="400.901" class="s4">固定虚拟用户数（VU）</text>
+<path d="m79.56 368.928h309.4" clip-path="url(#a)" class="s1"/>
+<text x="66.11" y="373.394" class="s4">0</text>
+<path d="m79.56 334.919h309.4" clip-path="url(#a)" class="s1"/>
+<text x="59.659" y="339.385" class="s4">50</text>
+<path d="m79.56 300.911h309.4" clip-path="url(#a)" class="s1"/>
+<text x="53.209" y="305.377" class="s4">100</text>
+<path d="m79.56 266.902h309.4" clip-path="url(#a)" class="s1"/>
+<text x="53.209" y="271.368" class="s4">150</text>
+<path d="m79.56 232.893h309.4" clip-path="url(#a)" class="s1"/>
+<text x="53.209" y="237.359" class="s4">200</text>
+<path d="m79.56 198.885h309.4" clip-path="url(#a)" class="s1"/>
+<text x="53.209" y="203.351" class="s4">250</text>
+<path d="m79.56 164.876h309.4" clip-path="url(#a)" class="s1"/>
+<text x="53.209" y="169.342" class="s4">300</text>
+<text x="0" transform="translate(46.421 273.435) rotate(-90)" y="0" class="s4">P99 毫秒</text>
+<path d="m93.624 343.722 140.636-133.164 140.636-38.688" clip-path="url(#a)" fill="none" stroke="var(--c5)" stroke-linecap="square" stroke-width="2.2"/>
+<defs>
+<path id="i" d="m0 3c0.796 0 1.559-0.316 2.121-0.879 0.563-0.563 0.879-1.326 0.879-2.121s-0.316-1.559-0.879-2.121c-0.563-0.563-1.326-0.879-2.121-0.879s-1.559 0.316-2.121 0.879c-0.563 0.563-0.879 1.326-0.879 2.121s0.316 1.559 0.879 2.121c0.563 0.563 1.326 0.879 2.121 0.879z" class="s6"/>
+</defs>
+<g clip-path="url(#a)" fill="var(--c5)" stroke="var(--c5)">
+<use x="93.624" y="343.722" xlink:href="#i"/>
+<use x="234.26" y="210.559" xlink:href="#i"/>
+<use x="374.896" y="171.871" xlink:href="#i"/>
+</g>
+<path d="m93.624 345.464 140.636-129.461 140.636-29.803" clip-path="url(#a)" fill="none" stroke="var(--c6)" stroke-linecap="square" stroke-width="2.2"/>
+<defs>
+<path id="f" d="m0 3c0.796 0 1.559-0.316 2.121-0.879 0.563-0.563 0.879-1.326 0.879-2.121s-0.316-1.559-0.879-2.121c-0.563-0.563-1.326-0.879-2.121-0.879s-1.559 0.316-2.121 0.879c-0.563 0.563-0.879 1.326-0.879 2.121s0.316 1.559 0.879 2.121c0.563 0.563 1.326 0.879 2.121 0.879z" class="s7"/>
+</defs>
+<g clip-path="url(#a)" fill="var(--c6)" stroke="var(--c6)">
+<use x="93.624" y="345.464" xlink:href="#f"/>
+<use x="234.26" y="216.003" xlink:href="#f"/>
+<use x="374.896" y="186.2" xlink:href="#f"/>
+</g>
+<path d="m93.624 344.906 140.636-127.54 140.636-38.259" clip-path="url(#a)" fill="none" stroke="var(--c7)" stroke-linecap="square" stroke-width="2.2"/>
+<defs>
+<path id="j" d="m0 3c0.796 0 1.559-0.316 2.121-0.879 0.563-0.563 0.879-1.326 0.879-2.121s-0.316-1.559-0.879-2.121c-0.563-0.563-1.326-0.879-2.121-0.879s-1.559 0.316-2.121 0.879c-0.563 0.563-0.879 1.326-0.879 2.121s0.316 1.559 0.879 2.121c0.563 0.563 1.326 0.879 2.121 0.879z" class="s8"/>
+</defs>
+<g clip-path="url(#a)" fill="var(--c7)" stroke="var(--c7)">
+<use x="93.624" y="344.906" xlink:href="#j"/>
+<use x="234.26" y="217.366" xlink:href="#j"/>
+<use x="374.896" y="179.107" xlink:href="#j"/>
+</g>
+<path d="m93.624 343.248 140.636-135.264 140.636-39.303" clip-path="url(#a)" fill="none" stroke="var(--c8)" stroke-linecap="square" stroke-width="2.2"/>
+<defs>
+<path id="g" d="m0 3c0.796 0 1.559-0.316 2.121-0.879 0.563-0.563 0.879-1.326 0.879-2.121s-0.316-1.559-0.879-2.121c-0.563-0.563-1.326-0.879-2.121-0.879s-1.559 0.316-2.121 0.879c-0.563 0.563-0.879 1.326-0.879 2.121s0.316 1.559 0.879 2.121c0.563 0.563 1.326 0.879 2.121 0.879z" class="s9"/>
+</defs>
+<g clip-path="url(#a)" fill="var(--c8)" stroke="var(--c8)">
+<use x="93.624" y="343.248" xlink:href="#g"/>
+<use x="234.26" y="207.984" xlink:href="#g"/>
+<use x="374.896" y="168.681" xlink:href="#g"/>
+</g>
+<path d="m93.624 345.506 140.636-129.697 140.636-36.523" clip-path="url(#a)" fill="none" stroke="var(--c9)" stroke-linecap="square" stroke-width="2.2"/>
+<defs>
+<path id="l" d="m0 3c0.796 0 1.559-0.316 2.121-0.879 0.563-0.563 0.879-1.326 0.879-2.121s-0.316-1.559-0.879-2.121c-0.563-0.563-1.326-0.879-2.121-0.879s-1.559 0.316-2.121 0.879c-0.563 0.563-0.879 1.326-0.879 2.121s0.316 1.559 0.879 2.121c0.563 0.563 1.326 0.879 2.121 0.879z" class="s10"/>
+</defs>
+<g clip-path="url(#a)" fill="var(--c9)" stroke="var(--c9)">
+<use x="93.624" y="345.506" xlink:href="#l"/>
+<use x="234.26" y="215.809" xlink:href="#l"/>
+<use x="374.896" y="179.286" xlink:href="#l"/>
+</g>
+<path d="m93.624 345.614 140.636-131.633 140.636-33.367" clip-path="url(#a)" fill="none" stroke="var(--c10)" stroke-linecap="square" stroke-width="2.2"/>
+<defs>
+<path id="e" d="m0 3c0.796 0 1.559-0.316 2.121-0.879 0.563-0.563 0.879-1.326 0.879-2.121s-0.316-1.559-0.879-2.121c-0.563-0.563-1.326-0.879-2.121-0.879s-1.559 0.316-2.121 0.879c-0.563 0.563-0.879 1.326-0.879 2.121s0.316 1.559 0.879 2.121c0.563 0.563 1.326 0.879 2.121 0.879z" class="s11"/>
+</defs>
+<g clip-path="url(#a)" fill="var(--c10)" stroke="var(--c10)">
+<use x="93.624" y="345.614" xlink:href="#e"/>
+<use x="234.26" y="213.981" xlink:href="#e"/>
+<use x="374.896" y="180.613" xlink:href="#e"/>
+</g>
+<path d="m93.624 345.623 140.636-128.809 140.636-73.433" clip-path="url(#a)" fill="none" stroke="var(--c11)" stroke-linecap="square" stroke-width="2.2"/>
+<defs>
+<path id="k" d="m0 3c0.796 0 1.559-0.316 2.121-0.879 0.563-0.563 0.879-1.326 0.879-2.121s-0.316-1.559-0.879-2.121c-0.563-0.563-1.326-0.879-2.121-0.879s-1.559 0.316-2.121 0.879c-0.563 0.563-0.879 1.326-0.879 2.121s0.316 1.559 0.879 2.121c0.563 0.563 1.326 0.879 2.121 0.879z" class="s12"/>
+</defs>
+<g clip-path="url(#a)" fill="var(--c11)" stroke="var(--c11)">
+<use x="93.624" y="345.623" xlink:href="#k"/>
+<use x="234.26" y="216.813" xlink:href="#k"/>
+<use x="374.896" y="143.38" xlink:href="#k"/>
+</g>
+<path d="m93.624 349.864 140.636-18.596 140.636-59.624" clip-path="url(#a)" fill="none" stroke="var(--c12)" stroke-linecap="square" stroke-width="2.2"/>
+<defs>
+<path id="m" d="m0 3c0.796 0 1.559-0.316 2.121-0.879 0.563-0.563 0.879-1.326 0.879-2.121s-0.316-1.559-0.879-2.121c-0.563-0.563-1.326-0.879-2.121-0.879s-1.559 0.316-2.121 0.879c-0.563 0.563-0.879 1.326-0.879 2.121s0.316 1.559 0.879 2.121c0.563 0.563 1.326 0.879 2.121 0.879z" class="s13"/>
+</defs>
+<g clip-path="url(#a)" fill="var(--c12)" stroke="var(--c12)">
+<use x="93.624" y="349.864" xlink:href="#m"/>
+<use x="234.26" y="331.268" xlink:href="#m"/>
+<use x="374.896" y="271.644" xlink:href="#m"/>
+</g>
+<path d="m79.56 368.928h309.4" class="s14"/>
+<text x="79.56" y="119.056" class="s15">博客</text>
+<path d="m481.78 368.928h309.4v-235.872h-309.4z" class="s0"/>
+<path d="m495.844 368.928v-235.872" clip-path="url(#b)" class="s1"/>
+<text x="489.393" y="384.86" class="s3">16</text>
+<path d="m636.48 368.928v-235.872" clip-path="url(#b)" class="s1"/>
+<text x="630.03" y="384.86" class="s3">64</text>
+<path d="m777.116 368.928v-235.872" clip-path="url(#b)" class="s1"/>
+<text x="767.441" y="384.86" class="s3">256</text>
+<text x="579.155" y="400.901" class="s4">固定虚拟用户数（VU）</text>
+<path d="m481.78 368.928h309.4" clip-path="url(#b)" class="s1"/>
+<text x="468.33" y="373.394" class="s4">0</text>
+<path d="m481.78 323.077h309.4" clip-path="url(#b)" class="s1"/>
+<text x="461.879" y="327.543" class="s4">20</text>
+<path d="m481.78 277.226h309.4" clip-path="url(#b)" class="s1"/>
+<text x="461.879" y="281.692" class="s4">40</text>
+<path d="m481.78 231.375h309.4" clip-path="url(#b)" class="s1"/>
+<text x="461.879" y="235.841" class="s4">60</text>
+<path d="m481.78 185.524h309.4" clip-path="url(#b)" class="s1"/>
+<text x="461.879" y="189.99" class="s4">80</text>
+<path d="m481.78 139.673h309.4" clip-path="url(#b)" class="s1"/>
+<text x="455.429" y="144.139" class="s4">100</text>
+<text x="0" transform="translate(448.641 273.435) rotate(-90)" y="0" class="s4">P99 毫秒</text>
+<g class="s6">
+<path d="m495.844 340.327 140.636-39.047 140.636-71.62" clip-path="url(#b)" class="s16"/>
+<g clip-path="url(#b)" class="s17">
+<use x="495.844" y="340.327" xlink:href="#i"/>
+<use x="636.48" y="301.28" xlink:href="#i"/>
+<use x="777.116" y="229.66" xlink:href="#i"/>
+</g>
+</g>
+<g class="s7">
+<path d="m495.844 340.917 140.636-35.356 140.636-80.454" clip-path="url(#b)" class="s16"/>
+<g clip-path="url(#b)" class="s18">
+<use x="495.844" y="340.917" xlink:href="#f"/>
+<use x="636.48" y="305.56" xlink:href="#f"/>
+<use x="777.116" y="225.107" xlink:href="#f"/>
+</g>
+</g>
+<g class="s8">
+<path d="m495.844 340.645 140.636-36.133 140.636-76.27" clip-path="url(#b)" class="s16"/>
+<g clip-path="url(#b)" class="s19">
+<use x="495.844" y="340.645" xlink:href="#j"/>
+<use x="636.48" y="304.512" xlink:href="#j"/>
+<use x="777.116" y="228.242" xlink:href="#j"/>
+</g>
+</g>
+<g class="s9">
+<path d="m495.844 340.494 140.636-41.426 140.636-84.301" clip-path="url(#b)" class="s16"/>
+<g clip-path="url(#b)" class="s20">
+<use x="495.844" y="340.494" xlink:href="#g"/>
+<use x="636.48" y="299.068" xlink:href="#g"/>
+<use x="777.116" y="214.767" xlink:href="#g"/>
+</g>
+</g>
+<g class="s10">
+<path d="m495.844 340.785 140.636-39.854 140.636-75.198" clip-path="url(#b)" class="s16"/>
+<g clip-path="url(#b)" class="s21">
+<use x="495.844" y="340.785" xlink:href="#l"/>
+<use x="636.48" y="300.931" xlink:href="#l"/>
+<use x="777.116" y="225.733" xlink:href="#l"/>
+</g>
+</g>
+<g class="s11">
+<path d="m495.844 338.783 140.636-44.258 140.636-67.068" clip-path="url(#b)" class="s16"/>
+<g clip-path="url(#b)" class="s22">
+<use x="495.844" y="338.783" xlink:href="#e"/>
+<use x="636.48" y="294.525" xlink:href="#e"/>
+<use x="777.116" y="227.457" xlink:href="#e"/>
+</g>
+</g>
+<g class="s12">
+<path d="m495.844 336.784 140.636-62.225 140.636-116.63" clip-path="url(#b)" class="s16"/>
+<g clip-path="url(#b)" class="s23">
+<use x="495.844" y="336.784" xlink:href="#k"/>
+<use x="636.48" y="274.559" xlink:href="#k"/>
+<use x="777.116" y="157.929" xlink:href="#k"/>
+</g>
+</g>
+<g class="s13">
+<path d="m495.844 332.209 140.636-42.171 140.636-147.084" clip-path="url(#b)" class="s16"/>
+<g clip-path="url(#b)" class="s24">
+<use x="495.844" y="332.209" xlink:href="#m"/>
+<use x="636.48" y="290.038" xlink:href="#m"/>
+<use x="777.116" y="142.954" xlink:href="#m"/>
+</g>
+</g>
+<path d="m481.78 368.928h309.4" class="s14"/>
+<text x="481.78" y="119.056" class="s15">商城</text>
+<path d="m884 368.928h309.4v-235.872h-309.4z" class="s0"/>
+<path d="m898.064 368.928v-235.872" clip-path="url(#c)" class="s1"/>
+<text x="891.613" y="384.86" class="s3">16</text>
+<path d="m1038.7 368.928v-235.872" clip-path="url(#c)" class="s1"/>
+<text x="1032.25" y="384.86" class="s3">64</text>
+<path d="m1179.34 368.928v-235.872" clip-path="url(#c)" class="s1"/>
+<text x="1169.66" y="384.86" class="s3">256</text>
+<text x="981.375" y="400.901" class="s4">固定虚拟用户数（VU）</text>
+<path d="m884 368.928h309.4" clip-path="url(#c)" class="s1"/>
+<text x="870.55" y="373.394" class="s4">0</text>
+<path d="m884 328.267h309.4" clip-path="url(#c)" class="s1"/>
+<text x="864.099" y="332.733" class="s4">20</text>
+<path d="m884 287.606h309.4" clip-path="url(#c)" class="s1"/>
+<text x="864.099" y="292.072" class="s4">40</text>
+<path d="m884 246.944h309.4" clip-path="url(#c)" class="s1"/>
+<text x="864.099" y="251.41" class="s4">60</text>
+<path d="m884 206.283h309.4" clip-path="url(#c)" class="s1"/>
+<text x="864.099" y="210.749" class="s4">80</text>
+<path d="m884 165.622h309.4" clip-path="url(#c)" class="s1"/>
+<text x="857.649" y="170.088" class="s4">100</text>
+<text x="0" transform="translate(850.861 273.435) rotate(-90)" y="0" class="s4">P99 毫秒</text>
+<g class="s6">
+<path d="m898.064 347.972 140.636-31.215 140.636-71.097" clip-path="url(#c)" class="s16"/>
+<g clip-path="url(#c)" class="s17">
+<use x="898.064" y="347.972" xlink:href="#i"/>
+<use x="1038.7" y="316.757" xlink:href="#i"/>
+<use x="1179.34" y="245.66" xlink:href="#i"/>
+</g>
+</g>
+<g class="s7">
+<path d="m898.064 348.665 140.636-28.236 140.636-66.282" clip-path="url(#c)" class="s16"/>
+<g clip-path="url(#c)" class="s18">
+<use x="898.064" y="348.665" xlink:href="#f"/>
+<use x="1038.7" y="320.429" xlink:href="#f"/>
+<use x="1179.34" y="254.147" xlink:href="#f"/>
+</g>
+</g>
+<g class="s8">
+<path d="m898.064 348.503 140.636-30.39 140.636-70.992" clip-path="url(#c)" class="s16"/>
+<g clip-path="url(#c)" class="s19">
+<use x="898.064" y="348.503" xlink:href="#j"/>
+<use x="1038.7" y="318.114" xlink:href="#j"/>
+<use x="1179.34" y="247.122" xlink:href="#j"/>
+</g>
+</g>
+<g class="s9">
+<path d="m898.064 348.32 140.636-31.903 140.636-69.866" clip-path="url(#c)" class="s16"/>
+<g clip-path="url(#c)" class="s20">
+<use x="898.064" y="348.32" xlink:href="#g"/>
+<use x="1038.7" y="316.416" xlink:href="#g"/>
+<use x="1179.34" y="246.551" xlink:href="#g"/>
+</g>
+</g>
+<g class="s10">
+<path d="m898.064 347.83 140.636-31.901 140.636-71.086" clip-path="url(#c)" class="s16"/>
+<g clip-path="url(#c)" class="s21">
+<use x="898.064" y="347.83" xlink:href="#l"/>
+<use x="1038.7" y="315.929" xlink:href="#l"/>
+<use x="1179.34" y="244.843" xlink:href="#l"/>
+</g>
+</g>
+<g class="s11">
+<path d="m898.064 346.525 140.636-31.991 140.636-72.204" clip-path="url(#c)" class="s16"/>
+<g clip-path="url(#c)" class="s22">
+<use x="898.064" y="346.525" xlink:href="#e"/>
+<use x="1038.7" y="314.534" xlink:href="#e"/>
+<use x="1179.34" y="242.33" xlink:href="#e"/>
+</g>
+</g>
+<g class="s12">
+<path d="m898.064 347.083 140.636-39.623 140.636-105.23" clip-path="url(#c)" class="s16"/>
+<g clip-path="url(#c)" class="s23">
+<use x="898.064" y="347.083" xlink:href="#k"/>
+<use x="1038.7" y="307.46" xlink:href="#k"/>
+<use x="1179.34" y="202.23" xlink:href="#k"/>
+</g>
+</g>
+<g class="s13">
+<path d="m898.064 341.48 140.636-44.958 140.636-153.199" clip-path="url(#c)" class="s16"/>
+<g clip-path="url(#c)" class="s24">
+<use x="898.064" y="341.48" xlink:href="#m"/>
+<use x="1038.7" y="296.522" xlink:href="#m"/>
+<use x="1179.34" y="143.323" xlink:href="#m"/>
+</g>
+</g>
+<path d="m884 368.928h309.4" class="s14"/>
+<text x="884" y="119.056" class="s15">社区</text>
+<text x="30.6" font-weight="bold" fill="var(--c4)" font-size="24" y="47.29">增加并发，尾延迟如何变化</text>
+<text x="31.824" y="74.572" textLength="280.797" lengthAdjust="spacingAndGlyphs" class="s3">固定虚拟用户负载 · 16 / 64 / 256 VU · 每个档位三次重复</text>
+<g fill="var(--c3)">
+<text x="30.6" y="516.174" textLength="425.414" lengthAdjust="spacingAndGlyphs" class="s25">2026-09-24—25 实测 · WSL2 / i5-12600KF · 应用 4 逻辑 CPU / 2 GiB · 数据库 4 逻辑 CPU / 6 GiB</text>
+<text x="30.6" y="531.342" textLength="435.363" lengthAdjust="spacingAndGlyphs" class="s25">PostgreSQL 18.6 · 129 万行预热数据 · 本机 HTTP/1.1 · 相同原生 SQL，非 ORM · 每轮恢复种子数据库</text>
+<text x="30.6" y="547.395" textLength="479.438" lengthAdjust="spacingAndGlyphs" class="s25">Go 单进程（GOMAXPROCS=4）· ThinkPHP：Swoole 8 worker + JIT · Laravel：FrankenPHP 16 worker + JIT</text>
+<text x="30.6" y="563.239" textLength="403.787" lengthAdjust="spacingAndGlyphs" class="s25">PHP 均为 8.5.10；FrankenPHP 为 ZTS，Swoole 为 NTS；ThinkPHP 在应用层过滤弃用提示。</text>
+<text x="30.6" y="578.9" textLength="323" lengthAdjust="spacingAndGlyphs" class="s25">分位数为各轮分位数的中位数，未合并全部请求；吞吐与尾延迟需同时阅读。</text>
+</g>
+<path d="m408.784 434.998h10 10" fill="none" stroke="var(--c5)" stroke-linecap="square" stroke-width="3"/>
+<text x="436.784" y="438.498" class="s26">Gin 1.12.0</text>
+<path d="m408.784 450.652h10 10" fill="none" stroke="var(--c6)" stroke-linecap="square" stroke-width="3"/>
+<text x="436.784" y="454.152" class="s26">Fiber 3.5.0</text>
+<path d="m506.005 434.998h10 10" fill="none" stroke="var(--c7)" stroke-linecap="square" stroke-width="3"/>
+<text x="534.005" y="438.498" class="s26">Echo 5.3.1</text>
+<path d="m506.005 450.652h10 10" fill="none" stroke="var(--c8)" stroke-linecap="square" stroke-width="3"/>
+<text x="534.005" y="454.152" class="s26">Chi 5.3.2</text>
+<path d="m602.4 434.998h10 10" fill="none" stroke="var(--c9)" stroke-linecap="square" stroke-width="3"/>
+<text x="630.4" y="438.498" class="s26">Beego 2.3.10</text>
+<path d="m602.4 450.662h10 10" fill="none" stroke="var(--c10)" stroke-linecap="square" stroke-width="3"/>
+<text x="630.4" y="454.162" class="s26">ThinkGo 3.0.2</text>
+<path d="m715.719 434.998h10 10" fill="none" stroke="var(--c11)" stroke-linecap="square" stroke-width="3"/>
+<text x="743.719" y="438.498" class="s26">ThinkPHP 8.1.4</text>
+<path d="m715.719 450.652h10 10" fill="none" stroke="var(--c12)" stroke-linecap="square" stroke-width="3"/>
+<text x="743.719" y="454.152" class="s26">Laravel 13.33.0</text>
+<defs>
+<clipPath id="a">
+<rect x="79.56" y="133.056" width="309.4" height="235.872"/>
+</clipPath>
+<clipPath id="b">
+<rect x="481.78" y="133.056" width="309.4" height="235.872"/>
+</clipPath>
+<clipPath id="c">
+<rect x="884" y="133.056" width="309.4" height="235.872"/>
+</clipPath>
+</defs>
+</svg>

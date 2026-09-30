@@ -7,6 +7,7 @@ import (
 	"math"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	cacheDriver "github.com/zhuhanxin0308/thinkgo/v3/cache/driver"
@@ -118,44 +119,52 @@ func TestCacheAtomicUpdateMaintainsTagMetadata(t *testing.T) {
 // 并在 JSON 文件后端保持 MaxInt64 精度与原有错误语义。
 func TestCacheFencedCounterPreservesTTLAndPrecision(t *testing.T) {
 	tests := []struct {
-		name     string
-		driver   func(t *testing.T) Driver
-		ttl      time.Duration
-		waitTime time.Duration
+		name   string
+		driver func(t *testing.T) Driver
 	}{
-		{name: "memory", driver: func(*testing.T) Driver { return cacheDriver.NewMemory() }, ttl: 35 * time.Millisecond, waitTime: 60 * time.Millisecond},
+		{name: "memory", driver: func(*testing.T) Driver { return cacheDriver.NewMemory() }},
 		{name: "file", driver: func(t *testing.T) Driver {
 			driver, err := cacheDriver.NewFile(t.TempDir())
 			if err != nil {
 				t.Fatalf("创建文件缓存失败: %v", err)
 			}
 			return driver
-		}, ttl: 800 * time.Millisecond, waitTime: time.Second},
+		}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			manager := NewCache(nil, test.driver(t))
-			if err := manager.Set("ttl-counter", int64(1), test.ttl); err != nil {
-				t.Fatalf("写入短期计数失败: %v", err)
-			}
-			if value, err := manager.Inc("ttl-counter", 1); err != nil || value != 2 {
-				t.Fatalf("递增短期计数失败: value=%d err=%v", value, err)
-			}
-			time.Sleep(test.waitTime)
-			if _, found, err := manager.Get("ttl-counter"); err != nil || found {
-				t.Fatalf("计数更新意外延长 TTL: found=%t err=%v", found, err)
-			}
+			// 实际文件读写不变；仅控制时间，避免磁盘调度先耗尽短 TTL。
+			synctest.Test(t, func(t *testing.T) {
+				manager := NewCache(nil, test.driver(t))
+				const ttl = time.Second
+				if err := manager.Set("ttl-counter", int64(1), ttl); err != nil {
+					t.Fatalf("写入短期计数失败: %v", err)
+				}
+				// 在原 TTL 中段更新，再分别验证原到期点之前和之后的状态。
+				time.Sleep(ttl / 2)
+				if value, err := manager.Inc("ttl-counter", 1); err != nil || value != 2 {
+					t.Fatalf("递增短期计数失败: value=%d err=%v", value, err)
+				}
+				time.Sleep(ttl/2 - time.Nanosecond)
+				if value, found, err := manager.Get("ttl-counter"); err != nil || !found || value != int64(2) {
+					t.Fatalf("计数在原 TTL 到期前丢失: value=%#v found=%t err=%v", value, found, err)
+				}
+				time.Sleep(2 * time.Nanosecond)
+				if _, found, err := manager.Get("ttl-counter"); err != nil || found {
+					t.Fatalf("计数更新意外延长 TTL: found=%t err=%v", found, err)
+				}
 
-			if err := manager.Set("overflow", int64(math.MaxInt64), 0); err != nil {
-				t.Fatalf("写入 MaxInt64 失败: %v", err)
-			}
-			if _, err := manager.Inc("overflow", 1); !errors.Is(err, cacheDriver.ErrCounterOverflow) {
-				t.Fatalf("MaxInt64 溢出错误不兼容: %v", err)
-			}
-			value, found, err := manager.Get("overflow")
-			if err != nil || !found || value != int64(math.MaxInt64) {
-				t.Fatalf("失败计数破坏原值: value=%#v found=%t err=%v", value, found, err)
-			}
+				if err := manager.Set("overflow", int64(math.MaxInt64), 0); err != nil {
+					t.Fatalf("写入 MaxInt64 失败: %v", err)
+				}
+				if _, err := manager.Inc("overflow", 1); !errors.Is(err, cacheDriver.ErrCounterOverflow) {
+					t.Fatalf("MaxInt64 溢出错误不兼容: %v", err)
+				}
+				value, found, err := manager.Get("overflow")
+				if err != nil || !found || value != int64(math.MaxInt64) {
+					t.Fatalf("失败计数破坏原值: value=%#v found=%t err=%v", value, found, err)
+				}
+			})
 		})
 	}
 }

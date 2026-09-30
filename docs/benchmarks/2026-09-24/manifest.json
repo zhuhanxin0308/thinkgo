@@ -1,0 +1,370 @@
+{
+  "language": "中文",
+  "measurement_dates": [
+    "2026-09-24",
+    "2026-09-25"
+  ],
+  "themes": [
+    "light",
+    "dark"
+  ],
+  "files": [
+    "light/00-test-conditions.png",
+    "light/00-test-conditions.svg",
+    "light/01-business-throughput.png",
+    "light/01-business-throughput.svg",
+    "light/02-business-p99.png",
+    "light/02-business-p99.svg",
+    "light/03-framework-basics-throughput.png",
+    "light/03-framework-basics-throughput.svg",
+    "light/04-framework-basics-p99.png",
+    "light/04-framework-basics-p99.svg",
+    "light/05-transaction-throughput.png",
+    "light/05-transaction-throughput.svg",
+    "light/06-scenario-throughput-map.png",
+    "light/06-scenario-throughput-map.svg",
+    "light/07-concurrency-throughput.png",
+    "light/07-concurrency-throughput.svg",
+    "light/08-concurrency-p99.png",
+    "light/08-concurrency-p99.svg",
+    "light/09-application-memory.png",
+    "light/09-application-memory.svg",
+    "light/10-cpu-utilization.png",
+    "light/10-cpu-utilization.svg",
+    "light/11-cpu-cost-per-request.png",
+    "light/11-cpu-cost-per-request.svg",
+    "light/12-latency-percentiles.png",
+    "light/12-latency-percentiles.svg",
+    "light/13-throughput-latency-tradeoff.png",
+    "light/13-throughput-latency-tradeoff.svg",
+    "light/14-run-variation.png",
+    "light/14-run-variation.svg",
+    "light/15-container-readiness.png",
+    "light/15-container-readiness.svg",
+    "light/16-open-arrival-drops.png",
+    "light/16-open-arrival-drops.svg",
+    "dark/00-test-conditions.png",
+    "dark/00-test-conditions.svg",
+    "dark/01-business-throughput.png",
+    "dark/01-business-throughput.svg",
+    "dark/02-business-p99.png",
+    "dark/02-business-p99.svg",
+    "dark/03-framework-basics-throughput.png",
+    "dark/03-framework-basics-throughput.svg",
+    "dark/04-framework-basics-p99.png",
+    "dark/04-framework-basics-p99.svg",
+    "dark/05-transaction-throughput.png",
+    "dark/05-transaction-throughput.svg",
+    "dark/06-scenario-throughput-map.png",
+    "dark/06-scenario-throughput-map.svg",
+    "dark/07-concurrency-throughput.png",
+    "dark/07-concurrency-throughput.svg",
+    "dark/08-concurrency-p99.png",
+    "dark/08-concurrency-p99.svg",
+    "dark/09-application-memory.png",
+    "dark/09-application-memory.svg",
+    "dark/10-cpu-utilization.png",
+    "dark/10-cpu-utilization.svg",
+    "dark/11-cpu-cost-per-request.png",
+    "dark/11-cpu-cost-per-request.svg",
+    "dark/12-latency-percentiles.png",
+    "dark/12-latency-percentiles.svg",
+    "dark/13-throughput-latency-tradeoff.png",
+    "dark/13-throughput-latency-tradeoff.svg",
+    "dark/14-run-variation.png",
+    "dark/14-run-variation.svg",
+    "dark/15-container-readiness.png",
+    "dark/15-container-readiness.svg",
+    "dark/16-open-arrival-drops.png",
+    "dark/16-open-arrival-drops.svg"
+  ],
+  "charts": [
+    [
+      "00-test-conditions",
+      "测试环境与数据覆盖"
+    ],
+    [
+      "01-business-throughput",
+      "三类应用的业务吞吐"
+    ],
+    [
+      "02-business-p99",
+      "三类应用的 P99 尾延迟"
+    ],
+    [
+      "03-framework-basics-throughput",
+      "框架基础接口吞吐"
+    ],
+    [
+      "04-framework-basics-p99",
+      "框架基础接口尾延迟"
+    ],
+    [
+      "05-transaction-throughput",
+      "事务接口吞吐对比"
+    ],
+    [
+      "06-scenario-throughput-map",
+      "19 个单接口场景的相对吞吐"
+    ],
+    [
+      "07-concurrency-throughput",
+      "增加并发，吞吐如何变化"
+    ],
+    [
+      "08-concurrency-p99",
+      "增加并发，尾延迟如何变化"
+    ],
+    [
+      "09-application-memory",
+      "相同业务负载下的应用内存"
+    ],
+    [
+      "10-cpu-utilization",
+      "应用、数据库与负载端 CPU 占用"
+    ],
+    [
+      "11-cpu-cost-per-request",
+      "每个成功请求的应用 CPU 开销"
+    ],
+    [
+      "12-latency-percentiles",
+      "延迟分布：P50 到 P99.9"
+    ],
+    [
+      "13-throughput-latency-tradeoff",
+      "吞吐与尾延迟，需要一起看"
+    ],
+    [
+      "14-run-variation",
+      "三次重复测试的吞吐波动"
+    ],
+    [
+      "15-container-readiness",
+      "容器启动到健康就绪的耗时"
+    ],
+    [
+      "16-open-arrival-drops",
+      "固定到达率下，哪些请求没能发出"
+    ]
+  ],
+  "text_boundary_checks": [
+    {
+      "chart": "00-test-conditions",
+      "theme": "light",
+      "outside_canvas_text": [],
+      "legend_axis_label_overlap": []
+    },
+    {
+      "chart": "01-business-throughput",
+      "theme": "light",
+      "outside_canvas_text": [],
+      "legend_axis_label_overlap": []
+    },
+    {
+      "chart": "02-business-p99",
+      "theme": "light",
+      "outside_canvas_text": [],
+      "legend_axis_label_overlap": []
+    },
+    {
+      "chart": "03-framework-basics-throughput",
+      "theme": "light",
+      "outside_canvas_text": [],
+      "legend_axis_label_overlap": []
+    },
+    {
+      "chart": "04-framework-basics-p99",
+      "theme": "light",
+      "outside_canvas_text": [],
+      "legend_axis_label_overlap": []
+    },
+    {
+      "chart": "05-transaction-throughput",
+      "theme": "light",
+      "outside_canvas_text": [],
+      "legend_axis_label_overlap": []
+    },
+    {
+      "chart": "06-scenario-throughput-map",
+      "theme": "light",
+      "outside_canvas_text": [],
+      "legend_axis_label_overlap": []
+    },
+    {
+      "chart": "07-concurrency-throughput",
+      "theme": "light",
+      "outside_canvas_text": [],
+      "legend_axis_label_overlap": []
+    },
+    {
+      "chart": "08-concurrency-p99",
+      "theme": "light",
+      "outside_canvas_text": [],
+      "legend_axis_label_overlap": []
+    },
+    {
+      "chart": "09-application-memory",
+      "theme": "light",
+      "outside_canvas_text": [],
+      "legend_axis_label_overlap": []
+    },
+    {
+      "chart": "10-cpu-utilization",
+      "theme": "light",
+      "outside_canvas_text": [],
+      "legend_axis_label_overlap": []
+    },
+    {
+      "chart": "11-cpu-cost-per-request",
+      "theme": "light",
+      "outside_canvas_text": [],
+      "legend_axis_label_overlap": []
+    },
+    {
+      "chart": "12-latency-percentiles",
+      "theme": "light",
+      "outside_canvas_text": [],
+      "legend_axis_label_overlap": []
+    },
+    {
+      "chart": "13-throughput-latency-tradeoff",
+      "theme": "light",
+      "outside_canvas_text": [],
+      "legend_axis_label_overlap": []
+    },
+    {
+      "chart": "14-run-variation",
+      "theme": "light",
+      "outside_canvas_text": [],
+      "legend_axis_label_overlap": []
+    },
+    {
+      "chart": "15-container-readiness",
+      "theme": "light",
+      "outside_canvas_text": [],
+      "legend_axis_label_overlap": []
+    },
+    {
+      "chart": "16-open-arrival-drops",
+      "theme": "light",
+      "outside_canvas_text": [],
+      "legend_axis_label_overlap": []
+    },
+    {
+      "chart": "00-test-conditions",
+      "theme": "dark",
+      "outside_canvas_text": [],
+      "legend_axis_label_overlap": []
+    },
+    {
+      "chart": "01-business-throughput",
+      "theme": "dark",
+      "outside_canvas_text": [],
+      "legend_axis_label_overlap": []
+    },
+    {
+      "chart": "02-business-p99",
+      "theme": "dark",
+      "outside_canvas_text": [],
+      "legend_axis_label_overlap": []
+    },
+    {
+      "chart": "03-framework-basics-throughput",
+      "theme": "dark",
+      "outside_canvas_text": [],
+      "legend_axis_label_overlap": []
+    },
+    {
+      "chart": "04-framework-basics-p99",
+      "theme": "dark",
+      "outside_canvas_text": [],
+      "legend_axis_label_overlap": []
+    },
+    {
+      "chart": "05-transaction-throughput",
+      "theme": "dark",
+      "outside_canvas_text": [],
+      "legend_axis_label_overlap": []
+    },
+    {
+      "chart": "06-scenario-throughput-map",
+      "theme": "dark",
+      "outside_canvas_text": [],
+      "legend_axis_label_overlap": []
+    },
+    {
+      "chart": "07-concurrency-throughput",
+      "theme": "dark",
+      "outside_canvas_text": [],
+      "legend_axis_label_overlap": []
+    },
+    {
+      "chart": "08-concurrency-p99",
+      "theme": "dark",
+      "outside_canvas_text": [],
+      "legend_axis_label_overlap": []
+    },
+    {
+      "chart": "09-application-memory",
+      "theme": "dark",
+      "outside_canvas_text": [],
+      "legend_axis_label_overlap": []
+    },
+    {
+      "chart": "10-cpu-utilization",
+      "theme": "dark",
+      "outside_canvas_text": [],
+      "legend_axis_label_overlap": []
+    },
+    {
+      "chart": "11-cpu-cost-per-request",
+      "theme": "dark",
+      "outside_canvas_text": [],
+      "legend_axis_label_overlap": []
+    },
+    {
+      "chart": "12-latency-percentiles",
+      "theme": "dark",
+      "outside_canvas_text": [],
+      "legend_axis_label_overlap": []
+    },
+    {
+      "chart": "13-throughput-latency-tradeoff",
+      "theme": "dark",
+      "outside_canvas_text": [],
+      "legend_axis_label_overlap": []
+    },
+    {
+      "chart": "14-run-variation",
+      "theme": "dark",
+      "outside_canvas_text": [],
+      "legend_axis_label_overlap": []
+    },
+    {
+      "chart": "15-container-readiness",
+      "theme": "dark",
+      "outside_canvas_text": [],
+      "legend_axis_label_overlap": []
+    },
+    {
+      "chart": "16-open-arrival-drops",
+      "theme": "dark",
+      "outside_canvas_text": [],
+      "legend_axis_label_overlap": []
+    }
+  ],
+  "source_hashes": {
+    "benchmark.json": "425bcf9c4edcdb7d0005f5fb82e313bbf5436d911cb57790da3d615363d0f8ea",
+    "contracts.json": "1df60dd74e5403186f645acb707e64bf38a49d960cf53f32d67daf93d72cd0dd",
+    "versions.json": "ee9234baa6ee61726bbc9a4191b264136ed8603eaa919b9538bdc498a27b3a98",
+    "results/index.jsonl": "6c0f26e6a39e8eeaae7ad1e0db547f2ed085d82f83662ed0041813dfff74255d",
+    "results/report-data.json": "ff96aa44545bd93e007935e2564ea0c3713fcf208b5d67a1c327afbf51536891",
+    "results/final-audit.json": "7ab2a6cb4c0ff776af56e6ac115e61178f6d84a3d349ac378362afaa11e6e772",
+    "results/environment.json": "a6c027080316316c83281348628834c3fafddce245cd0a7e5accbccc5d84f56b",
+    "results/selected-runtime.json": "4ab844944799d40dfa27f05942efad30fed03a14674dbb6f2a1e3786d0af64b4",
+    "results/interruption-20260925.json": "48d3234c4205c8004f0b860160ab33a1f9fd8d49750ba23ba4da8a937c213892"
+  },
+  "png_dpi": 200,
+  "github_image_syntax_source": "https://docs.github.com/en/get-started/writing-on-github/getting-started-with-writing-and-formatting-on-github/basic-writing-and-formatting-syntax#images"
+}

@@ -1,0 +1,249 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1224pt" height="604.8pt" font-family="Microsoft YaHei,Noto Sans CJK SC,sans-serif" version="1.1" viewBox="0 0 1224 604.8" role="img">
+<title>固定到达率下，哪些请求没能发出</title>
+<style>*{stroke-linejoin: round; stroke-linecap: butt}:root{--c0:#ffffff;--c1:#f6f8fa;--c2:#59636e;--c3:#1f2328;--c4:#d8dee4;--c5:#0969da;--c6:#008579;--c7:#8250df;--c8:#bc4c00;--c9:#bf3989;--c10:#3b5b92;--c11:#607b09;--c12:#9a6700;}@media(prefers-color-scheme:dark){:root{--c0:#0d1117;--c1:#161b22;--c2:#b1bac4;--c3:#f0f6fc;--c4:#30363d;--c5:#58a6ff;--c6:#39d3bb;--c7:#bc8cff;--c8:#ffa657;--c9:#f778ba;--c10:#9bbcf5;--c11:#b2ce65;--c12:#e3b341;}}.s0{fill:var(--c1);}.s1{fill:#ffc;}.s2{fill:#fffecb;}.s3{fill:#f84528;}.s4{fill:var(--c2);font-size:11;}.s5{fill:var(--c3);font-size:11;}.s6{fill:none;stroke:var(--c4);stroke-linecap:square;stroke-width:0.8;}.s7{fill:#231810;font-size:10;}.s8{fill:#fff;font-size:10;}.s9{fill:var(--c3);font-size:14;font-weight:bold;}.s10{fill:#fffec9;}.s11{fill:#fffcc4;}.s12{fill:#fff6b6;}.s13{fill:#fffdc8;}.s15{font-size:9.5;}.s16{fill:var(--c3);font-size:10;}</style>
+<path d="m0 604.8h1224v-604.8h-1224z" fill="var(--c0)"/>
+<path d="m79.56 368.928h284.38v-235.872h-284.38z" class="s0"/>
+<g clip-path="url(#c)">
+<path d="m79.56 133.056h94.793v29.484h-94.793v-29.484" class="s1"/>
+<path d="m174.353 133.056h94.793v29.484h-94.793v-29.484" class="s1"/>
+<path d="m269.147 133.056h94.793v29.484h-94.793v-29.484" fill="#da141e"/>
+<path d="m79.56 162.54h94.793v29.484h-94.793v-29.484" class="s1"/>
+<path d="m174.353 162.54h94.793v29.484h-94.793v-29.484" fill="#fffdc6"/>
+<path d="m269.147 162.54h94.793v29.484h-94.793v-29.484" fill="#c90823"/>
+<path d="m79.56 192.024h94.793v29.484h-94.793v-29.484" class="s1"/>
+<path d="m174.353 192.024h94.793v29.484h-94.793v-29.484" class="s2"/>
+<path d="m269.147 192.024h94.793v29.484h-94.793v-29.484" class="s3"/>
+<path d="m79.56 221.508h94.793v29.484h-94.793v-29.484" class="s1"/>
+<path d="m174.353 221.508h94.793v29.484h-94.793v-29.484" class="s1"/>
+<path d="m269.147 221.508h94.793v29.484h-94.793v-29.484" fill="#df171d"/>
+<path d="m79.56 250.992h94.793v29.484h-94.793v-29.484" class="s1"/>
+<path d="m174.353 250.992h94.793v29.484h-94.793v-29.484" class="s2"/>
+<path d="m269.147 250.992h94.793v29.484h-94.793v-29.484" fill="#f84628"/>
+<path d="m79.56 280.476h94.793v29.484h-94.793v-29.484" class="s1"/>
+<path d="m174.353 280.476h94.793v29.484h-94.793v-29.484" fill="#fff4b0"/>
+<path d="m269.147 280.476h94.793v29.484h-94.793v-29.484" fill="#fb4b29"/>
+<path d="m79.56 309.96h94.793v29.484h-94.793v-29.484" class="s1"/>
+<path d="m174.353 309.96h94.793v29.484h-94.793v-29.484" class="s1"/>
+<path d="m269.147 309.96h94.793v29.484h-94.793v-29.484" fill="#fd7836"/>
+<path d="m79.56 339.444h94.793v29.484h-94.793v-29.484" class="s1"/>
+<path d="m174.353 339.444h94.793v29.484h-94.793v-29.484" fill="#fff3ae"/>
+<path d="m269.147 339.444h94.793v29.484h-94.793v-29.484" fill="#fd7234"/>
+</g>
+<text x="115.613" y="385.86" class="s4">50%</text>
+<text x="210.406" y="385.86" class="s4">85%</text>
+<text x="301.975" y="385.86" class="s4">110%</text>
+<text x="144.75" y="401.881" class="s5">相对各自最佳闭环吞吐的到达率</text>
+<text x="53.675" y="152.264" class="s5">Gin</text>
+<text x="45.322" y="181.748" class="s5">Fiber</text>
+<text x="46.229" y="211.232" class="s5">Echo</text>
+<text x="54.501" y="240.716" class="s5">Chi</text>
+<text x="38.146" y="270.2" class="s5">Beego</text>
+<text x="27.613" y="299.684" class="s5">ThinkGo</text>
+<text x="20.817" y="329.168" class="s5">ThinkPHP</text>
+<text x="34.682" y="358.652" class="s5">Laravel</text>
+<path d="m79.56 368.928h284.38" class="s6"/>
+<text x="112.508" y="150.591" class="s7">0.00%</text>
+<text x="207.302" y="150.591" class="s7">0.00%</text>
+<text x="299.163" y="150.591" class="s8">13.11%</text>
+<text x="112.508" y="180.075" class="s7">0.00%</text>
+<text x="207.302" y="180.075" class="s7">0.33%</text>
+<text x="299.163" y="180.075" class="s8">14.04%</text>
+<text x="112.508" y="209.559" class="s7">0.00%</text>
+<text x="207.302" y="209.559" class="s7">0.07%</text>
+<text x="299.163" y="209.559" class="s8">10.88%</text>
+<text x="112.508" y="239.043" class="s7">0.00%</text>
+<text x="207.302" y="239.043" class="s7">0.05%</text>
+<text x="299.163" y="239.043" class="s8">12.88%</text>
+<text x="112.508" y="268.527" class="s7">0.00%</text>
+<text x="207.302" y="268.527" class="s7">0.07%</text>
+<text x="299.163" y="268.527" class="s8">10.83%</text>
+<text x="112.508" y="298.011" class="s7">0.00%</text>
+<text x="207.302" y="298.011" class="s7">1.33%</text>
+<text x="299.163" y="298.011" class="s8">10.59%</text>
+<text x="112.508" y="327.495" class="s7">0.00%</text>
+<text x="207.302" y="327.495" class="s7">0.01%</text>
+<text x="302.095" y="327.495" class="s7">9.10%</text>
+<text x="112.508" y="356.979" class="s7">0.00%</text>
+<text x="207.302" y="356.979" class="s7">1.45%</text>
+<text x="302.095" y="356.979" class="s8">9.31%</text>
+<text x="79.56" y="119.056" class="s9">博客</text>
+<path d="m460.63 368.928h284.38v-235.872h-284.38z" class="s0"/>
+<g clip-path="url(#a)">
+<path d="m460.63 133.056h94.793v29.484h-94.793v-29.484" class="s10"/>
+<path d="m555.423 133.056h94.793v29.484h-94.793v-29.484" class="s11"/>
+<path d="m650.217 133.056h94.793v29.484h-94.793v-29.484" fill="#990026"/>
+<path d="m460.63 162.54h94.793v29.484h-94.793v-29.484" class="s10"/>
+<path d="m555.423 162.54h94.793v29.484h-94.793v-29.484" class="s12"/>
+<path d="m650.217 162.54h94.793v29.484h-94.793v-29.484" fill="#cd0b22"/>
+<path d="m460.63 192.024h94.793v29.484h-94.793v-29.484" class="s1"/>
+<path d="m555.423 192.024h94.793v29.484h-94.793v-29.484" class="s13"/>
+<path d="m650.217 192.024h94.793v29.484h-94.793v-29.484" fill="#d9131f"/>
+<path d="m460.63 221.508h94.793v29.484h-94.793v-29.484" class="s2"/>
+<path d="m555.423 221.508h94.793v29.484h-94.793v-29.484" fill="#fff9bd"/>
+<path d="m650.217 221.508h94.793v29.484h-94.793v-29.484" fill="#ed2e21"/>
+<path d="m460.63 250.992h94.793v29.484h-94.793v-29.484" class="s10"/>
+<path d="m555.423 250.992h94.793v29.484h-94.793v-29.484" fill="#fffac0"/>
+<path d="m650.217 250.992h94.793v29.484h-94.793v-29.484" fill="#c30424"/>
+<path d="m460.63 280.476h94.793v29.484h-94.793v-29.484" class="s2"/>
+<path d="m555.423 280.476h94.793v29.484h-94.793v-29.484" fill="#fffbc2"/>
+<path d="m650.217 280.476h94.793v29.484h-94.793v-29.484" fill="#fc612f"/>
+<path d="m460.63 309.96h94.793v29.484h-94.793v-29.484" class="s1"/>
+<path d="m555.423 309.96h94.793v29.484h-94.793v-29.484" fill="#fed572"/>
+<path d="m650.217 309.96h94.793v29.484h-94.793v-29.484" fill="#ca0923"/>
+<path d="m460.63 339.444h94.793v29.484h-94.793v-29.484" class="s1"/>
+<path d="m555.423 339.444h94.793v29.484h-94.793v-29.484" fill="#fff8bb"/>
+<path d="m650.217 339.444h94.793v29.484h-94.793v-29.484" class="s3"/>
+</g>
+<text x="496.683" y="385.86" class="s4">50%</text>
+<text x="591.476" y="385.86" class="s4">85%</text>
+<text x="683.044" y="385.86" class="s4">110%</text>
+<text x="525.82" y="401.881" class="s5">相对各自最佳闭环吞吐的到达率</text>
+<text x="434.744" y="152.264" class="s5">Gin</text>
+<text x="426.391" y="181.748" class="s5">Fiber</text>
+<text x="427.299" y="211.232" class="s5">Echo</text>
+<text x="435.571" y="240.716" class="s5">Chi</text>
+<text x="419.216" y="270.2" class="s5">Beego</text>
+<text x="408.683" y="299.684" class="s5">ThinkGo</text>
+<text x="401.887" y="329.168" class="s5">ThinkPHP</text>
+<text x="415.752" y="358.652" class="s5">Laravel</text>
+<path d="m460.63 368.928h284.38" class="s6"/>
+<text x="493.578" y="150.591" class="s7">0.19%</text>
+<text x="588.372" y="150.591" class="s7">0.40%</text>
+<text x="680.233" y="150.591" class="s8">15.92%</text>
+<text x="493.578" y="180.075" class="s7">0.16%</text>
+<text x="588.372" y="180.075" class="s7">1.10%</text>
+<text x="680.233" y="180.075" class="s8">13.84%</text>
+<text x="493.578" y="209.559" class="s7">0.05%</text>
+<text x="588.372" y="209.559" class="s7">0.24%</text>
+<text x="680.233" y="209.559" class="s8">13.21%</text>
+<text x="493.578" y="239.043" class="s7">0.11%</text>
+<text x="588.372" y="239.043" class="s7">0.76%</text>
+<text x="680.233" y="239.043" class="s8">11.81%</text>
+<text x="493.578" y="268.527" class="s7">0.18%</text>
+<text x="588.372" y="268.527" class="s7">0.64%</text>
+<text x="680.233" y="268.527" class="s8">14.33%</text>
+<text x="493.578" y="298.011" class="s7">0.09%</text>
+<text x="588.372" y="298.011" class="s7">0.48%</text>
+<text x="683.165" y="298.011" class="s8">9.90%</text>
+<text x="493.578" y="327.495" class="s7">0.01%</text>
+<text x="588.372" y="327.495" class="s7">4.43%</text>
+<text x="680.233" y="327.495" class="s8">13.98%</text>
+<text x="493.578" y="356.979" class="s7">0.00%</text>
+<text x="588.372" y="356.979" class="s7">0.82%</text>
+<text x="680.233" y="356.979" class="s8">10.85%</text>
+<text x="460.63" y="119.056" class="s9">商城</text>
+<path d="m841.7 368.928h284.38v-235.872h-284.38z" class="s0"/>
+<g clip-path="url(#b)">
+<path d="m841.7 133.056h94.793v29.484h-94.793v-29.484" class="s10"/>
+<path d="m936.493 133.056h94.793v29.484h-94.793v-29.484" class="s2"/>
+<path d="m1031.29 133.056h94.793v29.484h-94.793v-29.484" fill="#ec2c21"/>
+<path d="m841.7 162.54h94.793v29.484h-94.793v-29.484" fill="#fff0a8"/>
+<path d="m936.493 162.54h94.793v29.484h-94.793v-29.484" class="s12"/>
+<path d="m1031.29 162.54h94.793v29.484h-94.793v-29.484" fill="#a20026"/>
+<path d="m841.7 192.024h94.793v29.484h-94.793v-29.484" class="s10"/>
+<path d="m936.493 192.024h94.793v29.484h-94.793v-29.484" fill="#fff1a9"/>
+<path d="m1031.29 192.024h94.793v29.484h-94.793v-29.484" fill="#800026"/>
+<path d="m841.7 221.508h94.793v29.484h-94.793v-29.484" class="s1"/>
+<path d="m936.493 221.508h94.793v29.484h-94.793v-29.484" class="s13"/>
+<path d="m1031.29 221.508h94.793v29.484h-94.793v-29.484" fill="#db141e"/>
+<path d="m841.7 250.992h94.793v29.484h-94.793v-29.484" class="s1"/>
+<path d="m936.493 250.992h94.793v29.484h-94.793v-29.484" fill="#ffea9b"/>
+<path d="m1031.29 250.992h94.793v29.484h-94.793v-29.484" fill="#f33b25"/>
+<path d="m841.7 280.476h94.793v29.484h-94.793v-29.484" class="s10"/>
+<path d="m936.493 280.476h94.793v29.484h-94.793v-29.484" class="s11"/>
+<path d="m1031.29 280.476h94.793v29.484h-94.793v-29.484" fill="#f64227"/>
+<path d="m841.7 309.96h94.793v29.484h-94.793v-29.484" class="s1"/>
+<path d="m936.493 309.96h94.793v29.484h-94.793v-29.484" fill="#fffcc5"/>
+<path d="m1031.29 309.96h94.793v29.484h-94.793v-29.484" fill="#e0181d"/>
+<path d="m841.7 339.444h94.793v29.484h-94.793v-29.484" class="s1"/>
+<path d="m936.493 339.444h94.793v29.484h-94.793v-29.484" class="s2"/>
+<path d="m1031.29 339.444h94.793v29.484h-94.793v-29.484" fill="#fd9841"/>
+</g>
+<text x="877.753" y="385.86" class="s4">50%</text>
+<text x="972.546" y="385.86" class="s4">85%</text>
+<text x="1064.11" y="385.86" class="s4">110%</text>
+<text x="906.89" y="401.881" class="s5">相对各自最佳闭环吞吐的到达率</text>
+<text x="815.814" y="152.264" class="s5">Gin</text>
+<text x="807.461" y="181.748" class="s5">Fiber</text>
+<text x="808.369" y="211.232" class="s5">Echo</text>
+<text x="816.641" y="240.716" class="s5">Chi</text>
+<text x="800.285" y="270.2" class="s5">Beego</text>
+<text x="789.753" y="299.684" class="s5">ThinkGo</text>
+<text x="782.957" y="329.168" class="s5">ThinkPHP</text>
+<text x="796.822" y="358.652" class="s5">Laravel</text>
+<path d="m841.7 368.928h284.38" class="s6"/>
+<text x="874.648" y="150.591" class="s7">0.14%</text>
+<text x="969.441" y="150.591" class="s7">0.12%</text>
+<text x="1061.3" y="150.591" class="s8">11.85%</text>
+<text x="874.648" y="180.075" class="s7">1.73%</text>
+<text x="969.441" y="180.075" class="s7">1.08%</text>
+<text x="1061.3" y="180.075" class="s8">15.64%</text>
+<text x="874.648" y="209.559" class="s7">0.14%</text>
+<text x="969.441" y="209.559" class="s7">1.65%</text>
+<text x="1061.3" y="209.559" class="s8">16.83%</text>
+<text x="874.648" y="239.043" class="s7">0.02%</text>
+<text x="969.441" y="239.043" class="s7">0.22%</text>
+<text x="1061.3" y="239.043" class="s8">13.03%</text>
+<text x="874.648" y="268.527" class="s7">0.02%</text>
+<text x="969.441" y="268.527" class="s7">2.37%</text>
+<text x="1061.3" y="268.527" class="s8">11.28%</text>
+<text x="874.648" y="298.011" class="s7">0.15%</text>
+<text x="969.441" y="298.011" class="s7">0.44%</text>
+<text x="1061.3" y="298.011" class="s8">11.00%</text>
+<text x="874.648" y="327.495" class="s7">0.06%</text>
+<text x="969.441" y="327.495" class="s7">0.35%</text>
+<text x="1061.3" y="327.495" class="s8">12.80%</text>
+<text x="874.648" y="356.979" class="s7">0.02%</text>
+<text x="969.441" y="356.979" class="s7">0.09%</text>
+<text x="1064.23" y="356.979" class="s7">7.82%</text>
+<text x="841.7" y="119.056" class="s9">社区</text>
+<path d="m1156.68 359.856h14.688v-214.704h-14.688z" class="s0"/>
+<image x="1156.68" y="145.152" width="14.688" height="214.704" image-rendering="pixelated" preserveAspectRatio="none" xlink:href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAEACAIAAAD9XIvPAAAAkElEQVR42qWOQRLCMAwDJT2Gd/LzcrACamOaMBw81mxWbvHEQwKmYcPuhn+4JCQeIuuNIw9up+aQRsbFu/Rl/9OPbvZFUcXwzrXhTdGunVPPNNjco+D+ifnevBvG+Y07vZVD3869yZnvavwlz1Ew+XuRtx0KWnSGg+BdRviIvjOT/3RLX2/OfsPubmHjH2q/ADSYDskod12XAAAAAElFTkSuQmCC"/>
+<text x="1178.37" y="364.322" class="s5">0</text>
+<text x="1178.37" y="338.802" class="s5">2</text>
+<text x="1178.37" y="313.281" class="s5">4</text>
+<text x="1178.37" y="287.76" class="s5">6</text>
+<text x="1178.37" y="262.24" class="s5">8</text>
+<text x="1178.37" y="236.719" class="s5">10</text>
+<text x="1178.37" y="211.199" class="s5">12</text>
+<text x="1178.37" y="185.678" class="s5">14</text>
+<text x="1178.37" y="160.158" class="s5">16</text>
+<text x="0" transform="translate(1204.44 319.525) rotate(-90)" y="0" class="s5">未发出比例 %（越低越好）</text>
+<path d="m1156.68 359.856h7.344 7.344v-214.704h-7.344-7.344v214.704z" class="s6"/>
+<text x="30.6" font-weight="bold" fill="var(--c3)" font-size="24" y="47.29">固定到达率下，哪些请求没能发出</text>
+<text x="31.824" y="74.529" textLength="392.399" lengthAdjust="spacingAndGlyphs" class="s4">每格为丢弃比例：未发出迭代 ÷（已发请求 + 未发出迭代）· 每档一次 20 秒测量</text>
+<g fill="var(--c2)">
+<text x="30.6" y="516.174" textLength="425.414" lengthAdjust="spacingAndGlyphs" class="s15">2026-09-24—25 实测 · WSL2 / i5-12600KF · 应用 4 逻辑 CPU / 2 GiB · 数据库 4 逻辑 CPU / 6 GiB</text>
+<text x="30.6" y="531.342" textLength="435.363" lengthAdjust="spacingAndGlyphs" class="s15">PostgreSQL 18.6 · 129 万行预热数据 · 本机 HTTP/1.1 · 相同原生 SQL，非 ORM · 每轮恢复种子数据库</text>
+<text x="30.6" y="547.395" textLength="479.438" lengthAdjust="spacingAndGlyphs" class="s15">Go 单进程（GOMAXPROCS=4）· ThinkPHP：Swoole 8 worker + JIT · Laravel：FrankenPHP 16 worker + JIT</text>
+<text x="30.6" y="563.239" textLength="403.787" lengthAdjust="spacingAndGlyphs" class="s15">PHP 均为 8.5.10；FrankenPHP 为 ZTS，Swoole 为 NTS；ThinkPHP 在应用层过滤弃用提示。</text>
+<text x="30.6" y="578.946" textLength="501.921" lengthAdjust="spacingAndGlyphs" class="s15">各框架绝对目标 RPS 不同，不能据此排总名次；k6 预分配 128 VU、上限 512；丢弃不等于 HTTP 失败或服务端拒绝。</text>
+</g>
+<path d="m408.784 434.998h10 10" fill="none" stroke="var(--c5)" stroke-linecap="square" stroke-width="3"/>
+<text x="436.784" y="438.498" class="s16">Gin 1.12.0</text>
+<path d="m408.784 450.652h10 10" fill="none" stroke="var(--c6)" stroke-linecap="square" stroke-width="3"/>
+<text x="436.784" y="454.152" class="s16">Fiber 3.5.0</text>
+<path d="m506.005 434.998h10 10" fill="none" stroke="var(--c7)" stroke-linecap="square" stroke-width="3"/>
+<text x="534.005" y="438.498" class="s16">Echo 5.3.1</text>
+<path d="m506.005 450.652h10 10" fill="none" stroke="var(--c8)" stroke-linecap="square" stroke-width="3"/>
+<text x="534.005" y="454.152" class="s16">Chi 5.3.2</text>
+<path d="m602.4 434.998h10 10" fill="none" stroke="var(--c9)" stroke-linecap="square" stroke-width="3"/>
+<text x="630.4" y="438.498" class="s16">Beego 2.3.10</text>
+<path d="m602.4 450.662h10 10" fill="none" stroke="var(--c10)" stroke-linecap="square" stroke-width="3"/>
+<text x="630.4" y="454.162" class="s16">ThinkGo 3.0.2</text>
+<path d="m715.719 434.998h10 10" fill="none" stroke="var(--c11)" stroke-linecap="square" stroke-width="3"/>
+<text x="743.719" y="438.498" class="s16">ThinkPHP 8.1.4</text>
+<path d="m715.719 450.652h10 10" fill="none" stroke="var(--c12)" stroke-linecap="square" stroke-width="3"/>
+<text x="743.719" y="454.152" class="s16">Laravel 13.33.0</text>
+<defs>
+<clipPath id="c">
+<rect x="79.56" y="133.056" width="284.38" height="235.872"/>
+</clipPath>
+<clipPath id="a">
+<rect x="460.63" y="133.056" width="284.38" height="235.872"/>
+</clipPath>
+<clipPath id="b">
+<rect x="841.7" y="133.056" width="284.38" height="235.872"/>
+</clipPath>
+</defs>
+</svg>
