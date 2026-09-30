@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -127,32 +126,5 @@ func (c *Redis) ClearPrefixContext(parent context.Context, prefix string) error 
 	if prefix == "" {
 		return ErrInvalidCachePrefix
 	}
-	ctx, cancel := context.WithTimeout(parent, c.opTimeout*5)
-	defer cancel()
-	physicalPrefix := c.withPrefix(prefix)
-	pattern := redisScanPattern(physicalPrefix)
-	lockPrefix := c.withPrefix(managerLockKeyPrefix)
-	fencePrefix := c.withPrefix(cacheFenceMetadataPrefix)
-	var cursor uint64
-	for {
-		keys, next, err := c.client.Scan(ctx, cursor, pattern, 256).Result()
-		if err != nil {
-			return err
-		}
-		deletable := keys[:0]
-		for _, key := range keys {
-			if strings.HasPrefix(key, physicalPrefix) && !strings.HasPrefix(key, lockPrefix) && !strings.HasPrefix(key, fencePrefix) {
-				deletable = append(deletable, key)
-			}
-		}
-		if len(deletable) > 0 {
-			if err = c.client.Del(ctx, deletable...).Err(); err != nil {
-				return err
-			}
-		}
-		cursor = next
-		if cursor == 0 {
-			return nil
-		}
-	}
+	return c.clearPhysicalPrefixContext(parent, c.withPrefix(prefix))
 }
