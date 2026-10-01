@@ -405,8 +405,13 @@ func cloneMemoryReflect(value reflect.Value, visited map[memoryCloneVisit]reflec
 		}
 		result := reflect.MakeSlice(value.Type(), value.Len(), value.Len())
 		visited[visit] = result
-		// 字节元素不包含可变引用；批量复制保留命名类型和快照隔离，避免逐字节反射。
-		if value.Type().Elem().Kind() == reflect.Uint8 {
+		// 标量元素不包含可变引用（字符串底层数据不可变）；批量复制保留命名类型与隔离。
+		// 含 map、slice、指针或结构体的元素仍走递归，不能把浅复制当作深快照。
+		switch value.Type().Elem().Kind() {
+		case reflect.Bool, reflect.String,
+			reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+			reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr,
+			reflect.Float32, reflect.Float64, reflect.Complex64, reflect.Complex128:
 			reflect.Copy(result, value)
 			return result
 		}
