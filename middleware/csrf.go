@@ -37,6 +37,12 @@ const (
 	maxCSRFClockSkew      = 5 * time.Minute
 )
 
+// CSRF uses a distinct wire version and MAC domain; generic Cookie signatures never qualify.
+const (
+	csrfTokenVersion  = "csrf-v1"
+	csrfSigningDomain = "thinkgo:csrf\x00"
+)
+
 var (
 	// ErrInvalidCSRFConfig 表示 CSRF 配置字段、类型或安全策略非法。
 	ErrInvalidCSRFConfig = errors.New("CSRF 配置非法")
@@ -393,9 +399,9 @@ func signCSRFToken(cookieName, nonce, secret string, now time.Time) (string, err
 	}
 	timestamp := strconv.FormatInt(now.Unix(), 10)
 	mac := hmac.New(sha256.New, []byte(secret))
-	_, _ = mac.Write([]byte(cookieName + "\x00v1\x00" + nonce + "\x00" + timestamp))
+	_, _ = mac.Write([]byte(csrfSigningDomain + cookieName + "\x00" + csrfTokenVersion + "\x00" + nonce + "\x00" + timestamp))
 	signature := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
-	return "v1." + nonce + "." + timestamp + "." + signature, nil
+	return csrfTokenVersion + "." + nonce + "." + timestamp + "." + signature, nil
 }
 
 func verifyCSRFToken(cookieName, token, secret string, maxAge int, now time.Time) (string, error) {
@@ -404,7 +410,7 @@ func verifyCSRFToken(cookieName, token, secret string, maxAge int, now time.Time
 		return "", ErrInvalidCSRFToken
 	}
 	parts := strings.Split(token, ".")
-	if len(parts) != 4 || parts[0] != "v1" {
+	if len(parts) != 4 || parts[0] != csrfTokenVersion {
 		return "", ErrInvalidCSRFToken
 	}
 	nonce, err := base64.RawURLEncoding.DecodeString(parts[1])
@@ -426,7 +432,7 @@ func verifyCSRFToken(cookieName, token, secret string, maxAge int, now time.Time
 		return "", ErrInvalidCSRFToken
 	}
 	mac := hmac.New(sha256.New, []byte(secret))
-	_, _ = mac.Write([]byte(cookieName + "\x00v1\x00" + parts[1] + "\x00" + parts[2]))
+	_, _ = mac.Write([]byte(csrfSigningDomain + cookieName + "\x00" + csrfTokenVersion + "\x00" + parts[1] + "\x00" + parts[2]))
 	if !hmac.Equal(provided, mac.Sum(nil)) {
 		return "", ErrInvalidCSRFToken
 	}
