@@ -74,6 +74,16 @@ func NewMemoryWithMaxEntries(maxEntries int) (*Memory, error) {
 }
 
 func (c *Memory) Get(key string) (interface{}, bool, error) {
+	value, found, err := c.lookup(key)
+	if err != nil || !found {
+		return nil, false, err
+	}
+	return cloneMemoryValue(value), true, nil
+}
+
+// lookup 借用驱动内不可变值，仅限内部使用；公开 Get 必须复制后再交给调用方。
+// Has 只读取存在性，避免为丢弃的 payload 执行深拷贝。
+func (c *Memory) lookup(key string) (interface{}, bool, error) {
 	if c == nil {
 		return nil, false, fmt.Errorf("内存缓存驱动为空")
 	}
@@ -95,7 +105,7 @@ func (c *Memory) Get(key string) (interface{}, bool, error) {
 		c.lock.Unlock()
 		return nil, false, nil
 	}
-	return cloneMemoryValue(value), true, nil
+	return value, true, nil
 }
 
 func (c *Memory) Set(key string, value interface{}, ttl time.Duration) error {
@@ -121,7 +131,7 @@ func (c *Memory) Set(key string, value interface{}, ttl time.Duration) error {
 }
 
 func (c *Memory) Has(key string) (bool, error) {
-	_, found, err := c.Get(key)
+	_, found, err := c.lookup(key)
 	return found, err
 }
 
@@ -395,6 +405,16 @@ func cloneMemoryReflect(value reflect.Value, visited map[memoryCloneVisit]reflec
 		}
 		result := reflect.MakeSlice(value.Type(), value.Len(), value.Len())
 		visited[visit] = result
+		// 标量元素不包含可变引用（字符串底层数据不可变）；批量复制保留命名类型与隔离。
+		// 含 map、slice、指针或结构体的元素仍走递归，不能把浅复制当作深快照。
+		switch value.Type().Elem().Kind() {
+		case reflect.Bool, reflect.String,
+			reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+			reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr,
+			reflect.Float32, reflect.Float64, reflect.Complex64, reflect.Complex128:
+			reflect.Copy(result, value)
+			return result
+		}
 		for index := 0; index < value.Len(); index++ {
 			result.Index(index).Set(cloneMemoryReflect(value.Index(index), visited))
 		}

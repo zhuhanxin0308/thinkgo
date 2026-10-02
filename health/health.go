@@ -251,8 +251,12 @@ func (r *Registry) runCheckWithinBudget(check Check, ctx context.Context) error 
 
 	result := make(chan error, 1)
 	go func() {
-		defer func() { <-slots }()
-		result <- runCheck(check, ctx)
+		// 在发布结果之前释放执行槽，避免下一项检查误判容量已耗尽。
+		// 内层 defer 同时保证检查调用 runtime.Goexit 时也能归还执行槽。
+		result <- func() error {
+			defer func() { <-slots }()
+			return runCheck(check, ctx)
+		}()
 	}()
 	select {
 	case err := <-result:

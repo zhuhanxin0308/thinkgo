@@ -146,6 +146,7 @@ func decodeSessionValue(raw json.RawMessage) (interface{}, error) {
 
 // normalizeSessionDecodedValue 恢复 JSON 数字的业务标量类型，避免 Session.Get
 // 向业务层泄露编码器内部使用的 json.Number。
+// 输入由本次 decodeSessionValue 独占，可就地转换新解码的集合；不接收共享 Session 数据。
 func normalizeSessionDecodedValue(value interface{}) interface{} {
 	switch typed := value.(type) {
 	case json.Number:
@@ -157,17 +158,15 @@ func normalizeSessionDecodedValue(value interface{}) interface{} {
 		}
 		return typed.String()
 	case []interface{}:
-		result := make([]interface{}, len(typed))
 		for index, item := range typed {
-			result[index] = normalizeSessionDecodedValue(item)
+			typed[index] = normalizeSessionDecodedValue(item)
 		}
-		return result
+		return typed
 	case map[string]interface{}:
-		result := make(map[string]interface{}, len(typed))
 		for key, item := range typed {
-			result[key] = normalizeSessionDecodedValue(item)
+			typed[key] = normalizeSessionDecodedValue(item)
 		}
-		return result
+		return typed
 	default:
 		return value
 	}

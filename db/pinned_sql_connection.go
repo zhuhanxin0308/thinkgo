@@ -65,24 +65,32 @@ func (database *DB) WithPinnedSQLConnection(ctx context.Context, callback func(P
 	}
 	defer release()
 
-	var panicValue interface{}
-	func() {
-		defer func() {
-			panicValue = recover()
-		}()
-		resultErr = callback(pinned)
-	}()
-	if panicValue != nil {
-		pinned.Invalidate()
-		if cleanupErr := pinned.finish(); cleanupErr != nil {
-			_ = database.reportError("pinned_cleanup_after_panic", cleanupErr, nil)
+	callbackReturned := false
+	defer func() {
+		recovered := recover()
+		// 清理必须属于拥有连接的栈帧；Goexit 不会返回到回调之后的普通语句。
+		if recovered != nil || !callbackReturned {
+			pinned.Invalidate()
+			operation := "pinned_cleanup_after_callback_exit"
+			if recovered != nil {
+				operation = "pinned_cleanup_after_panic"
+			}
+			if cleanupErr := pinned.finish(); cleanupErr != nil {
+				_ = database.reportError(operation, cleanupErr, nil)
+			}
+			if recovered != nil {
+				panic(recovered)
+			}
+			return
 		}
-		panic(panicValue)
-	}
-	if ctxErr := ctx.Err(); ctxErr != nil {
-		resultErr = errors.Join(resultErr, ctxErr)
-	}
-	return errors.Join(resultErr, pinned.finish())
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			resultErr = errors.Join(resultErr, ctxErr)
+		}
+		resultErr = errors.Join(resultErr, pinned.finish())
+	}()
+	resultErr = callback(pinned)
+	callbackReturned = true
+	return resultErr
 }
 
 func normalizePinnedDialect(dialect string) string {
@@ -189,16 +197,26 @@ func (connection *pinnedSQLConnection) TransactionContext(ctx context.Context, c
 		return err
 	}
 	transaction := &pinnedSQLTransaction{handle: handle, connection: connection.connection, owner: connection}
+	callbackReturned := false
 	defer func() {
-		if recovered := recover(); recovered != nil {
+		recovered := recover()
+		if recovered != nil || !callbackReturned {
 			transaction.close()
-			if rollbackErr := handle.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
-				_ = connection.database.reportError("pinned_rollback_after_panic", rollbackErr, nil)
+			operation := "pinned_rollback_after_callback_exit"
+			if recovered != nil {
+				operation = "pinned_rollback_after_panic"
 			}
+			if rollbackErr := handle.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
+				_ = connection.database.reportError(operation, rollbackErr, nil)
+			}
+		}
+		if recovered != nil {
 			panic(recovered)
 		}
 	}()
-	if callbackErr := callback(transaction); callbackErr != nil {
+	callbackErr := callback(transaction)
+	callbackReturned = true
+	if callbackErr != nil {
 		transaction.close()
 		return errors.Join(callbackErr, handle.Rollback())
 	}

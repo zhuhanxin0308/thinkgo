@@ -44,6 +44,13 @@ func TestLiveRedisSessionDriver(t *testing.T) {
 		t.Fatalf("真实 Redis Session Ping 失败: %v", err)
 	}
 
+	t.Run("nested_namespace_clear", func(t *testing.T) {
+		assertRedisSessionClearScope(t, driver)
+	})
+	t.Run("commit_boundaries", func(t *testing.T) {
+		assertRedisSessionCommitBoundaries(t, driver)
+	})
+
 	const (
 		workers          = 8
 		updatesPerWorker = 25
