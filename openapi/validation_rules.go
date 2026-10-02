@@ -3,6 +3,7 @@ package openapi
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 )
 
 // WithValidationRules 控制 Schema 中 x-thinkgo-validation 规则原文的导出，默认保留。
@@ -50,9 +51,9 @@ func withoutValidationRules(encoded []byte) ([]byte, error) {
 	for _, callback := range schemaObject(components["callbacks"]) {
 		omitPathsValidationRules(callback)
 	}
-	omitPathsValidationRules(components["pathItems"])
+	omitNamedPathItemsValidationRules(components["pathItems"])
 	omitPathsValidationRules(document["paths"])
-	omitPathsValidationRules(document["webhooks"])
+	omitNamedPathItemsValidationRules(document["webhooks"])
 	return json.Marshal(document)
 }
 
@@ -61,20 +62,35 @@ func schemaObject(value any) map[string]any {
 	return object
 }
 
+// Paths/Callback 对象中的扩展是非结构化数据；组件和 webhook 名称映射则不同。
 func omitPathsValidationRules(value any) {
+	for name, path := range schemaObject(value) {
+		if !strings.HasPrefix(name, "x-") {
+			omitPathItemValidationRules(path)
+		}
+	}
+}
+
+func omitNamedPathItemsValidationRules(value any) {
 	for _, path := range schemaObject(value) {
-		item := schemaObject(path)
-		omitParametersValidationRules(item["parameters"])
-		for _, method := range []string{"get", "put", "post", "delete", "options", "head", "patch", "trace"} {
-			operation := schemaObject(item[method])
-			omitParametersValidationRules(operation["parameters"])
-			omitContentValidationRules(schemaObject(operation["requestBody"])["content"])
-			for _, response := range schemaObject(operation["responses"]) {
+		omitPathItemValidationRules(path)
+	}
+}
+
+func omitPathItemValidationRules(value any) {
+	item := schemaObject(value)
+	omitParametersValidationRules(item["parameters"])
+	for _, method := range []string{"get", "put", "post", "delete", "options", "head", "patch", "trace"} {
+		operation := schemaObject(item[method])
+		omitParametersValidationRules(operation["parameters"])
+		omitContentValidationRules(schemaObject(operation["requestBody"])["content"])
+		for name, response := range schemaObject(operation["responses"]) {
+			if !strings.HasPrefix(name, "x-") {
 				omitResponseValidationRules(response)
 			}
-			for _, callback := range schemaObject(operation["callbacks"]) {
-				omitPathsValidationRules(callback)
-			}
+		}
+		for _, callback := range schemaObject(operation["callbacks"]) {
+			omitPathsValidationRules(callback)
 		}
 	}
 }
