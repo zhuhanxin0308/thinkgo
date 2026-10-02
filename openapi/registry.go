@@ -46,13 +46,14 @@ var (
 
 // Registry 在启动期收集契约，首次导出后冻结为不可变 JSON 快照。
 type Registry struct {
-	mu           sync.RWMutex
-	document     *openapi3.T
-	operationIDs map[string]string
-	operations   map[string]struct{}
-	frozen       bool
-	snapshot     []byte
-	comments     *SourceComments
+	mu                  sync.RWMutex
+	document            *openapi3.T
+	operationIDs        map[string]string
+	operations          map[string]struct{}
+	frozen              bool
+	snapshot            []byte
+	comments            *SourceComments
+	omitValidationRules bool
 }
 
 // NewRegistry 创建 OpenAPI 3.1 注册表并立即校验文档元信息。
@@ -222,6 +223,12 @@ func (registry *Registry) JSON(ctx context.Context) ([]byte, error) {
 		encoded, err := json.Marshal(registry.document)
 		if err != nil {
 			return nil, fmt.Errorf("%w: 序列化失败: %v", ErrInvalidDocument, err)
+		}
+		if registry.omitValidationRules {
+			encoded, err = withoutValidationRules(encoded)
+			if err != nil {
+				return nil, fmt.Errorf("%w: 过滤校验规则扩展失败: %v", ErrInvalidDocument, err)
+			}
 		}
 		// 在独立文档上解析内部组件引用；默认禁止外部引用，不读取网络或仓库文件。
 		loader := openapi3.NewLoader()
