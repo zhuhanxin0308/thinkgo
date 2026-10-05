@@ -68,9 +68,10 @@ func (r Result) Violations() []Violation {
 }
 
 type validationOptions struct {
-	scene      string
-	collectAll bool
-	location   *time.Location
+	scene        string
+	collectAll   bool
+	strictFields bool
+	location     *time.Location
 }
 
 // Option 配置一次 Validate 调用，不修改共享验证器。
@@ -98,6 +99,15 @@ func WithScene(name string) Option {
 func CollectAllErrors() Option {
 	return func(options *validationOptions) error {
 		options.collectAll = true
+		return nil
+	}
+}
+
+// DisallowUnknownFields 拒绝当前规则或所选场景之外的顶层字段。
+// 默认兼容模式不变；此选项只验证，不删除或修改输入 map，也不替代业务授权。
+func DisallowUnknownFields() Option {
+	return func(options *validationOptions) error {
+		options.strictFields = true
 		return nil
 	}
 }
@@ -248,6 +258,26 @@ func (v *Validator) Validate(data map[string]interface{}, optionFunctions ...Opt
 		return Result{}, err
 	}
 	result := Result{violations: make([]Violation, 0)}
+	if options.strictFields {
+		allowed := make(map[string]struct{}, len(plan))
+		for _, field := range plan {
+			allowed[field.name] = struct{}{}
+		}
+		unknown := make([]string, 0)
+		for name := range data {
+			if _, exists := allowed[name]; !exists {
+				unknown = append(unknown, name)
+			}
+		}
+		sort.Strings(unknown)
+		for _, name := range unknown {
+			result.violations = append(result.violations, buildViolation(config, compiledField{name: name}, compiledRule{name: "unknown_field"}))
+			if !options.collectAll {
+				return result, nil
+			}
+		}
+	}
+
 	for _, field := range plan {
 		value, exists := data[field.name]
 		for _, rule := range field.rules {
@@ -413,6 +443,8 @@ func interpolateValidationMessage(message string, field string, rule string, par
 
 func defaultMessage(field string, rule string, param string) string {
 	switch rule {
+	case "unknown_field":
+		return fmt.Sprintf("field %q is not allowed", field)
 	case "required":
 		return fmt.Sprintf("%s is required", field)
 	case "email":
