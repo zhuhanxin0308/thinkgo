@@ -94,7 +94,7 @@ func (command *OptimizeConfig) Execute(input *console.Input, output *console.Out
 		}
 		content = append(content, '\n')
 		target := filepath.Join(command.App.GetRootPath(), "runtime", currentDirectory, "config.json")
-		if err := writeProjectFileAtomically(command.App, target, content); err != nil {
+		if err := writeProjectFileAtomicallyWithMode(command.App, target, content, 0o600); err != nil {
 			return fmt.Errorf("写入应用 %q 配置缓存失败: %w", currentDirectory, err)
 		}
 	}

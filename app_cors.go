@@ -26,6 +26,11 @@ func createAppCors(values map[string]interface{}) (middleware.Handler, bool, err
 	if err != nil {
 		return nil, false, err
 	}
+	if enabled {
+		if _, configured := values["allow_origins"]; !configured {
+			return nil, true, fmt.Errorf("cors.enable=true 时必须显式配置 allow_origins")
+		}
+	}
 	config := middleware.CorsConfig{}
 	if config.AllowOrigins, err = corsConfigStrings(values, "allow_origins", defaults.AllowOrigins); err != nil {
 		return nil, enabled, err

@@ -25,6 +25,7 @@ const (
 	securityWarningProfile
 	securityWarningProfileMismatch
 	securityWarningSessionDisabled
+	securityWarningDebug
 )
 
 // createAppCookie 创建经过严格配置校验的全局 Cookie 工厂。
@@ -133,6 +134,9 @@ func unavailableCSRFHandler(req *context.Request, next func(*context.Request) *c
 func (app *App) warnProductionSecurity() {
 	if app == nil || !strings.EqualFold(app.securityWarningEnvironment(), securityEnvironmentProduction) {
 		return
+	}
+	if app.IsDebug() || (app.config != nil && app.config.GetBool("app.app_debug", false)) {
+		app.emitSecurityWarning(securityWarningDebug, "生产环境安全警告：必须关闭 app_debug")
 	}
 	profile := app.securityProfile
 	if app.config != nil && app.config.Has("app.security_profile") {
