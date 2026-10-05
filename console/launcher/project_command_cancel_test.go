@@ -87,6 +87,10 @@ func assertProjectCommandDiscoveryCancellation(t *testing.T, stage string) {
 	if err := target.Close(); err != nil {
 		t.Fatal(err)
 	}
+	// fake Go 复用 race 测试二进制，正常退出也有默认 1s 等待。
+	// exports 前的两个短命进程不应消耗取消测试的启动预算；只调整子进程退出等待，
+	// 保留调用方其他 GORACE 选项、race 检测和原有启动/取消时限。
+	t.Setenv("GORACE", os.Getenv("GORACE")+" atexit_sleep_ms=0")
 	t.Setenv("THINKGO_TEST_FAKE_GO", "1")
 	t.Setenv("THINKGO_TEST_FAKE_GO_STAGE", stage)
 	t.Setenv("THINKGO_TEST_GO_STARTED", started)
@@ -121,5 +125,17 @@ func assertProjectCommandDiscoveryCancellation(t *testing.T, stage string) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("取消后命令发现仍被 Go 工具阻塞")
+	}
+}
+
+// The fixture must not inherit artificial race-runtime exit waits from its caller.
+func TestProjectCommandDiscoveryCancellationWithInheritedRaceOptions(t *testing.T) {
+	const options = "halt_on_error=1 history_size=2 atexit_sleep_ms=1600"
+	t.Setenv("GORACE", options)
+	t.Run("exports", func(t *testing.T) {
+		assertProjectCommandDiscoveryCancellation(t, "exports")
+	})
+	if got := os.Getenv("GORACE"); got != options {
+		t.Fatalf("fixture leaked GORACE changes: got %q, want %q", got, options)
 	}
 }
