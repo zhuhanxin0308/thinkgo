@@ -9,7 +9,7 @@ var (
 	// databaseURISecretPattern 覆盖常见 scheme://user:password@host 形式的连接串。
 	databaseURISecretPattern = regexp.MustCompile(`(?i)(://[^/\s:@]+:)[^@\s/]+(@)`)
 	// 原生 MySQL DSN 不带 scheme；歧义或多行凭据优先扩大脱敏范围，避免泄密。
-	databaseMySQLSecretPattern = regexp.MustCompile(`(?is)(\b[^:\s@/]+:).*(@(?:tcp[46]?|unix)\()`)
+	databaseMySQLSecretPattern = regexp.MustCompile(`(?is)(:).*(@(?:tcp[46]?|unix)\()`)
 	// databaseKeySecretPattern 覆盖 DSN、JSON 错误和 key=value 形式的敏感字段。
 	databaseKeySecretPattern = regexp.MustCompile(`(?i)(\b(?:password|passwd|pwd|secret|token|authorization|api[_-]?key|refresh[_-]?token)\b["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^,\s;)&]+)`)
 )

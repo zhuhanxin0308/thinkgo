@@ -111,3 +111,17 @@ func TestIssue21CorsStillRejectsInvalidExplicitPolicies(t *testing.T) {
 		}
 	}
 }
+
+func TestIssue47NativeDSNDoesNotDependOnASCIIUsername(t *testing.T) {
+	for _, username := range []string{"", "!!!", "用户", "δοκιμή", "user name", "a:b"} {
+		for _, network := range []string{"tcp(localhost:3306)", "tcp4(localhost:3306)", "tcp6([::1]:3306)", "unix(/tmp/mysql.sock)"} {
+			t.Run(username+"/"+network, func(t *testing.T) {
+				message := "connect " + username + ":test-only-password@" + network + "/app failed"
+				got := redactDatabaseConnectionError(errors.New(message))
+				if strings.Contains(got, "test-only-password") || !strings.Contains(got, "[REDACTED]") {
+					t.Fatalf("native DSN not redacted for %q: %s", username, got)
+				}
+			})
+		}
+	}
+}
