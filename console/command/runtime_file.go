@@ -14,7 +14,12 @@ import (
 
 // writeProjectFileAtomically 在项目根目录约束内原子替换单个文件，
 // 配置缓存、路由缓存和供应商发布共享同一套路径与持久化保证。
-func writeProjectFileAtomically(app *framework.App, target string, content []byte) (returnErr error) {
+func writeProjectFileAtomically(app *framework.App, target string, content []byte) error {
+	return writeProjectFileAtomicallyWithMode(app, target, content, 0)
+}
+
+// writeProjectFileAtomicallyWithMode 的非零 mode 也应用于已有文件，避免保留历史宽松权限。
+func writeProjectFileAtomicallyWithMode(app *framework.App, target string, content []byte, mode os.FileMode) (returnErr error) {
 	if app == nil {
 		return framework.ErrNilApplication
 	}
@@ -33,11 +38,16 @@ func writeProjectFileAtomically(app *framework.App, target string, content []byt
 		return fmt.Errorf("创建目标目录失败: %w", err)
 	}
 	permission := os.FileMode(0o644)
+	if mode != 0 {
+		permission = mode.Perm()
+	}
 	if information, statErr := root.Lstat(relative); statErr == nil {
 		if information.Mode()&os.ModeSymlink != 0 || !information.Mode().IsRegular() {
 			return fmt.Errorf("目标必须是普通文件: %s", target)
 		}
-		permission = information.Mode().Perm()
+		if mode == 0 {
+			permission = information.Mode().Perm()
+		}
 	} else if !errors.Is(statErr, os.ErrNotExist) {
 		return fmt.Errorf("检查目标文件失败: %w", statErr)
 	}
