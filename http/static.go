@@ -88,10 +88,8 @@ func (h *Http) openPublicFile(urlPath string) (*os.File, os.FileInfo, bool) {
 	if cleanPath != urlPath || cleanPath == "/" {
 		return nil, nil, false
 	}
-	for _, segment := range strings.Split(strings.Trim(cleanPath, "/"), "/") {
-		if segment == "" || segment == "." || segment == ".." {
-			return nil, nil, false
-		}
+	if !publicStaticRelativePath(strings.TrimPrefix(cleanPath, "/")) {
+		return nil, nil, false
 	}
 	if h.reserveStaticPrefixProbe(cleanPath, time.Now()) {
 		return nil, nil, false
@@ -125,13 +123,13 @@ func (h *Http) openPublicFile(urlPath string) (*os.File, os.FileInfo, bool) {
 		return nil, nil, false
 	}
 	targetReal, err := filepath.EvalSymlinks(targetCandidate)
-	if err != nil || !pathWithinRoot(publicReal, targetReal) {
+	if err != nil || !publicStaticTarget(publicReal, targetReal) {
 		_ = file.Close()
 		return nil, nil, false
 	}
 	verifiedReal, verifyErr := filepath.EvalSymlinks(targetCandidate)
 	verifiedInfo, statErr := os.Stat(verifiedReal)
-	if err != nil || verifyErr != nil || statErr != nil || !pathWithinRoot(publicReal, verifiedReal) || !os.SameFile(info, verifiedInfo) || !info.Mode().IsRegular() {
+	if err != nil || verifyErr != nil || statErr != nil || !publicStaticTarget(publicReal, verifiedReal) || !os.SameFile(info, verifiedInfo) || !info.Mode().IsRegular() {
 		_ = file.Close()
 		return nil, nil, false
 	}
@@ -215,4 +213,24 @@ func pathWithinRoot(root, target string) bool {
 		return false
 	}
 	return !strings.HasPrefix(relative, ".."+string(os.PathSeparator))
+}
+
+// publicStaticTarget applies the same visibility policy after resolving symlinks.
+func publicStaticTarget(root, target string) bool {
+	relative, err := filepath.Rel(root, target)
+	return err == nil && !filepath.IsAbs(relative) && publicStaticRelativePath(filepath.ToSlash(relative))
+}
+
+// publicStaticRelativePath rejects hidden segments except the root well-known namespace.
+func publicStaticRelativePath(relative string) bool {
+	segments := strings.Split(relative, "/")
+	for index, segment := range segments {
+		if segment == "" || segment == "." || segment == ".." {
+			return false
+		}
+		if strings.HasPrefix(segment, ".") && !(index == 0 && len(segments) > 1 && segment == ".well-known") {
+			return false
+		}
+	}
+	return true
 }
