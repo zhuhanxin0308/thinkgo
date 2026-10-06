@@ -16,7 +16,7 @@ require (
 	github.com/neo4j/neo4j-go-driver/v5 v5.28.4
 	github.com/quic-go/quic-go v0.63.0
 	github.com/redis/go-redis/v9 v9.22.0
-	go.mongodb.org/mongo-driver/v2 v2.8.0
+	go.mongodb.org/mongo-driver/v2 v2.9.1
 	go.opentelemetry.io/otel v1.46.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.46.0
 	go.opentelemetry.io/otel/sdk v1.46.0
