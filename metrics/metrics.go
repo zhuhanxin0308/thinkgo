@@ -34,14 +34,14 @@ var durationBucketBounds = [durationBucketCount]float64{
 
 // Registry 保存低基数 HTTP 指标。默认关闭，避免兼容应用在未启用观测时承担采集开销。
 type Registry struct {
-	enabled        atomic.Bool
-	inFlight       atomic.Int64
-	requests       atomic.Uint64
-	errors         atomic.Uint64
-	statusClasses  [statusClassCount]atomic.Uint64
-	otherStatuses  atomic.Uint64
-	durationCount  atomic.Uint64
-	durationSum    atomic.Uint64
+	enabled       atomic.Bool
+	inFlight      atomic.Int64
+	requests      atomic.Uint64
+	errors        atomic.Uint64
+	statusClasses [statusClassCount]atomic.Uint64
+	otherStatuses atomic.Uint64
+	durationSum   atomic.Uint64
+	// 每项只记录落入该区间的样本；Snapshot 负责累加为公开的累计桶。
 	durationBucket [bucketCount]atomic.Uint64
 }
 
@@ -110,7 +110,7 @@ func (r *Registry) Observe(status int, duration time.Duration) {
 
 func (r *Registry) observe(status int, duration time.Duration) {
 	r.requests.Add(1)
-	if status >= http.StatusInternalServerError {
+	if status >= http.StatusInternalServerError && status < http.StatusInternalServerError+100 {
 		r.errors.Add(1)
 	}
 	if status >= http.StatusContinue && status < http.StatusContinue+statusClassCount*100 {
@@ -122,17 +122,19 @@ func (r *Registry) observe(status int, duration time.Duration) {
 	if seconds < 0 || math.IsNaN(seconds) || math.IsInf(seconds, 0) {
 		seconds = 0
 	}
-	r.durationCount.Add(1)
 	addFloat64(&r.durationSum, seconds)
+	bucket := len(durationBucketBounds)
 	for index, bound := range durationBucketBounds {
 		if seconds <= bound {
-			r.durationBucket[index].Add(1)
+			bucket = index
+			break
 		}
 	}
-	r.durationBucket[len(durationBucketBounds)].Add(1)
+	r.durationBucket[bucket].Add(1)
 }
 
-// Snapshot 返回当前指标快照。
+// Snapshot 返回当前指标快照。累计桶在同一次读取中构造，保证非递减且 +Inf 等于 DurationCount；
+// 其它计数和耗时总和仍是独立原子读取的近似快照。
 func (r *Registry) Snapshot() Snapshot {
 	var snapshot Snapshot
 	if r == nil {
@@ -146,11 +148,13 @@ func (r *Registry) Snapshot() Snapshot {
 		snapshot.StatusClasses[index] = r.statusClasses[index].Load()
 	}
 	snapshot.OtherStatuses = r.otherStatuses.Load()
-	snapshot.DurationCount = r.durationCount.Load()
 	snapshot.DurationSum = math.Float64frombits(r.durationSum.Load())
+	var cumulative uint64
 	for index := range snapshot.DurationBuckets {
-		snapshot.DurationBuckets[index] = r.durationBucket[index].Load()
+		cumulative += r.durationBucket[index].Load()
+		snapshot.DurationBuckets[index] = cumulative
 	}
+	snapshot.DurationCount = cumulative
 	return snapshot
 }
 
@@ -165,7 +169,6 @@ func (r *Registry) Reset() {
 		r.statusClasses[index].Store(0)
 	}
 	r.otherStatuses.Store(0)
-	r.durationCount.Store(0)
 	r.durationSum.Store(0)
 	for index := range r.durationBucket {
 		r.durationBucket[index].Store(0)

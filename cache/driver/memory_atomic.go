@@ -74,15 +74,17 @@ func (c *Memory) updateAtomicLocked(key string, ttl time.Duration, update func(i
 		}
 		return nil
 	}
+	cloned := cloneMemoryValue(next)
 	expiry := stored.expiry
 	if !preserveTTL {
 		expiry = time.Time{}
-	}
-	if !preserveTTL && ttl > 0 {
-		expiry = now.Add(ttl)
+		if ttl > 0 {
+			// 新值的 TTL 从提交准备完成时开始，不消耗在回调和快照复制上。
+			expiry = time.Now().Add(ttl)
+		}
 	}
 	c.sequence++
-	return c.storeItemLocked(key, cloneMemoryValue(next), expiry, c.sequence, isMetadataKey(key))
+	return c.storeItemLocked(key, cloned, expiry, c.sequence, isMetadataKey(key))
 }
 
 // UpdateIfLockOwnerContext 将租约判定与缓存写入放在同一互斥区间内。

@@ -264,8 +264,17 @@ func (r *Redis) Clear() error {
 		if err != nil {
 			return err
 		}
-		if len(keys) > 0 {
-			if err = r.client.Del(ctx, keys...).Err(); err != nil {
+		// MATCH 只筛选候选键；嵌套前缀的数据或锁也可能匹配。
+		// 只有当前 data: 前缀后紧跟合法 Session ID 才能证明归属。
+		owned := keys[:0]
+		for _, key := range keys {
+			id, matches := strings.CutPrefix(key, r.prefix+redisSessionDataPrefix)
+			if matches && validateSessionID(id) == nil {
+				owned = append(owned, key)
+			}
+		}
+		if len(owned) > 0 {
+			if err = r.client.Del(ctx, owned...).Err(); err != nil {
 				return err
 			}
 		}

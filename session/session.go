@@ -279,12 +279,13 @@ func (s *Session) Get(name string) (interface{}, bool) {
 	}
 	s.mu.RLock()
 	raw, found := s.data[name]
-	copyRaw := append(json.RawMessage(nil), raw...)
+	// data 的 RawMessage 发布后只替换、不原地修改；本次解码可以只读借用。
+	// 解码结果另有独立存储，不把原文或共享数据交给调用方。
 	s.mu.RUnlock()
 	if !found {
 		return nil, false
 	}
-	value, err := decodeSessionValue(copyRaw)
+	value, err := decodeSessionValue(raw)
 	if err != nil {
 		return nil, false
 	}
@@ -293,17 +294,25 @@ func (s *Session) Get(name string) (interface{}, bool) {
 
 // All 返回当前 Session 数据的隔离快照。
 func (s *Session) All() map[string]interface{} {
-	result := make(map[string]interface{})
 	if s == nil {
-		return result
+		return make(map[string]interface{})
 	}
 	s.mu.RLock()
-	snapshot := cloneSessionData(s.data)
+	// 仅冻结键到不可变原文的映射，解码放在锁外；写入者仍能替换或删除自己的项。
+	type entry struct {
+		name string
+		raw  json.RawMessage
+	}
+	snapshot := make([]entry, 0, len(s.data))
+	for name, raw := range s.data {
+		snapshot = append(snapshot, entry{name: name, raw: raw})
+	}
 	s.mu.RUnlock()
-	for name, raw := range snapshot {
-		value, err := decodeSessionValue(raw)
+	result := make(map[string]interface{}, len(snapshot))
+	for _, item := range snapshot {
+		value, err := decodeSessionValue(item.raw)
 		if err == nil {
-			result[name] = value
+			result[item.name] = value
 		}
 	}
 	return result

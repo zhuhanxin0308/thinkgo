@@ -94,16 +94,27 @@ func (db *DB) TransactionContext(ctx context.Context, fn func(tx *Tx) error) err
 		return err
 	}
 
+	callbackReturned := false
 	defer func() {
-		if recovered := recover(); recovered != nil {
-			if rollbackErr := transaction.Rollback(); rollbackErr != nil {
-				_ = db.reportError("rollback_after_panic", rollbackErr, nil)
+		recovered := recover()
+		// Goexit 执行 defer 但 recover 返回 nil；不能只在 panic 时回收事务租约。
+		if recovered != nil || !callbackReturned {
+			operation := "rollback_after_callback_exit"
+			if recovered != nil {
+				operation = "rollback_after_panic"
 			}
+			if rollbackErr := transaction.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, ErrTransactionDone) {
+				_ = db.reportError(operation, rollbackErr, nil)
+			}
+		}
+		if recovered != nil {
 			panic(recovered)
 		}
 	}()
 
-	if callbackErr := fn(transaction); callbackErr != nil {
+	callbackErr := fn(transaction)
+	callbackReturned = true
+	if callbackErr != nil {
 		return errors.Join(callbackErr, transaction.Rollback())
 	}
 	return transaction.Commit()
