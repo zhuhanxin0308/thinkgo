@@ -119,8 +119,9 @@ type Cache struct {
 	debug     *debug.Debug
 }
 
-// StoreOptions 定义 ThinkPHP 缓存 store 的键前缀、默认有效期和标签前缀。
+// StoreOptions 定义缓存 store 的默认有效期和标签前缀。
 type StoreOptions struct {
+	// Prefix 保留用于识别错误配置；ConfigureStore 拒绝非空值。注册前请使用 NewNamespaceDriver。
 	Prefix    string
 	Expire    time.Duration
 	TagPrefix string
@@ -206,7 +207,7 @@ func (c *Cache) RegisterStore(name string, driver Driver) error {
 	return nil
 }
 
-// ConfigureStore 应用 ThinkPHP cache.stores 中的公共选项。
+// ConfigureStore 设置默认有效期和标签前缀，不改变已注册驱动的键空间。
 func (c *Cache) ConfigureStore(name string, options StoreOptions) error {
 	if c == nil || c.state == nil {
 		return ErrCacheDriverNotConfigured
@@ -214,17 +215,13 @@ func (c *Cache) ConfigureStore(name string, options StoreOptions) error {
 	if !cacheStorePattern.MatchString(name) {
 		return fmt.Errorf("%w: %q", ErrInvalidCacheStore, name)
 	}
-	if options.Expire < 0 || options.Expire > maxCacheTTL {
-		return fmt.Errorf("%w: %s", ErrInvalidCacheTTL, options.Expire)
+	var err error
+	options, err = validateStoreOptions(options)
+	if err != nil {
+		return err
 	}
-	if len(options.Prefix) > maxCacheKeyBytes || !utf8.ValidString(options.Prefix) || hasControlCharacter(options.Prefix) {
-		return fmt.Errorf("%w: store 前缀非法", ErrInvalidCacheKey)
-	}
-	if options.TagPrefix == "" {
-		options.TagPrefix = "tag:"
-	}
-	if len(options.TagPrefix) > maxCacheTagBytes || !utf8.ValidString(options.TagPrefix) || hasControlCharacter(options.TagPrefix) {
-		return fmt.Errorf("%w: store 标签前缀非法", ErrInvalidCacheTag)
+	if options.Prefix != "" {
+		return fmt.Errorf("%w: ConfigureStore 不支持 Prefix；请在注册前使用 NewNamespaceDriver 显式隔离键空间", ErrInvalidCacheStore)
 	}
 	c.state.storesMu.Lock()
 	defer c.state.storesMu.Unlock()
@@ -239,6 +236,23 @@ func (c *Cache) ConfigureStore(name string, options StoreOptions) error {
 	}
 	c.state.storeOptions[name] = options
 	return nil
+}
+
+// validateStoreOptions 为配置和命名空间构造复用同一组值校验。
+func validateStoreOptions(options StoreOptions) (StoreOptions, error) {
+	if options.Expire < 0 || options.Expire > maxCacheTTL {
+		return StoreOptions{}, fmt.Errorf("%w: %s", ErrInvalidCacheTTL, options.Expire)
+	}
+	if len(options.Prefix) > maxCacheKeyBytes || !utf8.ValidString(options.Prefix) || hasControlCharacter(options.Prefix) {
+		return StoreOptions{}, fmt.Errorf("%w: store 前缀非法", ErrInvalidCacheKey)
+	}
+	if options.TagPrefix == "" {
+		options.TagPrefix = "tag:"
+	}
+	if len(options.TagPrefix) > maxCacheTagBytes || !utf8.ValidString(options.TagPrefix) || hasControlCharacter(options.TagPrefix) {
+		return StoreOptions{}, fmt.Errorf("%w: store 标签前缀非法", ErrInvalidCacheTag)
+	}
+	return options, nil
 }
 
 // Store 返回指定 store 的不可变视图；未知名称不会静默回退。
