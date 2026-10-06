@@ -1,7 +1,7 @@
 {
     "pathinfo_depr": "/",
     "url_lazy_route": false,
-    "url_route_must": false,
+    "url_route_must": true,
     "url_case_sensitive": false,
     "route_auto_group": false,
     "route_rule_merge": false,

@@ -8,13 +8,13 @@ import (
 	fwcontext "github.com/zhuhanxin0308/thinkgo/v3/context"
 )
 
-// TestRouterDefaultsMatchThinkPHP8 验证无项目配置时的路由默认值与
-// ThinkPHP 8.1.4 config/route.php 保持一致。
-func TestRouterDefaultsMatchThinkPHP8(t *testing.T) {
+// TestRouterDefaultsRequireRoutesAndPreserveOtherThinkPHPOptions 验证强制路由
+// 安全默认值，以及未在本次策略变更中调整的其它路由选项。
+func TestRouterDefaultsRequireRoutesAndPreserveOtherThinkPHPOptions(t *testing.T) {
 	router := NewRouter()
 
-	if !router.autoRoute {
-		t.Fatal("ThinkPHP 默认 url_route_must=false，应启用自动路由")
+	if router.autoRoute {
+		t.Fatal("ThinkGo 默认强制路由，不应启用自动调度")
 	}
 	if router.caseSensitive {
 		t.Fatal("ThinkPHP 默认 URL 不区分大小写")
@@ -65,9 +65,12 @@ func TestRouterDefaultPatternMatchesThinkPHP8(t *testing.T) {
 }
 
 // TestRouterMethodMissFallsBackToThinkPHPURLDispatch 验证显式路由的方法不匹配时，
-// 默认继续 URL 调度；HEAD 不隐式复用 GET，OPTIONS 使用 ThinkPHP 固定自动响应。
+// 显式启用自动路由后继续 URL 调度；HEAD 不隐式复用 GET，OPTIONS 使用独立自动响应。
 func TestRouterMethodMissFallsBackToThinkPHPURLDispatch(t *testing.T) {
 	router := NewRouter()
+	if err := router.EnableAutoRoute(true); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := router.Get("/items", "item/show"); err != nil {
 		t.Fatalf("注册 GET 路由失败: %v", err)
 	}
