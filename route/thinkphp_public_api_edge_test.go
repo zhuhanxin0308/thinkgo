@@ -85,6 +85,9 @@ func TestRouterPublicConfigurationAndMethodHelpers(t *testing.T) {
 // 且 Route 的零值读取 API 不会触发 panic。
 func TestRouterAutoRouteControllerLayerAccessors(t *testing.T) {
 	router := NewRouter()
+	if err := router.EnableAutoRoute(true); err != nil {
+		t.Fatal(err)
+	}
 	if err := router.SetControllerLayer("backend.controller"); err != nil {
 		t.Fatalf("设置自动路由控制器层失败: %v", err)
 	}

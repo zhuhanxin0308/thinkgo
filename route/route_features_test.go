@@ -295,6 +295,9 @@ func TestRouterRejectsInvalidPatternsAndComplexOptionalPaths(t *testing.T) {
 
 func TestRouterMethodSemantics(t *testing.T) {
 	router := NewRouter()
+	if err := router.EnableAutoRoute(true); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := router.Get("/items", "Item@Index"); err != nil {
 		t.Fatalf("注册 GET 路由失败: %v", err)
 	}
@@ -326,6 +329,9 @@ func TestRouterMethodSemantics(t *testing.T) {
 // 是默认 URL 调度的独立响应，不复制其它方法路由的参数和中间件。
 func TestAutomaticOptionsDoesNotInheritRouteMiddleware(t *testing.T) {
 	router := NewRouter()
+	if err := router.EnableAutoRoute(true); err != nil {
+		t.Fatal(err)
+	}
 	getCors, err := middleware.NewCors(middleware.CorsConfig{
 		AllowOrigins: []string{"https://get.example"},
 		AllowMethods: []string{http.MethodGet},

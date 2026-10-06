@@ -168,6 +168,29 @@ func TestWelcome(t *testing.T) {
         t.Fatalf("首页响应异常: %%d %%s", response.Code, response.Body.String())
     }
 }
+
+// TestExplicitRoutesOnly 防止生成项目退回隐式控制器调度。
+func TestExplicitRoutesOnly(t *testing.T) {
+    app := framework.NewConsoleAppUninitialized(".")
+    t.Cleanup(func() { _ = app.Close() })
+    if err := businessapp.Register(app); err != nil { t.Fatal(err) }
+    if err := app.Initialize(); err != nil { t.Fatal(err) }
+    host, err := fwhttp.NewHttp(app)
+    if err != nil { t.Fatal(err) }
+    for _, test := range []struct { method, path string; status int }{
+        {http.MethodGet, "/index/index/hello", http.StatusNotFound},
+        {http.MethodPost, "/", http.StatusNotFound},
+        {http.MethodOptions, "/index/index/hello", http.StatusNotFound},
+        {http.MethodGet, "/index/hello/Visitor", http.StatusOK},
+    } {
+        response := httptest.NewRecorder()
+        host.ServeHTTP(response, httptest.NewRequest(test.method, "http://localhost"+test.path, nil))
+        if response.Code != test.status {
+            t.Errorf("%%s %%s: status=%%d, want %%d", test.method, test.path, response.Code, test.status)
+        }
+    }
+}
+
 `
 
 var projectConfigSources = map[string]string{
@@ -178,7 +201,7 @@ var projectConfigSources = map[string]string{
 	"log":        `{"default":"file","channels":{"file":{"type":"File","path":"","max_files":30,"json":false,"realtime_write":false}}}`,
 	"view":       `{"type":"Think","view_dir_name":"view","view_suffix":"html","tpl_begin":"{","tpl_end":"}"}`,
 	"lang":       `{"default_lang":"zh-cn","auto_detect_browser":true,"allow_lang_list":[],"detect_var":"lang","use_cookie":true,"cookie_var":"think_lang","header_var":"think-lang"}`,
-	"route":      `{"url_route_must":false,"default_route_pattern":"[\\w\\.]+","default_controller":"Index","default_action":"index","url_html_suffix":"html","controller_layer":"controller"}`,
+	"route":      `{"url_route_must":true,"default_route_pattern":"[\\w\\.]+","default_controller":"Index","default_action":"index","url_html_suffix":"html","controller_layer":"controller"}`,
 	"filesystem": `{"default":"local","disks":{"local":{"type":"local","root":"./runtime/storage"},"public":{"type":"local","root":"./public/storage","url":"/storage","visibility":"public"}}}`,
 	"middleware": `{"alias":{},"priority":[]}`,
 	"console":    `{"commands":[]}`,

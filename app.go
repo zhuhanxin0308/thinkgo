@@ -801,7 +801,8 @@ func (app *App) applyRouteConfigTo(configuration *config.Config, router *route.R
 			app.recordStartupError(fmt.Errorf("设置默认路由动作失败: %w", err))
 		}
 	}
-	mustRoute, err := readRouteBool(routeConfig, "url_route_must", false)
+	// 缺省配置与 NewRouter 保持一致：未声明规则的请求不自动调用控制器。
+	mustRoute, err := readRouteBool(routeConfig, "url_route_must", true)
 	if err != nil {
 		app.recordStartupError(err)
 	} else if err := router.EnableAutoRoute(!mustRoute); err != nil {
