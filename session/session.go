@@ -11,10 +11,12 @@ import (
 	"io"
 	"net/http"
 	"reflect"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/zhuhanxin0308/thinkgo/v3/cookie"
+	frameworklog "github.com/zhuhanxin0308/thinkgo/v3/log"
 )
 
 const (
@@ -834,14 +836,26 @@ func (s *Session) reportError(message string, err error, context map[string]inte
 		return nil
 	}
 	s.mu.RLock()
-	logger := s.logger
+	logger, sessionID := s.logger, s.id
 	s.mu.RUnlock()
 	if logger != nil {
 		logContext := map[string]interface{}{"component": "session"}
+		detail := fmt.Sprintf("%s: %v", message, err)
+		if sessionID != "" {
+			detail = strings.ReplaceAll(detail, sessionID, "[REDACTED]")
+		}
 		for key, value := range context {
+			if strings.Contains(strings.ToLower(key), "session") {
+				logContext[key] = "[REDACTED]"
+				if id, ok := value.(string); ok && id != "" {
+					detail = strings.ReplaceAll(detail, id, "[REDACTED]")
+				}
+				continue
+			}
 			logContext[key] = value
 		}
-		logger.ErrorCtx(fmt.Sprintf("%s: %v", message, err), logContext)
+		// Logger is an extension boundary: sanitize before invoking custom implementations.
+		logger.ErrorCtx(frameworklog.SanitizeErrorTextFully(detail), logContext)
 	}
 	return err
 }

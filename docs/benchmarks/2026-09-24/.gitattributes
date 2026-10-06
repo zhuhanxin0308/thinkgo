@@ -1,3 +1,10 @@
-# 原始导出清单的 SHA-256 包含 CRLF；禁止 Git 自动规范化，保持来源字节。
-# 仅此文件例外，其他 JSON/Go/Markdown 继续遵循仓库根目录的 LF 规则。
+# 原图包的文件按原字节保存（包括 CRLF），用于 SHA256SUMS 校验。
+# 禁止 Git 自动规范化原图、数据和存档说明；其他文档仍遵循仓库根目录规则。
+# SVG 为原始导出产物，使用二进制差异，避免路径数据产生巨量文本噪声。
 manifest.json -text
+chart-data.json -text
+light/*.png -text
+light/*.svg -text -diff
+dark/*.png -text
+dark/*.svg -text -diff
+source/*.txt -text

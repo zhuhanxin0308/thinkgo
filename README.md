@@ -2,7 +2,7 @@
 
 `github.com/zhuhanxin0308/thinkgo/v3` 是 ThinkGo 的公共 Go 模块，框架源码位于仓库根目录。业务项目通过 CLI 创建，拥有独立的模块、配置和应用目录。
 
-[安装与创建项目](#安装与创建项目) · [原生多应用](#原生多应用) · [性能对比](#性能对比) · [完整文档](docs/README.md)
+[安装与创建项目](#安装与创建项目) · [原生多应用](#原生多应用) · [路由安全默认值](#路由安全默认值) · [性能对比](#性能对比) · [完整文档](docs/README.md)
 
 ## 安装与创建项目
 
@@ -58,6 +58,18 @@ func main() {
 ```
 
 业务项目通常由 `service:discover` 生成上述清单，不需要手工维护注册表。项目级 `app.default_app`、`app.app_map`、`app.domain_bind`、`app.deny_app_list` 和 `app.app_express` 决定请求解析；应用目录下的配置不能反向修改宿主监听地址或项目级解析规则。
+
+## 路由安全默认值
+
+ThinkGo 默认关闭自动路由、开启强制路由。`config/route.json` 中的 `url_route_must` 缺省为 `true`，新项目也显式采用该配置：
+
+```json
+{"url_route_must": true}
+```
+
+控制器注册不等于公开其所有动作；业务入口应按 HTTP 方法显式注册路由。未命中规则时不再按 URL 自动调用控制器动作，没有显式 MISS 等接管时返回 404。强制路由不等于 `route_complete_match`，也不替代认证、授权和 CSRF。
+
+已有项目显式配置的 `url_route_must=false` 或注册期调用 `EnableAutoRoute(true)` 仍是主动启用自动调度，不会被自动重写。采用安全默认策略时，应删除旧的显式 `false` 或改为 `true`，并核对路由加载器。完整行为与边界见[自动路由](docs/路由/自动路由.md)。本节描述当前源码策略，已发布版本以对应版本实现为准。
 
 ## 性能对比
 

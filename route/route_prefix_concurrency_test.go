@@ -94,6 +94,10 @@ func TestRouterConcurrentStaticPrefixMatchKeepsIndexReadOnly(t *testing.T) {
 func newStaticPrefixConcurrencyRouter(t *testing.T, prefixRouteCount int) *Router {
 	t.Helper()
 	router := NewRouter()
+	// 该夹具包含显式 opt-in 的 URL 调度扫描用例。
+	if err := router.EnableAutoRoute(true); err != nil {
+		t.Fatal(err)
+	}
 	if err := router.SetCompleteMatch(false); err != nil {
 		t.Fatalf("设置非完整匹配失败: %v", err)
 	}

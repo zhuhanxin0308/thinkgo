@@ -24,7 +24,8 @@ func TestAutomaticRouteAuditUsesLoadedRouter(t *testing.T) {
 		wantLevel  Level
 		wantStrict bool
 	}{
-		{name: "default", wantAuto: true, wantLevel: LevelWarn, wantStrict: true},
+		{name: "default", wantLevel: LevelPass},
+		{name: "explicit-auto", mustRoute: deployBool(false), wantAuto: true, wantLevel: LevelWarn, wantStrict: true},
 		{name: "explicit-routes", mustRoute: deployBool(true), wantLevel: LevelPass},
 		{name: "loader-enables-auto", mustRoute: deployBool(true), override: deployBool(true), wantAuto: true, wantLevel: LevelWarn, wantStrict: true},
 		{name: "loader-disables-auto", mustRoute: deployBool(false), override: deployBool(false), wantLevel: LevelPass},

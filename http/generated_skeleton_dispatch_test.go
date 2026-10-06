@@ -165,7 +165,7 @@ func newGeneratedSkeletonHTTP(t *testing.T, extraConfig string, requireAuthoriza
 	basePath := t.TempDir()
 	writeNativeHTTPConfig(t, basePath, `{"app_env":"test","default_app":"index","with_route":true,"public_path":"public","server":{"host":"127.0.0.1","port":8080,"allowed_hosts":["example.com"]},"compression":{"enable":false}`+extraConfig+`}`)
 	files := map[string]string{
-		"config/route.json":            `{"url_route_must":false,"default_route_pattern":"[\\w\\.]+","default_controller":"Index","default_action":"index","url_html_suffix":"html","controller_layer":"controller"}`,
+		"config/route.json":            `{"url_route_must":true,"default_route_pattern":"[\\w\\.]+","default_controller":"Index","default_action":"index","url_html_suffix":"html","controller_layer":"controller"}`,
 		"public/robots.txt":            "User-agent: *\nDisallow:\n",
 		"public/assets/site.css":       "body { color: black; }",
 		"public/admin/secret.txt":      "private-secret",

@@ -149,7 +149,7 @@ type routeDefinition struct {
 	domain      string
 }
 
-// NewRouter 创建处于注册状态的路由器。
+// NewRouter 创建处于注册状态的路由器；默认强制显式路由，不进行自动控制器调度。
 func NewRouter() *Router {
 	return &Router{
 		routes:                 make([]*Route, 0),
@@ -157,7 +157,7 @@ func NewRouter() *Router {
 		dynamicRoutes:          make(map[string][]*Route),
 		namedRoutes:            make(map[string]*Route),
 		missRoutes:             make(map[string]*Route),
-		autoRoute:              true,
+		autoRoute:              false,
 		defaultController:      "Index",
 		defaultAction:          "index",
 		caseSensitive:          false,
@@ -170,7 +170,7 @@ func NewRouter() *Router {
 	}
 }
 
-// EnableAutoRoute 设置只读自动路由开关。
+// EnableAutoRoute 在注册期显式选择自动调度；默认关闭，冻结后不可更改。
 func (r *Router) EnableAutoRoute(enable bool) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()

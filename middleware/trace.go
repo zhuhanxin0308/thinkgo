@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
+	"mime"
 	"net/http"
 	"sort"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/zhuhanxin0308/thinkgo/v3/context"
 	"github.com/zhuhanxin0308/thinkgo/v3/debug"
+	"github.com/zhuhanxin0308/thinkgo/v3/exception"
 	frameworkVersion "github.com/zhuhanxin0308/thinkgo/v3/version"
 )
 
@@ -105,6 +107,9 @@ func (t *Trace) Handle(req *context.Request, next func(*context.Request) *contex
 	if req == nil {
 		return nil
 	}
+	if !exception.CanExposeDebugPage(req.Raw()) {
+		return next(req)
+	}
 	traceType := t.traceType()
 	if traceType == "html" {
 		if assetResp := t.serveTraceAsset(req); assetResp != nil {
@@ -125,6 +130,7 @@ func (t *Trace) Handle(req *context.Request, next func(*context.Request) *contex
 		return resp
 	}
 
+	resp.Header("Cache-Control", "no-store")
 	info := reqDebug.GetInfo()
 	info["time"] = duration
 	info["req_time"] = start.Format("2006-01-02 15:04:05")
@@ -175,20 +181,13 @@ func buildConsoleTrace(info map[string]interface{}) string {
 		"</script>\n"
 }
 
-// isHTMLResponse 判断响应是否为 HTML：优先看 Content-Type，未显式声明时按可注入处理。
+// isHTMLResponse 仅对明确声明为 HTML 的响应注入内容，不改变纯文本/API 响应。
 func isHTMLResponse(resp *context.Response) bool {
-	contentType := strings.ToLower(resp.Headers().Get("Content-Type"))
-	if contentType == "" {
-		return true
+	if resp == nil {
+		return false
 	}
-	if strings.Contains(contentType, "text/html") {
-		return true
-	}
-	// ThinkPHP 普通 Response 默认按页面处理；Go Content 的 text/plain 只是传输层差异。
-	if strings.HasPrefix(contentType, "text/plain") {
-		return true
-	}
-	return false
+	mediaType, _, err := mime.ParseMediaType(resp.Headers().Get("Content-Type"))
+	return err == nil && strings.EqualFold(mediaType, "text/html")
 }
 
 // serveTraceAsset 为调试面板提供静态 CSS/JS 资源，避免每个响应都重复内联整段样式与脚本。

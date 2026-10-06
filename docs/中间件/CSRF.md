@@ -37,17 +37,19 @@ Secret 非空时必须为 32 至 4096 字节；`MaxAge` 必须为 1 至 400 天�
 token 格式为：
 
 ```text
-v1.nonce.timestamp.signature
+csrf-v1.nonce.timestamp.signature
 ```
 
-`nonce` 为 32 字节随机值的无填充 URL Base64，签名是绑定 Cookie 名、版本、nonce 和时间戳的 HMAC-SHA256。解析时会拒绝非规范 Base64、非法签名、重复 Cookie、超大 token、超过 5 分钟时钟偏差的未来 token 和超过 `MaxAge` 的过期 token。
+`nonce` 为 32 字节随机值的无填充 URL Base64。HMAC-SHA256 的输入为 `"thinkgo:csrf\x00" + cookieName + "\x00csrf-v1\x00" + nonce + "\x00" + timestamp`，同时绑定 CSRF 用途、Cookie 名、版本、nonce 和时间戳。即使通用 Cookie 使用同名和同密钥，其签名也不能替代 CSRF token；修改外层版本标识不会改变这一边界。解析时会拒绝非规范 Base64、非法签名、重复 Cookie、超大 token、超过 5 分钟时钟偏差的未来 token 和超过 `MaxAge` 的过期 token。
+
+只接受上述格式和签名输入，不提供旧 `v1` token 的兼容校验、双验签、降级开关或回退。状态变更请求携带旧 token 返回 403；安全方法沿用无效 Cookie 的处理路径签发新 token，而不是接受旧 token。通用 Cookie 的签名格式不变。显式设置独立的 `CSRF_SECRET` 仍可隔离密钥管理；此修复不改变已有的密钥配置解析。
 
 安全方法的行为：
 
 1. 读取并尝试验证 Cookie。
-2. Cookie 缺失或无效时仍调用下游。
-3. 下游返回非空响应且请求成功进入响应阶段时，生成新 token 并写入 `Set-Cookie`。
-4. 已有合法 Cookie 或下游返回 `nil` 时不刷新。
+2. 已有唯一合法 Cookie 时直接调用下游，不刷新。
+3. Cookie 缺失或无效时，先生成新 token 并校验 Cookie 头；失败则拒绝进入下游。
+4. 在下游可能提交响应前设置 Cookie 头或注册提交钩子，同时为尚未提交的非空内存响应补充 `Set-Cookie`。
 
 安全方法出现重复同名 Cookie 会立即返回 400。随机源或 Cookie 写入失败返回 500。
 

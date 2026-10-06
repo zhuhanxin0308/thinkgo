@@ -8,14 +8,14 @@ import (
 	"github.com/zhuhanxin0308/thinkgo/v3/context"
 )
 
-// TestAutoRouteEnabledByDefault 验证 ThinkPHP 默认 url_route_must=false。
-func TestAutoRouteEnabledByDefault(t *testing.T) {
+// TestAutoRouteDisabledByDefault 验证未显式启用时不生成控制器调度。
+func TestAutoRouteDisabledByDefault(t *testing.T) {
 	router := NewRouter()
 	req := context.MustNewRequest(newTestHTTPRequest("GET", "/user/index"))
 
 	route, _ := matchForTest(t, router, req)
-	if route == nil || route.Handler() != "user/index" {
-		t.Fatalf("自动路由默认应保留 user/index 调度，实际为 %#v", route)
+	if route != nil {
+		t.Fatalf("默认不应生成 user/index 自动调度，实际为 %#v", route)
 	}
 }
 

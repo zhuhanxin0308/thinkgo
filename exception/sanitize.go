@@ -44,7 +44,7 @@ func sanitizeJSONValue(key string, value interface{}) interface{} {
 }
 
 func isSensitiveKey(key string) bool {
-	lowerKey := strings.ToLower(strings.TrimSpace(key))
+	lowerKey := strings.ToLower(strings.NewReplacer("-", "", "_", "", ".", "").Replace(strings.TrimSpace(key)))
 	if lowerKey == "" {
 		return false
 	}
@@ -52,16 +52,16 @@ func isSensitiveKey(key string) bool {
 	sensitiveKeys := []string{
 		"authorization",
 		"cookie",
-		"set-cookie",
+		"setcookie",
 		"password",
 		"passwd",
 		"token",
 		"secret",
 		"session",
-		"api_key",
 		"apikey",
-		"access_key",
-		"refresh_token",
+		"accesskey",
+		"refreshtoken",
+		"privatekey", "signingkey", "encryptionkey", "credential", "clientsecret",
 	}
 
 	for _, sensitiveKey := range sensitiveKeys {

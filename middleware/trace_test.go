@@ -51,7 +51,7 @@ func TestTraceEscapesDebugPanelContent(t *testing.T) {
 		reqDebug.AddVar("payload", `<script>alert(1)</script>`)
 		reqDebug.AddFile(`<iframe src=javascript:alert(1)>`)
 
-		return fwcontext.NewResponse().Content("<html><body>ok</body></html>")
+		return fwcontext.NewResponse().ContentType("text/html", "utf-8").Content("<html><body>ok</body></html>")
 	})
 
 	body := string(resp.GetBody())
@@ -86,7 +86,7 @@ func TestTraceInjectsExternalAssetsInsteadOfInlineBundle(t *testing.T) {
 	req := newLocalTraceRequest(http.MethodGet, "http://example.com/debug-page")
 
 	resp := trace.Handle(req, func(req *fwcontext.Request) *fwcontext.Response {
-		return fwcontext.NewResponse().Content("<html><body>ok</body></html>")
+		return fwcontext.NewResponse().ContentType("text/html", "utf-8").Content("<html><body>ok</body></html>")
 	})
 
 	body := string(resp.GetBody())
@@ -107,19 +107,18 @@ func TestTraceInjectsExternalAssetsInsteadOfInlineBundle(t *testing.T) {
 	}
 }
 
-// TestTraceFollowsThinkPHPDebugVisibility 验证开启 Debug 后 Trace 对当前 HTTP
-// 请求生效，不额外改变 ThinkPHP 的来源地址语义。
-func TestTraceFollowsThinkPHPDebugVisibility(t *testing.T) {
+// TestTraceRemoteDebugVisibility 验证开启 Debug 也不能向远程请求注入调试数据。
+func TestTraceRemoteDebugVisibility(t *testing.T) {
 	trace := &Trace{Debug: &debug.Debug{Enabled: true}}
 	req := fwcontext.MustNewRequest(httptest.NewRequest(http.MethodGet, "http://example.com/page", nil))
 
 	resp := trace.Handle(req, func(req *fwcontext.Request) *fwcontext.Response {
-		return fwcontext.NewResponse().Content("<html><body>ok</body></html>")
+		return fwcontext.NewResponse().ContentType("text/html", "utf-8").Content("<html><body>ok</body></html>")
 	})
 
 	body := string(resp.GetBody())
-	if !strings.Contains(body, "tg-debug-bar") || !strings.Contains(body, "__thinkgo_debug__") {
-		t.Fatalf("Debug 请求应被注入 Html Trace，响应为 %s", body)
+	if strings.Contains(body, "tg-debug-bar") || strings.Contains(body, "__thinkgo_debug__") {
+		t.Fatalf("远程 Debug 请求不应注入 Trace，响应为 %s", body)
 	}
 }
 
@@ -152,7 +151,7 @@ func TestTraceServesStaticAssets(t *testing.T) {
 		req := newLocalTraceRequest(http.MethodGet, "http://example.com"+tc.path)
 		resp := trace.Handle(req, func(req *fwcontext.Request) *fwcontext.Response {
 			nextCalled = true
-			return fwcontext.NewResponse().Content("unexpected")
+			return fwcontext.NewResponse().ContentType("text/html", "utf-8").Content("unexpected")
 		})
 
 		if nextCalled {
@@ -171,10 +170,10 @@ func TestTraceServesStaticAssets(t *testing.T) {
 // 使用浏览器控制台脚本，不再渲染 Html 调试条。
 func TestTraceConsoleTypeInjectsBrowserConsoleScript(t *testing.T) {
 	trace := &Trace{Debug: &debug.Debug{Enabled: true}, Type: "Console"}
-	request := fwcontext.MustNewRequest(httptest.NewRequest(http.MethodGet, "http://example.com/page", nil))
+	request := newLocalTraceRequest(http.MethodGet, "http://example.com/page")
 	response := trace.Handle(request, func(request *fwcontext.Request) *fwcontext.Response {
 		debug.FromRequest(request).AddLog("info", "console trace")
-		return fwcontext.NewResponse().Content("<html><body>ok</body></html>")
+		return fwcontext.NewResponse().ContentType("text/html", "utf-8").Content("<html><body>ok</body></html>")
 	})
 	body := string(response.GetBody())
 	if !strings.Contains(body, "console.group") || strings.Contains(body, "tg-debug-bar") {
@@ -186,13 +185,13 @@ func TestTraceConsoleTypeInjectsBrowserConsoleScript(t *testing.T) {
 // 默认通道与其它通道的记录不会混入页面 Trace。
 func TestTraceChannelFiltersRequestLogs(t *testing.T) {
 	trace := &Trace{Debug: &debug.Debug{Enabled: true}, Channel: "sql"}
-	request := fwcontext.MustNewRequest(httptest.NewRequest(http.MethodGet, "http://example.com/page", nil))
+	request := newLocalTraceRequest(http.MethodGet, "http://example.com/page")
 	response := trace.Handle(request, func(request *fwcontext.Request) *fwcontext.Response {
 		collector := debug.FromRequest(request)
 		collector.AddLog("info", "default-channel")
 		collector.AddLog("info", "selected-channel", "sql")
 		collector.AddLog("info", "other-channel", "audit")
-		return fwcontext.NewResponse().Content("<html><body>ok</body></html>")
+		return fwcontext.NewResponse().ContentType("text/html", "utf-8").Content("<html><body>ok</body></html>")
 	})
 	body := string(response.GetBody())
 	if !strings.Contains(body, "selected-channel") {
@@ -251,7 +250,7 @@ func TestTraceRequestIsolation(t *testing.T) {
 					handlerErr = fmt.Errorf("请求 %d 未挂载 collector", index)
 					ready.Done()
 					<-release
-					return fwcontext.NewResponse().Content("<html><body>missing</body></html>")
+					return fwcontext.NewResponse().ContentType("text/html", "utf-8").Content("<html><body>missing</body></html>")
 				}
 				cacheKey := fmt.Sprintf("cache-request-%02d", index)
 				if err := rootCache.WithDebug(collector).Set(cacheKey, index, time.Minute); err != nil {
@@ -263,7 +262,7 @@ func TestTraceRequestIsolation(t *testing.T) {
 				}
 				ready.Done()
 				<-release
-				return fwcontext.NewResponse().Content("<html><body>ok</body></html>")
+				return fwcontext.NewResponse().ContentType("text/html", "utf-8").Content("<html><body>ok</body></html>")
 			})
 			results <- result{index: index, body: string(response.GetBody()), err: handlerErr}
 		}()
@@ -323,7 +322,7 @@ func TestTraceUnauthorizedRequestsDoNotAttachCollector(t *testing.T) {
 				if collector := debug.FromRequest(request); collector != nil {
 					t.Fatalf("未授权请求不应挂载 collector，实际为 %#v", collector)
 				}
-				return fwcontext.NewResponse().Content("<html><body>ok</body></html>")
+				return fwcontext.NewResponse().ContentType("text/html", "utf-8").Content("<html><body>ok</body></html>")
 			})
 			if collector := debug.FromRequest(testCase.request); collector != nil {
 				t.Fatalf("请求结束后仍发现未授权 collector: %#v", collector)
@@ -339,7 +338,7 @@ func TestTraceUnauthorizedRequestsDoNotAttachCollector(t *testing.T) {
 func TestTraceDisabledDoesNotAllocateCollector(t *testing.T) {
 	trace := &Trace{Debug: &debug.Debug{Enabled: false}}
 	request := newLocalTraceRequest(http.MethodGet, "http://example.com/disabled")
-	response := fwcontext.NewResponse().Content("plain")
+	response := fwcontext.NewResponse().ContentType("text/html", "utf-8").Content("plain")
 	next := func(*fwcontext.Request) *fwcontext.Response { return response }
 
 	baseline := testing.AllocsPerRun(1000, func() {
@@ -396,7 +395,7 @@ func TestTraceCollectorResponseBoundaries(t *testing.T) {
 	}{
 		{name: "nil-response", response: nil},
 		{name: "json-response", response: fwcontext.NewResponse().Json(map[string]interface{}{"ok": true})},
-		{name: "html-without-closing-tag", response: fwcontext.NewResponse().Content("plain fragment")},
+		{name: "html-without-closing-tag", response: fwcontext.NewResponse().ContentType("text/html", "utf-8").Content("plain fragment")},
 	}
 
 	for _, testCase := range tests {
@@ -424,7 +423,7 @@ func TestTraceCollectorResponseBoundaries(t *testing.T) {
 				t.Fatal("授权请求结束后请求仍应拥有 collector")
 			}
 			if logs := collector.GetInfo()["logs"].([]map[string]interface{}); len(logs) != 0 {
-				t.Fatalf("请求结束后 collector 应释放已渲染数据，实际为 %#v", logs)
+				t.Fatalf("请求结束后 collector 应释放已渲染数据，实际为 %#v", collector)
 			}
 		})
 	}
