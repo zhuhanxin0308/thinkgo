@@ -13,7 +13,7 @@ require (
 	github.com/lib/pq v1.12.3
 	github.com/mattn/go-sqlite3 v1.14.52
 	github.com/microsoft/go-mssqldb v1.11.2
-	github.com/neo4j/neo4j-go-driver/v5 v5.28.4
+	github.com/neo4j/neo4j-go-driver/v5 v5.28.5
 	github.com/quic-go/quic-go v0.63.0
 	github.com/redis/go-redis/v9 v9.22.0
 	go.mongodb.org/mongo-driver/v2 v2.8.0
