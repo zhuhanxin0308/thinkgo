@@ -20,7 +20,7 @@ const (
 	applicationServerHostEnvironment = "APP_SERVER_HOST"
 	applicationServerPortEnvironment = "APP_SERVER_PORT"
 	applicationPublicPathEnvironment = "APP_PUBLIC_PATH"
-	defaultRunHost                   = "0.0.0.0"
+	defaultRunHost                   = framework.DefaultServerHost
 	defaultRunPort                   = "8000"
 )
 

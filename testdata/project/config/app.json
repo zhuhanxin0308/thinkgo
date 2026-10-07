@@ -9,7 +9,7 @@
     "deny_app_list": [],
     "server": {
         "domain": "https://localhost",
-        "host": "0.0.0.0",
+        "host": "127.0.0.1",
         "port": 8000,
         "allowed_hosts": [],
         "trusted_proxies": [],

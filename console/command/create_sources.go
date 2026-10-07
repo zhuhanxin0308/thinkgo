@@ -194,7 +194,7 @@ func TestExplicitRoutesOnly(t *testing.T) {
 `
 
 var projectConfigSources = map[string]string{
-	"app":        `{"default_app":"index","default_timezone":"Asia/Shanghai","with_route":true,"public_path":"public","server":{"host":"0.0.0.0","port":8000},"show_error_msg":false}`,
+	"app":        `{"default_app":"index","default_timezone":"Asia/Shanghai","with_route":true,"public_path":"public","server":{"host":"127.0.0.1","port":8000},"show_error_msg":false}`,
 	"database":   `{"default":"mysql","auto_timestamp":true,"connections":{"mysql":{"type":"mysql","hostname":"127.0.0.1","hostport":"3306","database":"","username":"root","password":"","charset":"utf8mb4","fields_cache":false}}}`,
 	"cache":      `{"default":"file","stores":{"file":{"type":"File","path":"","prefix":"","expire":0,"tag_prefix":"tag:"}}}`,
 	"session":    `{"name":"THINKGOSESSID","type":"file","expire":1440,"prefix":""}`,

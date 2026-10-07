@@ -107,7 +107,7 @@ func parseHTTPApplicationConfig(raw interface{}) (serverConf, compressionConf, e
 
 func parseServerConfig(values map[string]interface{}) (serverConf, error) {
 	config := serverConf{
-		Host:                   "0.0.0.0",
+		Host:                   framework.DefaultServerHost,
 		Port:                   8000,
 		CertFile:               "./runtime/cert.pem",
 		KeyFile:                "./runtime/key.pem",

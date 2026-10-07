@@ -24,6 +24,7 @@ COPY --from=certificates --chown=65532:65532 /runtime /app/runtime
 COPY --chown=65532:65532 . /app/
 COPY --chmod=0555 thinkgo-nocgo /app/thinkgo-nocgo
 USER 65532:65532
+# 容器内监听网卡以接受端口映射；宿主暴露范围由 ports 配置及防火墙决定。
 ENV APP_SERVER_HOST=0.0.0.0 APP_SERVER_PORT=8000
 EXPOSE 8000
 ENTRYPOINT ["/app/thinkgo-nocgo"]
