@@ -140,14 +140,14 @@ func TestAllowedHostNormalization(t *testing.T) {
 	}
 }
 
-// TestDefaultServerAddressMatchesThinkPHPRun 验证未配置服务地址时与
-// think run 的默认监听地址 0.0.0.0:8000 一致。
-func TestDefaultServerAddressMatchesThinkPHPRun(t *testing.T) {
+// TestDefaultServerAddressMatchesThinkGoRun 验证未配置服务地址时与
+// thinkgo run 的默认监听地址 127.0.0.1:8000 一致。
+func TestDefaultServerAddressMatchesThinkGoRun(t *testing.T) {
 	configuration, err := parseServerConfig(map[string]interface{}{})
 	if err != nil {
 		t.Fatalf("解析默认 HTTP 配置失败: %v", err)
 	}
-	if configuration.Host != "0.0.0.0" || configuration.Port != 8000 {
+	if configuration.Host != "127.0.0.1" || configuration.Port != 8000 {
 		t.Fatalf("默认 HTTP 地址错误: %s:%d", configuration.Host, configuration.Port)
 	}
 }

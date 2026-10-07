@@ -22,8 +22,8 @@ const (
 // ==================== 服务器默认配置常量 ====================
 
 const (
-	// DefaultServerHost 默认监听地址
-	DefaultServerHost = "0.0.0.0"
+	// DefaultServerHost 默认仅监听 IPv4 回环；外部访问必须显式配置。
+	DefaultServerHost = "127.0.0.1"
 	// DefaultServerPort 默认监听端口
 	DefaultServerPort = 8000
 	// DefaultTLSCertFile 默认 TLS 证书文件路径
