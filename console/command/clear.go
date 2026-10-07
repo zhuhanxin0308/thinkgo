@@ -21,7 +21,7 @@ func (c *Clear) Configure() {
 	c.Signature = "clear"
 	c.Description = "Clear application cache"
 	c.AddArgument("app", "app name .", false)
-	c.AddOption("path", "d", "path to clear", "")
+	c.AddOption("path", "d", "project subdirectory to clear", "")
 	c.AddBoolOption("cache", "c", "clear cache file")
 	c.AddBoolOption("log", "l", "clear log file")
 	c.AddBoolOption("dir", "r", "clear empty dir")
@@ -59,7 +59,7 @@ func (c *Clear) Execute(input *console.Input, output *console.Output) error {
 	if cacheSelected {
 		err = clearApplicationCache(application, target, removeDirectories, input.GetOption("expire") == "true")
 	} else {
-		err = clearRuntimeFiles(target, removeDirectories)
+		err = clearRuntimeFiles(application.BasePath, target, removeDirectories)
 	}
 	if err != nil {
 		return fmt.Errorf("clear runtime path %q: %w", target, err)
@@ -94,7 +94,23 @@ func clearTargetPath(app *framework.App, input *console.Input) (string, bool, er
 	if filepath.Clean(target) == filepath.Clean(basePath) || filepath.Dir(target) == target {
 		return "", false, fmt.Errorf("拒绝清理项目根目录或文件系统根目录: %s", target)
 	}
+	// 缓存路径来自可信的 runtime 配置，不应阻止项目外缓存后端的正常清理。
+	// 只有 --path/--log 的通用文件清理受项目目录边界约束。
+	if !cacheSelected {
+		if _, err := clearProjectRelativePath(basePath, target); err != nil {
+			return "", false, err
+		}
+	}
 	return target, cacheSelected, nil
+}
+
+// clearProjectRelativePath 拒绝项目根、项目外路径及不同卷，不用字符串前缀判断目录归属。
+func clearProjectRelativePath(basePath, target string) (string, error) {
+	relative, err := filepath.Rel(basePath, target)
+	if err != nil || relative == "." || !filepath.IsLocal(relative) {
+		return "", fmt.Errorf("清理目标必须位于项目根目录内且不能是项目根: %s", target)
+	}
+	return relative, nil
 }
 
 func clearApplicationCache(app *framework.App, target string, removeDirectories, expireOnly bool) error {
@@ -161,8 +177,25 @@ func clearEmptyCacheDirectories(root *os.Root, relative string) error {
 	return nil
 }
 
-func clearRuntimeFiles(target string, removeDirectories bool) (returnErr error) {
-	information, err := os.Lstat(target)
+// clearRuntimeFiles 从项目目录句柄打开目标，避免词法检查后重新按绝对路径打开导致链接逃逸。
+// 此范围约束用于 --path/--log 文件清理；缓存后端 Flush 仍由已配置的驱动负责。
+func clearRuntimeFiles(basePath, target string, removeDirectories bool) (returnErr error) {
+	basePath, err := filepath.Abs(filepath.Clean(basePath))
+	if err != nil {
+		return err
+	}
+	relative, err := clearProjectRelativePath(basePath, target)
+	if err != nil {
+		return err
+	}
+	projectRoot, err := os.OpenRoot(basePath)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		returnErr = errors.Join(returnErr, projectRoot.Close())
+	}()
+	information, err := projectRoot.Lstat(relative)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
@@ -172,13 +205,24 @@ func clearRuntimeFiles(target string, removeDirectories bool) (returnErr error) 
 	if information.Mode()&os.ModeSymlink != 0 || !information.IsDir() {
 		return fmt.Errorf("清理目标必须是真实目录")
 	}
-	root, err := os.OpenRoot(target)
+	root, err := projectRoot.OpenRoot(relative)
 	if err != nil {
 		return err
 	}
 	defer func() {
 		returnErr = errors.Join(returnErr, root.Close())
 	}()
+	opened, err := root.Stat(".")
+	if err != nil {
+		return err
+	}
+	base, err := projectRoot.Stat(".")
+	if err != nil {
+		return err
+	}
+	if !os.SameFile(information, opened) || os.SameFile(base, opened) {
+		return fmt.Errorf("清理目标发生变化或指向项目根目录")
+	}
 	return clearRuntimeDirectory(root, ".", removeDirectories)
 }
 
