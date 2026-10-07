@@ -46,9 +46,7 @@ func NewNamespaceDriver(driver Driver, prefix string, tagPrefix string) (*Namesp
 	if tagPrefix == "" {
 		tagPrefix = "tag:"
 	}
-	options := StoreOptions{Prefix: prefix, TagPrefix: tagPrefix}
-	probe := NewCache(nil, driver)
-	if err := probe.ConfigureStore(defaultStoreName, options); err != nil {
+	if _, err := validateStoreOptions(StoreOptions{Prefix: prefix, TagPrefix: tagPrefix}); err != nil {
 		return nil, err
 	}
 	return &NamespaceDriver{driver: driver, prefix: prefix, tagPrefix: tagPrefix}, nil
