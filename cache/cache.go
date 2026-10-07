@@ -573,7 +573,14 @@ func (c *Cache) RememberWithLockContext(ctx context.Context, key string, ttl, lo
 		return nil, err
 	}
 	deadline := time.Now().Add(rememberLockWait)
+	retryCeiling := lockRetryInterval
 	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if !time.Now().Before(deadline) {
+			return nil, ErrCacheLockBusy
+		}
 		acquired, acquireErr := lock.AcquireContext(ctx)
 		if acquireErr != nil {
 			return nil, acquireErr
@@ -581,10 +588,12 @@ func (c *Cache) RememberWithLockContext(ctx context.Context, key string, ttl, lo
 		if acquired {
 			break
 		}
-		if !time.Now().Before(deadline) {
+		delay := rememberRetryDelay(retryCeiling, time.Until(deadline))
+		if delay <= 0 {
 			return nil, ErrCacheLockBusy
 		}
-		timer := time.NewTimer(lockRetryInterval)
+		retryCeiling = min(retryCeiling*2, maximumRememberRetry)
+		timer := time.NewTimer(delay)
 		select {
 		case <-timer.C:
 		case <-ctx.Done():
