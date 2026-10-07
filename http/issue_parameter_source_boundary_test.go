@@ -26,7 +26,7 @@ func TestIssue29AuthorizationUsesOneRouteID(t *testing.T) {
 	}
 	for _, test := range []struct {
 		name, routeID, query, contentType, body, merged string
-		status                                        int
+		status                                          int
 	}{
 		{"json", "123", "789", "application/json", `{"id":"456","name":"changed"}`, "456", 200},
 		{"form", "123", "789", "application/x-www-form-urlencoded", "id=456&name=changed", "456", 200},
