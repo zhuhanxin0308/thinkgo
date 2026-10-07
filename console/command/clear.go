@@ -94,8 +94,12 @@ func clearTargetPath(app *framework.App, input *console.Input) (string, bool, er
 	if filepath.Clean(target) == filepath.Clean(basePath) || filepath.Dir(target) == target {
 		return "", false, fmt.Errorf("拒绝清理项目根目录或文件系统根目录: %s", target)
 	}
-	if _, err := clearProjectRelativePath(basePath, target); err != nil {
-		return "", false, err
+	// 缓存路径来自可信的 runtime 配置，不应阻止项目外缓存后端的正常清理。
+	// 只有 --path/--log 的通用文件清理受项目目录边界约束。
+	if !cacheSelected {
+		if _, err := clearProjectRelativePath(basePath, target); err != nil {
+			return "", false, err
+		}
 	}
 	return target, cacheSelected, nil
 }
