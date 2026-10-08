@@ -4,6 +4,7 @@
 
 | 主题 | 指南 |
 | --- | --- |
+| 数据库错误对外展示 | [内部错误与公共响应](database-errors.md) |
 | 参数来源与授权对象 | [Request.Route / Param 的安全用法](request-parameter-sources.md) |
 | 内部路径与对外文件引用 | [Local.Path、上传 key 和 URL](filesystem-paths.md) |
 | 来自用户输入的跳转 | [站内重定向](local-redirects.md) |
