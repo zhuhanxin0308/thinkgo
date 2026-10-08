@@ -59,7 +59,7 @@ type Http struct {
 	staticMisses        map[string]time.Time
 	initializeOnce      sync.Once
 	initializeErr       error
-	httpRunWarningOnce  sync.Once
+	httpRunWarning      applicationRunWarningState
 	listenMu            sync.Mutex
 	listening           bool
 	allowApplications   bool
