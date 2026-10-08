@@ -59,6 +59,7 @@ type Http struct {
 	staticMisses        map[string]time.Time
 	initializeOnce      sync.Once
 	initializeErr       error
+	httpRunWarning      applicationRunWarningState
 	listenMu            sync.Mutex
 	listening           bool
 	allowApplications   bool
@@ -160,6 +161,9 @@ func (h *Http) ensureInitialized() error {
 		}
 		// Provider Boot 允许替换服务；构造期校验的快照不能直接进入运行期。
 		h.initializeErr = h.loadServices()
+		if h.initializeErr == nil {
+			h.warnApplicationRunListeners()
+		}
 		if h.initializeErr == nil && h.allowApplications && len(h.app.ApplicationNames()) > 0 {
 			h.applicationHost, h.initializeErr = newNativeApplicationHost(h)
 		}
@@ -197,6 +201,7 @@ func (h *Http) reloadRuntimeServices() error {
 		return err
 	}
 	h.applyHTTPServiceSnapshot(snapshot)
+	h.warnApplicationRunListeners()
 	return nil
 }
 
