@@ -2,6 +2,7 @@ package neo4j
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -38,6 +39,21 @@ func compileCypherNode(node PredicateNode, index *int, params map[string]interfa
 			clauses = append(clauses, clause)
 		}
 		return "(" + strings.Join(clauses, " "+node.Operator+" ") + ")", nil
+	case PredicateLikeLiteral:
+		field, err := cypherIdentifier(node.Field)
+		if err != nil {
+			return "", err
+		}
+		if len(node.Values) != 1 {
+			return "", fmt.Errorf("%w: literal LIKE requires one value", ErrInvalidQuery)
+		}
+		literal, ok := node.Values[0].(string)
+		if !ok || len(literal) > maxCypherLikeLength {
+			return "", fmt.Errorf("%w: invalid literal LIKE text", ErrInvalidQuery)
+		}
+		name := nextCypherParameter(index)
+		params[name] = `(?i)\A` + regexp.QuoteMeta(literal) + `\z`
+		return "n." + field + " =~ $" + name, nil
 	case PredicateComparison:
 		field, err := cypherIdentifier(node.Field)
 		if err != nil {

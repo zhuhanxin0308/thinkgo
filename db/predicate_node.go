@@ -15,6 +15,8 @@ const (
 	PredicateExpression
 	PredicateRaw
 	PredicateFalse
+	// PredicateLikeLiteral matches literal text using the backend's LIKE collation, not pattern syntax.
+	PredicateLikeLiteral
 )
 
 // PredicateNode 是驱动可以读取的条件树快照，字段名尚未进行后端引用。
@@ -56,7 +58,11 @@ func appendPredicateNode(nodes []PredicateNode, connector string, node Predicate
 	return append(nodes, node)
 }
 
-func predicateNodeSQL(node PredicateNode, quote func(string) string) (string, []interface{}, error) {
+func predicateNodeSQL(node PredicateNode, builder Builder) (string, []interface{}, error) {
+	var quote func(string) string
+	if builder != nil {
+		quote = builder.QuoteIdentifier
+	}
 	field := node.Field
 	if quote != nil && field != "" {
 		field = quote(field)
@@ -68,7 +74,7 @@ func predicateNodeSQL(node PredicateNode, quote func(string) string) (string, []
 		clauses := make([]string, 0, len(node.Children))
 		var values []interface{}
 		for _, child := range node.Children {
-			clause, args, err := predicateNodeSQL(child, quote)
+			clause, args, err := predicateNodeSQL(child, builder)
 			if err != nil {
 				return "", nil, err
 			}
@@ -96,6 +102,8 @@ func predicateNodeSQL(node PredicateNode, quote func(string) string) (string, []
 			expression = quoteConditionIdentifiers(expression, quote)
 		}
 		return field + " " + node.Operator + " " + expression, cloneDatabaseValues(node.Values), nil
+	case PredicateLikeLiteral:
+		return literalLikeSQL(node, field, builder)
 	case PredicateComparison:
 		switch node.Operator {
 		case "IS NULL", "IS NOT NULL":

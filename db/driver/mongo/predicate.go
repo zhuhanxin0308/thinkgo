@@ -2,6 +2,7 @@ package mongo
 
 import (
 	"fmt"
+	"regexp"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
@@ -44,6 +45,20 @@ func compileMongoNode(node PredicateNode) (bson.M, error) {
 			return bson.M{"$or": filters}, nil
 		}
 		return combineMongoAnd(filters), nil
+	case PredicateLikeLiteral:
+		field, err := mongoField(node.Field)
+		if err != nil {
+			return nil, err
+		}
+		if len(node.Values) != 1 {
+			return nil, fmt.Errorf("%w: literal LIKE requires one value", ErrInvalidQuery)
+		}
+		literal, ok := node.Values[0].(string)
+		if !ok || len(literal) > maxMongoLikeLength {
+			return nil, fmt.Errorf("%w: invalid literal LIKE text", ErrInvalidQuery)
+		}
+		// Absolute anchors avoid the end-before-final-newline behavior of '$'.
+		return bson.M{field: bson.M{"$regex": `\A` + regexp.QuoteMeta(literal) + `\z`, "$options": "i"}}, nil
 	case PredicateComparison:
 		field, err := mongoField(node.Field)
 		if err != nil {

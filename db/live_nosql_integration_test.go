@@ -233,6 +233,15 @@ func TestLiveMongoOperationContract(t *testing.T) {
 	if err != nil || deleted != 1 {
 		t.Fatalf("Mongo default Model delete=%d err=%v", deleted, err)
 	}
+	t.Run("literal_like", func(t *testing.T) {
+		literalCollection := liveResourceName("live_literal_like")
+		t.Cleanup(func() {
+			if err := dropLiveMongoCollection(database, literalCollection); err != nil {
+				t.Errorf("drop literal Mongo collection: %v", err)
+			}
+		})
+		assertLiteralLikeRows(t, database, literalCollection)
+	})
 }
 
 // TestLiveMongoStreamingContract 验证真实 MongoDB 游标流式读取和回调提前停止。
@@ -290,6 +299,15 @@ func TestLiveNeoStrictAndDetachDelete(t *testing.T) {
 	if err != nil || result.Deleted != 1 || !result.RelatedDeletedKnown || result.RelatedDeleted < 1 {
 		t.Fatalf("detach result=%#v err=%v", result, err)
 	}
+	t.Run("literal_like", func(t *testing.T) {
+		literalLabel := liveResourceName("live_literal_like")
+		t.Cleanup(func() {
+			if err := cleanupLiveNeo(database, literalLabel); err != nil {
+				t.Errorf("cleanup literal Neo4j label: %v", err)
+			}
+		})
+		assertLiteralLikeRows(t, database, literalLabel)
+	})
 }
 
 func runFixedBenchmarkWorkers(b *testing.B, concurrency int, operation func() error) {

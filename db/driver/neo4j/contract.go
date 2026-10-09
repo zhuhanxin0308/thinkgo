@@ -27,12 +27,13 @@ type (
 )
 
 const (
-	InsertIDInteger     = db.InsertIDInteger
-	InsertIDString      = db.InsertIDString
-	InsertIDDynamic     = db.InsertIDDynamic
-	PredicateFalse      = db.PredicateFalse
-	PredicateBoolean    = db.PredicateBoolean
-	PredicateComparison = db.PredicateComparison
+	InsertIDInteger      = db.InsertIDInteger
+	InsertIDString       = db.InsertIDString
+	InsertIDDynamic      = db.InsertIDDynamic
+	PredicateFalse       = db.PredicateFalse
+	PredicateBoolean     = db.PredicateBoolean
+	PredicateLikeLiteral = db.PredicateLikeLiteral
+	PredicateComparison  = db.PredicateComparison
 )
 
 var (
