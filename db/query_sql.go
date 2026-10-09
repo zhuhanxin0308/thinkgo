@@ -344,22 +344,18 @@ func (q *Query) operationPredicate() (Predicate, error) {
 
 // appendQueryNode 以条件树为来源，同步生成 SQL 执行路径使用的派生缓存。
 func (q *Query) appendQueryNode(connector string, node PredicateNode, builder Builder) *Query {
-	var quote func(string) string
-	if builder != nil {
-		quote = builder.QuoteIdentifier
-	}
-	clause, args, err := predicateNodeSQL(node, quote)
+	clause, args, err := predicateNodeSQL(node, builder)
 	if err != nil {
 		return q.setError(err)
 	}
 	if !q.appendQueryArguments(&q.args, args) {
 		return q
 	}
-	q.predicate.quote = quote
+	q.predicate.builder = builder
 	q.predicate.nodes = appendPredicateNode(q.predicate.nodes, connector, node)
 	if connector == "OR" && len(q.where) > 0 {
 		last := len(q.where) - 1
-		combined, _, err := predicateNodeSQL(q.predicate.nodes[last], quote)
+		combined, _, err := predicateNodeSQL(q.predicate.nodes[last], builder)
 		if err != nil {
 			return q.setError(err)
 		}

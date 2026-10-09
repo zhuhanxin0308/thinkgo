@@ -4,6 +4,7 @@
 
 | 主题 | 指南 |
 | --- | --- |
+| 字面搜索与通配模式 | [WhereLikeLiteral 与授权范围](database-literal-like.md) |
 | 插入完成但主键读取失败 | [部分写入与事务结果](database-insert-results.md) |
 | 数据库错误对外展示 | [内部错误与公共响应](database-errors.md) |
 | 参数来源与授权对象 | [Request.Route / Param 的安全用法](request-parameter-sources.md) |

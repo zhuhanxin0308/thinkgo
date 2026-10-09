@@ -12,9 +12,9 @@ type PredicateClause struct {
 
 // Predicate 仅保存不可变条件树；只有经过校验的框架入口可以创建内部节点。
 type Predicate struct {
-	nodes []PredicateNode
-	err   error
-	quote func(string) string
+	nodes   []PredicateNode
+	err     error
+	builder Builder
 }
 
 func newPredicate() Predicate { return Predicate{} }
@@ -81,7 +81,7 @@ func (p Predicate) PortableNodes() ([]PredicateNode, error) {
 func (p Predicate) Clauses() []PredicateClause {
 	clauses := make([]PredicateClause, 0, len(p.nodes))
 	for _, node := range p.nodes {
-		sql, args, err := predicateNodeSQL(node, p.quote)
+		sql, args, err := predicateNodeSQL(node, p.builder)
 		if err != nil {
 			return nil
 		}
@@ -108,14 +108,14 @@ func (p Predicate) compileSQL(builders ...Builder) ([]string, []interface{}, err
 	if p.err != nil {
 		return nil, nil, p.err
 	}
-	quote := p.quote
+	builder := p.builder
 	if len(builders) > 0 && builders[0] != nil {
-		quote = builders[0].QuoteIdentifier
+		builder = builders[0]
 	}
 	where := make([]string, 0, len(p.nodes))
 	var args []interface{}
 	for _, node := range p.nodes {
-		clause, values, err := predicateNodeSQL(node, quote)
+		clause, values, err := predicateNodeSQL(node, builder)
 		if err != nil {
 			return nil, nil, fmt.Errorf("%w: %w", ErrInvalidQuery, err)
 		}

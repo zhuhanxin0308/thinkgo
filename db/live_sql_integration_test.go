@@ -213,6 +213,9 @@ func assertLiveSQLQueryAndTransactionContract(t *testing.T, driver string) {
 	if affected, deleteErr := database.Table(table).WhereField("id", "=", id).Delete(); deleteErr != nil || affected != 1 {
 		t.Fatalf("真实 %s 删除失败: affected=%d err=%v", driver, affected, deleteErr)
 	}
+	t.Run("literal_like", func(t *testing.T) {
+		assertLiteralLikeRows(t, database, createLiveSQLTable(t, database, driver))
+	})
 }
 
 // TestLiveMySQLQueryAndTransactionContract 验证真实 MySQL 的主键回传、批量写入、类型映射、流式读取与事务语义。
