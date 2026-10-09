@@ -1,3 +1,5 @@
+//go:build cgo || integration
+
 package db_test
 
 import (
