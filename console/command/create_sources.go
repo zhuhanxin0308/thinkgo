@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 )
 
-const scaffoldGoVersion = "1.26.6"
+const scaffoldGoVersion = "1.26.9"
 
 func projectSources(module string) (map[string][]byte, error) {
 	sources := nativeApplicationBuildSources("index")
