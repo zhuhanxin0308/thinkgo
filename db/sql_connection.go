@@ -197,11 +197,12 @@ func (c *SQLConnection) Insert(ctx context.Context, request InsertRequest) (Inse
 	}
 	operationResult := InsertResult{Affected: affected, Data: data}
 	if request.WantsID() {
-		operationResult.ID, err = result.LastInsertId()
-		operationResult.IDKnown = err == nil
-		if err != nil {
-			return InsertResult{}, err
+		id, idErr := result.LastInsertId()
+		if idErr != nil {
+			// Exec 已成功；保留已知结果，不能让上层将 ID 读取失败当作未写入。
+			return operationResult, &PartialWriteError{Result: operationResult, Cause: idErr}
 		}
+		operationResult.ID, operationResult.IDKnown = id, true
 	}
 	return operationResult, operationResult.Validate()
 }

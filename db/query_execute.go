@@ -314,11 +314,12 @@ func (q *Query) insertResultInTx(request InsertRequest) (InsertResult, error) {
 	}
 	operationResult := InsertResult{Affected: affected, Data: data}
 	if request.WantsID() {
-		operationResult.ID, err = sqlResult.LastInsertId()
-		operationResult.IDKnown = err == nil
-		if err != nil {
-			return InsertResult{}, err
+		id, idErr := sqlResult.LastInsertId()
+		if idErr != nil {
+			// Exec 已成功；保留已知结果，不能让上层将 ID 读取失败当作未写入。
+			return operationResult, &PartialWriteError{Result: operationResult, Cause: idErr}
 		}
+		operationResult.ID, operationResult.IDKnown = id, true
 	}
 	return operationResult, operationResult.Validate()
 }
