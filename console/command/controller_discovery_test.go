@@ -10,6 +10,7 @@ import (
 
 	"github.com/zhuhanxin0308/thinkgo/v3"
 	"github.com/zhuhanxin0308/thinkgo/v3/console"
+	"golang.org/x/mod/modfile"
 )
 
 // TestRefreshControllerDiscoveryGeneratesApplicationAssembly 验证一个业务应用的
@@ -230,14 +231,26 @@ func writeDiscoveryModuleFixture(t *testing.T, basePath, modulePath string) {
 	if err != nil {
 		t.Fatalf("解析框架模块路径失败: %v", err)
 	}
+	frameworkModulePath := filepath.Join(frameworkPath, "go.mod")
+	frameworkSource, err := os.ReadFile(frameworkModulePath)
+	if err != nil {
+		t.Fatalf("读取框架模块声明失败: %v", err)
+	}
+	frameworkModule, err := modfile.ParseLax(frameworkModulePath, frameworkSource, nil)
+	if err != nil {
+		t.Fatalf("解析框架模块声明失败: %v", err)
+	}
+	if frameworkModule.Go == nil {
+		t.Fatal("框架模块缺少 Go 版本声明")
+	}
 	moduleFile := fmt.Sprintf(`module %s
 
-go 1.26.6
+go %s
 
 require github.com/zhuhanxin0308/thinkgo/v3 v3.0.0
 
 replace github.com/zhuhanxin0308/thinkgo/v3 => %s
-`, modulePath, filepath.ToSlash(frameworkPath))
+`, modulePath, frameworkModule.Go.Version, filepath.ToSlash(frameworkPath))
 	writeDiscoveryFixture(t, basePath, "go.mod", moduleFile)
 	frameworkSum, err := os.ReadFile(filepath.Join(frameworkPath, "go.sum"))
 	if err != nil {
