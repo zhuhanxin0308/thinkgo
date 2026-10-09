@@ -6,7 +6,7 @@
 
 ## 安装与创建项目
 
-需要 Go 1.26.6 或更新版本，并将 Go 的可执行文件安装目录加入 PATH：
+需要 Go 1.26.9 或更新的兼容安全补丁版本，并将 Go 的可执行文件安装目录加入 PATH：
 
 ```bash
 go install github.com/zhuhanxin0308/thinkgo/v3/cmd/thinkgo@v3.0.2
