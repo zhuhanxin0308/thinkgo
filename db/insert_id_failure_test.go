@@ -23,7 +23,7 @@ type insertIDFailureConnector struct{ state *insertIDFailureState }
 func (c insertIDFailureConnector) Connect(context.Context) (driver.Conn, error) {
 	return &insertIDFailureConn{c.state}, nil
 }
-func (c insertIDFailureConnector) Driver() driver.Driver { return insertIDFailureDriver{c.state} }
+func (c insertIDFailureConnector) Driver() driver.Driver { return insertIDFailureDriver(c) }
 
 type insertIDFailureDriver struct{ state *insertIDFailureState }
 
