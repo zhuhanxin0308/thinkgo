@@ -8,8 +8,9 @@ import (
 
 var primaryKeyTextUnmarshalerType = reflect.TypeFor[encoding.TextUnmarshaler]()
 
-// PartialWriteError 表示写入已成功，但生成的主键无法回填到调用方模型。
-// Result 保留持久化结果，便于调用方查询核对已写入的记录。
+// PartialWriteError 表示写入已执行，但主键读取或本地结果回填失败。
+// Result 仅保留当前已知的执行结果；IDKnown 为 false 时，ID 不可使用。
+// 它不表示事务已提交：事务调用方仍须明确提交或回滚，并在重试前核对结果。
 type PartialWriteError struct {
 	Result InsertResult
 	Cause  error
