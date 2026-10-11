@@ -4,6 +4,7 @@
 
 | 主题 | 指南 |
 | --- | --- |
+| 会话 ID 与认证轮换 | [拒绝未知 ID、登录与混合模式边界](session-identity.md) |
 | 生产限流配置 | [HTTP 启动提醒与部署职责](rate-limit-startup.md) |
 | 密码存储与计算预算 | [Argon2id 哈希、验证与升级](password-hashing.md) |
 | 字面搜索与通配模式 | [WhereLikeLiteral 与授权范围](database-literal-like.md) |

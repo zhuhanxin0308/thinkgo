@@ -607,6 +607,12 @@ func (s *Session) bootstrapID(id string, markInvalid bool) error {
 		return s.reportError("读取 Session 存储失败", err, map[string]interface{}{"session_id": id})
 	}
 	if !stored {
+		if s.config.RejectUnknownID {
+			// A valid shape is not proof of a server-issued session. Keep lazy
+			// persistence: Save clears the supplied cookie if no data is set.
+			s.invalidCookie = markInvalid
+			return s.assignFreshID()
+		}
 		// ThinkPHP Store 会保留合法的 32 位外部 ID，并在首次写入时创建记录。
 		s.id = id
 		s.persisted = false
