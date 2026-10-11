@@ -64,6 +64,10 @@ type Config struct {
 	SameSite     string
 	MaxDataBytes int
 	MaxEntries   int
+
+	// RejectUnknownID replaces externally supplied IDs absent from storage.
+	// It does not replace Regenerate after authentication or privilege changes.
+	RejectUnknownID bool
 }
 
 // DefaultConfig 返回安全且完整的 Session 默认配置。
@@ -88,6 +92,7 @@ func ParseConfig(raw map[string]interface{}) (Config, error) {
 		"storage_path": true, "redis": true, "cookie_path": true,
 		"expire": true, "domain": true, "secure": true, "httponly": true,
 		"samesite": true, "max_data_bytes": true, "max_entries": true,
+		"reject_unknown_id": true,
 	}
 	for key := range raw {
 		if !allowed[key] {
@@ -104,6 +109,12 @@ func ParseConfig(raw map[string]interface{}) (Config, error) {
 	}
 	if value, exists := raw["var_session_id"]; exists {
 		config.VarSessionID, err = sessionConfigString(value, "var_session_id")
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	if value, exists := raw["reject_unknown_id"]; exists {
+		config.RejectUnknownID, err = sessionConfigBool(value, "reject_unknown_id")
 		if err != nil {
 			return Config{}, err
 		}
