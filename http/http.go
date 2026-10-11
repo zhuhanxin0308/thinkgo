@@ -60,6 +60,7 @@ type Http struct {
 	initializeOnce      sync.Once
 	initializeErr       error
 	httpRunWarning      applicationRunWarningState
+	rateLimitWarning    productionRateLimitWarningState
 	listenMu            sync.Mutex
 	listening           bool
 	allowApplications   bool
@@ -163,6 +164,7 @@ func (h *Http) ensureInitialized() error {
 		h.initializeErr = h.loadServices()
 		if h.initializeErr == nil {
 			h.warnApplicationRunListeners()
+			h.warnProductionRateLimit()
 		}
 		if h.initializeErr == nil && h.allowApplications && len(h.app.ApplicationNames()) > 0 {
 			h.applicationHost, h.initializeErr = newNativeApplicationHost(h)
@@ -202,6 +204,7 @@ func (h *Http) reloadRuntimeServices() error {
 	}
 	h.applyHTTPServiceSnapshot(snapshot)
 	h.warnApplicationRunListeners()
+	h.warnProductionRateLimit()
 	return nil
 }
 
