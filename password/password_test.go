@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // Independently generated with argon2-cffi's Argon2id v19 implementation.
@@ -145,11 +146,49 @@ func TestPasswordConfigurationAndZeroValue(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := h.Hash(nil, "test"); !errors.Is(err, ErrInvalidContext) {
-		t.Fatal(err)
-	}
-	if _, err := h.Check(nil, referenceHash, "test"); !errors.Is(err, ErrInvalidContext) {
-		t.Fatal(err)
+}
+
+// TestPasswordContextAdmission keeps deliberately invalid contexts as test
+// inputs, not application call sites. No invalid context may emit a result or
+// retain an operation slot; both reusable and shared APIs must reject it.
+func TestPasswordContextAdmission(t *testing.T) {
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	expired, stop := context.WithDeadline(context.Background(), time.Unix(0, 0))
+	defer stop()
+	for _, sample := range []struct {
+		name string
+		ctx  context.Context
+		want error
+	}{
+		{"nil", nil, ErrInvalidContext},
+		{"canceled", canceled, context.Canceled},
+		{"expired", expired, context.DeadlineExceeded},
+	} {
+		t.Run(sample.name, func(t *testing.T) {
+			h := testHasher(t)
+			for name, hash := range map[string]func(context.Context, string) (string, error){
+				"hasher": h.Hash, "shared": HashPassword,
+			} {
+				t.Run(name+"/hash", func(t *testing.T) {
+					if encoded, err := hash(sample.ctx, referencePassword); encoded != "" || !errors.Is(err, sample.want) {
+						t.Fatalf("invalid context produced hash length=%d, err=%v; want %v", len(encoded), err, sample.want)
+					}
+				})
+			}
+			for name, check := range map[string]func(context.Context, string, string) (bool, error){
+				"hasher": h.Check, "shared": CheckPassword,
+			} {
+				t.Run(name+"/check", func(t *testing.T) {
+					if matched, err := check(sample.ctx, referenceHash, referencePassword); matched || !errors.Is(err, sample.want) {
+						t.Fatalf("invalid context produced match=%v, err=%v; want %v", matched, err, sample.want)
+					}
+				})
+			}
+			if len(h.slots) != 0 || len(defaultHasher.slots) != 0 {
+				t.Fatal("invalid context retained an operation slot")
+			}
+		})
 	}
 }
 
