@@ -4,6 +4,7 @@
 
 | 主题 | 指南 |
 | --- | --- |
+| SQL 连接数预算 | [显式连接池上限与部署容量](database-pool-budget.md) |
 | 会话 ID 与认证轮换 | [拒绝未知 ID、登录与混合模式边界](session-identity.md) |
 | 生产限流配置 | [HTTP 启动提醒与部署职责](rate-limit-startup.md) |
 | 密码存储与计算预算 | [Argon2id 哈希、验证与升级](password-hashing.md) |
