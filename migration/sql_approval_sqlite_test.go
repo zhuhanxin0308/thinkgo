@@ -16,7 +16,7 @@ func TestSQLApprovalRealSQLiteFirstApplyAndRollback(t *testing.T) {
 	if _, err := database.Execute("INSERT INTO protected_records (id) VALUES (7)"); err != nil {
 		t.Fatal(err)
 	}
-	approvals := map[string]string{approvalName: approvalChecksum}
+	approvals := map[string]string{approvalName: approvalDigest}
 	tampered, err := NewSQLWithApproval(approvalName, []string{approvalCreate, "DELETE FROM protected_records"}, []string{approvalDrop}, approvals)
 	if tampered != nil || !errors.Is(err, ErrMigrationNotApproved) {
 		t.Fatalf("tampered migration=%v err=%v", tampered, err)
@@ -51,7 +51,7 @@ func TestSQLApprovalRealSQLiteFirstApplyAndRollback(t *testing.T) {
 		t.Fatalf("approved data: %v %v", rows, err)
 	}
 	history, err := store.Applied(context.Background())
-	if err != nil || len(history) != 1 || history[0].Checksum != approvalChecksum {
+	if err != nil || len(history) != 1 || history[0].Checksum != approvalHistoryChecksum {
 		t.Fatalf("history: %v %v", history, err)
 	}
 	result, err = runner.Rollback(context.Background(), 1)

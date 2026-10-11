@@ -10,7 +10,7 @@ func ExampleNewSQLWithApproval() {
 	// This value is pinned after reviewing both directions, not derived from
 	// SQL arriving at startup. Protect changes to this approval separately.
 	approvals := map[string]string{
-		"202610120001_reviewed_table": "048a4555502260d95723a632a30b9d90efa2fd8f63dfa60b0244825e3299c03e",
+		"202610120001_reviewed_table": "sql-approval-v1:e691b6cd4e47ba8f6638d7ef512e983def55127228274182ef3e35c901d2a281",
 	}
 	current, err := migration.NewSQLWithApproval("202610120001_reviewed_table",
 		[]string{"CREATE TABLE approved_items (id INTEGER PRIMARY KEY)", "INSERT INTO approved_items (id) VALUES (51)"},
