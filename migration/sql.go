@@ -10,6 +10,9 @@ import (
 
 // NewSQL 创建由完整 SQL 语句序列组成的迁移，并根据双向语句自动计算稳定校验和。
 // 每个元素必须是一条可由驱动独立执行的完整语句，框架不会按分号猜测拆分 SQL。
+// SQL 必须来自可信代码；校验和不是作者签名，也不判断语句是否安全。
+// 需要在首次应用前核对独立审查清单时，使用 NewSQLWithApproval 和 SQLApprovalDigest；
+// 不将本迁移的历史 Checksum 值用作执行批准摘要。
 func NewSQL(name string, upStatements, downStatements []string) (Migration, error) {
 	up, err := normalizeStatements(upStatements)
 	if err != nil {
