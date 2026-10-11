@@ -17,7 +17,7 @@ func readDatabaseConfig(connConfig map[string]interface{}) (db.Config, error) {
 		"username": true, "password": true, "charset": true, "prefix": true,
 		"debug": true, "auto_timestamp": true, "create_time_field": true,
 		"update_time_field": true, "timestamp_value_type": true,
-		"max_open_conns": true, "max_idle_conns": true,
+		"max_open_conns": true, "max_idle_conns": true, "max_open_conns_limit": true,
 		"conn_max_lifetime_seconds": true, "conn_max_idle_time_seconds": true,
 		"params": true, "deploy": true, "rw_separate": true, "master_num": true,
 		"slave_no": true, "fields_strict": true, "break_reconnect": true,
@@ -87,6 +87,7 @@ func readDatabaseConfig(connConfig map[string]interface{}) (db.Config, error) {
 		target *int
 	}{
 		{name: "max_open_conns", target: &configuration.MaxOpenConns},
+		{name: "max_open_conns_limit", target: &configuration.MaxOpenConnsLimit},
 		{name: "max_idle_conns", target: &configuration.MaxIdleConns},
 		{name: "conn_max_lifetime_seconds", target: &configuration.ConnMaxLifetimeSeconds},
 		{name: "conn_max_idle_time_seconds", target: &configuration.ConnMaxIdleTimeSeconds},

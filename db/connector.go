@@ -23,6 +23,7 @@ type Config struct {
 	Charset                string            // 字符集
 	Prefix                 string            // 表前缀
 	MaxOpenConns           int               // 最大打开连接数
+	MaxOpenConnsLimit      int               // 可选 SQL 连接数预算；0 表示不额外限制，不改变 MaxOpenConns
 	MaxIdleConns           int               // 最大空闲连接数
 	ConnMaxLifetimeSeconds int               // 连接最大生命周期（秒）
 	ConnMaxIdleTimeSeconds int               // 连接最大空闲时长（秒）
@@ -66,6 +67,19 @@ func (config Config) Validate() error {
 	}
 	if config.MaxOpenConns > 0 && config.MaxIdleConns > config.MaxOpenConns {
 		return fmt.Errorf("%w: max_idle_conns 不能超过 max_open_conns", ErrInvalidDatabaseConfig)
+	}
+	if config.MaxOpenConnsLimit < 0 {
+		return fmt.Errorf("%w: max_open_conns_limit 不能为负数", ErrInvalidDatabaseConfig)
+	}
+	if config.MaxOpenConnsLimit > 0 {
+		switch config.Type {
+		case "mysql", "pgsql", "sqlsrv", "sqlite", "oracle":
+		default:
+			return fmt.Errorf("%w: max_open_conns_limit 仅支持内置 SQL 连接器", ErrInvalidDatabaseConfig)
+		}
+		if config.MaxOpenConns > config.MaxOpenConnsLimit {
+			return fmt.Errorf("%w: max_open_conns 超过 max_open_conns_limit", ErrInvalidDatabaseConfig)
+		}
 	}
 	paramKeys := make([]string, 0, len(config.Params))
 	for key := range config.Params {

@@ -61,6 +61,12 @@ func resolveSQLConnectionPoolConfig(config db.Config) (sqlConnectionPoolConfig, 
 	if settings.MaxIdleConns > settings.MaxOpenConns {
 		return sqlConnectionPoolConfig{}, fmt.Errorf("%w: max_idle_conns 不能超过 max_open_conns", db.ErrInvalidDatabaseConfig)
 	}
+	// Check the effective value, including defaults. Never silently clamp a
+	// deployment's requested capacity to its separate safety budget.
+	if config.MaxOpenConnsLimit < 0 ||
+		(config.MaxOpenConnsLimit > 0 && settings.MaxOpenConns > config.MaxOpenConnsLimit) {
+		return sqlConnectionPoolConfig{}, fmt.Errorf("%w: 生效的 max_open_conns 超过预算或 max_open_conns_limit 非法", db.ErrInvalidDatabaseConfig)
+	}
 	var err error
 	if config.ConnMaxLifetimeSeconds > 0 {
 		settings.ConnMaxLifetime, err = secondsDuration(config.ConnMaxLifetimeSeconds)
@@ -92,11 +98,11 @@ func applySQLConnectionPool(handle *sql.DB, settings sqlConnectionPoolConfig) {
 }
 
 func openSQLConnection(driverName, dataSourceName string, build db.Builder, config db.Config) (db.Connection, error) {
-	handle, err := sql.Open(driverName, dataSourceName)
+	settings, err := resolveSQLConnectionPoolConfig(config)
 	if err != nil {
 		return nil, err
 	}
-	return verifySQLConnection(handle, build, config)
+	return openSQLConnectionWithPool(driverName, dataSourceName, build, settings)
 }
 
 func openSQLConnectionWithPool(driverName, dataSourceName string, build db.Builder, settings sqlConnectionPoolConfig) (db.Connection, error) {
