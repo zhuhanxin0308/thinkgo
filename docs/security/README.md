@@ -4,6 +4,7 @@
 
 | 主题 | 指南 |
 | --- | --- |
+| 通用与认证 Cookie | [显式属性、工厂隔离与认证职责](cookie-policies.md) |
 | 迁移代码与独立批准 | [首次执行准入与可信来源边界](migration-trust.md) |
 | SQL 连接数预算 | [显式连接池上限与部署容量](database-pool-budget.md) |
 | 会话 ID 与认证轮换 | [拒绝未知 ID、登录与混合模式边界](session-identity.md) |
