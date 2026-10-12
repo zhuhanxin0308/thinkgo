@@ -6,7 +6,7 @@ require (
 	github.com/alicebob/miniredis/v2 v2.39.0
 	github.com/andybalholm/brotli v1.2.6
 	github.com/getkin/kin-openapi v0.149.0
-	github.com/go-sql-driver/mysql v1.10.0
+	github.com/go-sql-driver/mysql v1.10.1
 	github.com/godror/godror v0.51.5
 	github.com/hibiken/asynq v0.26.0
 	github.com/klauspost/compress v1.20.0
