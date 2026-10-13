@@ -1,6 +1,7 @@
 package db
 
 import (
+	"bytes"
 	"fmt"
 	"strings"
 )
@@ -184,6 +185,7 @@ func (q *Query) traceOperation(operation string) func() {
 }
 
 // BuildSelectSQL 构造完整的 SELECT SQL 语句（不执行），通常用于子查询或调试。
+// 返回参数沿用查询构造时的容器快照语义，修改它们不会改变后续查询。
 // 对应 ThinkPHP 的 Db::name('user')->where('id', 1)->buildSql()
 func (q *Query) BuildSelectSQL() (string, []interface{}, error) {
 	if err := q.ensureValid(); err != nil {
@@ -290,6 +292,14 @@ func (q *Query) BuildSelectSQL() (string, []interface{}, error) {
 		sqlBuilder.WriteString(lockSpec.Tail)
 	}
 
+	// allArgs owns its outer slice; detach mutable values before crossing the public boundary.
+	for index, value := range allArgs {
+		if data, ok := value.([]byte); ok {
+			allArgs[index] = bytes.Clone(data)
+		} else {
+			allArgs[index] = cloneDatabaseValue(value)
+		}
+	}
 	return sqlBuilder.String(), allArgs, nil
 }
 
