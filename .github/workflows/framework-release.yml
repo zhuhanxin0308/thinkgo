@@ -217,7 +217,9 @@ jobs:
             "TestLiveMySQLColdStatementIsolation"
             "TestLiveMySQLReadinessRecovery"
             "TestLiveMySQLMigrationRecovery"
+            "TestLiveMySQLRawSQLBoundary"
             "TestLivePostgreSQLQueryAndTransactionContract"
+            "TestLivePostgreSQLRawSQLBoundary"
             "TestLiveMongoOperationContract"
             "TestLiveMongoStreamingContract"
             "TestLiveNeoStrictAndDetachDelete"
@@ -230,6 +232,7 @@ jobs:
             fi
           done
           GOWORK=off go test -tags integration -race -run '^TestLive(RedisOperationContract|RedisConditionalClear|RedisScopedInvalidation|RedisAtomicReservationOrder|RedisAtomicTTLPolicy|RedisSessionDriver|RedisQueueRetriesFailedTask|RedisQueueShutdownRestartPreservesTask|MySQLQueryAndTransactionContract|MySQLColdStatementIsolation|MySQLReadinessRecovery|MySQLMigrationRecovery|PostgreSQLQueryAndTransactionContract|MongoOperationContract|MongoStreamingContract|NeoStrictAndDetachDelete)$' -shuffle=on -count=1 . ./cache ./cache/driver/redis ./session/driver ./db ./migration ./queue/asynq
+          GOWORK=off go test -tags integration -race -run '^TestLive(MySQL|PostgreSQL)RawSQLBoundary$' -v -count=1 ./db
 
       - name: Fuzz route index parity
         shell: bash
