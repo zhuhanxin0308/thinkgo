@@ -4,6 +4,7 @@
 
 | 主题 | 指南 |
 | --- | --- |
+| 内存缓存容量与过期 | [过期回收、FIFO 与资源预算边界](memory-cache-capacity.md) |
 | 预发与显式安全检查 | [不改变环境名的生产级配置检查](strict-security.md) |
 | 不可信文件上传 | [显式类型配对、大小上限与原子发布](upload-policy.md) |
 | 通用与认证 Cookie | [显式属性、工厂隔离与认证职责](cookie-policies.md) |
