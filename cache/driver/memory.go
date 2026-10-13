@@ -25,9 +25,13 @@ type Memory struct {
 	locks      map[string]memoryLock
 	order      *list.List
 	maxEntries int
-	lock       sync.RWMutex
-	sequence   uint64
-	lastSweep  time.Time
+	// capacityEntries excludes fencing records; nextCapacityExpiry is a conservative
+	// earliest deadline, reset by a sweep. Both are guarded by lock.
+	capacityEntries    int
+	nextCapacityExpiry time.Time
+	lock               sync.RWMutex
+	sequence           uint64
+	lastSweep          time.Time
 }
 
 type item struct {
@@ -160,6 +164,8 @@ func (c *Memory) Clear() error {
 		}
 	}
 	c.items = preserved
+	c.capacityEntries = 0
+	c.nextCapacityExpiry = time.Time{}
 	if c.maxEntries > 0 {
 		c.order = list.New()
 		for key, stored := range c.items {
@@ -464,10 +470,15 @@ func (c *Memory) storeItemLocked(key string, value interface{}, expiry time.Time
 		stored.version = version
 		stored.protected = stored.protected || protected
 		c.items[key] = stored
+		c.noteCapacityExpiryLocked(key, expiry)
 		return nil
 	}
 	if c.maxEntries <= 0 {
 		c.items[key] = item{value: value, expiry: expiry, version: version, protected: protected}
+		if !isCapacityExemptKey(key) {
+			c.capacityEntries++
+			c.noteCapacityExpiryLocked(key, expiry)
+		}
 		return nil
 	}
 	if isCapacityExemptKey(key) {
@@ -475,6 +486,13 @@ func (c *Memory) storeItemLocked(key string, value interface{}, expiry time.Time
 		stored.order = c.order.PushBack(key)
 		c.items[key] = stored
 		return nil
+	}
+	// Reclaim due entries before rejecting a protected write or evicting live data.
+	// A stale early hint can trigger one extra sweep, never delay reclamation.
+	if c.capacityUsedLocked() >= c.maxEntries && !c.nextCapacityExpiry.IsZero() {
+		if now := time.Now(); !now.Before(c.nextCapacityExpiry) {
+			c.sweepExpiredItemsLocked(now)
+		}
 	}
 	if protected {
 		if c.capacityUsedLocked() >= c.maxEntries {
@@ -492,17 +510,22 @@ func (c *Memory) storeItemLocked(key string, value interface{}, expiry time.Time
 	stored := item{value: value, expiry: expiry, version: version, protected: protected}
 	stored.order = c.order.PushBack(key)
 	c.items[key] = stored
+	c.capacityEntries++
+	c.noteCapacityExpiryLocked(key, expiry)
 	return nil
 }
 
 func (c *Memory) capacityUsedLocked() int {
-	used := 0
-	for key := range c.items {
-		if !isCapacityExemptKey(key) {
-			used++
-		}
+	return c.capacityEntries
+}
+
+func (c *Memory) noteCapacityExpiryLocked(key string, expiry time.Time) {
+	if isCapacityExemptKey(key) || expiry.IsZero() {
+		return
 	}
-	return used
+	if c.nextCapacityExpiry.IsZero() || expiry.Before(c.nextCapacityExpiry) {
+		c.nextCapacityExpiry = expiry
+	}
 }
 
 func (c *Memory) oldestEvictableItemLocked() (string, item, bool) {
@@ -533,17 +556,29 @@ func (c *Memory) removeItemLocked(key string, stored item) {
 		c.order.Remove(stored.order)
 	}
 	delete(c.items, key)
+	if !isCapacityExemptKey(key) {
+		c.capacityEntries--
+	}
+}
+
+// sweepExpiredItemsLocked also rebuilds the conservative capacity deadline.
+// It does not reset the lock sweep clock: capacity pressure is not a lock sweep.
+func (c *Memory) sweepExpiredItemsLocked(now time.Time) {
+	c.nextCapacityExpiry = time.Time{}
+	for key, stored := range c.items {
+		if !stored.expiry.IsZero() && !now.Before(stored.expiry) {
+			c.removeItemLocked(key, stored)
+		} else {
+			c.noteCapacityExpiryLocked(key, stored.expiry)
+		}
+	}
 }
 
 func (c *Memory) sweepExpiredLocked(now time.Time) {
 	if !c.lastSweep.IsZero() && now.Sub(c.lastSweep) < memorySweepInterval {
 		return
 	}
-	for key, stored := range c.items {
-		if !stored.expiry.IsZero() && !now.Before(stored.expiry) {
-			c.removeItemLocked(key, stored)
-		}
-	}
+	c.sweepExpiredItemsLocked(now)
 	for key, lock := range c.locks {
 		if !lock.expiry.After(now) {
 			delete(c.locks, key)
