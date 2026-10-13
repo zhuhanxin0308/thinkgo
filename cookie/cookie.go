@@ -325,7 +325,8 @@ func (c *Cookie) BuildHeader(name, value string, options ...CookieOptions) (stri
 			return "", err
 		}
 	}
-	secure := opts.Secure || strings.EqualFold(opts.SameSite, "None")
+	sameSite := sameSiteMode(opts.SameSite)
+	secure := opts.Secure || sameSite == http.SameSiteNoneMode
 	if requestSecureSet {
 		secure = secure || requestSecure
 	} else {
@@ -339,7 +340,7 @@ func (c *Cookie) BuildHeader(name, value string, options ...CookieOptions) (stri
 		Domain:   opts.Domain,
 		Secure:   secure,
 		HttpOnly: opts.HttpOnly,
-		SameSite: sameSiteMode(opts.SameSite),
+		SameSite: sameSite,
 	}
 	if opts.Expire > 0 {
 		cookie.MaxAge = opts.Expire
@@ -538,7 +539,8 @@ func normalizeSameSite(value string) (string, error) {
 }
 
 func sameSiteMode(value string) http.SameSite {
-	switch strings.ToLower(value) {
+	// Keep serialization consistent with normalizeSameSite validation.
+	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "":
 		return http.SameSiteDefaultMode
 	case "strict":
