@@ -56,14 +56,15 @@ func NewSecurityHeaders(config SecurityHeadersConfig) (Handler, error) {
 	if err := validateSecurityHeaders(config); err != nil {
 		return nil, err
 	}
+	// 枚举按校验所用的规范形式输出；CSP 和 Permissions-Policy 的大小写必须保留。
 	policy := &securityHeaders{headers: make(http.Header)}
 	policy.headers.Set("X-Content-Type-Options", "nosniff")
-	policy.headers.Set("X-Frame-Options", config.FrameOptions)
+	policy.headers.Set("X-Frame-Options", strings.ToUpper(config.FrameOptions))
 	policy.headers.Set("Content-Security-Policy", config.ContentSecurityPolicy)
-	policy.headers.Set("Referrer-Policy", config.ReferrerPolicy)
+	policy.headers.Set("Referrer-Policy", strings.ToLower(config.ReferrerPolicy))
 	policy.headers.Set("Permissions-Policy", config.PermissionsPolicy)
-	policy.headers.Set("Cross-Origin-Opener-Policy", config.CrossOriginOpenerPolicy)
-	policy.headers.Set("Cross-Origin-Resource-Policy", config.CrossOriginResourcePolicy)
+	policy.headers.Set("Cross-Origin-Opener-Policy", strings.ToLower(config.CrossOriginOpenerPolicy))
+	policy.headers.Set("Cross-Origin-Resource-Policy", strings.ToLower(config.CrossOriginResourcePolicy))
 	if config.HSTSMaxAgeSeconds > 0 {
 		policy.hsts = "max-age=" + strconv.Itoa(config.HSTSMaxAgeSeconds)
 		if config.HSTSIncludeSubDomains {
