@@ -52,10 +52,11 @@ func NewUploadPolicy(config UploadPolicyConfig) (*UploadPolicy, error) {
 	}
 	policy := &UploadPolicy{maxBytes: config.MaxBytes, allowed: make(map[string]map[string]struct{}, len(config.AllowedTypes))}
 	for extension, types := range config.AllowedTypes {
-		extension = strings.ToLower(strings.TrimPrefix(extension, "."))
+		extension = strings.TrimPrefix(extension, ".")
 		if !validUploadExtension(extension) || len(types) == 0 {
 			return nil, fmt.Errorf("%w: upload policy has an invalid extension or empty MIME list", ErrInvalidConfiguration)
 		}
+		extension = strings.ToLower(extension)
 		if _, exists := policy.allowed[extension]; exists {
 			return nil, fmt.Errorf("%w: upload policy contains duplicate normalized extensions", ErrInvalidConfiguration)
 		}
@@ -77,7 +78,7 @@ func validUploadExtension(value string) bool {
 		return false
 	}
 	for _, char := range value {
-		if !(char >= 'a' && char <= 'z' || char >= '0' && char <= '9') {
+		if !(char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' || char >= '0' && char <= '9') {
 			return false
 		}
 	}
@@ -97,7 +98,11 @@ func uploadPolicyOption(options map[string]interface{}) (*UploadPolicy, error) {
 }
 
 func uploadExtension(name string) string {
-	return strings.ToLower(strings.TrimPrefix(path.Ext(strings.ReplaceAll(name, "\\", "/")), "."))
+	extension := strings.TrimPrefix(path.Ext(strings.ReplaceAll(name, "\\", "/")), ".")
+	if !validUploadExtension(extension) {
+		return ""
+	}
+	return strings.ToLower(extension)
 }
 
 // Strict destination names use one extension and a restricted application-chosen
@@ -105,7 +110,7 @@ func uploadExtension(name string) string {
 func policyDestination(name string) bool {
 	base := path.Base(name)
 	stem, extension, found := strings.Cut(base, ".")
-	if !found || stem == "" || len(base) > 255 || !validUploadExtension(strings.ToLower(extension)) {
+	if !found || stem == "" || len(base) > 255 || !validUploadExtension(extension) {
 		return false
 	}
 	for _, char := range stem {
