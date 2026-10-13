@@ -4,6 +4,7 @@
 
 | 主题 | 指南 |
 | --- | --- |
+| 原生 SQL 与绑定参数 | [固定结构、参数化与查询快照](database-raw-sql.md) |
 | 内存缓存容量与过期 | [过期回收、FIFO 与资源预算边界](memory-cache-capacity.md) |
 | 预发与显式安全检查 | [不改变环境名的生产级配置检查](strict-security.md) |
 | 不可信文件上传 | [显式类型配对、大小上限与原子发布](upload-policy.md) |
