@@ -130,9 +130,14 @@ func unavailableCSRFHandler(req *context.Request, next func(*context.Request) *c
 	})
 }
 
-// warnProductionSecurity 在生产环境执行一次性分类安全检查，不安全配置会阻止服务启动。
+// warnProductionSecurity 执行生产级安全检查；其他环境可通过 app.security_strict 显式启用。
+// 生产环境不能通过关闭此开关绕过检查，非法开关值仍会进入启动错误链。
 func (app *App) warnProductionSecurity() {
-	if app == nil || !strings.EqualFold(app.securityWarningEnvironment(), securityEnvironmentProduction) {
+	if app == nil {
+		return
+	}
+	strict := app.readApplicationBool("app.security_strict", false)
+	if !strict && !strings.EqualFold(app.securityWarningEnvironment(), securityEnvironmentProduction) {
 		return
 	}
 	if app.IsDebug() || (app.config != nil && app.config.GetBool("app.app_debug", false)) {
@@ -270,10 +275,15 @@ func (app *App) emitSecurityWarning(category uint32, message string) {
 			return
 		}
 		if atomic.CompareAndSwapUint32(&app.securityWarningBits, current, current|category) {
+			failure := "生产环境安全检查失败"
+			if app.securityWarningEnvironment() != securityEnvironmentProduction {
+				message = strings.Replace(message, "生产环境安全警告", "严格模式安全警告", 1)
+				failure = "严格模式安全检查失败"
+			}
 			if app.log != nil {
 				app.log.Warning(message)
 			}
-			app.recordStartupError(fmt.Errorf("生产环境安全检查失败: %s", message))
+			app.recordStartupError(fmt.Errorf("%s: %s", failure, message))
 			return
 		}
 	}
