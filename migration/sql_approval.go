@@ -18,7 +18,7 @@ var ErrMigrationNotApproved = errors.New("SQL migration is not approved")
 // its name and exact SQLApprovalDigest, covering normalized Up and Down statements.
 // A missing, empty or mismatched approval returns nil and ErrMigrationNotApproved.
 // Invalid definitions retain NewSQL's ErrInvalidMigration classification.
-// Migration.Checksum is a separate legacy history value, not an approval digest.
+// Migration.Checksum is a separate history value, not an approval digest.
 //
 // Approvals must come from an independently reviewed, trusted source. Computing
 // them from incoming SQL at startup defeats the check. This is neither an author

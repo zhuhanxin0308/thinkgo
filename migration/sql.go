@@ -3,8 +3,10 @@ package migration
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"strings"
 )
 
@@ -13,6 +15,9 @@ import (
 // SQL 必须来自可信代码；校验和不是作者签名，也不判断语句是否安全。
 // 需要在首次应用前核对独立审查清单时，使用 NewSQLWithApproval 和 SQLApprovalDigest；
 // 不将本迁移的历史 Checksum 值用作执行批准摘要。
+// 普通定义保留既有摘要；含完整语句 "down" 的定义改用无歧义的 v2 编码。
+// 此类旧历史会报告 ErrMigrationDrift，不回退接受旧摘要或自动重写记录；
+// 升级限制见 docs/security/migration-history-checksums.md。
 func NewSQL(name string, upStatements, downStatements []string) (Migration, error) {
 	up, err := normalizeStatements(upStatements)
 	if err != nil {
@@ -56,7 +61,17 @@ func normalizeStatements(statements []string) ([]string, error) {
 	return normalized, nil
 }
 
+// up/down 已由 normalizeStatements 拒绝 NUL 并去除首尾空白。
+// 无完整 "down" 语句时，旧编码只有一个方向分隔标记，可以唯一解码。
+// 否则不能保留旧摘要：即使它与历史相等，也不能证明原来的方向边界。
 func checksumStatements(up, down []string) string {
+	for _, statements := range [][]string{up, down} {
+		for _, statement := range statements {
+			if statement == "down" {
+				return checksumFramedStatements(up, down)
+			}
+		}
+	}
 	hash := sha256.New()
 	for _, group := range []struct {
 		name       string
@@ -67,6 +82,34 @@ func checksumStatements(up, down []string) string {
 		for _, statement := range group.statements {
 			_, _ = hash.Write([]byte(statement))
 			_, _ = hash.Write([]byte{0})
+		}
+	}
+	return hex.EncodeToString(hash.Sum(nil))
+}
+
+// checksumFramedStatements 的用途域、方向、数量及字节长度固定编码为 v2。
+// 与旧编码的 "up\x00" 前缀分离；存储结果仍为 64 位小写 SHA-256。
+// 版本在哈希输入中，不是数据库新字段，也不是可信升级旧记录的依据。
+func checksumFramedStatements(up, down []string) string {
+	hash := sha256.New()
+	writeUint := func(value uint64) {
+		var encoded [8]byte
+		binary.BigEndian.PutUint64(encoded[:], value)
+		_, _ = hash.Write(encoded[:])
+	}
+	writeText := func(value string) {
+		writeUint(uint64(len(value)))
+		_, _ = io.WriteString(hash, value)
+	}
+	writeText("thinkgo/sql-migration-history/v2")
+	for _, group := range []struct {
+		direction  string
+		statements []string
+	}{{"up", up}, {"down", down}} {
+		writeText(group.direction)
+		writeUint(uint64(len(group.statements)))
+		for _, statement := range group.statements {
+			writeText(statement)
 		}
 	}
 	return hex.EncodeToString(hash.Sum(nil))
