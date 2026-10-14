@@ -33,11 +33,11 @@ func TestSQLApprovalRejectsDirectionBoundaryCollision(t *testing.T) {
 		{[]string{"SELECT 1"}, []string{"down"}},
 		{[]string{"SELECT 1", "down"}, nil},
 	}
-	legacy := make([]Migration, len(plans))
+	definitions := make([]Migration, len(plans))
 	digests := make([]string, len(plans))
 	for i, plan := range plans {
 		var err error
-		legacy[i], err = NewSQL(name, plan.up, plan.down)
+		definitions[i], err = NewSQL(name, plan.up, plan.down)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -46,9 +46,12 @@ func TestSQLApprovalRejectsDirectionBoundaryCollision(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// Keep history unchanged, but never reuse its ambiguous encoding for approval.
-	if legacy[0].Checksum() != legacy[1].Checksum() || digests[0] == digests[1] {
-		t.Fatal("legacy collision or new direction separation invariant changed")
+	// Preserve the old collision fixture, but both current history and approval must separate it.
+	if legacySQLHistoryChecksum(plans[0].up, plans[0].down) != legacySQLHistoryChecksum(plans[1].up, plans[1].down) {
+		t.Fatal("legacy collision fixture changed")
+	}
+	if definitions[0].Checksum() == definitions[1].Checksum() || digests[0] == digests[1] {
+		t.Fatal("history or approval failed to separate directions")
 	}
 	for i, plan := range plans {
 		approvals := map[string]string{name: digests[i]}
@@ -60,7 +63,7 @@ func TestSQLApprovalRejectsDirectionBoundaryCollision(t *testing.T) {
 		if err := approved.Up(context.Background(), executor); err != nil {
 			t.Fatal(err)
 		}
-		if !reflect.DeepEqual(executor.statements, plan.up) || approved.Checksum() != legacy[i].Checksum() {
+		if !reflect.DeepEqual(executor.statements, plan.up) || approved.Checksum() != definitions[i].Checksum() {
 			t.Fatal("approved plan or history changed")
 		}
 		other := plans[1-i]
@@ -68,8 +71,10 @@ func TestSQLApprovalRejectsDirectionBoundaryCollision(t *testing.T) {
 		if rejected != nil || !errors.Is(err, ErrMigrationNotApproved) {
 			t.Fatal("approval accepted SQL moved across the Up/Down boundary")
 		}
-		if rejected, err := NewSQLWithApproval(name, plan.up, plan.down, map[string]string{name: legacy[i].Checksum()}); rejected != nil || !errors.Is(err, ErrMigrationNotApproved) {
-			t.Fatal("legacy checksum remained an authorization fallback")
+		for _, history := range []string{definitions[i].Checksum(), legacySQLHistoryChecksum(plan.up, plan.down)} {
+			if rejected, err := NewSQLWithApproval(name, plan.up, plan.down, map[string]string{name: history}); rejected != nil || !errors.Is(err, ErrMigrationNotApproved) {
+				t.Fatal("history checksum became an authorization fallback")
+			}
 		}
 	}
 }
