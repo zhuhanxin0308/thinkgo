@@ -59,3 +59,5 @@ Worker 验签后将实际 Asynq 任务 ID、队列和最大重试次数与签名
 ## 验证范围
 
 回归覆盖字段篡改、无签名、ID/队列/重试边界、过期/计划及小数秒、保留头、密钥快照与轮换、原 payload/UniqueFor、成功重放、可信总 attempt 预算、共享 claim 并发排他和 owner fencing；并覆盖 Claim/Finish 故障、panic、上下文取消和迟到 Claim。模拟 Redis 用于任务 wire/Worker 适配器行为，测试内存 ledger 是接口契约 oracle，不能当作实际持久化、多地域故障或崩溃恢复验收。
+
+真实 Redis 门禁 `TestLiveRedisQueueIntegrityWireContract` 检查生产者写入的签名、传播头及任务 ID，实际 Worker 执行、跨 Worker 成功重放拒绝，以及 payload／头／ID 篡改拒绝。工作流先核对测试名称存在，再单独以 `integration`、`race`、`-v`、`-count=1` 运行；未配置真实服务时的本地 SKIP 不能算验收通过。该门禁仍使用独立的测试 ledger，不替部署实现持久化 ReplayStore。
