@@ -114,9 +114,7 @@ func (app *App) initializeMiddleware(services applicationAssemblyServices) {
 		app.recordStartupError(fmt.Errorf("初始化安全响应头失败: %w", securityErr))
 	} else if securityEnabled {
 		services.middleware.Alias("security_headers", securityHandler)
-		if err := services.middleware.PipeByNameStrict("security_headers"); err != nil {
-			app.recordStartupError(fmt.Errorf("注册安全响应头中间件失败: %w", err))
-		}
+		services.middleware.WrapOuter(securityHandler)
 	}
 
 	// Recovery 包住其余中间件和控制器，异常继续进入统一处理链。
@@ -127,6 +125,11 @@ func (app *App) initializeMiddleware(services applicationAssemblyServices) {
 		Handler: services.exception,
 	}
 	services.middleware.Alias("recovery", recovery.Handle)
+	if securityEnabled && securityErr == nil {
+		// 普通 Recovery 继续按原优先级排序；固定兜底捕获被用户排在它前面的
+		// 中间件异常，让最外层安全头仍能处理恢复后的响应。
+		services.middleware.WrapOuter(recovery.Handle)
+	}
 	if err := services.middleware.PipeByNameStrict("recovery"); err != nil {
 		app.recordStartupError(fmt.Errorf("注册 recovery 中间件失败: %w", err))
 	}

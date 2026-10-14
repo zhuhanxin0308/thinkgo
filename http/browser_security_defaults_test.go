@@ -2,6 +2,7 @@ package http
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	stdhttp "net/http"
 	"net/http/httptest"
@@ -17,14 +18,45 @@ import (
 )
 
 func TestBrowserSecurityDefaultsOnHTTPResponseBoundaries(t *testing.T) {
+	testBrowserSecurityHTTPBoundaries(t, nil, false, "")
+}
+
+func TestBrowserSecurityHeadersIgnoreMiddlewarePriority(t *testing.T) {
+	for _, first := range []string{"cors", "rate_limit", "csrf", "recovery"} {
+		for _, duplicate := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/duplicate=%t", first, duplicate), func(t *testing.T) {
+				priority := []string{first}
+				for _, name := range []string{"cors", "rate_limit", "csrf", "recovery", "security_headers"} {
+					if name != first {
+						priority = append(priority, name)
+					}
+				}
+				testBrowserSecurityHTTPBoundaries(t, priority, duplicate, "")
+			})
+		}
+	}
+}
+
+func TestBrowserSecurityHeadersSurviveMiddlewarePanicBeforeRecovery(t *testing.T) {
+	for _, mode := range []string{"unshift", "priority"} {
+		t.Run(mode, func(t *testing.T) { testBrowserSecurityHTTPBoundaries(t, nil, false, mode) })
+	}
+}
+
+func testBrowserSecurityHTTPBoundaries(t *testing.T, priority []string, duplicate bool, earlyPanic string) {
+	t.Helper()
 	base := t.TempDir()
 	ensureHTTPTestConfigFiles(t, base)
 	files := map[string]map[string]interface{}{
-		"app":     {"app_env": "test", "app_debug": false, "security_profile": "browser_cookie", "security_strict": true, "session_enable": true, "database_startup_policy": "disabled", "server": map[string]interface{}{"allowed_hosts": []string{"example.test"}}, "compression": map[string]interface{}{"enable": false}},
-		"cookie":  {"secret": strings.Repeat("k", 32), "secure": true, "httponly": true, "samesite": "Lax"},
-		"session": {"type": "memory", "name": "SID", "reject_unknown_id": true, "samesite": "Lax"},
-		"csrf":    {"secure": true},
-		"cors":    {"enable": true, "allow_origins": []string{"https://client.example"}, "allow_methods": []string{"GET", "POST", "OPTIONS"}, "allow_headers": []string{"X-CSRF-Token", "Content-Type"}},
+		"app":        {"app_env": "test", "app_debug": false, "security_profile": "browser_cookie", "security_strict": true, "session_enable": true, "database_startup_policy": "disabled", "server": map[string]interface{}{"allowed_hosts": []string{"example.test"}}, "compression": map[string]interface{}{"enable": false}},
+		"cookie":     {"secret": strings.Repeat("k", 32), "secure": true, "httponly": true, "samesite": "Lax"},
+		"session":    {"type": "memory", "name": "SID", "reject_unknown_id": true, "samesite": "Lax"},
+		"csrf":       {"secure": true},
+		"cors":       {"enable": true, "allow_origins": []string{"https://client.example"}, "allow_methods": []string{"GET", "POST", "OPTIONS"}, "allow_headers": []string{"X-CSRF-Token", "Content-Type"}},
+		"rate_limit": {"enable": true, "rate": 1, "period_seconds": 3600, "burst": 1},
+	}
+	if priority != nil {
+		files["middleware"] = map[string]interface{}{"priority": priority}
 	}
 	for name, values := range files {
 		data, err := json.Marshal(values)
@@ -63,11 +95,42 @@ func TestBrowserSecurityDefaultsOnHTTPResponseBoundaries(t *testing.T) {
 			t.Error(err)
 		}
 	}))
+	if err := app.Initialize(); err != nil {
+		t.Fatal(err)
+	}
+	if duplicate {
+		if err := app.Middleware().PipeByNameStrict("security_headers"); err != nil {
+			t.Fatal(err)
+		}
+		if err := app.Middleware().PipeByNameStrict("security_headers"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if earlyPanic != "" {
+		handler := func(req *fwcontext.Request, next func(*fwcontext.Request) *fwcontext.Response) *fwcontext.Response {
+			if req.Raw().URL.Path == "/early-panic" {
+				panic("test-only middleware before ordinary recovery")
+			}
+			return next(req)
+		}
+		if earlyPanic == "unshift" {
+			app.Middleware().Unshift(handler)
+		} else {
+			app.Middleware().Alias("early_panic", handler).PipeByName("early_panic").SetPriority([]string{"early_panic", "cors", "rate_limit", "csrf", "recovery", "security_headers"})
+		}
+	}
 	kernel, err := NewHttp(app)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var csrf, sid *stdhttp.Cookie
+	requestIndex := 0
+	newRequest := func(method, path string) *stdhttp.Request {
+		requestIndex++
+		raw := httptest.NewRequest(method, "https://example.test"+path, nil)
+		raw.RemoteAddr = fmt.Sprintf("192.0.2.%d:1234", requestIndex)
+		return raw
+	}
 	for _, test := range []struct {
 		path   string
 		status int
@@ -81,7 +144,7 @@ func TestBrowserSecurityDefaultsOnHTTPResponseBoundaries(t *testing.T) {
 	} {
 		t.Run(test.path, func(t *testing.T) {
 			writer := httptest.NewRecorder()
-			kernel.ServeHTTP(writer, httptest.NewRequest(stdhttp.MethodGet, "https://example.test"+test.path, nil))
+			kernel.ServeHTTP(writer, newRequest(stdhttp.MethodGet, test.path))
 			response := writer.Result()
 			defer response.Body.Close()
 			if response.StatusCode != test.status || test.body != "" && writer.Body.String() != test.body {
@@ -103,8 +166,23 @@ func TestBrowserSecurityDefaultsOnHTTPResponseBoundaries(t *testing.T) {
 	if csrf == nil || sid == nil || !sid.HttpOnly || !sid.Secure || sid.SameSite != stdhttp.SameSiteLaxMode {
 		t.Fatal("browser defaults did not send protected session/CSRF cookies")
 	}
+	if earlyPanic != "" {
+		writer := httptest.NewRecorder()
+		kernel.ServeHTTP(writer, newRequest(stdhttp.MethodGet, "/early-panic"))
+		if writer.Code != stdhttp.StatusInternalServerError {
+			t.Fatalf("early middleware panic status=%d", writer.Code)
+		}
+		assertDefaultBrowserHeaders(t, writer.Result().Header)
+		// Direct Run has no prewritten Writer headers to retain during recovery.
+		response := kernel.Run(fwcontext.MustNewRequest(newRequest(stdhttp.MethodGet, "/early-panic")))
+		kernel.End(response)
+		if response.GetStatus() != stdhttp.StatusInternalServerError {
+			t.Fatalf("direct early middleware panic status=%d", response.GetStatus())
+		}
+		assertDefaultBrowserHeaders(t, response.Headers())
+	}
 	for _, includeToken := range []bool{false, true} {
-		raw := httptest.NewRequest(stdhttp.MethodPost, "https://example.test/page", nil)
+		raw := newRequest(stdhttp.MethodPost, "/page")
 		raw.Header.Set("Origin", "https://example.test")
 		raw.AddCookie(sid)
 		raw.AddCookie(csrf)
@@ -126,7 +204,7 @@ func TestBrowserSecurityDefaultsOnHTTPResponseBoundaries(t *testing.T) {
 		t.Fatalf("CSRF allowed %d state-changing handlers", posts)
 	}
 	for _, origin := range []string{"https://client.example", "https://untrusted.example"} {
-		raw := httptest.NewRequest(stdhttp.MethodOptions, "https://example.test/page", nil)
+		raw := newRequest(stdhttp.MethodOptions, "/page")
 		raw.Header.Set("Origin", origin)
 		raw.Header.Set("Access-Control-Request-Method", stdhttp.MethodPost)
 		raw.Header.Set("Access-Control-Request-Headers", middleware.DefaultCSRFHeaderName)
@@ -138,6 +216,16 @@ func TestBrowserSecurityDefaultsOnHTTPResponseBoundaries(t *testing.T) {
 		}
 		if writer.Code != want {
 			t.Fatalf("CORS origin=%s status=%d", origin, writer.Code)
+		}
+		assertDefaultBrowserHeaders(t, writer.Result().Header)
+	}
+	for _, want := range []int{stdhttp.StatusBadRequest, stdhttp.StatusTooManyRequests} {
+		raw := newRequest(stdhttp.MethodGet, "/error")
+		raw.RemoteAddr = "198.51.100.77:1234"
+		writer := httptest.NewRecorder()
+		kernel.ServeHTTP(writer, raw)
+		if writer.Code != want {
+			t.Fatalf("rate-limit boundary status=%d want=%d", writer.Code, want)
 		}
 		assertDefaultBrowserHeaders(t, writer.Result().Header)
 	}
