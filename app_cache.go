@@ -29,6 +29,7 @@ type appCacheStoreSpec struct {
 	path             string
 	confineToRuntime bool
 	maxMemoryEntries int
+	memoryBudget     *cacheDriver.MemoryBudget
 	redisConfig      map[string]interface{}
 	prefix           string
 	expire           time.Duration
@@ -228,7 +229,7 @@ func parseAppCacheStore(resolvePath func(string) (string, error), name string, s
 	}
 	switch driverType {
 	case "memory":
-		if err := rejectUnknownCacheStoreFields(name, storeConfig, "type", "max_entries", "prefix", "expire", "tag_prefix", "serialize"); err != nil {
+		if err := rejectUnknownCacheStoreFields(name, storeConfig, "type", "max_entries", "max_value_bytes", "max_bytes", "max_locks", "prefix", "expire", "tag_prefix", "serialize"); err != nil {
 			return appCacheStoreSpec{}, err
 		}
 		if rawMaxEntries, exists := storeConfig["max_entries"]; exists {
@@ -237,6 +238,25 @@ func parseAppCacheStore(resolvePath func(string) (string, error), name string, s
 				return appCacheStoreSpec{}, fmt.Errorf("内存缓存 store %q 的 max_entries 必须是非负整数: %w", name, err)
 			}
 			spec.maxMemoryEntries = maxEntries
+		}
+		_, valueBudget := storeConfig["max_value_bytes"]
+		_, totalBudget := storeConfig["max_bytes"]
+		_, lockBudget := storeConfig["max_locks"]
+		if valueBudget || totalBudget || lockBudget {
+			budget := cacheDriver.MemoryBudget{MaxEntries: spec.maxMemoryEntries}
+			values := make(map[string]int, 3)
+			for _, field := range []string{"max_value_bytes", "max_bytes", "max_locks"} {
+				value, err := readConfigIntValue(storeConfig[field])
+				if err != nil || value <= 0 {
+					return appCacheStoreSpec{}, fmt.Errorf("%w: 内存缓存 store %q 的 %s 必须是正整数", cacheDriver.ErrInvalidMemoryBudget, name, field)
+				}
+				values[field] = value
+			}
+			budget.MaxValueBytes, budget.MaxBytes, budget.MaxLocks = uint64(values["max_value_bytes"]), uint64(values["max_bytes"]), values["max_locks"]
+			if budget.MaxEntries <= 0 || budget.MaxBytes < budget.MaxValueBytes {
+				return appCacheStoreSpec{}, cacheDriver.ErrInvalidMemoryBudget
+			}
+			spec.memoryBudget = &budget
 		}
 	case "file":
 		if err := rejectUnknownCacheStoreFields(name, storeConfig, "type", "path", "prefix", "expire", "tag_prefix", "serialize"); err != nil {
@@ -455,7 +475,11 @@ func createAppCacheDriver(spec appCacheStoreSpec) (cache.Driver, error) {
 	)
 	switch spec.driverType {
 	case "memory":
-		driver, err = cacheDriver.NewMemoryWithMaxEntries(spec.maxMemoryEntries)
+		if spec.memoryBudget != nil {
+			driver, err = cacheDriver.NewMemoryWithBudget(*spec.memoryBudget)
+		} else {
+			driver, err = cacheDriver.NewMemoryWithMaxEntries(spec.maxMemoryEntries)
+		}
 	case "file":
 		driver, err = cacheDriver.NewFile(spec.path)
 	case "redis":

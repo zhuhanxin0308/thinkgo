@@ -43,6 +43,10 @@ func (c *Memory) updateAtomicTTLPolicy(key string, ttl time.Duration, update fun
 	if update == nil {
 		return ErrNilAtomicUpdate
 	}
+	if c.budget != nil {
+		c.snapshotLock.Lock()
+		defer c.snapshotLock.Unlock()
+	}
 	c.lock.Lock()
 	defer c.lock.Unlock()
 	return c.updateAtomicLocked(key, ttl, update)
@@ -62,7 +66,15 @@ func (c *Memory) updateAtomicLocked(key string, ttl time.Duration, update func(i
 	}
 	var current interface{}
 	if found {
-		current = cloneMemoryValue(stored.value)
+		if c.budget != nil {
+			var err error
+			current, _, err = budgetSnapshot(stored.value, c.budget.MaxValueBytes)
+			if err != nil {
+				return err
+			}
+		} else {
+			current = cloneMemoryValue(stored.value)
+		}
 	}
 	next, remove, preserveTTL, err := update(current, found)
 	if err != nil {
@@ -74,7 +86,10 @@ func (c *Memory) updateAtomicLocked(key string, ttl time.Duration, update func(i
 		}
 		return nil
 	}
-	cloned := cloneMemoryValue(next)
+	cloned := next
+	if c.budget == nil {
+		cloned = cloneMemoryValue(next)
+	}
 	expiry := stored.expiry
 	if !preserveTTL {
 		expiry = time.Time{}
@@ -97,6 +112,10 @@ func (c *Memory) UpdateIfLockOwnerContext(ctx context.Context, key string, ttl t
 	}
 	if update == nil {
 		return false, ErrNilAtomicUpdate
+	}
+	if c.budget != nil {
+		c.snapshotLock.Lock()
+		defer c.snapshotLock.Unlock()
 	}
 	c.lock.Lock()
 	defer c.lock.Unlock()

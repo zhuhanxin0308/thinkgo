@@ -21,10 +21,14 @@ const (
 
 // Memory 是支持 nil 命中、严格计数和独立锁空间的进程内缓存驱动。
 type Memory struct {
-	items      map[string]item
-	locks      map[string]memoryLock
-	order      *list.List
-	maxEntries int
+	items       map[string]item
+	locks       map[string]memoryLock
+	order       *list.List
+	maxEntries  int
+	budget      *MemoryBudget
+	budgetBytes uint64
+	// Serializes strict snapshot allocations, including callback input and output.
+	snapshotLock sync.Mutex
 	// capacityEntries excludes fencing records; nextCapacityExpiry is a conservative
 	// earliest deadline, reset by a sweep. Both are guarded by lock.
 	capacityEntries    int
@@ -40,11 +44,13 @@ type item struct {
 	version   uint64
 	order     *list.Element
 	protected bool
+	bytes     uint64
 }
 
 type memoryLock struct {
 	owner  string
 	expiry time.Time
+	bytes  uint64
 }
 
 type memoryCloneVisit struct {
@@ -78,9 +84,17 @@ func NewMemoryWithMaxEntries(maxEntries int) (*Memory, error) {
 }
 
 func (c *Memory) Get(key string) (interface{}, bool, error) {
+	if c != nil && c.budget != nil {
+		c.snapshotLock.Lock()
+		defer c.snapshotLock.Unlock()
+	}
 	value, found, err := c.lookup(key)
 	if err != nil || !found {
 		return nil, false, err
+	}
+	if c.budget != nil {
+		cloned, _, err := budgetSnapshot(value, c.budget.MaxValueBytes)
+		return cloned, err == nil, err
 	}
 	return cloneMemoryValue(value), true, nil
 }
@@ -119,12 +133,19 @@ func (c *Memory) Set(key string, value interface{}, ttl time.Duration) error {
 	if err := validateDriverTTL(ttl); err != nil {
 		return err
 	}
+	if c.budget != nil {
+		c.snapshotLock.Lock()
+		defer c.snapshotLock.Unlock()
+	}
 	now := time.Now()
 	expiry := time.Time{}
 	if ttl > 0 {
 		expiry = now.Add(ttl)
 	}
-	cloned := cloneMemoryValue(value)
+	cloned := value
+	if c.budget == nil {
+		cloned = cloneMemoryValue(value)
+	}
 	c.lock.Lock()
 	c.ensureMapsLocked()
 	c.sweepExpiredLocked(now)
@@ -164,6 +185,15 @@ func (c *Memory) Clear() error {
 		}
 	}
 	c.items = preserved
+	if c.budget != nil {
+		c.budgetBytes = 0
+		for _, stored := range c.items {
+			c.budgetBytes += stored.bytes
+		}
+		for _, lease := range c.locks {
+			c.budgetBytes += lease.bytes
+		}
+	}
 	c.capacityEntries = 0
 	c.nextCapacityExpiry = time.Time{}
 	if c.maxEntries > 0 {
@@ -185,6 +215,10 @@ func (c *Memory) Inc(key string, step int64) (int64, error) {
 	}
 	if err := validateCounterStep(step); err != nil {
 		return 0, err
+	}
+	if c.budget != nil {
+		c.snapshotLock.Lock()
+		defer c.snapshotLock.Unlock()
 	}
 	now := time.Now()
 	c.lock.Lock()
@@ -211,14 +245,8 @@ func (c *Memory) Inc(key string, step int64) (int64, error) {
 		return 0, err
 	}
 	c.sequence++
-	if found {
-		stored.value = updated
-		stored.version = c.sequence
-		c.items[key] = stored
-	} else {
-		if err = c.storeItemLocked(key, updated, time.Time{}, c.sequence, isMetadataKey(key)); err != nil {
-			return 0, err
-		}
+	if err = c.storeItemLocked(key, updated, stored.expiry, c.sequence, isMetadataKey(key)); err != nil {
+		return 0, err
 	}
 	return updated, nil
 }
@@ -229,6 +257,10 @@ func (c *Memory) Dec(key string, step int64) (int64, error) {
 	}
 	if err := validateCounterStep(step); err != nil {
 		return 0, err
+	}
+	if c.budget != nil {
+		c.snapshotLock.Lock()
+		defer c.snapshotLock.Unlock()
 	}
 	now := time.Now()
 	c.lock.Lock()
@@ -255,14 +287,8 @@ func (c *Memory) Dec(key string, step int64) (int64, error) {
 		return 0, err
 	}
 	c.sequence++
-	if found {
-		stored.value = updated
-		stored.version = c.sequence
-		c.items[key] = stored
-	} else {
-		if err = c.storeItemLocked(key, updated, time.Time{}, c.sequence, isMetadataKey(key)); err != nil {
-			return 0, err
-		}
+	if err = c.storeItemLocked(key, updated, stored.expiry, c.sequence, isMetadataKey(key)); err != nil {
+		return 0, err
 	}
 	return updated, nil
 }
@@ -277,10 +303,23 @@ func (c *Memory) AcquireLock(key string, owner string, ttl time.Duration) (bool,
 	defer c.lock.Unlock()
 	c.ensureMapsLocked()
 	c.sweepExpiredLocked(now)
+	if c.budget != nil {
+		c.sweepBudgetExpiredLocked(now)
+	}
 	if existing, found := c.locks[key]; found && existing.expiry.After(now) {
 		return false, nil
 	}
-	c.locks[key] = memoryLock{owner: owner, expiry: now.Add(ttl)}
+	charge := uint64(0)
+	if c.budget != nil {
+		available := c.budget.MaxBytes - c.budgetBytes
+		if len(c.locks) >= c.budget.MaxLocks || memoryLockCharge > available || uint64(len(key)) > available-memoryLockCharge || uint64(len(owner)) > available-memoryLockCharge-uint64(len(key)) {
+			return false, ErrMemoryCapacityExhausted
+		}
+		charge = memoryLockCharge + uint64(len(key)) + uint64(len(owner))
+		key, owner = strings.Clone(key), strings.Clone(owner)
+		c.budgetBytes += charge
+	}
+	c.locks[key] = memoryLock{owner: owner, expiry: now.Add(ttl), bytes: charge}
 	return true, nil
 }
 
@@ -297,13 +336,13 @@ func (c *Memory) ReleaseLock(key string, owner string) (bool, error) {
 		return false, nil
 	}
 	if !existing.expiry.After(now) {
-		delete(c.locks, key)
+		c.removeLockLocked(key, existing)
 		return false, nil
 	}
 	if existing.owner != owner {
 		return false, nil
 	}
-	delete(c.locks, key)
+	c.removeLockLocked(key, existing)
 	return true, nil
 }
 
@@ -317,13 +356,18 @@ func (c *Memory) RenewLock(key string, owner string, ttl time.Duration) (bool, e
 	defer c.lock.Unlock()
 	existing, found := c.locks[key]
 	if !found || !existing.expiry.After(now) {
-		delete(c.locks, key)
+		if found {
+			c.removeLockLocked(key, existing)
+		}
 		return false, nil
 	}
 	if existing.owner != owner {
 		return false, nil
 	}
 	existing.expiry = now.Add(ttl)
+	if c.budget != nil {
+		key = strings.Clone(key)
+	}
 	c.locks[key] = existing
 	return true, nil
 }
@@ -464,6 +508,9 @@ func (c *Memory) ensureMapsLocked() {
 
 // storeItemLocked 写入缓存项并按 FIFO 顺序淘汰最早的业务项；调用方必须持有写锁。
 func (c *Memory) storeItemLocked(key string, value interface{}, expiry time.Time, version uint64, protected bool) error {
+	if c.budget != nil {
+		return c.storeBudgetItemLocked(key, value, expiry, version, protected)
+	}
 	if stored, exists := c.items[key]; exists {
 		stored.value = value
 		stored.expiry = expiry
@@ -556,6 +603,9 @@ func (c *Memory) removeItemLocked(key string, stored item) {
 		c.order.Remove(stored.order)
 	}
 	delete(c.items, key)
+	if c.budget != nil {
+		c.budgetBytes -= stored.bytes
+	}
 	if !isCapacityExemptKey(key) {
 		c.capacityEntries--
 	}
@@ -581,8 +631,15 @@ func (c *Memory) sweepExpiredLocked(now time.Time) {
 	c.sweepExpiredItemsLocked(now)
 	for key, lock := range c.locks {
 		if !lock.expiry.After(now) {
-			delete(c.locks, key)
+			c.removeLockLocked(key, lock)
 		}
 	}
 	c.lastSweep = now
+}
+
+func (c *Memory) removeLockLocked(key string, lease memoryLock) {
+	delete(c.locks, key)
+	if c.budget != nil {
+		c.budgetBytes -= lease.bytes
+	}
 }

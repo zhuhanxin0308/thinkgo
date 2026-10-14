@@ -48,11 +48,13 @@ if err := applicationCache.RegisterStore("secondary", driver.NewMemory()); err !
 
 | `type` | 必要配置 | 说明 |
 |---|---|---|
-| `memory` | 无；可选 `max_entries` | 进程内动态值缓存；设置容量后按 FIFO 淘汰最早条目 |
+| `memory` | 可选 `max_entries`；严格模式完整配置 `max_entries`、`max_value_bytes`、`max_bytes`、`max_locks` | 进程内缓存；单独条目限制保留 FIFO，严格预算超界拒绝 |
 | `file` | `path` | 应用根目录内的文件缓存目录，或合法绝对路径 |
 | `redis` | Redis 配置字段 | JSON 值、原子计数和分布式锁 |
 
 `memory.max_entries` 达到上限时，普通业务项仍按 FIFO 淘汰；标签缓存的内部元数据不会被淘汰。若没有可安全淘汰的普通项，写入返回 `driver.ErrMemoryCapacityExhausted`，业务应保留原有缓存降级路径。标签场景需要额外预留元数据容量；未配置或设为 `0` 时保持无限容量兼容行为。
+
+来自外部输入的生产内存缓存应完整设置四个正预算和业务 TTL；严格模式包含 fencing 与锁的资源，不按 FIFO 淘汰同步状态。值支持范围、计费规则、快照峰值和默认兼容边界见[内存缓存资源预算](../security/memory-cache-budget.md)。
 
 未知字段、未知驱动、默认 store 缺失、文件路径越界和 Redis 类型错误会在启动阶段记录为 `StartupError`。初始化失败时应用会安装一个没有隐式驱动的缓存管理器；后续调用返回 `ErrCacheDriverNotConfigured`，不会静默换成文件缓存。
 
