@@ -177,7 +177,7 @@ func TestLocalDiskStreamChecksumVisibilityAndLifecycle(t *testing.T) {
 	if err = disk.SetVisibility("documents", VisibilityPublic); err != nil {
 		t.Fatalf("设置目录可见性失败: %v", err)
 	}
-	if err = disk.Move("documents/private", "moved/private", map[string]interface{}{"visibility": VisibilityPublic}); err != nil {
+	if err = disk.Move("documents/private", "moved/private", map[string]interface{}{"visibility": VisibilityPublic, "trusted_upload": true}); err != nil {
 		t.Fatalf("移动目录失败: %v", err)
 	}
 	if visibility, visibilityErr := disk.Visibility("moved/private"); visibilityErr != nil || visibility != VisibilityPublic {
@@ -235,7 +235,7 @@ func TestLocalDiskUploadMethodsMatchThinkPHP(t *testing.T) {
 	t.Cleanup(func() { _ = disk.Close() })
 	file := newUploadFileHeader(t, "avatar.txt", []byte("avatar-content"))
 
-	hashedPath, err := disk.PutFile("uploads", file, "sha256", map[string]interface{}{"visibility": VisibilityPublic})
+	hashedPath, err := disk.PutFile("uploads", file, "sha256", map[string]interface{}{"visibility": VisibilityPublic, "trusted_upload": true})
 	if err != nil {
 		t.Fatalf("按 sha256 保存上传文件失败: %v", err)
 	}
@@ -249,26 +249,26 @@ func TestLocalDiskUploadMethodsMatchThinkPHP(t *testing.T) {
 		t.Fatalf("上传内容错误: content=%q err=%v", stored, readErr)
 	}
 
-	generatedPath, err := disk.PutFile("uploads", file)
+	generatedPath, err := disk.PutFile("uploads", file, nil, map[string]interface{}{"trusted_upload": true})
 	if err != nil || !strings.HasSuffix(generatedPath, ".txt") || !strings.HasPrefix(generatedPath, "uploads/") {
 		t.Fatalf("默认上传命名错误: path=%q err=%v", generatedPath, err)
 	}
 	if path, putErr := disk.PutFile("uploads", file, HashNameRule(func(*multipart.FileHeader) (string, error) {
 		return "typed/rule", nil
-	})); putErr != nil || path != "uploads/typed/rule.txt" {
+	}), map[string]interface{}{"trusted_upload": true}); putErr != nil || path != "uploads/typed/rule.txt" {
 		t.Fatalf("HashNameRule 上传错误: path=%q err=%v", path, putErr)
 	}
 	if path, putErr := disk.PutFile("uploads", file, func(*multipart.FileHeader) (string, error) {
 		return "error_signature/rule", nil
-	}); putErr != nil || path != "uploads/error_signature/rule.txt" {
+	}, map[string]interface{}{"trusted_upload": true}); putErr != nil || path != "uploads/error_signature/rule.txt" {
 		t.Fatalf("error 回调上传错误: path=%q err=%v", path, putErr)
 	}
 	if path, putErr := disk.PutFile("uploads", file, func(*multipart.FileHeader) string {
 		return "string_signature/rule"
-	}); putErr != nil || path != "uploads/string_signature/rule.txt" {
+	}, map[string]interface{}{"trusted_upload": true}); putErr != nil || path != "uploads/string_signature/rule.txt" {
 		t.Fatalf("string 回调上传错误: path=%q err=%v", path, putErr)
 	}
-	if path, putErr := disk.PutFileAs("uploads", file, "fixed.txt"); putErr != nil || path != "uploads/fixed.txt" {
+	if path, putErr := disk.PutFileAs("uploads", file, "fixed.txt", map[string]interface{}{"trusted_upload": true}); putErr != nil || path != "uploads/fixed.txt" {
 		t.Fatalf("PutFileAs 上传错误: path=%q err=%v", path, putErr)
 	}
 

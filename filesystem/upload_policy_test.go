@@ -211,8 +211,8 @@ func TestUploadPolicyActualBytesNamesAndMIME(t *testing.T) {
 	if _, err := disk.PutFile("", file, rule, options); !errors.Is(err, ErrInvalidConfiguration) || called {
 		t.Fatalf("unbounded callback reached: called=%t err=%v", called, err)
 	}
-	// Legacy calls still require application validation; this feature is opt-in.
-	if _, err := disk.PutFileAs("", file, "legacy.html"); err != nil {
+	// Trusted uploads require an explicit application decision.
+	if _, err := disk.PutFileAs("", file, "legacy.html", map[string]interface{}{"trusted_upload": true}); err != nil {
 		t.Fatalf("legacy contract changed: %v", err)
 	}
 	assertNoPolicyTemporary(t, staging, root)

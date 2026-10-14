@@ -20,7 +20,8 @@ type HashNameRule func(file *multipart.FileHeader) (string, error)
 // 可选参数依次为规则和写入配置；规则支持 md5、sha1、sha256、sha384、sha512
 // 或 HashNameRule。省略规则时使用日期目录与随机 32 位名称。
 // 配置 upload_policy 可显式传入 *UploadPolicy，执行大小、扩展名和内容类型校验。
-// 启用策略时只支持内置命名规则；省略策略保持原有可信调用行为。
+// 启用策略时只支持内置命名规则；未配置策略默认拒绝。
+// 已经由业务校验的可信输入可显式设置 trusted_upload: true。
 func (disk *Local) PutFile(directory string, file *multipart.FileHeader, arguments ...interface{}) (string, error) {
 	if file == nil {
 		return "", fmt.Errorf("%w: 上传文件不能为空", ErrInvalidConfiguration)
@@ -56,6 +57,7 @@ func (disk *Local) PutFile(directory string, file *multipart.FileHeader, argumen
 
 // PutFileAs 使用指定文件名保存上传文件，并返回磁盘内的相对路径。
 // 可通过 upload_policy 显式选择 *UploadPolicy；策略同时校验源和最终扩展名。
+// 无策略默认拒绝；可信应用输入必须显式设置 trusted_upload: true。
 func (disk *Local) PutFileAs(directory string, file *multipart.FileHeader, name string, optionSets ...map[string]interface{}) (string, error) {
 	if file == nil {
 		return "", fmt.Errorf("%w: 上传文件不能为空", ErrInvalidConfiguration)

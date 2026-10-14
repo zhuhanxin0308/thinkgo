@@ -37,7 +37,8 @@ type UploadPolicyConfig struct {
 // Its zero value is invalid. Destination basenames must have a single extension
 // and an ASCII alphanumeric, underscore or hyphen stem (at most 255 bytes total).
 // Pass it as the "upload_policy" write option to PutFile or PutFileAs. Calls
-// without this option retain the trusted-storage behavior. MIME sniffing checks
+// without this option are rejected unless trusted_upload is explicitly true.
+// MIME sniffing checks
 // only the prefix: this is not a malware scanner or a full format parser.
 type UploadPolicy struct {
 	maxBytes int64
@@ -87,8 +88,18 @@ func validUploadExtension(value string) bool {
 
 func uploadPolicyOption(options map[string]interface{}) (*UploadPolicy, error) {
 	raw, exists := options["upload_policy"]
+	trusted, trustedExists := options["trusted_upload"]
+	if trustedExists {
+		value, ok := trusted.(bool)
+		if !ok || exists {
+			return nil, fmt.Errorf("%w: trusted_upload must be a boolean and cannot be combined with upload_policy", ErrInvalidConfiguration)
+		}
+		if value {
+			return nil, nil
+		}
+	}
 	if !exists {
-		return nil, nil
+		return nil, fmt.Errorf("%w: upload_policy is required; trusted application input requires explicit trusted_upload", ErrUploadRejected)
 	}
 	policy, ok := raw.(*UploadPolicy)
 	if !ok || policy == nil || policy.maxBytes <= 0 || policy.maxBytes == math.MaxInt64 || len(policy.allowed) == 0 {
