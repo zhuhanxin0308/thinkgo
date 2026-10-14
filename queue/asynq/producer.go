@@ -21,6 +21,7 @@ type Producer struct {
 	closed    bool
 	closeOnce sync.Once
 	closeErr  error
+	signing   *SigningPolicy
 }
 
 // NewProducer 创建拥有独立 Redis 连接池的生产者。
@@ -55,9 +56,21 @@ func (producer *Producer) Enqueue(ctx context.Context, task queue.Task, options 
 	if err != nil {
 		return queue.Info{}, err
 	}
-	resolvedOptions, err := backendOptions(options, time.Now())
+	backendOptionValues := options
+	if producer.signing != nil {
+		backendOptionValues = signedScheduleOptions(options)
+	}
+	resolvedOptions, err := backendOptions(backendOptionValues, time.Now())
 	if err != nil {
 		return queue.Info{}, err
+	}
+	if producer.signing != nil {
+		var id string
+		backendTaskValue, id, err = producer.signing.task(task, options, time.Now())
+		if err != nil {
+			return queue.Info{}, err
+		}
+		resolvedOptions = append(resolvedOptions, backend.TaskID(id), backend.Timeout(signedBackendTimeout(options.EffectiveTimeout())))
 	}
 	info, err := producer.client.EnqueueContext(ctx, backendTaskValue, resolvedOptions...)
 	if err != nil {
