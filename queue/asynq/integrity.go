@@ -14,6 +14,7 @@ import (
 	"reflect"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	backend "github.com/hibiken/asynq"
 	"github.com/redis/go-redis/v9"
@@ -208,7 +209,10 @@ func (policy *SigningPolicy) task(task queue.Task, options queue.EnqueueOptions,
 		return nil, "", fmt.Errorf("%w: signed validity must cover schedule and execution timeout", queue.ErrInvalidOptions)
 	}
 	headers := task.Headers()
-	for name := range headers {
+	for name, value := range headers {
+		if !utf8.ValidString(name) || !utf8.ValidString(value) {
+			return nil, "", fmt.Errorf("%w: signed propagation headers require valid UTF-8", queue.ErrInvalidTask)
+		}
 		if strings.EqualFold(name, integrityHeader) {
 			return nil, "", fmt.Errorf("%w: reserved integrity header", queue.ErrInvalidTask)
 		}
@@ -277,6 +281,11 @@ func (policy *VerificationPolicy) verify(task *backend.Task, now time.Time) (que
 	converted, err := queue.NewTask(task.Type(), task.Payload(), headers)
 	if err != nil {
 		return invalid()
+	}
+	for name, value := range headers {
+		if !utf8.ValidString(name) || !utf8.ValidString(value) {
+			return invalid()
+		}
 	}
 	key := policy.config.Keys[metadata.KeyID]
 	mac, err := hex.DecodeString(envelope.MAC)

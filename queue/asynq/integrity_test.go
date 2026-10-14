@@ -393,6 +393,58 @@ func TestIntegrityConfigurationRotationAndSigningBoundaries(t *testing.T) {
 
 func bytesKey(key []byte) []byte { return append([]byte(nil), key...) }
 
+func TestIntegrityRejectsNonUTF8HeadersBeforeCanonicalEncoding(t *testing.T) {
+	signing, verification := integrityPolicies(t, &integrityTestStore{})
+	now := time.Now()
+	// U+FFFD is valid Unicode and must remain distinct from invalid UTF-8 bytes.
+	task, err := queue.NewTask("charge", []byte{0xff}, map[string]string{"trace": "�"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire, _, err := signing.task(task, queue.EnqueueOptions{}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := verification.verify(wire, now); err != nil {
+		t.Fatal(err)
+	}
+	// An invalid-byte task must never enter signing. A legacy/malformed signer
+	// could otherwise give 0xff and 0xfe identical canonical JSON bytes.
+	malformed, err := queue.NewTask("charge", nil, map[string]string{"trace": string([]byte{0xff})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata := signedMetadata{Version: 1, KeyID: signing.config.KeyID, Audience: signing.config.Audience,
+		ID: strings.Repeat("a", 64), Type: malformed.Type(), Queue: queue.DefaultQueueName,
+		Issued: now.UnixNano(), NotBefore: now.UnixNano(), Expires: now.Add(time.Hour).UnixNano(),
+		MaxRetry: queue.DefaultMaxRetries, Timeout: int64(time.Minute)}
+	headers := malformed.Headers()
+	encoded, err := json.Marshal(signedEnvelope{metadata, fmtMAC(metadata, malformed.Payload(), headers, signing.config.Key)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	headers[integrityHeader] = string(encoded)
+	headers["trace"] = string([]byte{0xfe})
+	if _, _, err := verification.verify(backend.NewTaskWithHeaders(malformed.Type(), malformed.Payload(), headers), now); !errors.Is(err, ErrTaskUnauthenticated) {
+		t.Fatalf("distinct invalid UTF-8 bytes authenticated identically: %v", err)
+	}
+	for _, value := range []string{string([]byte{0xff}), string([]byte{0xfe}), string([]byte{0xc0, 0xaf})} {
+		headers := wire.Headers()
+		headers["trace"] = value
+		if _, _, err := verification.verify(backend.NewTaskWithHeaders(wire.Type(), wire.Payload(), headers), now); !errors.Is(err, ErrTaskUnauthenticated) {
+			t.Fatalf("invalid UTF-8 header reached authentication: err=%v", err)
+		}
+		// The ordinary queue API remains compatible; only authenticated encoding is stricter.
+		invalid, err := queue.NewTask("charge", nil, map[string]string{"trace": value})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := signing.task(invalid, queue.EnqueueOptions{}, now); !errors.Is(err, queue.ErrInvalidTask) {
+			t.Fatalf("signer admitted invalid UTF-8 header: %v", err)
+		}
+	}
+}
+
 func TestVerifiedWorkerRejectsTamperingAndSuccessfulReplay(t *testing.T) {
 	server := miniredis.RunT(t)
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})

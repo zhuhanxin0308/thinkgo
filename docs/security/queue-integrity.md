@@ -36,6 +36,8 @@ return worker.Start(handler)
 
 签名信封保存在保留头 `thinkgo-integrity-v1` 中，业务 payload 保持原字节，所以 `UniqueFor` 仍按 Asynq 原来的队列/类型/payload 去重。调用方不能使用保留头，验签后该头会在调用业务处理器前删除。验签前检查 payload、传播头和信封大小及语法，不对无界原始头做规范化编码。
 
+签名入口和 verifier 在 MAC 编码前额外要求传播头为有效 UTF-8，避免 JSON 将不同非法字节替换为同一个转义字符。有效 U+FFFD、其他合法 Unicode 头值及任意二进制 payload 仍受支持；普通 `queue.NewTask` 的头值兼容性不变。Asynq 的 protobuf wire 本身通常拒绝非法 UTF-8，此限制也覆盖直接构造的后端任务，不能将仅在该边界复现的碰撞当作已经验证的 Redis wire 攻击。
+
 Worker 验签后将实际 Asynq 任务 ID、队列和最大重试次数与签名绑定。Redis 的当前 retry counter 仅做合法范围检查，不能决定可信执行次数。任务执行上下文另施加签名的 timeout 和绝对 expiry，Redis 修改 timeout 无法延长允许的业务执行时间；同步 Handler 仍须遵守上下文，框架不能中断忽略取消的业务函数。
 
 `ValidFor` 必须覆盖排队、计划执行、全部重试及最终执行。没有自动续签，到期的重试直接拒绝；应用按业务延迟和重试策略设置有效窗口。Asynq 将调度/超时存为整秒，因此签名生产者将带小数的 `ProcessAt` 向上取整到下一秒，按调整后的计划校验有效期；原生 timeout 向上取整，Verifier 仍强制原始纳秒 timeout。`ClockSkew` 是显式允许的时钟偏差，上限 5 分钟；它也允许相同偏差内的提前执行/晚到任务，使用前应同步主机时钟。
