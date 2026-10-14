@@ -221,16 +221,31 @@ func (s *Session) SetResponseWriter(writer http.ResponseWriter) error {
 
 // Set 校验、编码并隔离存储值；失败时不修改请求状态。
 func (s *Session) Set(name string, value interface{}) error {
-	if err := validateSessionKey(name); err != nil {
+	encoded, err := s.encodeSetValue(name, value)
+	if err != nil {
 		return err
+	}
+	return s.setEncoded(name, encoded)
+}
+
+func (s *Session) encodeSetValue(name string, value interface{}) (json.RawMessage, error) {
+	if s == nil {
+		return nil, ErrInvalidSessionDependency
+	}
+	if err := validateSessionKey(name); err != nil {
+		return nil, err
 	}
 	encoded, err := json.Marshal(value)
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrInvalidSessionValue, err)
+		return nil, fmt.Errorf("%w: %v", ErrInvalidSessionValue, err)
 	}
 	if len(encoded) > s.config.MaxDataBytes {
-		return fmt.Errorf("%w: %d", ErrSessionDataTooLarge, len(encoded))
+		return nil, fmt.Errorf("%w: %d", ErrSessionDataTooLarge, len(encoded))
 	}
+	return encoded, nil
+}
+
+func (s *Session) setEncoded(name string, encoded json.RawMessage) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.requestState {
@@ -416,6 +431,12 @@ func (s *Session) Regenerate() error {
 	}
 	s.saveMu.Lock()
 	defer s.saveMu.Unlock()
+	return s.regenerateLocked()
+}
+
+// regenerateLocked requires saveMu, keeping rotation and authenticated publication
+// indivisible with respect to Save and the response commit boundary.
+func (s *Session) regenerateLocked() error {
 	s.mu.RLock()
 	committed := s.responseSealing || s.responseCommitted
 	s.mu.RUnlock()

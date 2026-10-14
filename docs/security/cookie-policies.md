@@ -2,7 +2,7 @@
 
 通用 `cookie.DefaultConfig()` 和 `cookie.NewCookie(nil)` 不是认证安全 profile：包级默认 `HttpOnly=false`，`SameSite` 为空，`Secure=false`。HTTPS 请求或可信协议结论可以使实际头部带上 Secure，但不应以此替代敏感 Cookie 的显式配置。脚手架中的配置、Session Cookie 的强制 HttpOnly，以及生产启动门禁，不能替代直接调用通用包时的策略。
 
-本指南不改变默认值，不将补充文档或示例视为 issue #28 的全部修复。是否改变默认值或引入强制 profile 需要单独决定。
+直接包调用保持上述默认值。应用可选择 `app.security_profile="browser_cookie"` 与 `app.security_strict=true`，初始化会要求通用 Cookie 的 Secure、HttpOnly、Lax/Strict SameSite，以及 Session 严格 ID 采纳和实际 Session SameSite，详见[严格安全检查](strict-security.md)。这是应用级强制策略；独立工厂与单次属性覆盖仍需审查。
 
 ## 对敏感 Cookie 显式配置
 
@@ -36,6 +36,6 @@
 
 新增协议回归检查实际头部：显式策略在 HTTP/HTTPS 请求模型下均保留；只覆盖有效期时属性和主机范围不丢失；修改原配置、配置副本或其他工厂不污染敏感策略；非法选项返回 `ErrInvalidCookieOptions` 且不写 Cookie。HTTP 请求模型用于检验头部构造，不代表推荐在明文网络传送令牌。
 
-这些是 Go HTTP 头部构造与隔离测试，不是浏览器 XSS/CSRF、反向代理或 SSO 的端到端验证，也不验证 token 的生成、账户认证或服务端撤销。本指南和测试不自动关闭 #28；完整候选及合并后的 CI、以及默认策略的范围决定需分别完成。
+这些是 Go HTTP 头部构造与隔离测试，不是浏览器 XSS/CSRF、反向代理或 SSO 的端到端验证，也不验证 token 的生成、账户认证或服务端撤销。默认属性保持兼容；严格档案的初始化回归另外验证属性缺失或降级阻止运行。
 
 依据：[OWASP Session Management Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html) 的 Secure、HttpOnly、SameSite 及 Domain/Path 章节。框架的具体合并和错误行为以 `cookie/cookie.go` 及相应回归为准。

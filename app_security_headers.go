@@ -10,6 +10,10 @@ import (
 )
 
 func createAppSecurityHeaders(values map[string]interface{}) (middleware.Handler, bool, error) {
+	return createAppSecurityHeadersForProfile(values, SecurityProfileStatelessAPI)
+}
+
+func createAppSecurityHeadersForProfile(values map[string]interface{}, profile SecurityProfile) (middleware.Handler, bool, error) {
 	allowed := map[string]struct{}{
 		"enable": {}, "content_security_policy": {}, "referrer_policy": {}, "permissions_policy": {},
 		"cross_origin_opener_policy": {}, "cross_origin_resource_policy": {}, "frame_options": {},
@@ -20,7 +24,7 @@ func createAppSecurityHeaders(values map[string]interface{}) (middleware.Handler
 			return nil, false, fmt.Errorf("security_headers 配置包含未知字段 %q", key)
 		}
 	}
-	enabled, err := securityHeaderBool(values, "enable", false)
+	enabled, err := securityHeaderBool(values, "enable", profile == SecurityProfileBrowserCookie)
 	if err != nil || !enabled {
 		return nil, enabled, err
 	}

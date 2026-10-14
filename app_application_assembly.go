@@ -108,7 +108,18 @@ func (app *App) initializeControllerBindings() error {
 
 // initializeMiddleware 装配框架级和应用级中间件。
 func (app *App) initializeMiddleware(services applicationAssemblyServices) {
-	// Recovery 必须先注册，保证后续中间件和控制器异常都能进入统一处理链。
+	// 已校验的固定安全头包装恢复响应，也覆盖 CORS 预检与拒绝响应。
+	securityHandler, securityEnabled, securityErr := createAppSecurityHeadersForProfile(services.config.GetMap("security_headers"), app.securityProfile)
+	if securityErr != nil {
+		app.recordStartupError(fmt.Errorf("初始化安全响应头失败: %w", securityErr))
+	} else if securityEnabled {
+		services.middleware.Alias("security_headers", securityHandler)
+		if err := services.middleware.PipeByNameStrict("security_headers"); err != nil {
+			app.recordStartupError(fmt.Errorf("注册安全响应头中间件失败: %w", err))
+		}
+	}
+
+	// Recovery 包住其余中间件和控制器，异常继续进入统一处理链。
 	recovery := &middleware.Recovery{
 		App:     app,
 		Log:     services.log,
@@ -130,16 +141,6 @@ func (app *App) initializeMiddleware(services applicationAssemblyServices) {
 	if corsEnabled {
 		if err := services.middleware.PipeByNameStrict("cors"); err != nil {
 			app.recordStartupError(fmt.Errorf("注册 cors 中间件失败: %w", err))
-		}
-	}
-
-	securityHandler, securityEnabled, securityErr := createAppSecurityHeaders(services.config.GetMap("security_headers"))
-	if securityErr != nil {
-		app.recordStartupError(fmt.Errorf("初始化安全响应头失败: %w", securityErr))
-	} else if securityEnabled {
-		services.middleware.Alias("security_headers", securityHandler)
-		if err := services.middleware.PipeByNameStrict("security_headers"); err != nil {
-			app.recordStartupError(fmt.Errorf("注册安全响应头中间件失败: %w", err))
 		}
 	}
 

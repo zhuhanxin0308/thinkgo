@@ -26,6 +26,10 @@ const (
 	securityWarningProfileMismatch
 	securityWarningSessionDisabled
 	securityWarningDebug
+	securityWarningCookieHTTPOnly
+	securityWarningCookieSameSite
+	securityWarningSessionID
+	securityWarningSessionSameSite
 )
 
 // createAppCookie 创建经过严格配置校验的全局 Cookie 工厂。
@@ -187,6 +191,22 @@ func (app *App) warnProductionSecurity() {
 	if app.cookie == nil || !app.cookie.GetConfig().Secure {
 		app.emitSecurityWarning(securityWarningCookieTransport, "生产环境安全警告：Cookie/Session Cookie 未启用 Secure")
 	}
+	// 显式严格档案补齐通用 Cookie 与外部 Session ID 的安全策略。
+	// 保留原有生产配置的兼容性；启用 strict 后不能以空默认值绕过检查。
+	if strict {
+		if app.cookie == nil || !app.cookie.GetConfig().HttpOnly {
+			app.emitSecurityWarning(securityWarningCookieHTTPOnly, "生产环境安全警告：严格 browser_cookie 必须设置 cookie.httponly=true")
+		}
+		if app.cookie == nil || !strictCookieSameSite(app.cookie.GetConfig().SameSite) {
+			app.emitSecurityWarning(securityWarningCookieSameSite, "生产环境安全警告：严格 browser_cookie 必须设置 cookie.samesite=Lax 或 Strict")
+		}
+		if app.session == nil || !app.session.GetConfig().RejectUnknownID {
+			app.emitSecurityWarning(securityWarningSessionID, "生产环境安全警告：严格 browser_cookie 必须设置 session.reject_unknown_id=true")
+		}
+		if app.session == nil || !strictCookieSameSite(app.session.GetConfig().SameSite) {
+			app.emitSecurityWarning(securityWarningSessionSameSite, "生产环境安全警告：严格 browser_cookie 必须设置 session.samesite=Lax 或 Strict")
+		}
+	}
 
 	csrfSecret := ""
 	if app.config != nil {
@@ -206,6 +226,10 @@ func (app *App) warnProductionSecurity() {
 	} else if !app.config.GetBool("csrf.secure", false) {
 		app.emitSecurityWarning(securityWarningCSRFTransport, "生产环境安全警告：CSRF Cookie 未启用 Secure")
 	}
+}
+
+func strictCookieSameSite(value string) bool {
+	return strings.EqualFold(strings.TrimSpace(value), "Lax") || strings.EqualFold(strings.TrimSpace(value), "Strict")
 }
 
 func (app *App) securityWarningEnvironment() string {
