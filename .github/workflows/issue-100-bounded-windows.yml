@@ -1,0 +1,95 @@
+name: Issue 100 bounded Windows experiment
+
+on:
+  push:
+    branches:
+      - diagnostic/issue-100-bounded-20261014
+
+permissions:
+  contents: read
+
+concurrency:
+  group: issue-100-bounded-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  GOTOOLCHAIN: local
+  GOWORK: 'off'
+
+jobs:
+  windows:
+    name: Windows session (${{ matrix.mode }})
+    runs-on: windows-2025
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [ordinary, race, package]
+    steps:
+      - name: Checkout immutable tested source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 2b802abf4a04c4003865693032887d2bb1ef7bc8
+          persist-credentials: false
+
+      - name: Setup declared Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+          check-latest: false
+
+      - name: Verify source identity
+        shell: pwsh
+        run: |
+          $actual = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($actual.Trim() -ne '2b802abf4a04c4003865693032887d2bb1ef7bc8') { throw 'Unexpected source commit' }
+          $status = git status --porcelain
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($status) { throw 'Source checkout is not clean' }
+          go version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Execute predetermined samples and verify observed counts
+        shell: pwsh
+        env:
+          EXPERIMENT_MODE: ${{ matrix.mode }}
+        run: |
+          $env:CGO_ENABLED = '0'
+          $expected = 30
+          $testArgs = @('test', '-json', '-mod=readonly', '-shuffle=1791897125488482700', '-timeout=10m')
+          switch ($env:EXPERIMENT_MODE) {
+            'ordinary' {
+              $testArgs += @('-run=^TestFileSessionProcessAtomicCounter$', '-count=30')
+            }
+            'race' {
+              $env:CGO_ENABLED = '1'
+              $compilerDirectory = 'C:\msys64\ucrt64\bin'
+              if (Test-Path -LiteralPath "$compilerDirectory\gcc.exe") { $env:PATH = "$compilerDirectory;$env:PATH" }
+              Get-Command gcc -ErrorAction Stop
+              $expected = 10
+              $testArgs += @('-race', '-run=^TestFileSessionProcessAtomicCounter$', '-count=10')
+            }
+            'package' {
+              $expected = 3
+              $testArgs += '-count=3'
+            }
+            default { throw 'Unknown experiment mode' }
+          }
+          $testArgs += './session/driver'
+          Write-Output ('Experiment source=2b802abf mode=' + $env:EXPERIMENT_MODE + ' expected_parent_passes=' + $expected)
+          Write-Output ('Command: go ' + ($testArgs -join ' '))
+          $trace = Join-Path $env:RUNNER_TEMP ('issue-100-' + $env:EXPERIMENT_MODE + '.jsonl')
+          & go @testArgs | Tee-Object -FilePath $trace
+          $nativeExit = $LASTEXITCODE
+          $events = @(Get-Content -LiteralPath $trace | ForEach-Object { $_ | ConvertFrom-Json -ErrorAction Stop })
+          $passes = @($events | Where-Object { $_.Action -eq 'pass' -and $_.Test -eq 'TestFileSessionProcessAtomicCounter' })
+          $failures = @($events | Where-Object { $_.Action -eq 'fail' })
+          $skips = @($events | Where-Object { $_.Action -eq 'skip' -and $_.Test -eq 'TestFileSessionProcessAtomicCounter' })
+          $packagePass = @($events | Where-Object { $_.Action -eq 'pass' -and -not $_.Test })
+          Write-Output ('Observed parent_passes=' + $passes.Count + ' expected=' + $expected + ' failures=' + $failures.Count + ' skips=' + $skips.Count + ' native_exit=' + $nativeExit)
+          if ($nativeExit -ne 0 -or $failures.Count -ne 0 -or $skips.Count -ne 0 -or $passes.Count -ne $expected -or $packagePass.Count -ne 1) { throw 'Experiment failed or did not execute every required sample; retain logs, do not retry automatically' }
+          $status = git status --porcelain
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($status) { throw 'Experiment changed checked-out source' }
