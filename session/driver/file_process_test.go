@@ -1,7 +1,6 @@
 package driver
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -35,14 +34,6 @@ type fileProcessSessionEnvelope struct {
 	Data    map[string]json.RawMessage `json:"data"`
 }
 
-// fileProcessChild 保存一个已启动的测试子进程及其独立的诊断输出。
-type fileProcessChild struct {
-	index   int
-	command *exec.Cmd
-	stdout  bytes.Buffer
-	stderr  bytes.Buffer
-}
-
 // TestFileSessionProcessAtomicCounter 使用当前测试二进制验证真实文件锁在多个进程间的原子计数语义。
 func TestFileSessionProcessAtomicCounter(t *testing.T) {
 	if mode, enabled := os.LookupEnv(fileProcessWorkerModeEnv); enabled {
@@ -72,31 +63,21 @@ func TestFileSessionProcessAtomicCounter(t *testing.T) {
 		child.command.Stderr = &child.stderr
 		if err := child.command.Start(); err != nil {
 			cancel()
-			for _, started := range children {
-				_ = started.command.Wait()
-			}
-			t.Fatalf("启动第 %d 个跨进程测试子进程失败: %v", index, err)
+			fileProcessWaitChildren(children)
+			t.Fatalf("启动第 %d 个跨进程测试子进程失败: %v\n%s", index, err, fileProcessChildDiagnostics(children))
 		}
 		children = append(children, child)
 	}
-	var failures []string
-	for _, child := range children {
-		if err := child.command.Wait(); err != nil {
-			failures = append(failures, fmt.Sprintf(
-				"子进程 %d 失败: %v\nstdout:\n%s\nstderr:\n%s",
-				child.index,
-				err,
-				child.stdout.String(),
-				child.stderr.String(),
-			))
+	failed := fileProcessWaitChildren(children)
+	// 已回收全部进程；即使后续最终计数断言失败，也保留成功写者的完整轨迹。
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("全部子进程诊断:\n%s", fileProcessChildDiagnostics(children))
 		}
-	}
-	if contextErr := contextWithTimeout.Err(); contextErr != nil {
-		failures = append(failures, fmt.Sprintf("等待跨进程测试子进程超时: %v", contextErr))
-	}
-	if len(failures) != 0 {
-		failures = append(failures, fileProcessLockDiagnostics(driver, sessionID))
-		t.Fatalf("跨进程原子计数失败:\n%s", strings.Join(failures, "\n"))
+	})
+	if contextErr := contextWithTimeout.Err(); failed || contextErr != nil {
+		t.Fatalf("跨进程原子计数失败: child_failed=%t context=%v\n%s",
+			failed, contextErr, fileProcessLockDiagnostics(driver, sessionID))
 	}
 
 	content, found, err := driver.Read(sessionID)
@@ -139,10 +120,20 @@ func fileProcessRunAtomicCounterWorker(t *testing.T) {
 	if err = validateSessionID(sessionID); err != nil {
 		t.Fatalf("测试子进程 Session ID 非法: %v", err)
 	}
+	// 在批次结束后才格式化输出，不在持锁回调或每次重获锁前打印日志。
+	// before_callback 包含锁等待和读取；after_callback 包含写入、Sync、替换及锁释放。
+	// 被强制终止的进程可能来不及输出内存记录，缺失轨迹不能解释为未取得锁。
+	timings := make([]fileProcessUpdateTiming, 0, updates)
+	defer func() {
+		t.Logf("更新阶段时序（不是纯锁等待／持锁时间）:\n%s", fileProcessTimingDiagnostics(timings))
+	}()
+	run := func(update func(string, bool) (string, bool, error)) error { return driver.Update(sessionID, update) }
 	for index := 0; index < updates; index++ {
-		started := time.Now()
-		if err = driver.Update(sessionID, fileProcessIncrementEnvelope); err != nil {
-			t.Fatalf("测试子进程第 %d 次原子更新失败，Update 总耗时 %s:\n%s", index+1, time.Since(started), fileProcessErrorChain(err))
+		timing, updateErr := fileProcessMeasureUpdate(run, fileProcessIncrementEnvelope, time.Now)
+		timings = append(timings, timing)
+		if updateErr != nil {
+			t.Fatalf("测试子进程第 %d 次原子更新失败，Update 总耗时 %s:\n%s",
+				index+1, timing.finished.Sub(timing.started), fileProcessErrorChain(updateErr))
 		}
 	}
 }
