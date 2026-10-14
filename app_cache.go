@@ -244,15 +244,20 @@ func parseAppCacheStore(resolvePath func(string) (string, error), name string, s
 		_, lockBudget := storeConfig["max_locks"]
 		if valueBudget || totalBudget || lockBudget {
 			budget := cacheDriver.MemoryBudget{MaxEntries: spec.maxMemoryEntries}
-			values := make(map[string]int, 3)
 			for _, field := range []string{"max_value_bytes", "max_bytes", "max_locks"} {
 				value, err := readConfigIntValue(storeConfig[field])
 				if err != nil || value <= 0 {
 					return appCacheStoreSpec{}, fmt.Errorf("%w: 内存缓存 store %q 的 %s 必须是正整数", cacheDriver.ErrInvalidMemoryBudget, name, field)
 				}
-				values[field] = value
+				switch field {
+				case "max_value_bytes":
+					budget.MaxValueBytes = uint64(value)
+				case "max_bytes":
+					budget.MaxBytes = uint64(value)
+				case "max_locks":
+					budget.MaxLocks = value
+				}
 			}
-			budget.MaxValueBytes, budget.MaxBytes, budget.MaxLocks = uint64(values["max_value_bytes"]), uint64(values["max_bytes"]), values["max_locks"]
 			if budget.MaxEntries <= 0 || budget.MaxBytes < budget.MaxValueBytes {
 				return appCacheStoreSpec{}, cacheDriver.ErrInvalidMemoryBudget
 			}

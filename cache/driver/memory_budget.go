@@ -107,7 +107,7 @@ func (g *memoryGraphInspection) inspect(value reflect.Value, depth int) error {
 		}
 		return g.inspect(value.Elem(), depth+1)
 	case reflect.String:
-		return g.add(uint64(value.Len()))
+		return g.addProduct(value.Len(), 1)
 	case reflect.Pointer, reflect.Slice, reflect.Map:
 		if value.IsNil() {
 			return nil
@@ -181,10 +181,14 @@ func (g *memoryGraphInspection) inspect(value reflect.Value, depth int) error {
 }
 
 func (g *memoryGraphInspection) addProduct(length int, size uint64) error {
-	if size != 0 && uint64(length) > (g.limit-g.bytes)/size {
+	if length < 0 {
 		return ErrMemoryValueTooLarge
 	}
-	return g.add(uint64(length) * size)
+	count := uint64(length)
+	if size != 0 && count > (g.limit-g.bytes)/size {
+		return ErrMemoryValueTooLarge
+	}
+	return g.add(count * size)
 }
 
 func budgetMapKey(t reflect.Type) bool {
