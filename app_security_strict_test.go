@@ -11,6 +11,8 @@ import (
 	"github.com/zhuhanxin0308/thinkgo/v3/config"
 	"github.com/zhuhanxin0308/thinkgo/v3/cookie"
 	"github.com/zhuhanxin0308/thinkgo/v3/log"
+	"github.com/zhuhanxin0308/thinkgo/v3/session"
+	sessionDriver "github.com/zhuhanxin0308/thinkgo/v3/session/driver"
 )
 
 func setStrictSecurityValue(t *testing.T, app *App, key string, value interface{}) {
@@ -78,7 +80,7 @@ func TestStrictSecurityInvalidSwitchFailsClosed(t *testing.T) {
 }
 
 func TestStrictSecurityReusesProfileChecksAndDeduplication(t *testing.T) {
-	for _, check := range []string{"valid-browser", "valid-api", "missing-hosts", "wildcard-hosts", "cookie-secret", "cookie-secure", "csrf-disabled", "csrf-secure", "session-disabled", "debug", "profile-mismatch"} {
+	for _, check := range []string{"valid-browser", "valid-api", "missing-hosts", "wildcard-hosts", "cookie-secret", "cookie-secure", "cookie-httponly", "cookie-samesite", "session-id", "csrf-disabled", "csrf-secure", "session-disabled", "debug", "profile-mismatch"} {
 		t.Run(check, func(t *testing.T) {
 			driver := &securityWarningDriver{}
 			logger := log.NewLog(driver)
@@ -93,6 +95,9 @@ func TestStrictSecurityReusesProfileChecksAndDeduplication(t *testing.T) {
 			setStrictSecurityValue(t, app, "app.server.allowed_hosts", []string{"staging.example.test"})
 			cookieConfig := cookie.DefaultConfig()
 			cookieConfig.Secret, cookieConfig.Secure = strings.Repeat("c", 32), true
+			cookieConfig.HttpOnly, cookieConfig.SameSite = true, "Lax"
+			sessionConfig := session.DefaultConfig()
+			sessionConfig.RejectUnknownID = true
 			marker := ""
 			switch check {
 			case "valid-api":
@@ -110,6 +115,12 @@ func TestStrictSecurityReusesProfileChecksAndDeduplication(t *testing.T) {
 				cookieConfig.Secret, marker = "", "Cookie/Session 密钥"
 			case "cookie-secure":
 				cookieConfig.Secure, marker = false, "Cookie/Session Cookie 未启用 Secure"
+			case "cookie-httponly":
+				cookieConfig.HttpOnly, marker = false, "cookie.httponly"
+			case "cookie-samesite":
+				cookieConfig.SameSite, marker = "", "cookie.samesite"
+			case "session-id":
+				sessionConfig.RejectUnknownID, marker = false, "session.reject_unknown_id"
 			case "csrf-disabled":
 				setStrictSecurityValue(t, app, "app.csrf_enable", false)
 				marker = "CSRF 未启用"
@@ -131,6 +142,11 @@ func TestStrictSecurityReusesProfileChecksAndDeduplication(t *testing.T) {
 				t.Fatal(err)
 			}
 			app.cookie = factory
+			app.session, err = session.NewSessionWithConfig(sessionConfig, sessionDriver.NewMemory(), factory)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = app.session.Close() })
 			app.warnProductionSecurity()
 			app.warnProductionSecurity()
 			if err := app.StartupError(); marker == "" && err != nil || marker != "" && (err == nil || !strings.Contains(err.Error(), marker)) {

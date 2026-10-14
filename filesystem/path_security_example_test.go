@@ -75,7 +75,7 @@ func TestIssue52UploadKeysAndPublicURLsKeepServerPathInternal(t *testing.T) {
 	})
 	file := form.File["file"][0]
 	for _, name := range []string{"report.txt", "a b#%.txt", "资料.txt"} {
-		key, err := disk.PutFileAs("reports", file, name)
+		key, err := disk.PutFileAs("reports", file, name, map[string]interface{}{"trusted_upload": true})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -116,7 +116,7 @@ func TestIssue52UploadKeysAndPublicURLsKeepServerPathInternal(t *testing.T) {
 		t.Fatalf("URL metacharacters not encoded: %q %v", publicURL, err)
 	}
 	for _, name := range []string{"../../outside.txt", "bad\x00name"} {
-		if key, err := disk.PutFileAs("reports", file, name); key != "" || !errors.Is(err, filesystem.ErrInvalidPath) {
+		if key, err := disk.PutFileAs("reports", file, name, map[string]interface{}{"trusted_upload": true}); key != "" || !errors.Is(err, filesystem.ErrInvalidPath) {
 			t.Fatalf("invalid upload key: %q %v", key, err)
 		}
 	}

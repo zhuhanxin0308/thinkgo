@@ -69,11 +69,11 @@ func TestLocalAtomicCopyAndUploadFailuresPreserveTargets(t *testing.T) {
 		uploadFailure := errors.New("upload copy failed")
 		disk.operations.copy = partialCopyFailure(uploadFailure)
 
-		if stored, err := disk.PutFileAs("uploads", upload, "avatar.txt"); !errors.Is(err, uploadFailure) || stored != "" {
+		if stored, err := disk.PutFileAs("uploads", upload, "avatar.txt", map[string]interface{}{"trusted_upload": true}); !errors.Is(err, uploadFailure) || stored != "" {
 			t.Fatalf("上传复制失败结果错误: stored=%q err=%v", stored, err)
 		}
 		assertLocalFileContent(t, disk, "uploads/avatar.txt", "old-avatar")
-		if stored, err := disk.PutFileAs("uploads", upload, "new-avatar.txt"); !errors.Is(err, uploadFailure) || stored != "" {
+		if stored, err := disk.PutFileAs("uploads", upload, "new-avatar.txt", map[string]interface{}{"trusted_upload": true}); !errors.Is(err, uploadFailure) || stored != "" {
 			t.Fatalf("新上传目标失败结果错误: stored=%q err=%v", stored, err)
 		}
 		if exists, err := disk.FileExists("uploads/new-avatar.txt"); err != nil || exists {
@@ -198,7 +198,7 @@ func TestLocalAtomicSourceCloseFailuresDoNotPublish(t *testing.T) {
 			return errors.Join(source.Close(), closeFailure)
 		}
 		upload := newUploadFileHeader(t, "avatar.txt", []byte("new"))
-		if stored, err := disk.PutFileAs("uploads", upload, "avatar.txt"); !errors.Is(err, closeFailure) || stored != "" {
+		if stored, err := disk.PutFileAs("uploads", upload, "avatar.txt", map[string]interface{}{"trusted_upload": true}); !errors.Is(err, closeFailure) || stored != "" {
 			t.Fatalf("Upload 必须传播源关闭错误: stored=%q err=%v", stored, err)
 		}
 		assertLocalFileContent(t, disk, "uploads/avatar.txt", "old")

@@ -71,6 +71,14 @@ ThinkGo 默认关闭自动路由、开启强制路由。`config/route.json` 中�
 
 已有项目显式配置的 `url_route_must=false` 或注册期调用 `EnableAutoRoute(true)` 仍是主动启用自动调度，不会被自动重写。采用安全默认策略时，应删除旧的显式 `false` 或改为 `true`，并核对路由加载器。完整行为与边界见[自动路由](docs/路由/自动路由.md)。本节描述当前源码策略，已发布版本以对应版本实现为准。
 
+## 浏览器会话安全
+
+`browser_cookie` 应用默认启用 CSRF 和安全响应头；启用 Session 时也会推导这一 profile。认证成功后使用 `Session.SetAuthenticated` 轮换 ID，再处理持久化结果。生产或预发环境可显式设置 `app.security_strict=true`，检查 Cookie 属性和未知会话 ID 策略。升级时核对 CSRF 密钥、客户端令牌提交和 CSP 所需资源，完整配置见[严格安全检查](docs/security/strict-security.md)和[会话认证轮换](docs/security/session-identity.md)。
+
+## 上传安全默认值
+
+`PutFile` / `PutFileAs` 未提供 `upload_policy` 时默认拒绝保存；处理不可信文件应显式配置允许扩展与嗅探 MIME 的配对及实际字节上限。框架默认 `local` 磁盘在非 Web 的 `runtime/storage`，公开磁盘需显式选择。业务已经校验的可信输入可设置 `trusted_upload: true` 保留旧调用行为，此出口不做类型或大小验证。迁移方法与边界见[上传策略](docs/security/upload-policy.md)。
+
 ## 性能对比
 
 以下为维护者提供的 **2026-09-24—25** 八框架测试快照。被测 ThinkGo 是 **v3.0.2 / `2797c83b`**，不是后续修复提交的重新测量结果。

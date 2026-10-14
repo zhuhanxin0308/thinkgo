@@ -21,7 +21,7 @@
 
 对于私有文件，不向客户端发送 OS 路径。保存业务 ID 与相对 key 的服务器端关联，通过认证下载路由检查权限，再使用磁盘读取 API。缺少 URL 配置时 `Local.URL` 返回 `ErrURLNotSupported`；不应降级为把 `Path()` 当下载地址。
 
-`VisibilityPrivate` 控制磁盘权限，不会阻止被 Web 服务器发布的文件通过 HTTP 访问。相对 key 也可能暴露业务信息，不能省略授权。`PutFileAs` 的文件名应由可信业务策略决定；这些 API 不承担上传类型、MIME 和大小的全面验证，本项不替代 issue #20 的上传策略工作。
+`VisibilityPrivate` 控制磁盘权限，不会阻止被 Web 服务器发布的文件通过 HTTP 访问。相对 key 也可能暴露业务信息，不能省略授权。`PutFileAs` 的文件名应由可信业务策略决定；上传 API 默认要求 `upload_policy`，执行实际字节数与扩展/MIME 配对检查；示例中的 `trusted_upload: true` 只用于已经校验的可信应用输入，详见[上传策略](upload-policy.md)。
 
 ## 验证与覆盖边界
 

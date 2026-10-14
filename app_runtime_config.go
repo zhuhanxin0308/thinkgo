@@ -98,6 +98,11 @@ func (app *App) applyApplicationRuntimeConfig() {
 	app.sessionEnabled = app.readApplicationBool("app.session_enable", false)
 	app.csrfEnabled = app.readApplicationBool("app.csrf_enable", false)
 	app.applyApplicationPolicies()
+	// 浏览器会话默认保护状态变更；显式 false 保留非生产兼容退出，
+	// 生产与严格模式仍由初始化门禁拒绝关闭保护。
+	if !app.config.Has("app.csrf_enable") && app.securityProfile == SecurityProfileBrowserCookie {
+		app.csrfEnabled = true
+	}
 	if app.debug != nil {
 		app.debug.Enabled = debugEnabled
 		app.debug.SetLocation(app.Location())

@@ -213,6 +213,7 @@ jobs:
             "TestLiveRedisSessionDriver"
             "TestLiveRedisQueueRetriesFailedTask"
             "TestLiveRedisQueueShutdownRestartPreservesTask"
+            "TestLiveRedisQueueIntegrityWireContract"
             "TestLiveMySQLQueryAndTransactionContract"
             "TestLiveMySQLColdStatementIsolation"
             "TestLiveMySQLReadinessRecovery"
@@ -233,6 +234,7 @@ jobs:
           done
           GOWORK=off go test -tags integration -race -run '^TestLive(RedisOperationContract|RedisConditionalClear|RedisScopedInvalidation|RedisAtomicReservationOrder|RedisAtomicTTLPolicy|RedisSessionDriver|RedisQueueRetriesFailedTask|RedisQueueShutdownRestartPreservesTask|MySQLQueryAndTransactionContract|MySQLColdStatementIsolation|MySQLReadinessRecovery|MySQLMigrationRecovery|PostgreSQLQueryAndTransactionContract|MongoOperationContract|MongoStreamingContract|NeoStrictAndDetachDelete)$' -shuffle=on -count=1 . ./cache ./cache/driver/redis ./session/driver ./db ./migration ./queue/asynq
           GOWORK=off go test -tags integration -race -run '^TestLive(MySQL|PostgreSQL)RawSQLBoundary$' -v -count=1 ./db
+          GOWORK=off go test -tags integration -race -run '^TestLiveRedisQueueIntegrityWireContract$' -v -count=1 ./queue/asynq
 
       - name: Fuzz route index parity
         shell: bash

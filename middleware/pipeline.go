@@ -51,6 +51,7 @@ type pipelineEntry struct {
 	handler    Handler
 	terminator Terminator
 	name       string // 别名（仅通过 PipeByName 注册时填充），用于优先级排序
+	outer      bool   // 固定包装整个普通管道，不参与别名优先级排序
 }
 
 // Pipeline 实现中间件管道，支持 handle 与 terminate 两个生命周期。
@@ -124,7 +125,7 @@ func (p *Pipeline) PipeByNameStrict(name string) error {
 }
 
 // SetPriority 设置中间件执行优先级。
-// 列表中的中间件别名将按指定顺序排在最前面执行。
+// 列表中的普通中间件别名将按指定顺序排在最前面执行，位于 WrapOuter 包装内。
 // 对应 ThinkPHP 的 config/middleware.php 中的 priority 配置。
 func (p *Pipeline) SetPriority(names []string) *Pipeline {
 	p.lock.Lock()
@@ -144,6 +145,22 @@ func (p *Pipeline) Unshift(handler Handler) *Pipeline {
 	defer p.lock.Unlock()
 	entry := pipelineEntry{handler: handler}
 	p.pipes = append([]pipelineEntry{entry}, p.pipes...)
+	p.orderDirty = true
+	return p
+}
+
+// WrapOuter 注册固定包装整个普通管道的中间件，不受 SetPriority、Unshift
+// 或后续 Pipe 等注册影响。多次调用按注册顺序执行，首个包装位于最外层。
+// 它保存当前 handler；之后替换同名别名不会改变已经注册的包装。
+// 零值 Pipeline 可以直接使用；nil Pipeline 或 nil handler 为无操作。
+// 生命周期回调可通过 Lifecycle 或 LifecycleContext 包装 handler 后注册。
+func (p *Pipeline) WrapOuter(handler Handler) *Pipeline {
+	if p == nil || handler == nil {
+		return p
+	}
+	p.lock.Lock()
+	defer p.lock.Unlock()
+	p.pipes = append(p.pipes, pipelineEntry{handler: handler, outer: true})
 	p.orderDirty = true
 	return p
 }
@@ -332,7 +349,8 @@ func ThenHandlers(request *context.Request, handlers []Handler, destination func
 }
 
 // orderedPipes 返回按优先级排序后的中间件副本。
-// priority 列表中按名称指定的中间件按其先后顺序排到最前执行，
+// WrapOuter 固定按注册顺序排在最外层，其余中间件由
+// priority 列表中按名称指定的中间件按其先后顺序排到前面执行，
 // 其余未指定的中间件保持原有相对顺序（稳定排序）。
 func (p *Pipeline) orderedPipes() []pipelineEntry {
 	if p == nil {
@@ -351,12 +369,6 @@ func (p *Pipeline) orderedPipes() []pipelineEntry {
 	if !p.orderDirty && p.ordered != nil {
 		return p.ordered
 	}
-	if len(p.priority) == 0 {
-		p.ordered = append([]pipelineEntry(nil), p.pipes...)
-		p.orderDirty = false
-		return p.ordered
-	}
-
 	rank := make(map[string]int, len(p.priority))
 	for index, name := range p.priority {
 		rank[name] = index
@@ -365,6 +377,12 @@ func (p *Pipeline) orderedPipes() []pipelineEntry {
 	ordered := make([]pipelineEntry, len(p.pipes))
 	copy(ordered, p.pipes)
 	sort.SliceStable(ordered, func(i, j int) bool {
+		if ordered[i].outer != ordered[j].outer {
+			return ordered[i].outer
+		}
+		if ordered[i].outer {
+			return false
+		}
 		ri, iok := rank[ordered[i].name]
 		rj, jok := rank[ordered[j].name]
 		if iok && jok {

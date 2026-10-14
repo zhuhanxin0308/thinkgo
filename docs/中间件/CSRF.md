@@ -57,4 +57,4 @@ csrf-v1.nonce.timestamp.signature
 
 URL 编码表单由框架 `Request` 解析缓存承载，CSRF 校验不会消费掉控制器后续读取 `Request.Body()` 所需的原始请求体；multipart 仍遵循请求体流式解析后的 `ErrRequestBodyUnavailable` 语义。
 
-CSRF 错误响应使用 JSON `code`、`msg`、`data` 字段。开启全局 CSRF 的配置键是 `app.csrf_enable`；即使关闭全局启用，`csrf` 别名仍然可用于路由和控制器。
+CSRF 错误响应使用 JSON `code`、`msg`、`data` 字段。开启全局 CSRF 的配置键是 `app.csrf_enable`；有效 `browser_cookie` 档案下缺省此字段会自动开启，包括由 Session 推导的浏览器档案。无状态 API 默认关闭，非生产非严格模式可显式 false 保留兼容流程。即使关闭全局启用，`csrf` 别名仍然可用于路由和控制器。升级接入及严格准入见[严格安全检查](../security/strict-security.md)。

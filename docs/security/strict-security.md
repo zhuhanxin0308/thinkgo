@@ -1,6 +1,6 @@
 # 显式严格安全检查
 
-`app.security_strict` 允许预发、测试或开发应用显式执行已有的生产级配置检查，而不把 `app_env` 改成 `production`。这是初始化准入，不是自动修复配置的开关，也不是所有安全功能的统一启用器。
+`app.security_strict` 允许预发、测试或开发应用显式执行生产级配置检查，而不把 `app_env` 改成 `production`。这是初始化准入；浏览器安全默认值由 `browser_cookie` 档案选择，严格模式另外禁止 Cookie 属性和 Session ID 策略降级。
 
 ## 启用方式
 
@@ -37,15 +37,21 @@
 
 `stateless_api` 须关闭 Session 和 CSRF Cookie，不会强制创建浏览器 Cookie 凭据。此档案不证明业务确实没有读取自定义认证 Cookie，业务不得用它绕过浏览器认证所需的保护。
 
-`browser_cookie` 须启用 Session，设置 Cookie/Session 密钥及 `cookie.secure=true`，启用 CSRF 并设置有效密钥和 `csrf.secure=true`；CSRF 仍可按现有规则复用 Cookie 密钥。开关不生成生产密钥，不把缺失保护自动配置成已启用。
+`browser_cookie` 须启用 Session，设置 Cookie/Session 密钥及 `cookie.secure=true`，启用 CSRF 并设置有效密钥和 `csrf.secure=true`；CSRF 仍可按现有规则复用 Cookie 密钥。开关不生成生产密钥。
+
+显式 `security_strict=true` 的浏览器应用还须设置 `cookie.httponly=true`、`cookie.samesite="Lax"` 或 `"Strict"`、`session.reject_unknown_id=true`；实际 Session Cookie 的 `session.samesite` 也必须为 Lax 或 Strict。仅配置通用 Cookie 工厂为 Lax 不能允许 Session 覆盖成 None。生产环境缺省 strict 时保留原有检查范围，启用 strict 才增加这些准入要求；无状态 API 不要求这些 Cookie 属性。
 
 失败的非生产应用使用“严格模式安全警告/检查失败”诊断；已有生产环境的诊断保持不变。同一应用按既有分类去重，重复检查不重复记日志。日志过滤或输出失败不取消已经记录的启动错误。实际 HTTP 初始化失败返回通用 500，不把内部配置错误回显给请求方；有效配置下不在白名单中的 Host 继续返回 421，业务处理器不执行。
 
 ## 与其他安全能力的边界
 
-这是复用现有启动检查，不会把通用 Cookie 的 HttpOnly、SameSite 默认值改掉，也没有新增这些属性的全局强制校验。自定义认证 Cookie 仍须按 [敏感 Cookie 策略](cookie-policies.md) 显式配置。`SameSite` 不能普遍替代 CSRF 防护，参考 [OWASP CSRF Prevention Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html)。
+通用 Cookie 包的默认值保持兼容，严格浏览器应用使用上述准入检查。独立创建的工厂和业务显式单次选项仍须按 [敏感 Cookie 策略](cookie-policies.md) 审查。JavaScript 可读偏好 Cookie 应使用独立且不承载身份的工厂。跨站 SSO 或嵌入协议需要单独评估，不应使用严格档案后期待 None 被忽略。`SameSite` 不能普遍替代 CSRF 防护，参考 [OWASP CSRF Prevention Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html)。
 
-开关不强制启用安全响应头、限流、上传策略或严格 Session ID 采纳，不配置 TLS 证书、可信代理、数据库连接预算或网关规则，也不替业务执行对象授权、登录后会话轮换或安全审计。现有 `app_env=production` 的其他专用诊断不会因这个开关自动推广到预发。
+`browser_cookie` 下缺省 `app.csrf_enable` 和 `security_headers.enable` 现在默认开启；`stateless_api` 和未使用 Session/CSRF 的旧配置保持关闭。没有显式档案、但启用 Session 的应用会推导为 `browser_cookie`，同样采用浏览器默认值。已有显式 false 不被覆盖；生产和严格模式拒绝关闭 CSRF。安全响应头可通过显式 false 退出，CSP/frame/COOP 等也可按原配置定制。
+
+升级前应检查已有页面的内联脚本、CDN、跨域资源和嵌入策略，并配置合适的安全头；表单/JavaScript 的状态变更请求必须提交有效 CSRF token。显式关闭只用于已有经过评估的兼容流程，不意味着该应用已受这些保护。默认值只更新当前实例和中间件，不写回冻结项目配置，无状态兄弟应用不会继承浏览器实例的运行时开关。
+
+严格模式不配置 TLS 证书、可信代理、限流、上传策略、数据库连接预算或网关规则，也不替业务执行对象授权或凭据验证。认证和权限提升须使用请求 Session 的 `SetAuthenticated` 或正确调用 `Regenerate`，并处理最终持久化失败，详见[会话认证边界](session-identity.md)。现有 `app_env=production` 的其他专用诊断不会因这个开关自动推广到预发。
 
 应把它配置到每个需要保护的 App 的最终配置中，并在初始化前完成配置合并；多应用配置继承与覆盖规则不变，不宣称测试了所有多应用组合。它不是运行时热更新或持续检查机制；初始化失败后不能通过修改配置或关闭开关让失败对象恢复运行，应修正配置并新建应用。
 

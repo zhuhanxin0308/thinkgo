@@ -40,6 +40,7 @@ type Worker struct {
 	state        lifecycleState
 	shutdownOnce sync.Once
 	shutdownErr  error
+	verification *VerificationPolicy
 }
 
 type lifecycleState uint8
@@ -91,6 +92,9 @@ func (worker *Worker) Start(handler queue.Handler) error {
 		return fmt.Errorf("%w: %w", queue.ErrBackendUnavailable, queue.ErrClosed)
 	}
 	adapter := backend.HandlerFunc(func(ctx context.Context, task *backend.Task) error {
+		if worker.verification != nil {
+			return worker.verification.handle(ctx, task, handler)
+		}
 		if task == nil {
 			return queue.ErrInvalidTask
 		}

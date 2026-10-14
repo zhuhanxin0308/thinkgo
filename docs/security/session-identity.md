@@ -29,7 +29,11 @@ Cookie 和显式 `NewRequestSessionWithIDAndSecure` 入口使用相同判断。`
 
 ## 登录与权限提升仍须轮换
 
-应用应先完成凭据校验，再调用该请求 Session 的 `Regenerate()`，检查错误后才写入用户标识或更高权限，最后由 Session 中间件完成响应提交前的持久化。轮换或持久化失败不能向客户端报告登录成功。不要从任意 `Set` 猜测认证完成，也不要重用另一个请求的 Session 对象。
+应用应先完成凭据校验，再调用该请求 Session 的 `SetAuthenticated("identity", verifiedIdentity)`；该显式认证边界先校验并隔离业务值，再撤销旧 ID、生成新 ID，成功后才写入身份或权限值。它不会校验密码、注册身份，也不会从任意 `Set` 猜测认证完成。也可以继续正确地调用 `Regenerate()`，检查错误后再 `Set`。
+
+`SetAuthenticated` 保留购物车等无关数据，使用与 `Set` 相同的键、JSON 值和容量限制。输入错误在轮换前返回；撤销失败不发布传入身份值。轮换与身份写入共用保存锁，`Save` 和响应提交不能夹入其中。已有认证状态的权限提升失败会保持原权限，不发布新权限；已撤销 ID 的另一请求返回 `ErrSessionRevoked`。合并后完整数据超限可能在旧 ID 撤销后使写入失败，仍须向客户端返回失败。
+
+helper 成功不表示已经持久化。最后仍须由 Session 中间件完成响应提交前保存，或显式检查 `Save()` 的错误。轮换或持久化失败不能向客户端报告登录成功。不要重用另一个请求的 Session 对象。可执行示例见 `session/session_authentication_example_test.go`。
 
 本选项只检查记录是否存在且有效，不认证创建记录的代码来源。攻击者若已获得一份合法的匿名会话 ID，或会话被另一台宽松模式节点创建，它依然是“已有 ID”。因此，即便开启本选项，省略认证后的轮换仍可能造成会话固定。
 
@@ -41,7 +45,7 @@ Cookie 和显式 `NewRequestSessionWithIDAndSecure` 入口使用相同判断。`
 
 旧二进制会严格拒绝未知配置字段。先升级代码，再启用新字段；回滚到不支持该字段的二进制前先移除字段，并明确回滚后不再具备未知 ID 拒绝能力。不要把记录校验和、配置开关或一次后端读取描述成跨节点身份来源证明。
 
-`Secure`、`HttpOnly`、`SameSite`、CSRF、可信代理、会话有效期、登录限流及账户授权仍需独立配置。该选项不增加登录路由、不自动轮换密码、不改变 Session 的存储容量，也不为应用创建完整认证系统。
+`app.security_strict=true` 的 `browser_cookie` 档案要求显式 `session.reject_unknown_id=true`，详见[严格安全检查](strict-security.md)。直接 Session 包调用仍保留兼容默认；所有节点都应采用一致 ID 策略并接入认证轮换 helper。`Secure`、`HttpOnly`、`SameSite`、CSRF、可信代理、会话有效期、登录限流及账户授权仍需独立配置。该选项不增加登录路由、不自动轮换密码、不改变 Session 的存储容量，也不为应用创建完整认证系统。
 
 ## 验证与依据
 

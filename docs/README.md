@@ -2,6 +2,8 @@
 
 ThinkGo 是参考 ThinkPHP 使用习惯实现的 Go Web 框架。本文档按 ThinkPHP 手册的章节目录风格组织，但内容只描述本项目当前已经实现并经过源码确认的能力。
 
+**上传安全默认值：** `PutFile` / `PutFileAs` 要求显式[上传策略](security/upload-policy.md)，未配置时拒绝保存。业务已校验的可信输入可显式使用 `trusted_upload: true`；该出口不做内容与大小验证。
+
 ## 基础
 
 - [开发规范](基础/开发规范.md)
