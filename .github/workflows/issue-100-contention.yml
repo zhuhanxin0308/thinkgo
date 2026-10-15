@@ -1,0 +1,55 @@
+name: Issue 100 controlled Windows contention
+
+on:
+  push:
+    branches:
+      - diagnostic/issue-100-contention-20261015
+
+permissions:
+  contents: read
+
+env:
+  GOTOOLCHAIN: local
+  CGO_ENABLED: '0'
+
+jobs:
+  contention:
+    name: Windows controlled contention (${{ matrix.case.name }})
+    runs-on: windows-2025
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        case:
+          - name: guard-reentry
+            package: ./internal/winfile
+            test: TestGuardWaitingContenderProgress
+          - name: session-slow-writers
+            package: ./session/driver
+            test: TestFileSessionProcessSlowAtomicCounter
+    steps:
+      - name: Checkout exact experimental commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Setup pinned Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+          check-latest: false
+      - name: Run one predeclared controlled case
+        shell: pwsh
+        env:
+          CASE_PACKAGE: ${{ matrix.case.package }}
+          CASE_TEST: ${{ matrix.case.test }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git rev-parse HEAD
+          go version
+          $listed = go test -mod=readonly -list "^$env:CASE_TEST`$" $env:CASE_PACKAGE
+          if ($LASTEXITCODE -ne 0 -or $listed -notcontains $env:CASE_TEST) {
+            throw "Required controlled test missing: $env:CASE_TEST"
+          }
+          go test -mod=readonly -run "^$env:CASE_TEST`$" -v -count=1 -timeout=2m $env:CASE_PACKAGE
+          exit $LASTEXITCODE
