@@ -456,17 +456,22 @@ func TestVerifiedWorkerRejectsTamperingAndSuccessfulReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	processed := make(chan queue.Task, 8)
+	release := make(chan struct{})
+	releaseHandler := sync.OnceFunc(func() { close(release) })
 	if err := worker.Start(queue.HandlerFunc(func(ctx context.Context, task queue.Task) error {
 		deadline, ok := ctx.Deadline()
 		if !ok || time.Until(deadline) > time.Minute {
 			t.Error("authenticated timeout not enforced")
 		}
 		processed <- task
+		<-release
 		return nil
 	})); err != nil {
 		t.Fatal(err)
 	}
 	defer worker.Shutdown()
+	// Release the handler before Shutdown on every assertion-failure path.
+	defer releaseHandler()
 	producer, err := NewSignedProducerFromRedisClient(client, signing)
 	if err != nil {
 		t.Fatal(err)
@@ -478,10 +483,14 @@ func TestVerifiedWorkerRejectsTamperingAndSuccessfulReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	inspector := backend.NewInspectorFromRedisClient(client)
+	waitIntegrityState(t, inspector, info.ID, backend.TaskStateActive)
+	// Asynq releases uniqueness on successful completion, even before UniqueFor
+	// expires. Hold the first execution while testing duplicate rejection.
 	if _, err := producer.Enqueue(t.Context(), task, options); !errors.Is(err, queue.ErrDuplicateTask) {
 		t.Fatalf("signed UniqueFor was lost: %v", err)
 	}
-	inspector := backend.NewInspectorFromRedisClient(client)
+	releaseHandler()
 	stored := waitIntegrityState(t, inspector, info.ID, backend.TaskStateCompleted)
 	if string(stored.Payload) != "protected" || stored.Headers[integrityHeader] == "" {
 		t.Fatal("signature missing or payload wrapped")
