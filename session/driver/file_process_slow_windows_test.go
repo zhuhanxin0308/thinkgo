@@ -40,13 +40,14 @@ func TestFileSessionProcessSlowAtomicCounter(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), fileProcessTimeout)
 	defer cancel()
 	children := make([]*fileProcessSlowChild, 0, fileProcessWorkerCount)
+	transcriptsLogged := false
 	t.Cleanup(func() {
 		cancel()
 		for _, child := range children {
 			_ = child.input.Close()
 		}
 		fileProcessWaitSlowChildren(children)
-		if t.Failed() {
+		if t.Failed() && !transcriptsLogged {
 			t.Logf("全部慢更新子进程诊断:\n%s", fileProcessChildDiagnostics(fileProcessSlowTranscripts(children)))
 		}
 	})
@@ -100,7 +101,11 @@ func TestFileSessionProcessSlowAtomicCounter(t *testing.T) {
 		}
 		_ = child.input.Close()
 	}
-	if failed := fileProcessWaitSlowChildren(children); failed || ctx.Err() != nil {
+	failed := fileProcessWaitSlowChildren(children)
+	// Retain the ownership progression of successful and failed samples alike.
+	t.Logf("全部慢更新子进程诊断:\n%s", fileProcessChildDiagnostics(fileProcessSlowTranscripts(children)))
+	transcriptsLogged = true
+	if failed || ctx.Err() != nil {
 		t.Fatalf("慢更新跨进程原子计数失败: child_failed=%t context=%v\n%s",
 			failed, ctx.Err(), fileProcessLockDiagnostics(driver, sessionID))
 	}

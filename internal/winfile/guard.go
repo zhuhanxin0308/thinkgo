@@ -4,10 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
-	"time"
 )
-
-const guardRetryInterval = 5 * time.Millisecond
 
 var ErrUnsafeGuard = errors.New("锁路径不是稳定的普通文件")
 
@@ -35,24 +32,8 @@ func WithGuard(ctx context.Context, path string, operation func() error) (result
 		return err
 	}
 	defer func() { result = errors.Join(result, handle.Close()) }()
-	for {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		locked, err := tryGuardLock(handle)
-		if err != nil {
-			return err
-		}
-		if locked {
-			break
-		}
-		timer := time.NewTimer(guardRetryInterval)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return ctx.Err()
-		case <-timer.C:
-		}
+	if err := lockGuard(ctx, handle); err != nil {
+		return err
 	}
 	defer func() { result = errors.Join(result, unlockGuard(handle)) }()
 	opened, openedErr := handle.Stat()

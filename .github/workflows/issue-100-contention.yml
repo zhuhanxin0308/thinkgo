@@ -27,6 +27,15 @@ jobs:
           - name: session-slow-writers
             package: ./session/driver
             test: TestFileSessionProcessSlowAtomicCounter
+          - name: pending-cancellation
+            package: ./internal/winfile
+            test: TestGuardPendingCancellationReleasesRequests
+          - name: grant-cancellation-race
+            package: ./internal/winfile
+            test: TestGuardPendingGrantCancellationRace
+          - name: active-callback-cancellation
+            package: ./internal/winfile
+            test: TestGuardCancellationDoesNotReleaseActiveCallback
     steps:
       - name: Checkout exact experimental commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
