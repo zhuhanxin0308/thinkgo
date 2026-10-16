@@ -18,4 +18,4 @@
 
 文档中的 API 以当前源码为准。`config/middleware.json` 的 `alias` 和 `priority` 会在应用装配阶段应用到框架的 `middleware.Pipeline`，但只能引用代码中已经注册的中间件别名，不能通过 JSON 反射构造 Go 中间件。
 
-兼容代码继续使用 `PipeByName`（缺失别名静默忽略）；安全敏感的装配使用 `PipeByNameStrict`，缺失别名会返回 `ErrMiddlewareAliasNotFound`。代理协议和 Session Secure Cookie 只接受 HTTP 内核经过 `trusted_proxies` 校验后的结论，详见[中间件安全边界](中间件安全边界.md)。
+`PipeByName` 已弃用（缺失别名仍静默忽略）；请迁移到 `PipeByNameStrict` 并在启动阶段处理 `ErrMiddlewareAliasNotFound`，防止保护中间件因拼写错误缺席。代理协议和 Session Secure Cookie 只接受 HTTP 内核经过 `trusted_proxies` 校验后的结论，详见[中间件安全边界](中间件安全边界.md)。

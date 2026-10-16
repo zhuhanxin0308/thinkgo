@@ -10,8 +10,8 @@ import (
 )
 
 // expressionCharPattern 限定表达式可用的字符集：标识符字符、空白、括号、占位符、
-// 算术运算符、点/逗号/取模。刻意排除引号、分号、冒号与注释符，杜绝字符串字面量、
-// 语句分隔与注释截断。
+// 算术运算符、点/逗号/取模。刻意排除引号、分号、冒号和 #；算术符组成的注释序列
+// 由 validateExpressionClause 另行拒绝，避免把合法减法、乘法和除法一起禁用。
 var expressionCharPattern = regexp.MustCompile(`^[A-Za-z0-9_\s\(\)\?\+\-\*\/\.,%]+$`)
 
 // expressionWordPattern 提取表达式中的“单词” token（标识符或函数名）。
@@ -289,7 +289,7 @@ func compileExpressionClause(field string, op string, expression string) (string
 // 取代原先基于带空格关键字子串的黑名单（可被 (1)OR(1=1) 这类去空格写法绕过）。
 //
 // 规则：
-//  1. 仅允许有限字符集（无引号/分号/冒号/注释符），从源头杜绝字符串字面量与语句截断；
+//  1. 仅允许有限字符集，并拒绝 SQL 注释序列，杜绝字符串字面量与语句截断；
 //  2. 每个“单词” token 若紧跟 '(' 视为函数调用，函数名必须在白名单内；
 //  3. 其余单词 token 必须是合法标识符（列名，支持 table.col），且不得是被禁关键字；
 //  4. 纯数字字面量与 '?' 占位符天然允许。
@@ -302,6 +302,10 @@ func validateExpressionClause(expression string) error {
 	}
 	if !expressionCharPattern.MatchString(expression) {
 		return fmt.Errorf("unsafe expression %q", expression)
+	}
+	// 单个算术符合法，但相邻符号可能注释掉后续过滤或分页；保留分隔负号的空白。
+	if strings.Contains(expression, "--") || strings.Contains(expression, "/*") || strings.Contains(expression, "*/") {
+		return fmt.Errorf("unsafe expression comment %q", expression)
 	}
 
 	lower := strings.ToLower(expression)

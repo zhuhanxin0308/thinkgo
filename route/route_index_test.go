@@ -284,10 +284,15 @@ func FuzzRouteIndexParity(f *testing.F) {
 		{method: http.MethodGet, path: "/users/1", host: "example.com"},
 		{method: http.MethodPost, path: "/docs/en", host: "api.example.com"},
 		{method: http.MethodOptions, path: "/unknown", host: "other.example.com"},
+		{method: http.MethodGet, path: "/status/admin/panel", host: "example.com"},
+		{method: http.MethodGet, path: "/status/admin", host: "api.example.com"},
+		{method: http.MethodGet, path: "/STATUS/ADMIN/panel.html", host: "api.example.com"},
+		{method: http.MethodGet, path: "/ſtatus/admin/.html", host: "api.example.com"},
+		{method: http.MethodGet, path: "/api/.json", host: "api.example.com"},
 	} {
 		f.Add(seed.method, seed.path, seed.host)
 	}
-	router := newRouteIndexParityRouterForFuzz()
+	routers := []*Router{newRouteIndexParityRouterForFuzz(false), newRouteIndexParityRouterForFuzz(true)}
 	f.Fuzz(func(t *testing.T, method, path, host string) {
 		if len(path) > maxRoutePathLength+32 {
 			t.Skip()
@@ -303,14 +308,17 @@ func FuzzRouteIndexParity(f *testing.F) {
 		}
 		raw := &http.Request{Method: method, URL: &url.URL{Path: path}, Host: host}
 		req := fwcontext.MustNewRequest(raw)
-		actual, actualParams, actualErr := router.Match(req)
-		expected, expectedParams, expectedErr := linearRouteMatch(router, req)
-		assertRouteMatchParity(t, actual, actualParams, actualErr, expected, expectedParams, expectedErr)
+		for _, router := range routers {
+			actual, actualParams, actualErr := router.Match(req)
+			expected, expectedParams, expectedErr := linearRouteMatch(router, req)
+			assertRouteMatchParity(t, actual, actualParams, actualErr, expected, expectedParams, expectedErr)
+		}
 	})
 }
 
-func newRouteIndexParityRouterForFuzz() *Router {
+func newRouteIndexParityRouterForFuzz(complete bool) *Router {
 	router := NewRouter()
+	_ = router.SetCompleteMatch(complete)
 	registered := make([]*Route, 0, 8)
 	for _, definition := range []struct {
 		method  string
@@ -323,6 +331,10 @@ func newRouteIndexParityRouterForFuzz() *Router {
 		{method: http.MethodGet, path: "/digits/:id", handler: "Digits@Show"},
 		{method: http.MethodGet, path: "/files/:name", handler: "File@Show"},
 		{method: anyMethod, path: "/wild/:name", handler: "Wild@Show"},
+		{method: http.MethodGet, path: "/ſtatus", handler: "Status@FirstAlias"},
+		{method: http.MethodGet, path: "/status", handler: "Status@Public"},
+		{method: http.MethodGet, path: "/status/admin", handler: "Status@Admin"},
+		{method: http.MethodGet, path: "/api/.json", handler: "API@Literal"},
 	} {
 		var route *Route
 		var err error
@@ -338,6 +350,19 @@ func newRouteIndexParityRouterForFuzz() *Router {
 	}
 	_ = registered[3].WithPattern("id", `[0-9]+`)
 	_ = registered[4].WithExtension("json")
+	_ = router.Domain("api.example.com", func(group *Group) error {
+		if _, err := group.Get("/ſtatus", "Status@FirstDomainAlias"); err != nil {
+			return err
+		}
+		if _, err := group.Get("/status", "Status@Domain"); err != nil {
+			return err
+		}
+		registered, err := group.Get("/api", "API@Domain")
+		if err != nil {
+			return err
+		}
+		return registered.WithExtension("json")
+	})
 	_ = router.Freeze()
 	return router
 }
@@ -355,7 +380,7 @@ func linearRouteMatch(router *Router, req *fwcontext.Request) (*Route, map[strin
 	methods := []string{method}
 	methods = append(methods, anyMethod)
 	for _, candidateMethod := range methods {
-		if matched := linearStaticMatch(router.staticRoutes[candidateMethod], requestParts, trailingSlash, host); matched != nil {
+		if matched := ownedMergeStaticMatch(router, candidateMethod, requestParts, trailingSlash, host); matched != nil {
 			return matched, nil, nil
 		}
 		if matched, params := linearDynamicMatch(router.dynamicRoutes[candidateMethod], requestParts, trailingSlash, host); matched != nil {
@@ -378,23 +403,6 @@ func linearRouteMatch(router *Router, req *fwcontext.Request) (*Route, map[strin
 		}
 	}
 	return nil, nil, nil
-}
-
-func linearStaticMatch(routes map[string][]*Route, requestParts []string, trailingSlash bool, host string) *Route {
-	candidates := routes[pathPartsKey(requestParts)]
-	for _, candidate := range candidates {
-		matched, _ := candidate.matchRequestPartsWithOptions(requestParts, trailingSlash)
-		if matched && candidate.domain != "" && candidate.domain == host {
-			return candidate
-		}
-	}
-	for _, candidate := range candidates {
-		matched, _ := candidate.matchRequestPartsWithOptions(requestParts, trailingSlash)
-		if matched && candidate.domain == "" {
-			return candidate
-		}
-	}
-	return nil
 }
 
 func linearDynamicMatch(routes []*Route, requestParts []string, trailingSlash bool, host string) (*Route, map[string]string) {

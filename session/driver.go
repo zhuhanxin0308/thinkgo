@@ -7,6 +7,7 @@ import (
 
 // Driver 定义可区分缺失值并支持原子读改写的 Session 存储协议。
 // Update 的回调在同一 Session ID 的排他区间内执行；remove=true 表示删除记录。
+// 回调返回错误时必须保留原记录，不得提交 next 或 remove。
 // 回调必须只计算新值，不得阻塞或重入同一驱动，否则会延长跨进程锁持有时间或造成死锁。
 type Driver interface {
 	Read(id string) (data string, found bool, err error)

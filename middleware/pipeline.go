@@ -76,7 +76,7 @@ func NewPipeline() *Pipeline {
 
 // Alias 注册中间件别名。
 // 对应 ThinkPHP 的 config/middleware.php 中的 alias 配置。
-// 注册后可通过 PipeByName() 按名称引用。
+// 注册后可通过 PipeByNameStrict() 按名称引用并检查错误。
 func (p *Pipeline) Alias(name string, handler Handler) *Pipeline {
 	name = strings.TrimSpace(name)
 	if name == "" || handler == nil {
@@ -98,6 +98,8 @@ func (p *Pipeline) ResolveAlias(name string) Handler {
 
 // PipeByName 通过别名注册中间件。
 // 如果别名未注册，将被忽略。注册时记录别名，供 SetPriority 排序使用。
+//
+// Deprecated: 使用 PipeByNameStrict 并处理返回的错误，避免拼写错误使安全中间件缺席。
 func (p *Pipeline) PipeByName(name string) *Pipeline {
 	p.lock.Lock()
 	defer p.lock.Unlock()

@@ -624,7 +624,14 @@ func (r *Request) rawCookieSnapshot() map[string]interface{} {
 	}
 	for _, current := range r.raw.Cookies() {
 		if current != nil {
-			result[current.Name] = current.Value
+			switch previous := result[current.Name].(type) {
+			case string:
+				result[current.Name] = []string{previous, current.Value}
+			case []string:
+				result[current.Name] = append(previous, current.Value)
+			default:
+				result[current.Name] = current.Value
+			}
 		}
 	}
 	return result

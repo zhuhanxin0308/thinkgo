@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"unicode"
 
 	"github.com/zhuhanxin0308/thinkgo/v3/context"
 	"github.com/zhuhanxin0308/thinkgo/v3/middleware"
@@ -78,12 +79,7 @@ func (r *Router) matchStatic(method string, requestParts []string, trailingSlash
 		return nil
 	}
 	candidates := r.staticCandidates(method, methodRoutes, requestParts)
-	for _, exactDomain := range []bool{true, false} {
-		if matched := candidates.firstMatch(host, requestParts, trailingSlash, exactDomain); matched != nil {
-			return matched
-		}
-	}
-	return nil
+	return candidates.firstMatch(host, requestParts, trailingSlash)
 }
 
 func (r *Router) matchDynamic(method string, requestParts []string, trailingSlash bool, host string) (*Route, map[string]string) {
@@ -129,46 +125,67 @@ func (r *Router) staticCandidates(method string, indexedPaths map[string][]*Rout
 	}
 }
 
-// firstMatch 保持原有候选优先级：先精确路径索引，再注册顺序前缀；域名精确匹配整体优先于公共路由。
-func (candidates staticCandidateSegments) firstMatch(host string, requestParts []string, trailingSlash, exactDomain bool) *Route {
-	if matched := firstMatchingStaticRoute(candidates.indexed, host, requestParts, trailingSlash, exactDomain); matched != nil {
-		return matched
+// firstMatch 先匹配全部精确路径，再选择最长静态前缀。只有路径同样具体时，
+// 精确域名才优先于公共路由；相同优先级保持注册顺序，不改写冻结索引。
+func (candidates staticCandidateSegments) firstMatch(host string, requestParts []string, trailingSlash bool) *Route {
+	var best *Route
+	for _, candidate := range candidates.indexed {
+		if candidate.domain != "" && candidate.domain != host {
+			continue
+		}
+		if matched, _ := candidate.matchRequestPartsWithOptions(requestParts, trailingSlash); matched && moreSpecificStaticRoute(candidate, best) {
+			best = candidate
+		}
 	}
-	if !candidates.includePrefix {
+	// An indexed full match consumes as many segments as the raw request.
+	// Extension-only final segments can yield shorter full matches, but cannot
+	// outrank this result. The canonical key includes every EqualFold alias.
+	if best != nil {
+		return best
+	}
+	if !candidates.includePrefix && (len(requestParts) == 0 || !strings.HasPrefix(requestParts[len(requestParts)-1], ".")) {
+		// Every full match preserving the segment count has a canonical index
+		// key. Only an extension-only final segment can require the fallback.
 		return nil
 	}
+
+	bestExact := false
 	for _, candidate := range candidates.registered {
-		if !isStaticPrefixCandidate(candidate, candidates.method, candidates.requestPartCount) {
+		if !isStaticPrefixCandidate(candidate, candidates.method, candidates.requestPartCount) ||
+			candidate.domain != "" && candidate.domain != host {
 			continue
 		}
-		if exactDomain {
-			if candidate.domain == "" || candidate.domain != host {
-				continue
-			}
-		} else if candidate.domain != "" {
+		parts, ok := stripRouteExtension(requestParts, candidate.ext, candidate.extensionRequired)
+		if !ok {
+			continue
+		}
+		exact := len(parts) == len(candidate.pathParts)
+		if !candidates.includePrefix && !exact {
+			continue
+		}
+		if best != nil && (!exact && bestExact || exact == bestExact && !moreSpecificStaticRoute(candidate, best)) {
 			continue
 		}
 		if matched, _ := candidate.matchRequestPartsWithOptions(requestParts, trailingSlash); matched {
-			return candidate
+			best, bestExact = candidate, exact
 		}
 	}
-	return nil
+	return best
 }
 
-func firstMatchingStaticRoute(candidates []*Route, host string, requestParts []string, trailingSlash, exactDomain bool) *Route {
-	for _, candidate := range candidates {
-		if exactDomain {
-			if candidate.domain == "" || candidate.domain != host {
-				continue
-			}
-		} else if candidate.domain != "" {
-			continue
-		}
-		if matched, _ := candidate.matchRequestPartsWithOptions(requestParts, trailingSlash); matched {
-			return candidate
-		}
+// moreSpecificStaticRoute ranks equally complete candidates without depending
+// on whether they came from the index or the registration fallback.
+func moreSpecificStaticRoute(candidate, current *Route) bool {
+	if current == nil {
+		return true
 	}
-	return nil
+	if len(candidate.pathParts) != len(current.pathParts) {
+		return len(candidate.pathParts) > len(current.pathParts)
+	}
+	if (candidate.domain != "") != (current.domain != "") {
+		return candidate.domain != ""
+	}
+	return candidate.order < current.order
 }
 
 func isStaticPrefixCandidate(candidate *Route, method string, requestPartCount int) bool {
@@ -496,7 +513,20 @@ func (r *Router) pathPartsKey(parts []string) string {
 	}
 	normalized := make([]string, len(parts))
 	for index, part := range parts {
-		normalized[index] = strings.ToLower(part)
+		// EqualFold uses Unicode simple folding, whose classes are wider
+		// than ToLower (for example s/S/ſ). Choose one key per entire class.
+		normalized[index] = strings.Map(func(value rune) rune {
+			canonical := value
+			for next := unicode.SimpleFold(value); next != value; next = unicode.SimpleFold(next) {
+				if next < canonical {
+					canonical = next
+				}
+			}
+			if canonical >= 'A' && canonical <= 'Z' {
+				canonical += 'a' - 'A'
+			}
+			return canonical
+		}, part)
 	}
 	return pathPartsKey(normalized)
 }

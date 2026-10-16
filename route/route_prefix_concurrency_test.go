@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"sync"
 	"testing"
 
@@ -191,9 +192,9 @@ func TestStaticPrefixCandidateSegmentsPreserveRoutingSemantics(t *testing.T) {
 		handler  string
 		wantMiss bool
 	}{
-		{name: "域名前缀优先于公共精确", method: http.MethodGet, host: "api.example.com", path: "/api/users", handler: "Domain@Prefix"},
+		{name: "公共精确优先于域名前缀", method: http.MethodGet, host: "api.example.com", path: "/api/users", handler: "Public@Exact"},
 		{name: "公共精确优先于公共前缀", method: http.MethodGet, host: "www.example.com", path: "/api/users", handler: "Public@Exact"},
-		{name: "显式 HEAD 优先于 GET 回落", method: http.MethodHead, host: "api.example.com", path: "/api/users", handler: "Head@Prefix"},
+		{name: "HEAD 仅使用显式 HEAD 规则", method: http.MethodHead, host: "api.example.com", path: "/api/users", handler: "Head@Prefix"},
 		{name: "ANY 支持任意方法", method: http.MethodPatch, host: "example.com", path: "/wild/value", handler: "Wild@Prefix"},
 		{name: "显式 OPTIONS 优先于自动响应", method: http.MethodOptions, host: "example.com", path: "/manual/value", handler: "Options@Prefix"},
 		{name: "强制后缀接受匹配", method: http.MethodGet, host: "example.com", path: "/files/value.json", handler: "File@Prefix"},
@@ -233,7 +234,7 @@ func TestStaticPrefixCandidateSegmentsPreserveRoutingSemantics(t *testing.T) {
 	}
 }
 
-// TestStaticPrefixCandidateSegmentsMatchOwnedMergeReference 用显式私有副本复现旧顺序并做组合差分。
+// TestStaticPrefixCandidateSegmentsMatchOwnedMergeReference 用显式私有排序副本验证新优先级契约。
 func TestStaticPrefixCandidateSegmentsMatchOwnedMergeReference(t *testing.T) {
 	router := NewRouter()
 	if err := router.EnableAutoRoute(false); err != nil {
@@ -300,7 +301,7 @@ func TestStaticPrefixCandidateSegmentsMatchOwnedMergeReference(t *testing.T) {
 	}
 }
 
-// ownedMergeStaticRouteMatch 使用新建切片复现修复前的候选拼接顺序，只作为差分参考实现。
+// ownedMergeStaticRouteMatch 使用私有候选副本排序，独立于生产只读选优扫描。
 func ownedMergeStaticRouteMatch(router *Router, request *fwcontext.Request) (*Route, map[string]string, error) {
 	requestParts, normalizedPath, trailingSlash, err := requestPathPartsWithOptions(request, router.removeSlash)
 	if err != nil {
@@ -337,31 +338,48 @@ func ownedMergeStaticRouteMatch(router *Router, request *fwcontext.Request) (*Ro
 
 func ownedMergeStaticMatch(router *Router, method string, requestParts []string, trailingSlash bool, host string) *Route {
 	candidates := ownedMergeStaticCandidates(router, method, requestParts)
-	for _, exactDomain := range []bool{true, false} {
-		if matched := firstMatchingStaticRoute(candidates, host, requestParts, trailingSlash, exactDomain); matched != nil {
-			return matched
+	matched := candidates[:0]
+	for _, candidate := range candidates {
+		if candidate.domain != "" && candidate.domain != host {
+			continue
+		}
+		if ok, _ := candidate.matchRequestPartsWithOptions(requestParts, trailingSlash); ok {
+			matched = append(matched, candidate)
 		}
 	}
-	return nil
+	sort.SliceStable(matched, func(i, j int) bool {
+		left, right := matched[i], matched[j]
+		leftParts, _ := stripRouteExtension(requestParts, left.ext, left.extensionRequired)
+		rightParts, _ := stripRouteExtension(requestParts, right.ext, right.extensionRequired)
+		leftExact, rightExact := len(leftParts) == len(left.pathParts), len(rightParts) == len(right.pathParts)
+		if leftExact != rightExact {
+			return leftExact
+		}
+		if len(left.pathParts) != len(right.pathParts) {
+			return len(left.pathParts) > len(right.pathParts)
+		}
+		if (left.domain != "") != (right.domain != "") {
+			return left.domain != ""
+		}
+		return left.order < right.order
+	})
+	if len(matched) == 0 {
+		return nil
+	}
+	return matched[0]
 }
 
 func ownedMergeStaticCandidates(router *Router, method string, requestParts []string) []*Route {
-	indexed := router.staticRoutes[method][router.pathPartsKey(requestParts)]
-	prefix := make([]*Route, 0)
-	seen := make(map[*Route]struct{})
+	// Collect directly from registration metadata, without using the production
+	// index key or selection comparator. Final matching below filters candidates.
+	candidates := make([]*Route, 0, len(router.routes))
 	for _, candidate := range router.routes {
-		if !isStaticPrefixCandidate(candidate, method, len(requestParts)) {
+		if candidate == nil || candidate.method != method || !isStaticRouteParts(candidate.pathParts) {
 			continue
 		}
-		if _, exists := seen[candidate]; exists {
-			continue
-		}
-		seen[candidate] = struct{}{}
-		prefix = append(prefix, candidate)
+		candidates = append(candidates, candidate)
 	}
-	candidates := make([]*Route, 0, len(indexed)+len(prefix))
-	candidates = append(candidates, indexed...)
-	return append(candidates, prefix...)
+	return candidates
 }
 
 // BenchmarkStaticPrefixMatch 记录非完整静态匹配修复后的分配和时延，防止只读所有权修复引入热路径退化。

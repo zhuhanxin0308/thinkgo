@@ -157,6 +157,8 @@ if err := registry.ValidateRouter(router, "/api"); err != nil {
 
 ThinkGo 的 `:id` 会转换为 OpenAPI 的 `{id}`。OpenAPI 不支持可选路径段，`:id?` 必须拆为两条明确的实际路由和两条契约，避免生成的客户端无法判断路径形态。
 
+契约路径只包含 URL 的路径部分，不能带原始 `?` 查询串或 `#` 片段；例如 `/users?active=1` 会在注册时返回 `ErrUnsupportedRoute`。查询参数应单独声明为 operation 的 query 参数，或由带 `query` 标签的请求字段生成。路径中的百分号转义不会被此校验解码，`/files/report%3Ffinal` 可作为字面路径保留在文档中。
+
 `ValidateRouter` 会冻结路由，因此须在全部路由注册完成后调用。它对指定前缀做双向核对：实际路由缺少契约、契约缺少实际路由、ANY 路由以及不可表达的可选路由都会失败。健康检查等不属于公开 API 的路径应放在前缀外；确有需要时可通过 `ignored` 参数用 `METHOD /path` 精确排除。
 
 文档处理器只允许 GET/HEAD，返回不可变 JSON、SHA-256 ETag、`nosniff` 和条件请求 304。生产环境是否公开 `/openapi.json` 仍应由路由鉴权和部署策略决定。

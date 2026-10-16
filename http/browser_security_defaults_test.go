@@ -116,7 +116,11 @@ func testBrowserSecurityHTTPBoundaries(t *testing.T, priority []string, duplicat
 		if earlyPanic == "unshift" {
 			app.Middleware().Unshift(handler)
 		} else {
-			app.Middleware().Alias("early_panic", handler).PipeByName("early_panic").SetPriority([]string{"early_panic", "cors", "rate_limit", "csrf", "recovery", "security_headers"})
+			app.Middleware().Alias("early_panic", handler)
+			if err := app.Middleware().PipeByNameStrict("early_panic"); err != nil {
+				t.Fatal(err)
+			}
+			app.Middleware().SetPriority([]string{"early_panic", "cors", "rate_limit", "csrf", "recovery", "security_headers"})
 		}
 	}
 	kernel, err := NewHttp(app)
