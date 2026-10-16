@@ -127,6 +127,8 @@ func applyResponseCookieOptionMap(cookie *http.Cookie, values map[string]interfa
 				return err
 			}
 			cookie.SameSite = parsed
+		default:
+			return fmt.Errorf("未知 Cookie 选项 %q", rawName)
 		}
 	}
 	return nil

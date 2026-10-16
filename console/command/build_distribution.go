@@ -194,11 +194,39 @@ func copyDistributionFile(source, target *os.Root, path string) (returnErr error
 	if err := target.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}
-	output, err := target.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
+	mode := fs.FileMode(0644)
+	flags := os.O_CREATE | os.O_TRUNC | os.O_WRONLY
+	privateConfig := isDistributionConfig(path)
+	if privateConfig {
+		mode = 0600
+		// Tighten existing files before truncating or copying any secret content.
+		flags &^= os.O_TRUNC
+	}
+	output, err := target.OpenFile(path, flags, mode)
 	if err != nil {
 		return err
 	}
 	defer func() { returnErr = errors.Join(returnErr, output.Close()) }()
+	if privateConfig {
+		if err := output.Chmod(0600); err != nil {
+			return err
+		}
+		if err := output.Truncate(0); err != nil {
+			return err
+		}
+	}
 	_, err = io.Copy(output, input)
 	return err
+}
+
+// Match the destination path so a configured-resource copy cannot later widen
+// the mode of configuration that was already included by the standard walk.
+func isDistributionConfig(path string) bool {
+	if !strings.EqualFold(filepath.Ext(path), ".json") {
+		return false
+	}
+	parts := strings.Split(filepath.ToSlash(filepath.Clean(path)), "/")
+	return len(parts) >= 2 && strings.EqualFold(parts[0], "config") ||
+		len(parts) >= 4 && strings.EqualFold(parts[0], "app") &&
+			parts[1] != "lang" && parts[1] != "view" && strings.EqualFold(parts[2], "config")
 }

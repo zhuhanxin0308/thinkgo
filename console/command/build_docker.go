@@ -41,7 +41,6 @@ ENTRYPOINT ["/app/thinkgo-nocgo"]
       APP_SERVER_HOST: "0.0.0.0"
       APP_SERVER_PORT: "8000"
     volumes:
-      - ./config:/app/config:ro
       - runtime:/app/runtime
     restart: unless-stopped
 volumes:

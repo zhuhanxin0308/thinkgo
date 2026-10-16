@@ -475,6 +475,13 @@ func (s *Session) regenerateLocked() error {
 	}
 	s.mu.Lock()
 	merged = s.applyMutationsAfterVersionLocked(merged, snapshot.Version)
+	s.installRegeneratedDataLocked(newID, merged)
+	s.mu.Unlock()
+	return nil
+}
+
+// installRegeneratedDataLocked requires mu and publishes only a prepared rotation.
+func (s *Session) installRegeneratedDataLocked(newID string, merged map[string]json.RawMessage) {
 	s.id = newID
 	s.persisted = false
 	s.invalidCookie = false
@@ -490,8 +497,6 @@ func (s *Session) regenerateLocked() error {
 	}
 	s.dirty = true
 	s.cookieDirty = true
-	s.mu.Unlock()
-	return nil
 }
 
 // Destroy 原子写入撤销墓碑；只有成功后才改变本地状态，Cookie 删除由 Save 完成。

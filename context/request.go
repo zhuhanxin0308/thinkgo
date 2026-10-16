@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	frameworkcookie "github.com/zhuhanxin0308/thinkgo/v3/cookie"
 	frameworkenv "github.com/zhuhanxin0308/thinkgo/v3/env"
 )
 
@@ -682,24 +683,57 @@ func (r *Request) File(key string) (*multipart.FileHeader, error) {
 }
 
 // Cookie 获取 Cookie 值，缺失时使用可选默认值。
+// 原始请求有重复同名 Cookie 时返回空字符串，不使用默认值或过滤器。
+// 需要区分重复、缺失与空值时，使用 CookieStrict 并处理错误。
 func (r *Request) Cookie(key string, defaults ...string) string {
+	value, exists, err := r.cookieValue(key)
+	if err != nil {
+		return ""
+	}
+	return r.filteredRequestScalar(value, exists, defaults)
+}
+
+// CookieStrict 获取 Cookie 值、存在标志和错误，不执行签名验证。
+// 原始请求中的重复同名 Cookie 返回 cookie.ErrDuplicateCookie，显式覆盖也不能消除该歧义。
+// 有效值应用请求过滤器；缺失时返回空字符串、false、nil，不应用过滤器。
+// 覆盖值不能表示为标量时返回 cookie.ErrInvalidCookieValue。
+func (r *Request) CookieStrict(key string) (string, bool, error) {
+	value, exists, err := r.cookieValue(key)
+	if err != nil || !exists {
+		return "", false, err
+	}
+	text, valid := stringifyRequestValue(value)
+	if !valid {
+		return "", false, frameworkcookie.ErrInvalidCookieValue
+	}
+	return r.applyRequestFilters(text), true, nil
+}
+
+func (r *Request) cookieValue(key string) (interface{}, bool, error) {
+	var matched *http.Cookie
+	if r != nil && r.raw != nil {
+		cookies := r.raw.CookiesNamed(key)
+		if len(cookies) > 1 {
+			return nil, false, fmt.Errorf("%w: %q", frameworkcookie.ErrDuplicateCookie, key)
+		}
+		if len(cookies) == 1 {
+			matched = cookies[0]
+		}
+	}
 	state := r.peekThinkPHPState()
 	if state != nil {
 		state.mu.RLock()
 		if state.cookieSet {
 			value, ok := state.cookieValues[key]
 			state.mu.RUnlock()
-			return r.filteredRequestScalar(value, ok, defaults)
+			return value, ok, nil
 		}
 		state.mu.RUnlock()
 	}
-	if r != nil && r.raw != nil {
-		cookie, err := r.raw.Cookie(key)
-		if err == nil {
-			return r.applyRequestFilters(cookie.Value)
-		}
+	if matched != nil {
+		return matched.Value, true, nil
 	}
-	return r.applyRequestFilters(firstDefault(defaults))
+	return nil, false, nil
 }
 
 // Has 判断参数是否存在，显式 null 或空字符串也视为存在。
