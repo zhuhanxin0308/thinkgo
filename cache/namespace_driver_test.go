@@ -32,7 +32,7 @@ func TestNamespaceDriverAppliesThinkPHPPrefixes(t *testing.T) {
 	if value, found, getErr := driver.Get("order"); getErr != nil || !found || value != "paid" {
 		t.Fatalf("命名空间 Get 错误: value=%#v found=%t err=%v", value, found, getErr)
 	}
-	if value, found, getErr := backend.Get(namespace+"order"); getErr != nil || !found || value != "paid" {
+	if value, found, getErr := backend.Get(namespace + "order"); getErr != nil || !found || value != "paid" {
 		t.Fatalf("底层物理键错误: value=%#v found=%t err=%v", value, found, getErr)
 	}
 	if found, hasErr := driver.Has("order"); hasErr != nil || !found {
@@ -58,7 +58,7 @@ func TestNamespaceDriverAppliesThinkPHPPrefixes(t *testing.T) {
 	if err = driver.Delete("order"); err != nil {
 		t.Fatalf("命名空间 Delete 失败: %v", err)
 	}
-	if found, _ := backend.Has(namespace+"order"); found {
+	if found, _ := backend.Has(namespace + "order"); found {
 		t.Fatal("Delete 必须删除物理命名空间键")
 	}
 	if err = driver.Clear(); err != nil {

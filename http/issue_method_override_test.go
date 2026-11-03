@@ -51,7 +51,7 @@ func TestIssue127StandardHandlerUsesAuthorizedMethod(t *testing.T) {
 			host := newTestHTTPHandler(t, app)
 			for _, test := range []struct {
 				name, method, path, override string
-				status                      int
+				status                       int
 			}{
 				{"head", http.MethodHead, "/api/spec", "", http.StatusOK},
 				{"anonymous-get", http.MethodGet, "/api/spec", "", http.StatusUnauthorized},
