@@ -22,20 +22,19 @@ jobs:
         run: |
           set -euo pipefail
           BASE="$RUNNER_TEMP/thinkgo-native"
-          mkdir -p "$BASE"/{go-dist,meta,prefetch,home,tmp,modcache,gocache,artifacts,image,scratch}
+          mkdir -p "$BASE"/{go-dist,meta,prefetch,home,tmp,modcache,gocache,gopath,artifacts,image,scratch}
           curl --fail --location --proto '=https' --tlsv1.2 --retry 2 --max-time 180 https://go.dev/dl/go1.26.10.linux-amd64.tar.gz -o "$BASE/go.tar.gz"
           printf '%s  %s\n' ccfe7ae822d2c2f41f4fe7c956199967a4dac22d0ee0d2b2bfdb440aab3b20c5 "$BASE/go.tar.gz" | sha256sum --check --strict
           tar --no-same-owner -xzf "$BASE/go.tar.gz" -C "$BASE/go-dist"
           cp source/go.mod source/go.sum "$BASE/meta/"
           cp source/go.mod "$BASE/artifacts/original-go.mod"
           cp source/go.sum "$BASE/artifacts/original-go.sum"
-          goenv=(env -i PATH="$BASE/go-dist/go/bin:/usr/bin:/bin" HOME="$BASE/home" TMPDIR="$BASE/tmp" GOTOOLCHAIN=local GOENV=off GOWORK=off GOTELEMETRY=off GOPROXY=https://proxy.golang.org GOSUMDB=sum.golang.org GOVCS='*:off' GOMODCACHE="$BASE/modcache" GOCACHE="$BASE/gocache")
+          goenv=(env -i PATH="$BASE/go-dist/go/bin:/usr/bin:/bin" HOME="$BASE/home" TMPDIR="$BASE/tmp" GOTOOLCHAIN=local GOENV=off GOWORK=off GOTELEMETRY=off GOPROXY=https://proxy.golang.org GOSUMDB=sum.golang.org GOVCS='*:off' GOMODCACHE="$BASE/modcache" GOCACHE="$BASE/gocache" GOPATH="$BASE/gopath")
           cd "$BASE/meta"
           "${goenv[@]}" go mod download all
           "${goenv[@]}" go list -m -json all > "$BASE/artifacts/module-graph.json"
           "${goenv[@]}" go mod graph > "$BASE/artifacts/module-edges.txt"
-          # Static import resolution only: no target build, test, generator or binary is executed here.
-          # Scaffold integration tests run tidy in a downstream module and require dependency-test modules.
+          # Parse imports and fetch authenticated modules only. No target program runs during preparation.
           printf 'module audit-prefetch\n\ngo 1.26.10\n\nrequire github.com/zhuhanxin0308/thinkgo/v3 v3.0.0\nreplace github.com/zhuhanxin0308/thinkgo/v3 => %s\n' "$GITHUB_WORKSPACE/source" > "$BASE/prefetch/go.mod"
           cp "$BASE/artifacts/original-go.sum" "$BASE/prefetch/go.sum"
           cat > "$BASE/prefetch/imports.go" <<'GO'
@@ -56,7 +55,10 @@ jobs:
           "${goenv[@]}" go mod verify > "$BASE/artifacts/prefetch-verification.txt"
           cd "$BASE/meta"
           "${goenv[@]}" go mod verify > "$BASE/artifacts/module-verification.txt"
-          env -i PATH="$BASE/go-dist/go/bin:/usr/bin:/bin" HOME="$BASE/home" TMPDIR="$BASE/tmp" GOTOOLCHAIN=local GOENV=off GOWORK=off GOTELEMETRY=off GOPROXY=off GOSUMDB=sum.golang.org GOMODCACHE="$BASE/modcache" GOCACHE="$BASE/gocache" go list -m all > "$BASE/artifacts/offline-module-list.txt"
+          # A checksum lookup cache is not a complete sumdb state: preserve its signed latest tree checkpoint too.
+          test -s "$BASE/gopath/pkg/sumdb/sum.golang.org/latest"
+          cp -a "$BASE/gopath/pkg/sumdb" "$BASE/sumdb-checkpoints"
+          cp "$BASE/gopath/pkg/sumdb/sum.golang.org/latest" "$BASE/artifacts/sumdb-signed-checkpoint.txt"
           cd "$GITHUB_WORKSPACE"
           cmp source/go.mod "$BASE/artifacts/original-go.mod"
           cmp source/go.sum "$BASE/artifacts/original-go.sum"
@@ -67,7 +69,7 @@ jobs:
           docker build --pull -t thinkgo-audit-tools "$BASE/image"
           docker image inspect thinkgo-audit-tools --format '{{.Id}}' > "$BASE/artifacts/container-image-id.txt"
           printf '%s\n' 'ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852' > "$BASE/artifacts/base-image-digest.txt"
-          chmod -R a+rX "$BASE/go-dist" "$BASE/modcache"
+          chmod -R a+rX "$BASE/go-dist" "$BASE/modcache" "$BASE/sumdb-checkpoints"
           truncate -s 8G "$BASE/scratch.ext4"
           mkfs.ext4 -q -F "$BASE/scratch.ext4"
           sudo mount -o loop,exec,nodev,nosuid "$BASE/scratch.ext4" "$BASE/scratch"
@@ -80,7 +82,8 @@ jobs:
           BASE="$RUNNER_TEMP/thinkgo-native"
           cat > "$BASE/plan.sh" <<'PLAN'
           set -uo pipefail
-          mkdir -p /scratch/home /scratch/tmp /scratch/gocache /scratch/gopath /scratch/work
+          mkdir -p /scratch/home /scratch/tmp /scratch/gocache /scratch/gopath/pkg /scratch/work /scratch/offline-probe
+          cp -r /sumdb-checkpoints /scratch/gopath/pkg/sumdb
           cp /bin/true /scratch/exec-probe && chmod 0700 /scratch/exec-probe && /scratch/exec-probe || exit 98
           rm /scratch/exec-probe
           cp -a /src/. /scratch/work/
@@ -96,11 +99,21 @@ jobs:
           df -h /scratch
           cat /sys/fs/cgroup/memory.max /sys/fs/cgroup/pids.max
           printf 'OFFLINE_MODULE_PROXY=%s\n' "$GOPROXY"
-          for f in /src/go.mod /go/VERSION /modcache/audit-probe /etc/audit-probe; do
+          for f in /src/go.mod /go/VERSION /modcache/audit-probe /sumdb-checkpoints/audit-probe /etc/audit-probe; do
             if ( : > "$f" ) 2>/dev/null; then echo "FAIL_WRITABLE=$f"; exit 99; else echo "READ_ONLY_OK=$f"; fi
           done
           echo AUDIT_ENVIRONMENT_END
-          go mod verify
+          go mod verify || exit 96
+          echo AUDIT_OFFLINE_CONSUMER_PREFLIGHT_BEGIN
+          cd /scratch/offline-probe
+          printf 'module audit-offline-probe\n\ngo 1.26.10\n\nrequire github.com/zhuhanxin0308/thinkgo/v3 v3.0.0\nreplace github.com/zhuhanxin0308/thinkgo/v3 => /src\n' > go.mod
+          cp /src/go.sum go.sum
+          printf 'package probe\nimport(_ "github.com/zhuhanxin0308/thinkgo/v3";_ "github.com/zhuhanxin0308/thinkgo/v3/http";_ "github.com/zhuhanxin0308/thinkgo/v3/db/connector";_ "github.com/zhuhanxin0308/thinkgo/v3/console/command";_ "github.com/zhuhanxin0308/thinkgo/v3/openapi")\n' > imports.go
+          CGO_ENABLED=0 go get github.com/zhuhanxin0308/thinkgo/v3 || exit 97
+          CGO_ENABLED=0 go mod tidy || exit 97
+          go mod verify || exit 97
+          echo AUDIT_OFFLINE_CONSUMER_PREFLIGHT_EXIT=0
+          cd /scratch/work
           echo AUDIT_BASELINE_BEGIN
           CGO_ENABLED=1 go test -json -mod=readonly -p 1 -parallel 2 -shuffle=1234567 -count=1 -timeout=180s ./...
           baseline=$?
@@ -116,9 +129,8 @@ jobs:
           test "$baseline" -eq 0 && test "$race" -eq 0 && test "$vet" -eq 0
           PLAN
           chmod a+r "$BASE/plan.sh"
-          # The only writable host mount is an empty, dedicated 8 GiB filesystem.
-          # File proxy resolution uses authenticated cached artifacts only; no external network or VCS fallback.
-          # No Actions environment, tokens, Docker socket, host home or artifacts enter the container.
+          # Only an empty, dedicated 8 GiB filesystem is writable. Sumdb public checkpoints are copied into it.
+          # No target process receives credentials, host HOME, Docker socket or an external network.
           ulimit -f 131072
           set +e
           timeout --signal=TERM --kill-after=15s 1500s docker run --name thinkgo-native-audit --rm \
@@ -129,6 +141,7 @@ jobs:
             --mount type=bind,src="$GITHUB_WORKSPACE/source",dst=/src,readonly \
             --mount type=bind,src="$BASE/go-dist/go",dst=/go,readonly \
             --mount type=bind,src="$BASE/modcache",dst=/modcache,readonly \
+            --mount type=bind,src="$BASE/sumdb-checkpoints",dst=/sumdb-checkpoints,readonly \
             --mount type=bind,src="$BASE/plan.sh",dst=/plan.sh,readonly \
             --entrypoint /usr/bin/env thinkgo-audit-tools -i \
             PATH=/go/bin:/usr/bin:/bin HOME=/scratch/home TMPDIR=/scratch/tmp \
