@@ -49,6 +49,8 @@ jobs:
           cat > "$BASE/plan.sh" <<'PLAN'
           set -uo pipefail
           mkdir -p /scratch/home /scratch/tmp /scratch/gocache /scratch/gopath /scratch/work
+          cp /bin/true /scratch/exec-probe && chmod 0700 /scratch/exec-probe && /scratch/exec-probe || exit 98
+          rm /scratch/exec-probe
           cp -a /src/. /scratch/work/
           rm -rf /scratch/work/.git
           cd /scratch/work
@@ -58,6 +60,7 @@ jobs:
           gcc --version | head -1
           ip -brief address
           grep -E 'CapEff|NoNewPrivs' /proc/self/status
+          grep ' /scratch ' /proc/mounts
           cat /sys/fs/cgroup/memory.max /sys/fs/cgroup/pids.max
           for f in /src/go.mod /go/VERSION /modcache/audit-probe /etc/audit-probe; do
             if ( : > "$f" ) 2>/dev/null; then echo "FAIL_WRITABLE=$f"; exit 99; else echo "READ_ONLY_OK=$f"; fi
@@ -86,7 +89,7 @@ jobs:
             --network none --read-only --user 65534:65534 --cap-drop ALL --security-opt no-new-privileges \
             --cpus 2 --memory 3g --memory-swap 3g --pids-limit 256 \
             --ulimit nofile=512:512 --ulimit fsize=134217728:134217728 --ulimit core=0:0 \
-            --tmpfs /scratch:rw,nosuid,nodev,size=2g,uid=65534,gid=65534,mode=0700 \
+            --tmpfs /scratch:rw,exec,nosuid,nodev,size=2g,uid=65534,gid=65534,mode=0700 \
             --mount type=bind,src="$GITHUB_WORKSPACE/source",dst=/src,readonly \
             --mount type=bind,src="$BASE/go-dist/go",dst=/go,readonly \
             --mount type=bind,src="$BASE/modcache",dst=/modcache,readonly \
