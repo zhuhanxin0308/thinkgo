@@ -138,7 +138,7 @@ func (c *SQLConnection) selectRowsContext(ctx context.Context, request SelectReq
 	if err := c.validateContext(ctx); err != nil {
 		return nil, err
 	}
-	where, args, err := request.Predicate().compileSQL(c.Builder)
+	where, args, err := request.Predicate().compileSQLWithDialect(sqlBuilderDialect(c.Builder))
 	if err != nil {
 		return nil, err
 	}
@@ -254,7 +254,7 @@ func (c *SQLConnection) Update(ctx context.Context, request UpdateRequest) (Upda
 	if err := validateWriteArguments(request.Table(), data); err != nil {
 		return UpdateResult{}, err
 	}
-	where, args, err := request.Predicate().compileSQL(c.Builder)
+	where, args, err := request.Predicate().compileSQLWithDialect(sqlBuilderDialect(c.Builder))
 	if err != nil {
 		return UpdateResult{}, err
 	}
@@ -284,7 +284,7 @@ func (c *SQLConnection) Delete(ctx context.Context, request DeleteRequest) (Dele
 	if err := validateIdentifier(request.Table()); err != nil {
 		return DeleteResult{}, fmt.Errorf("%w: 非法表名: %w", ErrInvalidQuery, err)
 	}
-	where, args, err := request.Predicate().compileSQL(c.Builder)
+	where, args, err := request.Predicate().compileSQLWithDialect(sqlBuilderDialect(c.Builder))
 	if err != nil {
 		return DeleteResult{}, err
 	}
@@ -313,7 +313,7 @@ func (c *SQLConnection) Count(ctx context.Context, request CountRequest) (int64,
 	if err := validateIdentifier(request.Table()); err != nil {
 		return 0, fmt.Errorf("%w: 非法表名: %w", ErrInvalidQuery, err)
 	}
-	where, args, err := request.Predicate().compileSQL(c.Builder)
+	where, args, err := request.Predicate().compileSQLWithDialect(sqlBuilderDialect(c.Builder))
 	if err != nil {
 		return 0, err
 	}
