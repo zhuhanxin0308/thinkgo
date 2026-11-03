@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 	"unicode"
 )
 
@@ -34,6 +35,7 @@ type compiledRule struct {
 	hasParam   bool
 	pattern    *regexp.Regexp
 	parameters []string
+	dateField  bool
 }
 
 func (r compiledRule) requiresPresence() bool {
@@ -314,9 +316,25 @@ func validateCompiledRule(rule *compiledRule) error {
 		rule.param = pattern
 		rule.pattern = compiled
 		return nil
-	case "different", "dateFormat", "after", "before":
+	case "different", "dateFormat":
 		if !rule.hasParam || rule.param == "" {
 			return fmt.Errorf("目标字段、日期或格式不能为空")
+		}
+		return nil
+	case "after", "before", "afterDate", "beforeDate", "afterField", "beforeField":
+		if !rule.hasParam || rule.param == "" {
+			return fmt.Errorf("目标字段或日期不能为空")
+		}
+		if rule.name == "afterField" || rule.name == "beforeField" {
+			rule.dateField = true
+			return nil
+		}
+		// 只按可信规则参数确定目标类型，不读取请求数据，也不缓存时区相关的时间值。
+		if _, err := parseRuleTimeInLocation(rule.param, time.UTC); err != nil {
+			if rule.name == "afterDate" || rule.name == "beforeDate" {
+				return fmt.Errorf("目标不是有效日期")
+			}
+			rule.dateField = true
 		}
 		return nil
 	case "requireIf":
@@ -353,7 +371,8 @@ func isKnownRule(ruleName string) bool {
 		"date", "alpha", "alphaNum", "alphaDash", "chs", "chsAlpha", "chsAlphaNum", "chsDash",
 		"ip", "url", "in", "notIn", "between", "notBetween", "length", "max", "min", "eq",
 		"gt", "lt", "egt", "elt", "regex", "confirm", "different", "mobile", "dateFormat",
-		"after", "before", "requireIf", "requireWith", "idCard":
+		"after", "before", "afterDate", "beforeDate", "afterField", "beforeField",
+		"requireIf", "requireWith", "idCard":
 		return true
 	default:
 		return false
