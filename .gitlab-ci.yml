@@ -12,12 +12,12 @@ stages:
   - test
 
 default:
-  image: golang:1.26.9
+  image: golang:1.26.10
   interruptible: true
   timeout: 1h
   cache:
     key:
-      prefix: 'go1.26.9-$CI_COMMIT_REF_SLUG-$CI_JOB_NAME_SLUG'
+      prefix: 'go1.26.10-$CI_COMMIT_REF_SLUG-$CI_JOB_NAME_SLUG'
       files:
         - go.sum
     paths:

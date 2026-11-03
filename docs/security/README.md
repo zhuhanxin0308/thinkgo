@@ -6,6 +6,7 @@
 | --- | --- |
 | 原生 SQL 与绑定参数 | [固定结构、参数化与查询快照](database-raw-sql.md) |
 | 内存缓存容量与过期 | [过期回收与 FIFO](memory-cache-capacity.md) · [对象图、条目与锁预算](memory-cache-budget.md) |
+| 缓存 store 与标签隔离 | [命名空间边界与升级迁移](cache-store-prefix.md) |
 | 预发与显式安全检查 | [不改变环境名的生产级配置检查](strict-security.md) |
 | 不可信文件上传 | [显式类型配对、大小上限与原子发布](upload-policy.md) |
 | 通用与认证 Cookie | [显式属性、工厂隔离与认证职责](cookie-policies.md) |
@@ -14,12 +15,14 @@
 | 会话 ID 与认证轮换 | [拒绝未知 ID、登录与混合模式边界](session-identity.md) |
 | 队列任务来源与重放 | [签名任务、可信执行预算与存储契约](queue-integrity.md) |
 | 生产限流配置 | [HTTP 启动提醒与部署职责](rate-limit-startup.md) |
+| Redis 限流命名空间 | [配额隔离与协调升级](rate-limit-namespace.md) |
 | 密码存储与计算预算 | [Argon2id 哈希、验证与升级](password-hashing.md) |
 | 字面搜索与通配模式 | [WhereLikeLiteral 与授权范围](database-literal-like.md) |
 | 插入完成但主键读取失败 | [部分写入与事务结果](database-insert-results.md) |
 | 数据库错误对外展示 | [内部错误与公共响应](database-errors.md) |
 | 参数来源与授权对象 | [Request.Route / Param 的安全用法](request-parameter-sources.md) |
 | 内部路径与对外文件引用 | [Local.Path、上传 key 和 URL](filesystem-paths.md) |
+| 本地文件原子发布 | [目录所有权、权限与平台信任边界](filesystem-atomic-write.md) |
 | 来自用户输入的跳转 | [站内重定向](local-redirects.md) |
 | 锁竞争负载 | [缓存锁退避](cache-lock-contention.md) |
 | 开发服务器监听 | [回环默认值与显式外部监听](development-listen-address.md) |

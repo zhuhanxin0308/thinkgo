@@ -40,7 +40,7 @@ func TestThinkPHPStorePrefixAndDefaultExpire(t *testing.T) {
 	if err := manager.Set("order", "paid"); err != nil {
 		t.Fatalf("写入默认缓存失败: %v", err)
 	}
-	if backend.key != "tenant:order" || backend.ttl != 30*time.Second {
+	if backend.key != namespaced.key("order") || backend.ttl != 30*time.Second {
 		t.Fatalf("store 选项未生效: key=%q ttl=%s", backend.key, backend.ttl)
 	}
 	if err := manager.Set("forever", true, 0); err != nil {

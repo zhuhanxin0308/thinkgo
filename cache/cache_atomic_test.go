@@ -477,7 +477,7 @@ func TestNamespaceDriverAtomicUpdateMapsPhysicalKey(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("命名空间原子创建失败: %v", err)
 	}
-	if value, found, getErr := backend.Get("tenant:profile"); getErr != nil || !found || value != "Ada" {
+	if value, found, getErr := backend.Get(driver.key("profile")); getErr != nil || !found || value != "Ada" {
 		t.Fatalf("物理原子键错误: value=%#v found=%t err=%v", value, found, getErr)
 	}
 	if err = driver.UpdateContext(context.Background(), "profile", 0, func(interface{}, bool) (interface{}, bool, error) {
@@ -485,7 +485,7 @@ func TestNamespaceDriverAtomicUpdateMapsPhysicalKey(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("命名空间上下文原子删除失败: %v", err)
 	}
-	if _, found, getErr := backend.Get("tenant:profile"); getErr != nil || found {
+	if _, found, getErr := backend.Get(driver.key("profile")); getErr != nil || found {
 		t.Fatalf("命名空间原子删除后仍命中: found=%t err=%v", found, getErr)
 	}
 }

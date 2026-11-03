@@ -161,7 +161,9 @@ ThinkGo 的 `:id` 会转换为 OpenAPI 的 `{id}`。OpenAPI 不支持可选路�
 
 `ValidateRouter` 会冻结路由，因此须在全部路由注册完成后调用。它对指定前缀做双向核对：实际路由缺少契约、契约缺少实际路由、ANY 路由以及不可表达的可选路由都会失败。健康检查等不属于公开 API 的路径应放在前缀外；确有需要时可通过 `ignored` 参数用 `METHOD /path` 精确排除。
 
-文档处理器只允许 GET/HEAD，返回不可变 JSON、SHA-256 ETag、`nosniff` 和条件请求 304。生产环境是否公开 `/openapi.json` 仍应由路由鉴权和部署策略决定。
+文档处理器只允许 GET/HEAD，返回不可变 JSON、SHA-256 ETag、`nosniff` 和条件请求 304。通过框架标准库路由适配器调用时，处理器收到与路由及鉴权一致的有效方法；方法覆盖为 HEAD 时也不会输出正文。生产环境是否公开 `/openapi.json` 仍应由路由鉴权和部署策略决定。
+
+动态压缩层保留已有强 ETag 的原始表示，不再对它重新编码，避免 identity 与 gzip 等不同字节内容共用强标签；因此 OpenAPI 文档的 200 与 304 均沿用同一未压缩表示的标签。带弱 ETag 的响应仍可压缩。压缩层会检查所有 `Cache-Control` 字段行，任一行包含 `no-transform` 都会跳过转换。
 
 ## 接口测试
 

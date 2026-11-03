@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -11,8 +12,8 @@ import (
 // NamespaceDriver 将 ThinkPHP store 的 prefix 与 tag_prefix 应用到所有后端键。
 type NamespaceDriver struct {
 	driver    Driver
-	prefix    string
 	tagPrefix string
+	namespace string
 }
 
 func (driver *NamespaceDriver) supportsTagMutationLock() bool {
@@ -38,7 +39,7 @@ func (driver *NamespaceDriver) UpdateIfLockOwnerContext(ctx context.Context, key
 	return driver.driver.(LockGuardedUpdater).UpdateIfLockOwnerContext(ctx, driver.key(key), ttl, driver.key(lockKey), owner, update)
 }
 
-// NewNamespaceDriver 创建缓存命名空间驱动；空业务前缀仍会应用标签前缀规则。
+// NewNamespaceDriver 创建缓存命名空间驱动；空前缀也占用独立的、带边界编码的键空间。
 func NewNamespaceDriver(driver Driver, prefix string, tagPrefix string) (*NamespaceDriver, error) {
 	if isNilCacheDriver(driver) {
 		return nil, ErrCacheDriverNotConfigured
@@ -49,22 +50,29 @@ func NewNamespaceDriver(driver Driver, prefix string, tagPrefix string) (*Namesp
 	if _, err := validateStoreOptions(StoreOptions{Prefix: prefix, TagPrefix: tagPrefix}); err != nil {
 		return nil, err
 	}
-	return &NamespaceDriver{driver: driver, prefix: prefix, tagPrefix: tagPrefix}, nil
+	// Length framing makes every configured namespace a distinct key prefix,
+	// including empty and nested prefixes. Do not fall back to legacy keys:
+	// their unframed representation cannot identify the owning namespace.
+	namespace := "__thinkgo_namespace__:v2:" + strconv.Itoa(len(prefix)) + ":" + prefix + ":"
+	return &NamespaceDriver{driver: driver, tagPrefix: tagPrefix, namespace: namespace}, nil
 }
 
 func (driver *NamespaceDriver) key(key string) string {
 	switch {
 	case strings.HasPrefix(key, cacheFencePrefix):
 		// fencing 元数据放在业务 namespace 之外，ClearPrefix 清理业务数据时必须保留单调代际。
-		digest := sha256.Sum256([]byte(driver.prefix))
-		return cacheFencePrefix + "namespace:" + hex.EncodeToString(digest[:]) + ":" + strings.TrimPrefix(key, cacheFencePrefix)
+		return cacheFencePrefix + "namespace:" + driver.namespace + strings.TrimPrefix(key, cacheFencePrefix)
 	case strings.HasPrefix(key, tagMetaPrefix):
-		return driver.prefix + driver.tagPrefix + strings.TrimPrefix(key, tagMetaPrefix)
+		return driver.namespace + tagMetaPrefix + driver.tagNamespace() + strings.TrimPrefix(key, tagMetaPrefix)
 	case strings.HasPrefix(key, tagReversePrefix):
-		return driver.prefix + driver.tagPrefix + "reverse:" + strings.TrimPrefix(key, tagReversePrefix)
+		return driver.namespace + tagReversePrefix + driver.tagNamespace() + strings.TrimPrefix(key, tagReversePrefix)
 	default:
-		return driver.prefix + key
+		return driver.namespace + key
 	}
+}
+
+func (driver *NamespaceDriver) tagNamespace() string {
+	return strconv.Itoa(len(driver.tagPrefix)) + ":" + driver.tagPrefix + ":"
 }
 
 func (driver *NamespaceDriver) Get(key string) (interface{}, bool, error) {
@@ -84,14 +92,11 @@ func (driver *NamespaceDriver) Delete(key string) error {
 }
 
 func (driver *NamespaceDriver) Clear() error {
-	if driver.prefix == "" {
-		return driver.driver.Clear()
-	}
 	clearer, ok := driver.driver.(PrefixClearer)
 	if !ok {
 		return ErrCacheNamespaceClearUnsupported
 	}
-	return clearer.ClearPrefix(driver.prefix)
+	return clearer.ClearPrefix(driver.namespace)
 }
 
 // ValidateClearPrefix 将范围检查传递到实际后端，禁止先发布代际再发现清理能力缺失。
@@ -100,7 +105,7 @@ func (driver *NamespaceDriver) ValidateClearPrefix(prefix string) error {
 		return ErrCacheNamespaceClearUnsupported
 	}
 	if validator, ok := driver.driver.(PrefixClearValidator); ok {
-		return validator.ValidateClearPrefix(driver.prefix + prefix)
+		return validator.ValidateClearPrefix(driver.namespace + prefix)
 	}
 	return nil
 }
@@ -111,8 +116,8 @@ func (driver *NamespaceDriver) ClearPrefixIfContext(ctx context.Context, prefix 
 	if !ok {
 		return ErrCacheNamespaceClearUnsupported
 	}
-	return clearer.ClearPrefixIfContext(ctx, driver.prefix+prefix, func(physical string) bool {
-		logical := strings.TrimPrefix(physical, driver.prefix)
+	return clearer.ClearPrefixIfContext(ctx, driver.namespace+prefix, func(physical string) bool {
+		logical := strings.TrimPrefix(physical, driver.namespace)
 		// Redis 的租约值不是业务 JSON，必须在读取和解码前排除本 namespace 的锁。
 		if strings.HasPrefix(logical, lockKeyPrefix) || strings.HasPrefix(logical, cacheFencePrefix) {
 			return false
@@ -172,21 +177,12 @@ func (driver *NamespaceDriver) DeleteContext(ctx context.Context, key string) er
 }
 
 func (driver *NamespaceDriver) ClearContext(ctx context.Context) error {
-	if driver.prefix != "" {
-		return driver.ClearPrefixContext(ctx, "")
-	}
-	if contextual, ok := driver.driver.(ContextualClearer); ok {
-		return contextual.ClearContext(ctx)
-	}
-	return driver.Clear()
+	return driver.ClearPrefixContext(ctx, "")
 }
 
 // ClearPrefix 只清理当前命名空间下更窄的逻辑前缀。
 func (driver *NamespaceDriver) ClearPrefix(prefix string) error {
-	physicalPrefix := driver.prefix + prefix
-	if physicalPrefix == "" {
-		return ErrInvalidCachePrefix
-	}
+	physicalPrefix := driver.namespace + prefix
 	clearer, ok := driver.driver.(PrefixClearer)
 	if !ok {
 		return ErrCacheNamespaceClearUnsupported
@@ -202,10 +198,7 @@ func (driver *NamespaceDriver) ClearPrefixContext(ctx context.Context, prefix st
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	physicalPrefix := driver.prefix + prefix
-	if physicalPrefix == "" {
-		return ErrInvalidCachePrefix
-	}
+	physicalPrefix := driver.namespace + prefix
 	if contextual, ok := driver.driver.(ContextualPrefixClearer); ok {
 		return contextual.ClearPrefixContext(ctx, physicalPrefix)
 	}
@@ -356,14 +349,26 @@ func (driver *NamespaceDriver) RenewLockContext(ctx context.Context, key string,
 	return driver.RenewLock(key, owner, ttl)
 }
 
-// CacheResourceIdentity 保留底层资源身份，并把逻辑命名空间纳入隔离判断。
+// CacheDirectory 返回底层文件缓存的真实目录；非文件后端返回空字符串。
+// 逻辑命名空间仅改变缓存键，不改变底层目录。
+func (driver *NamespaceDriver) CacheDirectory() string {
+	if driver == nil {
+		return ""
+	}
+	if located, ok := driver.driver.(interface{ CacheDirectory() string }); ok {
+		return located.CacheDirectory()
+	}
+	return ""
+}
+
+// CacheResourceIdentity 保留底层资源身份，并把逻辑命名空间纳入隔离判断；该标识不是文件目录。
 func (driver *NamespaceDriver) CacheResourceIdentity() string {
 	if identified, ok := driver.driver.(interface{ CacheResourceIdentity() string }); ok {
 		identity := strings.TrimSpace(identified.CacheResourceIdentity())
-		if identity == "" || driver.prefix == "" {
+		if identity == "" {
 			return identity
 		}
-		digest := sha256.Sum256([]byte(driver.prefix))
+		digest := sha256.Sum256([]byte(driver.namespace))
 		return identity + "|namespace:" + hex.EncodeToString(digest[:])
 	}
 	return ""

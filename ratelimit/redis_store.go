@@ -97,7 +97,11 @@ func NewRedisStore(client redis.UniversalClient, options RedisStoreOptions) (*Re
 	if opTimeout < 0 || opTimeout > maximumRedisRateLimitTimeout {
 		return nil, fmt.Errorf("%w: Redis 操作超时必须在 0 到 %s 之间", ErrInvalidConfiguration, maximumRedisRateLimitTimeout)
 	}
-	return &RedisStore{client: client, prefix: prefix, opTimeout: opTimeout}, nil
+	// A literal prefix+key concatenation lets nested namespaces address the same
+	// quota. Frame the complete configured prefix so Take and Reset share one
+	// unambiguous namespace. Legacy keys are deliberately not read or removed.
+	physicalPrefix := "__thinkgo_ratelimit__:v2:" + strconv.Itoa(len(prefix)) + ":" + prefix + ":"
+	return &RedisStore{client: client, prefix: physicalPrefix, opTimeout: opTimeout}, nil
 }
 
 // Take 使用 Redis TIME 消除多实例主机时钟偏差；now 参数只供其它 Store 实现使用。

@@ -11,7 +11,7 @@ import (
 // TestDiscoveryModuleFixtureTracksFrameworkGoRequirement uses synthetic module
 // declarations to exercise version drift without requiring another Go toolchain.
 func TestDiscoveryModuleFixtureTracksFrameworkGoRequirement(t *testing.T) {
-	for _, requirement := range []string{"1.26.5", "1.26.9", "1.27.0"} {
+	for _, requirement := range []string{"1.26.5", "1.26.10", "1.27.0"} {
 		t.Run(requirement, func(t *testing.T) {
 			frameworkRoot := t.TempDir()
 			moduleSource := "module github.com/zhuhanxin0308/thinkgo/v3\n\ngo " + requirement + "\n"

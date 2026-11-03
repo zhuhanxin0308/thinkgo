@@ -16,6 +16,16 @@
 // 不可信上传可使用 [NewUploadPolicy] 指定扩展与嗅探 MIME 配对及实际字节上限；
 // 仍须独立执行请求总限额、完整内容审查和对象授权，参见 docs/security/upload-policy.md。
 //
+// # 原子写入目录
+//
+// Write、Copy 和上传的暂存/发布要求根目录至目标父目录全部为真实目录。
+// Unix 下还要求目录归进程有效 UID 或 root 所有，且组和其他用户没有写权限；
+// 不满足时在读取写入内容前返回 [ErrUnsafeLocalWriteDirectory]。
+// 这些检查提供 POSIX DAC 边界，不验证 macOS 扩展 ACL、Windows DACL 或关闭所有权
+// 检查的文件系统。部署仍须确保这些机制不向不可信用户授予目录修改权限，且同 UID
+// 与管理员进程可信。临时文件使用已打开句柄设置权限；检测到临时路径替换时不发布、
+// 不删除替换项。完整条件见 docs/security/filesystem-atomic-write.md。
+//
 // 可执行示例见 [Local.Path]。仓库 docs/security/filesystem-paths.md
 // 说明绝对路径、相对 key、公共 URL 与私有下载之间的不同契约。
 package filesystem

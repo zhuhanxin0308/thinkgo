@@ -65,6 +65,41 @@ func TestTLSValidationAcceptsTrustedChainAndAllConfiguredHosts(t *testing.T) {
 	}
 }
 
+func TestTLSValidationUsesProjectRelativeMaterialOutsideWorkingDirectory(t *testing.T) {
+	now := time.Date(2026, time.August, 15, 8, 0, 0, 0, time.UTC)
+	options := tlsTestLeafOptions{
+		dnsNames:    []string{"api.example.com", "*.tenant.example.com"},
+		ipAddresses: []net.IP{net.ParseIP("192.0.2.10")},
+	}
+	projectPKI := newTLSTestPKI(t, now, options)
+	launcherPKI := newTLSTestPKI(t, now, options)
+	launcher := t.TempDir()
+	writeTLSTestMaterial(t, launcher, launcherPKI.leafKey, 0o600, launcherPKI.leafDER, launcherPKI.intermediateDER)
+	t.Chdir(launcher)
+	app, configuration := newDeployTestApp(t)
+	certPath, keyPath := writeTLSTestMaterial(t, app.BasePath, projectPKI.leafKey, 0o600, projectPKI.leafDER, projectPKI.intermediateDER)
+	configureTLSTestApp(configuration, filepath.Base(certPath), filepath.Base(keyPath))
+	if _, err := validateTLSMaterial(app, configuration, tlsValidationOptions{now: now, roots: projectPKI.rootPool}); err != nil {
+		t.Fatalf("deployment must validate the project's material, not the launcher's: %v", err)
+	}
+}
+
+func TestTLSWildcardTargetRequiresCertificateForExplicitDeepHost(t *testing.T) {
+	certificate := &x509.Certificate{DNSNames: []string{"*.tenant.example.test"}}
+	for _, target := range []string{"*.tenant.example.test", "one.tenant.example.test"} {
+		if err := verifyTLSCertificateTarget(certificate, target); err != nil {
+			t.Fatalf("single-label target %q must be covered: %v", target, err)
+		}
+	}
+	for _, target := range []string{"two.one.tenant.example.test", "tenant.example.test", "not-tenant.example.test"} {
+		assertTLSValidationCode(t, verifyTLSCertificateTarget(certificate, target), TLSValidationHostname)
+	}
+	certificate.DNSNames = append(certificate.DNSNames, "two.one.tenant.example.test")
+	if err := verifyTLSCertificateTarget(certificate, "two.one.tenant.example.test"); err != nil {
+		t.Fatalf("an explicit deeper SAN must remain supported: %v", err)
+	}
+}
+
 // TestTLSValidationRejectsMalformedMaterialAndRedactsDetails 验证类型化错误不会暴露敏感文件路径或内容。
 func TestTLSValidationRejectsMalformedMaterialAndRedactsDetails(t *testing.T) {
 	app, configuration := newDeployTestApp(t)

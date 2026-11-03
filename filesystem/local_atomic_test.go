@@ -93,7 +93,7 @@ func TestLocalAtomicPreCommitFailuresPreserveTarget(t *testing.T) {
 		{
 			name: "chmod",
 			inject: func(disk *Local, failure error) {
-				disk.operations.chmod = func(*os.Root, string, os.FileMode) error { return failure }
+				disk.operations.chmodTemporary = func(*os.File, os.FileMode) error { return failure }
 			},
 		},
 		{

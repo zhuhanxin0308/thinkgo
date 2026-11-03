@@ -8,7 +8,7 @@ ThinkGo 只发布根目录框架模块 `github.com/zhuhanxin0308/thinkgo/v3`。�
 
 1. 根 `go.mod` 必须声明 `github.com/zhuhanxin0308/thinkgo/v3`，`version/version.go` 的 `Number` 必须与目标模块版本一致。
 2. 根 `LICENSE`、`README.md` 和本文件必须存在。
-3. 工作树必须干净；仓库不得跟踪 `.env`、证书、私钥或其它凭据。
+3. 工作树必须干净；仓库不得跟踪 `.env`、证书、私钥或其它凭据。`python3 scripts/check_release_files.py` 按 `git ls-files -z` 的原始文件名检查 `.env` 与 `.pem`、`.key`、`.p12`、`.pfx` 后缀，中文、引号及换行文件名不例外；Git 读取失败也会阻断门禁。
 4. 仓库根不含业务 `app/`、`public/`、`main.go`、`go.work` 或旧 `framework/` 子模块。根 `config/` 是框架 Go 包；测试用 JSON 配置放在 `testdata/project/config/`。
 5. 所有配置示例只能包含结构、默认值或无敏感信息的示例值；生产凭据由部署环境注入。
 

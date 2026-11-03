@@ -108,14 +108,22 @@ func (p Predicate) compileSQL(builders ...Builder) ([]string, []interface{}, err
 	if p.err != nil {
 		return nil, nil, p.err
 	}
-	builder := p.builder
 	if len(builders) > 0 && builders[0] != nil {
-		builder = builders[0]
+		p.builder = builders[0]
+	}
+	return p.compileSQLWithDialect(sqlBuilderDialect(p.builder))
+}
+
+// compileSQLWithDialect uses the execution dialect only for Raw validation;
+// identifier rendering remains owned by the predicate's original builder.
+func (p Predicate) compileSQLWithDialect(dialect string) ([]string, []interface{}, error) {
+	if p.err != nil {
+		return nil, nil, p.err
 	}
 	where := make([]string, 0, len(p.nodes))
 	var args []interface{}
 	for _, node := range p.nodes {
-		clause, values, err := predicateNodeSQL(node, builder)
+		clause, values, err := predicateNodeSQL(node, p.builder, dialect)
 		if err != nil {
 			return nil, nil, fmt.Errorf("%w: %w", ErrInvalidQuery, err)
 		}

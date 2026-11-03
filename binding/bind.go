@@ -157,7 +157,7 @@ func Bind(request *fwcontext.Request, target any, options ...validate.Option) er
 	} else {
 		unknownFields(&state, body, plan.knownFields, "body")
 	}
-	state.validate(plan, data, func(item field) string { return item.rootPath })
+	state.validate(plan, data, next, func(item field) string { return item.rootPath })
 	if err := state.err(); err != nil {
 		return err
 	}
@@ -341,7 +341,7 @@ func (state *bindState) assign(plan *node, target reflect.Value, raw any, path s
 			state.assign(item.node, fieldValue(target, item.index), value, path+"."+item.name, depth+1)
 		}
 		unknownFields(state, object, plan.knownFields, path)
-		state.validate(plan, data, func(item field) string { return path + "." + item.name })
+		state.validate(plan, data, target, func(item field) string { return path + "." + item.name })
 	case reflect.Slice, reflect.Array:
 		values, ok := raw.([]any)
 		if !ok || target.Kind() == reflect.Array && len(values) != target.Len() {
@@ -374,7 +374,7 @@ func (state *bindState) assign(plan *node, target reflect.Value, raw any, path s
 	}
 }
 
-func (state *bindState) validate(plan *node, data map[string]any, path func(field) string) {
+func (state *bindState) validate(plan *node, data map[string]any, target reflect.Value, path func(field) string) {
 	if plan.validator == nil {
 		return
 	}
@@ -386,13 +386,63 @@ func (state *bindState) validate(plan *node, data map[string]any, path func(fiel
 		return
 	}
 	for _, violation := range result.Violations() {
-		for _, item := range plan.fields {
-			if item.name == violation.Field {
-				if len(state.issues) < maximumIssues {
-					state.issues = append(state.issues, Issue{Field: path(item), Rule: violation.Rule, Message: violation.Message})
-				}
-				break
+		state.addViolation(plan, violation, path, false)
+	}
+	// 原始输入仍用于格式、枚举等规则；数值范围还必须约束最终交付的浮点值。
+	// 复用已编译验证器，避免在绑定层重新实现规则分隔、引号或参数语法。
+	var assigned map[string]any
+	var floats map[string]bool
+	for _, item := range plan.fields {
+		if _, exists := data[item.name]; !exists || item.rules == "" {
+			continue
+		}
+		kind := underlyingNode(item.node).typ.Kind()
+		if kind != reflect.Float32 && kind != reflect.Float64 {
+			continue
+		}
+		number, ok := assignedFloatValue(item.node, fieldValue(target, item.index))
+		if !ok {
+			continue
+		}
+		if assigned == nil {
+			assigned = make(map[string]any, len(data))
+			for name, value := range data {
+				assigned[name] = value
 			}
+			floats = make(map[string]bool)
+		}
+		assigned[item.name], floats[item.name] = number, true
+	}
+	if assigned == nil {
+		return
+	}
+	result, err = plan.validator.Validate(assigned, options...)
+	if err != nil {
+		state.definitionErr = fmt.Errorf("%w: %v", ErrDefinition, err)
+		return
+	}
+	for _, violation := range result.Violations() {
+		if floats[violation.Field] && isNumericRangeRule(violation.Rule) {
+			state.addViolation(plan, violation, path, true)
+		}
+	}
+}
+
+func (state *bindState) addViolation(plan *node, violation validate.Violation, path func(field) string, deduplicate bool) {
+	for _, item := range plan.fields {
+		if item.name == violation.Field {
+			fieldPath := path(item)
+			if deduplicate {
+				for _, issue := range state.issues {
+					if issue.Field == fieldPath && issue.Rule == violation.Rule {
+						return
+					}
+				}
+			}
+			if len(state.issues) < maximumIssues {
+				state.issues = append(state.issues, Issue{Field: fieldPath, Rule: violation.Rule, Message: violation.Message})
+			}
+			return
 		}
 	}
 }

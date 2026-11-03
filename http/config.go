@@ -13,6 +13,7 @@ import (
 	"github.com/zhuhanxin0308/thinkgo/v3"
 	"github.com/zhuhanxin0308/thinkgo/v3/config"
 	"github.com/zhuhanxin0308/thinkgo/v3/context"
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/apppath"
 )
 
 var ErrInvalidHTTPConfig = errors.New("HTTP 配置非法")
@@ -54,7 +55,7 @@ func parseHTTPConfig(app *framework.App) (serverConf, compressionConf, error) {
 	if err != nil {
 		return serverConf{}, compressionConf{}, fmt.Errorf("%w: 应用配置服务不可用: %v", ErrInvalidHTTPConfig, err)
 	}
-	return parseHTTPApplicationConfig(configuration.Get("app", map[string]interface{}{}))
+	return parseHTTPApplicationConfigAtPath(configuration.Get("app", map[string]interface{}{}), app.BasePath)
 }
 
 // parseProjectHTTPConfig 使用业务应用配置叠加前的项目快照解析宿主监听配置，
@@ -63,7 +64,19 @@ func parseProjectHTTPConfig(app *framework.App) (serverConf, compressionConf, er
 	if app == nil {
 		return serverConf{}, compressionConf{}, fmt.Errorf("%w: 应用不能为空", ErrInvalidHTTPConfig)
 	}
-	return parseHTTPApplicationConfig(app.ProjectApplicationConfig())
+	return parseHTTPApplicationConfigAtPath(app.ProjectApplicationConfig(), app.BasePath)
+}
+
+func parseHTTPApplicationConfigAtPath(raw interface{}, basePath string) (serverConf, compressionConf, error) {
+	server, compression, err := parseHTTPApplicationConfig(raw)
+	if err != nil {
+		return serverConf{}, compressionConf{}, err
+	}
+	// Deployment checks and every TCP/HTTP3 listener must load the same material,
+	// even when the launcher uses a different working directory.
+	server.CertFile = apppath.Resolve(basePath, server.CertFile)
+	server.KeyFile = apppath.Resolve(basePath, server.KeyFile)
+	return server, compression, nil
 }
 
 func parseHTTPApplicationConfig(raw interface{}) (serverConf, compressionConf, error) {
@@ -531,7 +544,9 @@ func (h *Http) isAllowedHost(rawHost string) bool {
 			return true
 		case strings.HasPrefix(allowed, "*."):
 			base := strings.TrimPrefix(allowed, "*.")
-			if host != base && strings.HasSuffix(host, "."+base) {
+			prefix, matches := strings.CutSuffix(host, "."+base)
+			// Match the single-label wildcard used by X.509 DNS SANs.
+			if matches && prefix != "" && !strings.Contains(prefix, ".") {
 				return true
 			}
 		case host == allowed:

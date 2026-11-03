@@ -36,7 +36,7 @@ func TestNamespaceConditionalTTLForwardsAtomicPolicy(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if value, found, err := backend.Get("outer:inner:value"); err != nil || !found || value != "new" {
+	if value, found, err := backend.Get(outer.key(inner.key("value"))); err != nil || !found || value != "new" {
 		t.Fatalf("TTL 决策修改了错误命名空间: %v %t %v", value, found, err)
 	}
 	legacy, err := NewNamespaceDriver(struct{ Driver }{backend}, "legacy:", "tag:")

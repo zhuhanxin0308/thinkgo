@@ -58,7 +58,7 @@ func appendPredicateNode(nodes []PredicateNode, connector string, node Predicate
 	return append(nodes, node)
 }
 
-func predicateNodeSQL(node PredicateNode, builder Builder) (string, []interface{}, error) {
+func predicateNodeSQL(node PredicateNode, builder Builder, dialects ...string) (string, []interface{}, error) {
 	var quote func(string) string
 	if builder != nil {
 		quote = builder.QuoteIdentifier
@@ -74,7 +74,7 @@ func predicateNodeSQL(node PredicateNode, builder Builder) (string, []interface{
 		clauses := make([]string, 0, len(node.Children))
 		var values []interface{}
 		for _, child := range node.Children {
-			clause, args, err := predicateNodeSQL(child, builder)
+			clause, args, err := predicateNodeSQL(child, builder, dialects...)
 			if err != nil {
 				return "", nil, err
 			}
@@ -92,7 +92,11 @@ func predicateNodeSQL(node PredicateNode, builder Builder) (string, []interface{
 		}
 		return field + " " + node.Operator + " " + right, nil, nil
 	case PredicateRaw:
-		if err := validateRawClause(node.SQL, len(node.Values), "where"); err != nil {
+		dialect := sqlBuilderDialect(builder)
+		if len(dialects) > 0 {
+			dialect = dialects[0]
+		}
+		if err := validateRawClause(node.SQL, len(node.Values), "where", dialect); err != nil {
 			return "", nil, err
 		}
 		return node.SQL, cloneDatabaseValues(node.Values), nil

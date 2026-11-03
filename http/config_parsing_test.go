@@ -124,6 +124,7 @@ func TestAllowedHostNormalization(t *testing.T) {
 	}
 	for _, host := range []string{
 		"api.example.com",
+		"v2.v1.api.example.com",
 		"evil.example.net",
 		"bad@host",
 		"example.com:not-a-port",

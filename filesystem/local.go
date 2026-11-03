@@ -30,6 +30,7 @@ const (
 type localFileOperations struct {
 	copy           func(io.Writer, io.Reader) (int64, error)
 	chmod          func(*os.Root, string, os.FileMode) error
+	chmodTemporary func(*os.File, os.FileMode) error
 	syncFile       func(*os.File) error
 	closeTemporary func(*os.File) error
 	replace        func(*os.Root, string, string) error
@@ -42,6 +43,9 @@ func defaultLocalFileOperations() localFileOperations {
 		copy: io.Copy,
 		chmod: func(root *os.Root, name string, mode os.FileMode) error {
 			return root.Chmod(name, mode)
+		},
+		chmodTemporary: func(file *os.File, mode os.FileMode) error {
+			return file.Chmod(mode)
 		},
 		syncFile: func(file *os.File) error {
 			return file.Sync()
@@ -521,7 +525,7 @@ func (disk *Local) Copy(source string, destination string, optionSets ...map[str
 	if err != nil {
 		return err
 	}
-	if err = disk.ensureParentDirectoryLocked(to, disk.configuration.Visibility); err != nil {
+	if err = disk.ensureAtomicParentDirectoryLocked(to, disk.configuration.Visibility); err != nil {
 		return err
 	}
 	input, err := disk.root.Open(from)

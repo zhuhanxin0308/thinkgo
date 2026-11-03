@@ -212,7 +212,7 @@ func (t *Tx) QueryContext(ctx context.Context, rawSQL string, args ...interface{
 	if err := t.active(); err != nil {
 		return nil, err
 	}
-	if err := validateRawStatement(rawSQL, len(args)); err != nil {
+	if err := validateRawStatement(rawSQL, len(args), sqlBuilderDialect(t.connection.Builder)); err != nil {
 		return nil, err
 	}
 	if err := validateBindParameterBudget(t.connection.Builder, len(args)); err != nil {
@@ -233,7 +233,7 @@ func (t *Tx) ExecuteContext(ctx context.Context, rawSQL string, args ...interfac
 	if err := t.active(); err != nil {
 		return 0, err
 	}
-	if err := validateRawStatement(rawSQL, len(args)); err != nil {
+	if err := validateRawStatement(rawSQL, len(args), sqlBuilderDialect(t.connection.Builder)); err != nil {
 		return 0, err
 	}
 	if err := validateBindParameterBudget(t.connection.Builder, len(args)); err != nil {
