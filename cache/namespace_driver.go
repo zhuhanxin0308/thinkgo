@@ -349,7 +349,19 @@ func (driver *NamespaceDriver) RenewLockContext(ctx context.Context, key string,
 	return driver.RenewLock(key, owner, ttl)
 }
 
-// CacheResourceIdentity 保留底层资源身份，并把逻辑命名空间纳入隔离判断。
+// CacheDirectory 返回底层文件缓存的真实目录；非文件后端返回空字符串。
+// 逻辑命名空间仅改变缓存键，不改变底层目录。
+func (driver *NamespaceDriver) CacheDirectory() string {
+	if driver == nil {
+		return ""
+	}
+	if located, ok := driver.driver.(interface{ CacheDirectory() string }); ok {
+		return located.CacheDirectory()
+	}
+	return ""
+}
+
+// CacheResourceIdentity 保留底层资源身份，并把逻辑命名空间纳入隔离判断；该标识不是文件目录。
 func (driver *NamespaceDriver) CacheResourceIdentity() string {
 	if identified, ok := driver.driver.(interface{ CacheResourceIdentity() string }); ok {
 		identity := strings.TrimSpace(identified.CacheResourceIdentity())

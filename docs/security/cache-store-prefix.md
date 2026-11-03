@@ -14,11 +14,20 @@ two stores on one memory backend, verifies that flushing one preserves the other
 and checks that a silently ignored reconfiguration is rejected.
 
 The application configuration path is different: `cache.stores.<name>.prefix`
-is already applied during driver construction. Memory/file backends use the
-namespace wrapper; Redis applies its configured prefix inside the Redis driver
-to constrain SCAN/Clear and receives the wrapper's empty logical namespace, so
-the configured prefix is not added twice. All wrappers now add the versioned
-namespace encoding described below.
+is already applied during driver construction. Memory, file, and Redis backends
+all pass that complete logical prefix to the namespace wrapper. Application Redis
+stores use an empty low-level Redis prefix, so an unframed outer prefix cannot
+defeat the wrapper's encoding. SCAN/Clear receives the complete nonempty framed
+namespace. The existing 256-byte limit on an application Redis prefix is retained.
+Application Redis prefixes must not contain `__thinkgo_lock__:` or
+`__thinkgo_cache_fence__:`. These protected markers would make Redis's conservative
+clear-scope check ambiguous; configuration now rejects them at startup with an
+actionable error. Choose a business namespace without those markers. Prefixes
+containing `__thinkgo_namespace__:` remain supported and isolated.
+Direct `redis.NewRedis` callers retain its literal low-level prefix behavior; for
+shared Redis storage, keep that prefix empty and provide the logical namespace to
+`NewNamespaceDriver` instead. The injective mapping below applies to wrappers over
+the same backend scope, not arbitrary concatenated low-level Redis prefixes.
 The namespace constructor shares pure option validation with `ConfigureStore`,
 not its rejection of a runtime prefix change; valid explicit wrappers still work.
 
@@ -61,6 +70,15 @@ ones. Old and new instances do not share values, tag relationships, locks, or
 fencing state. Plan for a cold cache and the resulting origin load; prewarm
 important entries from their authoritative data after upgrading.
 
+Application Redis stores also move their configured prefix inside the versioned
+framing; it is no longer prepended as literal bytes outside that frame. This
+includes prefixes containing the namespace marker itself. Previously accepted
+application Redis prefixes containing a lock or fencing marker must be renamed
+as part of the coordinated rollout. Low-level Redis lock/fencing protection is
+unchanged. Resource identities remain logical isolation identifiers, not
+filesystem paths; file stores expose
+their canonical physical directory separately through `CacheDirectory`.
+
 The wrapper deliberately does not fall back to legacy keys or delete them during
 Clear: a legacy concatenated key cannot reliably identify its owning namespace.
 Let TTL-bound old entries expire. For persistent old entries, remove only a
@@ -71,7 +89,8 @@ automatic migration of old tag or lock metadata.
 Regressions cover rejection without partial option publication, shared-backend
 read/write/flush isolation, nested and empty prefixes, ordinary-key/tag metadata
 separation with custom tag prefixes, legacy-key noninterference, valid
-constructor/default-tag behavior, and malformed prefix/tag values. Full
+constructor/default-tag behavior, malformed prefix/tag values, application Redis
+prefixes containing the namespace marker, and file-cache startup on Windows. Full
 current-dependency CI and post-merge main verification
 are required before closing the issue. Local archived-dependency results are
 recorded separately and do not replace those checks.

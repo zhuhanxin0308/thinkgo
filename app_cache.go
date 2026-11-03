@@ -17,7 +17,10 @@ import (
 	redisDriver "github.com/zhuhanxin0308/thinkgo/v3/cache/driver/redis"
 )
 
-const maxConfiguredCacheStores = 64
+const (
+	maxConfiguredCacheStores = 64
+	maxAppRedisPrefixBytes   = 256
+)
 
 const fileCacheResourcePrefix = "file:"
 
@@ -116,15 +119,11 @@ func createAppCache(app *App, rawConfig map[string]interface{}) (*cache.Cache, e
 
 // validateAppCacheDriverPathWithinRuntime 在驱动创建后再次校验真实目录，阻断校验和创建之间的符号链接竞态。
 func validateAppCacheDriverPathWithinRuntime(runtimePath string, driver cache.Driver) error {
-	identified, ok := driver.(interface{ CacheResourceIdentity() string })
+	located, ok := driver.(interface{ CacheDirectory() string })
 	if !ok {
-		return errors.New("文件缓存驱动缺少资源标识")
+		return errors.New("文件缓存驱动缺少目录信息")
 	}
-	identity := identified.CacheResourceIdentity()
-	if !strings.HasPrefix(identity, fileCacheResourcePrefix) {
-		return errors.New("文件缓存驱动资源标识无效")
-	}
-	cachePath := strings.TrimPrefix(identity, fileCacheResourcePrefix)
+	cachePath := located.CacheDirectory()
 	if cachePath == "" {
 		return errors.New("文件缓存驱动路径为空")
 	}
@@ -376,8 +375,24 @@ func validateAppRedisPrefix(name string, storeConfig map[string]interface{}) err
 	if !valid {
 		return fmt.Errorf("redis 缓存 store %q 的 prefix 必须是非空字符串", name)
 	}
+	if err := validateAppRedisNamespacePrefix(prefix); err != nil {
+		return fmt.Errorf("redis 缓存 store %q 的 prefix 非法: %w", name, err)
+	}
 	if strings.TrimSpace(prefix) == "" && !allowFlush {
 		return fmt.Errorf("redis 缓存 store %q 的 prefix 必须是非空字符串", name)
+	}
+	return nil
+}
+
+// validateAppRedisNamespacePrefix 保留 Redis 前缀预算，并在启动时拒绝会令安全清理范围产生歧义的保留标记。
+func validateAppRedisNamespacePrefix(prefix string) error {
+	if len(prefix) > maxAppRedisPrefixBytes {
+		return fmt.Errorf("%w: prefix 必须是不超过 %d 字节的字符串", redisDriver.ErrInvalidRedisConfig, maxAppRedisPrefixBytes)
+	}
+	for _, marker := range []string{"__thinkgo_lock__:", "__thinkgo_cache_fence__:"} {
+		if strings.Contains(prefix, marker) {
+			return fmt.Errorf("%w: prefix 不能包含保留标记 %q，请改用不含该标记的命名空间", redisDriver.ErrInvalidRedisConfig, marker)
+		}
 	}
 	return nil
 }
@@ -488,19 +503,24 @@ func createAppCacheDriver(spec appCacheStoreSpec) (cache.Driver, error) {
 	case "file":
 		driver, err = cacheDriver.NewFile(spec.path)
 	case "redis":
-		driver, err = redisDriver.NewRedis(spec.redisConfig)
+		if err := validateAppRedisNamespacePrefix(spec.prefix); err != nil {
+			return nil, err
+		}
+		redisConfig := make(map[string]interface{}, len(spec.redisConfig))
+		for key, value := range spec.redisConfig {
+			redisConfig[key] = value
+		}
+		// 完整逻辑前缀由 NamespaceDriver 编码；底层不再拼接未编码前缀。
+		// ClearPrefix 仍接收非空的完整物理 namespace，不需要全库清理授权。
+		redisConfig["prefix"] = ""
+		driver, err = redisDriver.NewRedis(redisConfig)
 	default:
 		return nil, fmt.Errorf("不支持的缓存驱动 %q", spec.driverType)
 	}
 	if err != nil {
 		return nil, err
 	}
-	namespacePrefix := spec.prefix
-	if spec.driverType == "redis" {
-		// Redis 驱动自身用 prefix 约束 SCAN/Clear，不能在外层重复添加。
-		namespacePrefix = ""
-	}
-	return cache.NewNamespaceDriver(driver, namespacePrefix, spec.tagPrefix)
+	return cache.NewNamespaceDriver(driver, spec.prefix, spec.tagPrefix)
 }
 
 func closeAppCacheDrivers(drivers map[string]cache.Driver) error {

@@ -123,7 +123,15 @@ func (c *File) Has(key string) (bool, error) {
 	return found, err
 }
 
-// CacheResourceIdentity 返回文件驱动的真实资源标识，用于运行时 store 隔离校验。
+// CacheDirectory 返回构造时解析符号链接后的真实缓存目录。
+func (c *File) CacheDirectory() string {
+	if c == nil {
+		return ""
+	}
+	return c.path
+}
+
+// CacheResourceIdentity 返回用于 store 隔离校验的不透明资源标识；文件目录应读取 CacheDirectory。
 func (c *File) CacheResourceIdentity() string {
 	if c == nil || c.path == "" {
 		return ""
