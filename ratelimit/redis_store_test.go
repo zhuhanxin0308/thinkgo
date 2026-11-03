@@ -149,7 +149,7 @@ func TestRedisStoreFailsClosedOnBackendAndStateErrors(t *testing.T) {
 		t.Fatalf("Reset 应保留取消原因: %v", err)
 	}
 
-	server.Set(defaultRedisRateLimitPrefix+"client", "corrupted")
+	server.Set(store.prefix+"client", "corrupted")
 	if _, err := store.Take(context.Background(), "client", limit, time.Time{}); err == nil {
 		t.Fatal("损坏的 Redis TAT 必须失败关闭")
 	}

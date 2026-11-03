@@ -15,21 +15,63 @@ and checks that a silently ignored reconfiguration is rejected.
 
 The application configuration path is different: `cache.stores.<name>.prefix`
 is already applied during driver construction. Memory/file backends use the
-namespace wrapper; Redis applies its prefix inside the Redis driver to constrain
-SCAN/Clear and must not receive the same prefix twice. That path is unchanged.
+namespace wrapper; Redis applies its configured prefix inside the Redis driver
+to constrain SCAN/Clear and receives the wrapper's empty logical namespace, so
+the configured prefix is not added twice. All wrappers now add the versioned
+namespace encoding described below.
 The namespace constructor shares pure option validation with `ConfigureStore`,
 not its rejection of a runtime prefix change; valid explicit wrappers still work.
 
 The `Prefix` field remains in `StoreOptions` so old source can compile and receive
 an actionable error instead of falsely claiming isolation. This is an intentional
 fail-closed change for direct callers that supplied a previously ignored prefix.
-It does not migrate old data, change the meaning of existing keys, or automatically
-wrap active drivers. Empty prefixes do not provide isolation, and namespaces are
-not authentication or tenant-authorization boundaries. Callers must handle errors
-and protect backend access independently.
+It does not automatically wrap active drivers. Namespaces are not authentication
+or tenant-authorization boundaries. Callers must handle errors and protect backend
+access independently.
+
+## Namespace encoding and metadata isolation (#126, #128)
+
+`NewNamespaceDriver` treats the complete configured prefix as an identifier,
+including an empty prefix. Its physical business namespace is
+`__thinkgo_namespace__:v2:<UTF-8 byte length>:<prefix>:`. Length framing means
+`tenant:` and `tenant:vip:` cannot address or clear each other's entries even
+when a business key contains `vip:`. Two wrappers with the same logical prefix
+over the same backend still share the same business namespace.
+
+Tag membership and reverse-tag metadata keep separate reserved key prefixes
+inside that namespace. The custom `tag_prefix` is also length-framed after its
+metadata type; it is never substituted for the reserved prefix. A normal key
+such as `tag:default:billing` is therefore an ordinary business value and cannot
+read, overwrite, or delete the internal billing membership list. Existing public
+API rejection of `__thinkgo_tag__:`, `__thinkgo_tag_reverse__:`,
+`__thinkgo_cache_fence__:`, and `__thinkgo_lock__:` keys remains in force.
+
+Get/Set/Delete, batch operations, counters, atomic updates, and lock operations
+all use the same mapping. Clear operations use the complete encoded namespace;
+an empty configured prefix no longer invokes backend-wide Clear. A backend must
+support the relevant prefix-clearing capability, otherwise the wrapper fails
+closed. Fencing metadata remains outside business Clear, in a namespace tied to
+the new encoding, so clearing data does not reset monotonic generations.
+
+### Upgrade and existing cache data
+
+This is a physical key-format change. Upgrade all instances sharing a cache
+namespace together, or drain the old instances before sending traffic to the new
+ones. Old and new instances do not share values, tag relationships, locks, or
+fencing state. Plan for a cold cache and the resulting origin load; prewarm
+important entries from their authoritative data after upgrading.
+
+The wrapper deliberately does not fall back to legacy keys or delete them during
+Clear: a legacy concatenated key cannot reliably identify its owning namespace.
+Let TTL-bound old entries expire. For persistent old entries, remove only a
+verified application-owned scope after all old processes have stopped; do not
+use a broad prefix deletion on a shared backend. The framework does not perform
+automatic migration of old tag or lock metadata.
 
 Regressions cover rejection without partial option publication, shared-backend
-read/write/flush isolation, valid constructor/default-tag behavior, and malformed
-prefix/tag values. Full current-dependency CI and post-merge main verification
+read/write/flush isolation, nested and empty prefixes, ordinary-key/tag metadata
+separation with custom tag prefixes, legacy-key noninterference, valid
+constructor/default-tag behavior, and malformed prefix/tag values. Full
+current-dependency CI and post-merge main verification
 are required before closing the issue. Local archived-dependency results are
 recorded separately and do not replace those checks.

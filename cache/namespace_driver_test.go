@@ -19,9 +19,10 @@ func TestNamespaceDriverAppliesThinkPHPPrefixes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("创建命名空间驱动失败: %v", err)
 	}
-	if driver.key("order") != "tenant:order" ||
-		driver.key(tagMetaPrefix+"users") != "tenant:cache_tag:users" ||
-		driver.key(tagReversePrefix+"order") != "tenant:cache_tag:reverse:order" {
+	const namespace = "__thinkgo_namespace__:v2:7:tenant::"
+	if driver.key("order") != namespace+"order" ||
+		driver.key(tagMetaPrefix+"users") != namespace+tagMetaPrefix+"10:cache_tag::users" ||
+		driver.key(tagReversePrefix+"order") != namespace+tagReversePrefix+"10:cache_tag::order" {
 		t.Fatalf("命名空间键映射错误: normal=%q tag=%q reverse=%q", driver.key("order"), driver.key(tagMetaPrefix+"users"), driver.key(tagReversePrefix+"order"))
 	}
 
@@ -31,7 +32,7 @@ func TestNamespaceDriverAppliesThinkPHPPrefixes(t *testing.T) {
 	if value, found, getErr := driver.Get("order"); getErr != nil || !found || value != "paid" {
 		t.Fatalf("命名空间 Get 错误: value=%#v found=%t err=%v", value, found, getErr)
 	}
-	if value, found, getErr := backend.Get("tenant:order"); getErr != nil || !found || value != "paid" {
+	if value, found, getErr := backend.Get(namespace+"order"); getErr != nil || !found || value != "paid" {
 		t.Fatalf("底层物理键错误: value=%#v found=%t err=%v", value, found, getErr)
 	}
 	if found, hasErr := driver.Has("order"); hasErr != nil || !found {
@@ -57,7 +58,7 @@ func TestNamespaceDriverAppliesThinkPHPPrefixes(t *testing.T) {
 	if err = driver.Delete("order"); err != nil {
 		t.Fatalf("命名空间 Delete 失败: %v", err)
 	}
-	if found, _ := backend.Has("tenant:order"); found {
+	if found, _ := backend.Has(namespace+"order"); found {
 		t.Fatal("Delete 必须删除物理命名空间键")
 	}
 	if err = driver.Clear(); err != nil {
@@ -120,7 +121,7 @@ func TestNamespaceDriverKeepsFenceOutsideBusinessPrefix(t *testing.T) {
 		t.Fatalf("写入命名空间缓存失败: %v", err)
 	}
 	physicalFence := namespaced.key(manager.fenceSequenceKey())
-	if strings.HasPrefix(physicalFence, "tenant:") {
+	if strings.HasPrefix(physicalFence, namespaced.namespace) {
 		t.Fatalf("fencing 元数据落入业务清理前缀: %q", physicalFence)
 	}
 	if _, found, getErr := backend.Get(physicalFence); getErr != nil || !found {
