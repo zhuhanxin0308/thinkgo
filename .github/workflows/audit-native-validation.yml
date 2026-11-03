@@ -95,6 +95,7 @@ jobs:
           grep ' /scratch ' /proc/mounts
           df -h /scratch
           cat /sys/fs/cgroup/memory.max /sys/fs/cgroup/pids.max
+          printf 'OFFLINE_MODULE_PROXY=%s\n' "$GOPROXY"
           for f in /src/go.mod /go/VERSION /modcache/audit-probe /etc/audit-probe; do
             if ( : > "$f" ) 2>/dev/null; then echo "FAIL_WRITABLE=$f"; exit 99; else echo "READ_ONLY_OK=$f"; fi
           done
@@ -116,6 +117,7 @@ jobs:
           PLAN
           chmod a+r "$BASE/plan.sh"
           # The only writable host mount is an empty, dedicated 8 GiB filesystem.
+          # File proxy resolution uses authenticated cached artifacts only; no external network or VCS fallback.
           # No Actions environment, tokens, Docker socket, host home or artifacts enter the container.
           ulimit -f 131072
           set +e
@@ -130,7 +132,7 @@ jobs:
             --mount type=bind,src="$BASE/plan.sh",dst=/plan.sh,readonly \
             --entrypoint /usr/bin/env thinkgo-audit-tools -i \
             PATH=/go/bin:/usr/bin:/bin HOME=/scratch/home TMPDIR=/scratch/tmp \
-            GOROOT=/go GOTOOLCHAIN=local GOENV=off GOWORK=off GOTELEMETRY=off GOPROXY=off GOSUMDB=sum.golang.org GOVCS='*:off' \
+            GOROOT=/go GOTOOLCHAIN=local GOENV=off GOWORK=off GOTELEMETRY=off GOPROXY=file:///modcache/cache/download GOSUMDB=sum.golang.org GOVCS='*:off' \
             GOMODCACHE=/modcache GOCACHE=/scratch/gocache GOPATH=/scratch/gopath GOMAXPROCS=2 GOMEMLIMIT=768MiB LANG=C.UTF-8 \
             /bin/bash /plan.sh > "$BASE/artifacts/native-validation.log" 2>&1
           result=$?
