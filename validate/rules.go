@@ -125,10 +125,10 @@ func evaluateRule(data map[string]interface{}, field string, value interface{}, 
 		}
 		_, err := time.Parse(rule.param, text)
 		return err == nil
-	case "after":
-		return compareDateValue(data, value, rule.param, true, location)
-	case "before":
-		return compareDateValue(data, value, rule.param, false, location)
+	case "after", "afterDate", "afterField":
+		return compareDateValue(data, value, rule, true, location)
+	case "before", "beforeDate", "beforeField":
+		return compareDateValue(data, value, rule, false, location)
 	case "requireIf":
 		relatedValue, relatedExists := data[rule.parameters[0]]
 		if !relatedExists {
@@ -429,7 +429,7 @@ func compareNumeric(value interface{}, parameter string, allowedComparisons ...i
 	return false
 }
 
-func compareDateValue(data map[string]interface{}, value interface{}, parameter string, after bool, location *time.Location) bool {
+func compareDateValue(data map[string]interface{}, value interface{}, rule compiledRule, after bool, location *time.Location) bool {
 	text, valid := scalarText(value)
 	if !valid {
 		return false
@@ -438,8 +438,12 @@ func compareDateValue(data map[string]interface{}, value interface{}, parameter 
 	if err != nil {
 		return false
 	}
-	targetText := parameter
-	if targetValue, exists := data[parameter]; exists {
+	targetText := rule.param
+	if rule.dateField {
+		targetValue, exists := data[rule.param]
+		if !exists {
+			return false
+		}
 		targetText, valid = scalarText(targetValue)
 		if !valid {
 			return false
