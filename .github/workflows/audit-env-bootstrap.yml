@@ -1,0 +1,90 @@
+name: Audit offline environment bootstrap
+
+on:
+  push:
+    branches: ['audit/env-bootstrap-20261103-astra']
+    paths: ['.github/workflows/audit-env-bootstrap.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Read exact audit source (no persisted credentials)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 47fde62dd4a88e0df93cba41ab02fc89516ae035
+          path: source
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+          lfs: false
+
+      - name: Download and verify official toolchain; prefetch dependencies only
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          BASE="$RUNNER_TEMP/thinkgo-audit-bootstrap"
+          mkdir -p "$BASE"/{downloads,toolchains,metadata,home,tmp,modcache,gocache,artifacts/toolchain,artifacts/source,artifacts/modules}
+          curl --fail --location --proto '=https' --tlsv1.2 --retry 2 --max-time 180 \
+            https://go.dev/dl/go1.26.10.linux-amd64.tar.gz \
+            -o "$BASE/artifacts/toolchain/go1.26.10.linux-amd64.tar.gz"
+          printf '%s  %s\n' ccfe7ae822d2c2f41f4fe7c956199967a4dac22d0ee0d2b2bfdb440aab3b20c5 "$BASE/artifacts/toolchain/go1.26.10.linux-amd64.tar.gz" | sha256sum --check --strict
+          tar --no-same-owner -xzf "$BASE/artifacts/toolchain/go1.26.10.linux-amd64.tar.gz" -C "$BASE/toolchains"
+          "$BASE/toolchains/go/bin/go" version | tee "$BASE/artifacts/toolchain/version.txt"
+          test "$(git -C source rev-parse HEAD)" = 47fde62dd4a88e0df93cba41ab02fc89516ae035
+          git -C source archive --format=tar.gz HEAD > "$BASE/artifacts/source/thinkgo-47fde62.tar.gz"
+          git -C source ls-tree -r HEAD > "$BASE/artifacts/source/source-blobs.txt"
+          git -C source show HEAD:go.mod > "$BASE/metadata/go.mod"
+          git -C source show HEAD:go.sum > "$BASE/metadata/go.sum"
+          cp "$BASE/metadata/go.mod" "$BASE/artifacts/modules/go.mod"
+          cp "$BASE/metadata/go.sum" "$BASE/artifacts/modules/go.sum"
+          cd "$BASE/metadata"
+          # No target builds, tests, generators, hooks or binaries run here.
+          # Download uses the public Go proxy and checksum database; never direct VCS.
+          env -i PATH="$BASE/toolchains/go/bin:/usr/bin:/bin" HOME="$BASE/home" TMPDIR="$BASE/tmp" \
+            GOTOOLCHAIN=local GOENV=off GOWORK=off GOTELEMETRY=off GOPROXY=https://proxy.golang.org \
+            GOSUMDB=sum.golang.org GOMODCACHE="$BASE/modcache" GOCACHE="$BASE/gocache" \
+            go mod download -json > "$BASE/artifacts/modules/module-downloads.json"
+          env -i PATH="$BASE/toolchains/go/bin:/usr/bin:/bin" HOME="$BASE/home" TMPDIR="$BASE/tmp" \
+            GOTOOLCHAIN=local GOENV=off GOWORK=off GOTELEMETRY=off GOPROXY=off \
+            GOSUMDB=sum.golang.org GOMODCACHE="$BASE/modcache" GOCACHE="$BASE/gocache" \
+            go mod verify | tee "$BASE/artifacts/modules/module-verification.txt"
+          cmp go.mod "$BASE/artifacts/modules/go.mod"
+          cmp go.sum "$BASE/artifacts/modules/go.sum"
+          tar -czf "$BASE/artifacts/modules/modules.tar.gz" -C "$BASE" modcache
+          for part in toolchain source modules; do
+            (cd "$BASE/artifacts/$part" && find . -maxdepth 1 -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
+          done
+          du -sh "$BASE/artifacts/"*
+
+      - name: Export official toolchain archive
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: audit-go12610-linux-amd64
+          path: ${{ runner.temp }}/thinkgo-audit-bootstrap/artifacts/toolchain/*
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Export exact source snapshot
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: audit-source-47fde62
+          path: ${{ runner.temp }}/thinkgo-audit-bootstrap/artifacts/source/*
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Export authenticated module cache
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: audit-modules-47fde62
+          path: ${{ runner.temp }}/thinkgo-audit-bootstrap/artifacts/modules/*
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
