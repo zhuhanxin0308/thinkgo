@@ -15,6 +15,7 @@ import (
 	"github.com/zhuhanxin0308/thinkgo/v3"
 	"github.com/zhuhanxin0308/thinkgo/v3/config"
 	"github.com/zhuhanxin0308/thinkgo/v3/db"
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/apppath"
 	"github.com/zhuhanxin0308/thinkgo/v3/migration"
 	"github.com/zhuhanxin0308/thinkgo/v3/route"
 	"github.com/zhuhanxin0308/thinkgo/v3/telemetry"
@@ -501,11 +502,7 @@ func stringList(value interface{}) ([]string, error) {
 }
 
 func resolveApplicationPath(basePath, configured string) string {
-	configured = strings.TrimSpace(configured)
-	if filepath.IsAbs(configured) {
-		return filepath.Clean(configured)
-	}
-	return filepath.Join(basePath, configured)
+	return apppath.Resolve(basePath, configured)
 }
 
 func requireRegularFile(path string) error {

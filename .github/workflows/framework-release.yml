@@ -115,10 +115,8 @@ jobs:
           test ! -d framework
           test ! -f main.go
           test ! -f go.work
-          if git ls-files | grep -E '(^|/)(\.env|.*\.(pem|key|p12|pfx))$'; then
-            echo '发布提交包含环境文件或凭据文件' >&2
-            exit 1
-          fi
+          python3 -B -m unittest discover -s scripts -p 'test_check_release_files.py'
+          python3 -B scripts/check_release_files.py
           test -z "$(git status --porcelain)"
 
       - name: Verify framework module

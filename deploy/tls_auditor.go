@@ -446,6 +446,8 @@ func validTLSDNSName(host string) bool {
 
 func verifyTLSCertificateTarget(certificate *x509.Certificate, target string) error {
 	if strings.HasPrefix(target, "*.") {
+		// HTTP allowed_hosts uses the same single-label wildcard as DNS SANs.
+		// A matching wildcard therefore covers exactly this configured target set.
 		for _, dnsName := range certificate.DNSNames {
 			if strings.EqualFold(strings.TrimSuffix(strings.TrimSpace(dnsName), "."), target) {
 				return nil
