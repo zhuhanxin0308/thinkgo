@@ -21,7 +21,10 @@ env:
 jobs:
   linux:
     name: Linux framework gate
-    runs-on: ubuntu-24.04
+    # MongoDB 8.0.29 拒绝 24.04 runner 的 7.0 内核；22.04 当前使用 6.8。
+    # 固定包含 SERVER-131779 修复的镜像后恢复 24.04，早于 22.04 的 2027-04-17 退役日期。
+    # https://jira.mongodb.org/browse/SERVER-131779
+    runs-on: ubuntu-22.04
     timeout-minutes: 60
     services:
       redis:
@@ -126,6 +129,7 @@ jobs:
           unformatted="$(git ls-files -z -- '*.go' | xargs -0 gofmt -l)"
           if [[ -n "$unformatted" ]]; then
             printf 'Unformatted framework Go files:\n%s\n' "$unformatted" >&2
+            git ls-files -z -- '*.go' | xargs -0 gofmt -d -- >&2
             exit 1
           fi
           GOWORK=off go mod verify
