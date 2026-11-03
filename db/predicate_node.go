@@ -92,7 +92,7 @@ func predicateNodeSQL(node PredicateNode, builder Builder) (string, []interface{
 		}
 		return field + " " + node.Operator + " " + right, nil, nil
 	case PredicateRaw:
-		if err := validateRawClause(node.SQL, len(node.Values), "where"); err != nil {
+		if err := validateRawClause(node.SQL, len(node.Values), "where", sqlBuilderDialect(builder)); err != nil {
 			return "", nil, err
 		}
 		return node.SQL, cloneDatabaseValues(node.Values), nil

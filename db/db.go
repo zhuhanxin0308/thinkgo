@@ -424,7 +424,7 @@ func (db *DB) queryContext(ctx context.Context, allowLegacy bool, sql string, ar
 	if ctx == nil {
 		return nil, db.reportError("query", fmt.Errorf("%w: 查询上下文不能为空", ErrInvalidQuery), nil)
 	}
-	if err := validateRawStatement(sql, len(args)); err != nil {
+	if err := validateRawStatement(sql, len(args), db.DialectName()); err != nil {
 		return nil, db.reportError("query", err, nil)
 	}
 	if err := validateBindParameterBudget(databaseQueryBuilder(db), len(args)); err != nil {
@@ -494,7 +494,7 @@ func (db *DB) executeContext(ctx context.Context, allowLegacy bool, sql string, 
 	if ctx == nil {
 		return 0, db.reportError("execute", fmt.Errorf("%w: 执行上下文不能为空", ErrInvalidQuery), nil)
 	}
-	if err := validateRawStatement(sql, len(args)); err != nil {
+	if err := validateRawStatement(sql, len(args), db.DialectName()); err != nil {
 		return 0, db.reportError("execute", err, nil)
 	}
 	if err := validateBindParameterBudget(databaseQueryBuilder(db), len(args)); err != nil {

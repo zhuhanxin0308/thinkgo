@@ -431,7 +431,7 @@ func (q *Query) WhereBetween(field string, min, max interface{}) *Query {
 // 仅应在确实需要复杂表达式时使用，调用方必须自行保证参数化和输入安全。
 func (q *Query) WhereRaw(rawSQL string, args ...interface{}) *Query {
 	q = q.clone()
-	if err := validateRawClause(rawSQL, len(args), "where"); err != nil {
+	if err := validateRawClause(rawSQL, len(args), "where", sqlBuilderDialect(q.builder())); err != nil {
 		return q.setError(err)
 	}
 	return q.appendQueryNode("AND", PredicateNode{Kind: PredicateRaw, SQL: rawSQL, Values: cloneDatabaseValues(args)}, q.builder())
@@ -538,7 +538,7 @@ func (q *Query) Having(having string, args ...interface{}) *Query {
 // 仅应在聚合函数表达式等无法通过安全入口描述的场景下使用。
 func (q *Query) HavingRaw(having string, args ...interface{}) *Query {
 	q = q.clone()
-	if err := validateRawClause(having, len(args), "having"); err != nil {
+	if err := validateRawClause(having, len(args), "having", sqlBuilderDialect(q.builder())); err != nil {
 		return q.setError(err)
 	}
 	if !q.replaceHavingArguments(args) {

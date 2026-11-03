@@ -138,7 +138,7 @@ func (c *SQLConnection) selectRowsContext(ctx context.Context, request SelectReq
 	if err := c.validateContext(ctx); err != nil {
 		return nil, err
 	}
-	where, args, err := request.Predicate().compileSQL()
+	where, args, err := request.Predicate().compileSQL(c.Builder)
 	if err != nil {
 		return nil, err
 	}
@@ -156,7 +156,7 @@ func (c *SQLConnection) selectRowsContext(ctx context.Context, request SelectReq
 		fields = fmt.Sprintf("%s(%s) AS %s", strings.ToUpper(strings.TrimSpace(aggregate.Function)), aggregate.Field, aggregate.Alias)
 		fieldsForValidation = "*"
 	}
-	if err := validateSelectArguments(request.Table(), fieldsForValidation, where, args, request.Order(), request.Limit(), request.Offset()); err != nil {
+	if err := validateSelectArguments(request.Table(), fieldsForValidation, where, args, request.Order(), request.Limit(), request.Offset(), sqlBuilderDialect(c.Builder)); err != nil {
 		return nil, err
 	}
 	if err := validateBindParameterBudget(c.Builder, len(args)); err != nil {
@@ -254,11 +254,11 @@ func (c *SQLConnection) Update(ctx context.Context, request UpdateRequest) (Upda
 	if err := validateWriteArguments(request.Table(), data); err != nil {
 		return UpdateResult{}, err
 	}
-	where, args, err := request.Predicate().compileSQL()
+	where, args, err := request.Predicate().compileSQL(c.Builder)
 	if err != nil {
 		return UpdateResult{}, err
 	}
-	if err := validateMutationPredicate(where, args); err != nil {
+	if err := validateMutationPredicate(where, args, sqlBuilderDialect(c.Builder)); err != nil {
 		return UpdateResult{}, err
 	}
 	if err := validateBindParameterBudget(c.Builder, len(data), len(args)); err != nil {
@@ -284,11 +284,11 @@ func (c *SQLConnection) Delete(ctx context.Context, request DeleteRequest) (Dele
 	if err := validateIdentifier(request.Table()); err != nil {
 		return DeleteResult{}, fmt.Errorf("%w: 非法表名: %w", ErrInvalidQuery, err)
 	}
-	where, args, err := request.Predicate().compileSQL()
+	where, args, err := request.Predicate().compileSQL(c.Builder)
 	if err != nil {
 		return DeleteResult{}, err
 	}
-	if err := validateMutationPredicate(where, args); err != nil {
+	if err := validateMutationPredicate(where, args, sqlBuilderDialect(c.Builder)); err != nil {
 		return DeleteResult{}, err
 	}
 	if err := validateBindParameterBudget(c.Builder, len(args)); err != nil {
@@ -313,7 +313,7 @@ func (c *SQLConnection) Count(ctx context.Context, request CountRequest) (int64,
 	if err := validateIdentifier(request.Table()); err != nil {
 		return 0, fmt.Errorf("%w: 非法表名: %w", ErrInvalidQuery, err)
 	}
-	where, args, err := request.Predicate().compileSQL()
+	where, args, err := request.Predicate().compileSQL(c.Builder)
 	if err != nil {
 		return 0, err
 	}
@@ -344,7 +344,7 @@ func (c *SQLConnection) QueryContext(ctx context.Context, rawSQL string, args ..
 	if err := c.validateContext(ctx); err != nil {
 		return nil, err
 	}
-	if err := validateRawStatement(rawSQL, len(args)); err != nil {
+	if err := validateRawStatement(rawSQL, len(args), sqlBuilderDialect(c.Builder)); err != nil {
 		return nil, err
 	}
 	if err := validateBindParameterBudget(c.Builder, len(args)); err != nil {
@@ -365,7 +365,7 @@ func (c *SQLConnection) QueryEachContext(ctx context.Context, rawSQL string, cal
 	if err := c.validateContext(ctx); err != nil {
 		return err
 	}
-	if err := validateRawStatement(rawSQL, len(args)); err != nil {
+	if err := validateRawStatement(rawSQL, len(args), sqlBuilderDialect(c.Builder)); err != nil {
 		return err
 	}
 	if err := validateBindParameterBudget(c.Builder, len(args)); err != nil {
@@ -386,7 +386,7 @@ func (c *SQLConnection) ExecuteContext(ctx context.Context, rawSQL string, args 
 	if err := c.validateContext(ctx); err != nil {
 		return 0, err
 	}
-	if err := validateRawStatement(rawSQL, len(args)); err != nil {
+	if err := validateRawStatement(rawSQL, len(args), sqlBuilderDialect(c.Builder)); err != nil {
 		return 0, err
 	}
 	if err := validateBindParameterBudget(c.Builder, len(args)); err != nil {
@@ -442,7 +442,7 @@ func (c *SQLConnection) validateContext(ctx context.Context) error {
 	return nil
 }
 
-func validateSelectArguments(table, fields string, where []string, args []interface{}, order string, limit, offset int) error {
+func validateSelectArguments(table, fields string, where []string, args []interface{}, order string, limit, offset int, dialects ...string) error {
 	if err := validateIdentifier(table); err != nil {
 		return fmt.Errorf("%w: 非法表名: %w", ErrInvalidQuery, err)
 	}
@@ -455,7 +455,7 @@ func validateSelectArguments(table, fields string, where []string, args []interf
 	if limit < 0 || offset < 0 {
 		return fmt.Errorf("%w: limit 或 offset 不能为负数", ErrInvalidPagination)
 	}
-	if err := validatePlaceholderCount(strings.Join(where, " AND "), len(args)); err != nil {
+	if err := validatePlaceholderCount(strings.Join(where, " AND "), len(args), dialects...); err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalidQuery, err)
 	}
 	return nil
@@ -474,11 +474,11 @@ func validateWriteArguments(table string, data map[string]interface{}) error {
 	return nil
 }
 
-func validateMutationPredicate(where []string, args []interface{}) error {
+func validateMutationPredicate(where []string, args []interface{}, dialects ...string) error {
 	if len(where) == 0 {
 		return ErrUnsafeFullTableMutation
 	}
-	if err := validatePlaceholderCount(strings.Join(where, " AND "), len(args)); err != nil {
+	if err := validatePlaceholderCount(strings.Join(where, " AND "), len(args), dialects...); err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalidQuery, err)
 	}
 	return nil

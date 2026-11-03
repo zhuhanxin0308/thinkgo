@@ -11,29 +11,30 @@ const sqlRedactionMarker = "[REDACTED]"
 // 只有当前方言明确支持的标识符引用才会原样保留；未知方言采用保守脱敏。
 func redactSQLLiteralsAndComments(sqlText string, dialect string) string {
 	dialect = strings.ToLower(strings.TrimSpace(dialect))
+	backslashEscapes := sqlBackslashEscapes(dialect)
 	var result strings.Builder
 	result.Grow(len(sqlText))
 	for index := 0; index < len(sqlText); {
 		switch sqlText[index] {
 		case '\'':
-			index = redactSQLQuotedToken(&result, sqlText, index, '\'')
+			index = redactSQLQuotedToken(&result, sqlText, index, '\'', backslashEscapes)
 		case '"':
 			if doubleQuoteIsIdentifier(dialect) {
-				index = copySQLQuotedToken(&result, sqlText, index, '"')
+				index = copySQLQuotedToken(&result, sqlText, index, '"', backslashEscapes)
 			} else {
-				index = redactSQLQuotedToken(&result, sqlText, index, '"')
+				index = redactSQLQuotedToken(&result, sqlText, index, '"', backslashEscapes)
 			}
 		case '`':
 			if dialect == "mysql" {
-				index = copySQLQuotedToken(&result, sqlText, index, '`')
+				index = copySQLQuotedToken(&result, sqlText, index, '`', backslashEscapes)
 			} else {
-				index = redactSQLQuotedToken(&result, sqlText, index, '`')
+				index = redactSQLQuotedToken(&result, sqlText, index, '`', backslashEscapes)
 			}
 		case '[':
 			if dialect == "sqlserver" {
-				index = copySQLQuotedToken(&result, sqlText, index, ']')
+				index = copySQLQuotedToken(&result, sqlText, index, ']', backslashEscapes)
 			} else {
-				index = redactSQLQuotedToken(&result, sqlText, index, ']')
+				index = redactSQLQuotedToken(&result, sqlText, index, ']', backslashEscapes)
 			}
 		case '-':
 			if index+1 < len(sqlText) && sqlText[index+1] == '-' {
@@ -95,13 +96,13 @@ func doubleQuoteIsIdentifier(dialect string) bool {
 	}
 }
 
-func redactSQLQuotedToken(result *strings.Builder, sqlText string, index int, closing byte) int {
+func redactSQLQuotedToken(result *strings.Builder, sqlText string, index int, closing byte, backslashEscapes bool) int {
 	result.WriteByte(sqlText[index])
 	result.WriteString(sqlRedactionMarker)
 	index++
 	for index < len(sqlText) {
 		current := sqlText[index]
-		if current == '\\' && index+1 < len(sqlText) {
+		if backslashEscapes && current == '\\' && index+1 < len(sqlText) {
 			index += 2
 			continue
 		}
@@ -118,14 +119,14 @@ func redactSQLQuotedToken(result *strings.Builder, sqlText string, index int, cl
 	return index
 }
 
-func copySQLQuotedToken(result *strings.Builder, sqlText string, index int, closing byte) int {
+func copySQLQuotedToken(result *strings.Builder, sqlText string, index int, closing byte, backslashEscapes bool) int {
 	result.WriteByte(sqlText[index])
 	index++
 	for index < len(sqlText) {
 		current := sqlText[index]
 		result.WriteByte(current)
 		index++
-		if current == '\\' && index < len(sqlText) {
+		if backslashEscapes && current == '\\' && index < len(sqlText) {
 			result.WriteByte(sqlText[index])
 			index++
 			continue
@@ -142,33 +143,46 @@ func copySQLQuotedToken(result *strings.Builder, sqlText string, index int, clos
 	return index
 }
 
+// SQLite quotes are escaped by doubling the quote, never by a backslash.
+// Keep the existing scanner policy for other and unknown dialects.
+func sqlBackslashEscapes(dialects ...string) bool {
+	return len(dialects) == 0 || !strings.EqualFold(strings.TrimSpace(dialects[0]), "sqlite")
+}
+
+func sqlBuilderDialect(builder Builder) string {
+	if isNilDatabaseDependency(builder) {
+		return ""
+	}
+	return builder.DialectName()
+}
+
 // validateRawClause 校验显式原始条件的基本完整性和绑定参数数量。
-func validateRawClause(sqlText string, argsCount int, clauseName string) error {
+func validateRawClause(sqlText string, argsCount int, clauseName string, dialects ...string) error {
 	if strings.TrimSpace(sqlText) == "" {
 		return fmt.Errorf("%s 原始条件不能为空", clauseName)
 	}
 	if strings.IndexByte(sqlText, 0) >= 0 {
 		return fmt.Errorf("%s 原始条件包含 NUL 字节", clauseName)
 	}
-	return validatePlaceholderCount(sqlText, argsCount)
+	return validatePlaceholderCount(sqlText, argsCount, dialects...)
 }
 
 // validateRawStatement 校验原生 SQL 入口，框架约定调用方统一使用问号占位符。
-func validateRawStatement(sqlText string, argsCount int) error {
+func validateRawStatement(sqlText string, argsCount int, dialects ...string) error {
 	if strings.TrimSpace(sqlText) == "" {
 		return fmt.Errorf("%w: 原生 SQL 不能为空", ErrInvalidQuery)
 	}
 	if strings.IndexByte(sqlText, 0) >= 0 {
 		return fmt.Errorf("%w: 原生 SQL 包含 NUL 字节", ErrInvalidQuery)
 	}
-	if err := validatePlaceholderCount(sqlText, argsCount); err != nil {
+	if err := validatePlaceholderCount(sqlText, argsCount, dialects...); err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalidQuery, err)
 	}
 	return nil
 }
 
-func validatePlaceholderCount(sqlText string, argsCount int) error {
-	placeholderCount, err := countSQLPlaceholders(sqlText)
+func validatePlaceholderCount(sqlText string, argsCount int, dialects ...string) error {
+	placeholderCount, err := countSQLPlaceholders(sqlText, dialects...)
 	if err != nil {
 		return err
 	}
@@ -179,7 +193,8 @@ func validatePlaceholderCount(sqlText string, argsCount int) error {
 }
 
 // countSQLPlaceholders 忽略字符串、标识符引用和注释中的问号，只统计真实绑定占位符。
-func countSQLPlaceholders(sqlText string) (int, error) {
+func countSQLPlaceholders(sqlText string, dialects ...string) (int, error) {
+	backslashEscapes := sqlBackslashEscapes(dialects...)
 	const (
 		stateNormal = iota
 		stateSingleQuote
@@ -241,7 +256,7 @@ func countSQLPlaceholders(sqlText string) (int, error) {
 			} else if state == stateBacktick {
 				closing = '`'
 			}
-			if current == '\\' && index+1 < len(sqlText) {
+			if backslashEscapes && current == '\\' && index+1 < len(sqlText) {
 				index++
 				continue
 			}

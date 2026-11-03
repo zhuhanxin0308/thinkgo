@@ -150,7 +150,7 @@ func (connection *pinnedSQLConnection) QueryContext(ctx context.Context, rawSQL 
 	if ctx == nil {
 		return nil, fmt.Errorf("%w: pinned 查询上下文不能为空", ErrInvalidQuery)
 	}
-	if err := validateRawStatement(rawSQL, len(args)); err != nil {
+	if err := validateRawStatement(rawSQL, len(args), connection.DialectName()); err != nil {
 		return nil, err
 	}
 	if err := validateBindParameterBudget(connection.connection.Builder, len(args)); err != nil {
@@ -171,7 +171,7 @@ func (connection *pinnedSQLConnection) ExecuteContext(ctx context.Context, rawSQ
 	if ctx == nil {
 		return 0, fmt.Errorf("%w: pinned 执行上下文不能为空", ErrInvalidQuery)
 	}
-	if err := validateRawStatement(rawSQL, len(args)); err != nil {
+	if err := validateRawStatement(rawSQL, len(args), connection.DialectName()); err != nil {
 		return 0, err
 	}
 	if err := validateBindParameterBudget(connection.connection.Builder, len(args)); err != nil {
@@ -300,7 +300,7 @@ func (transaction *pinnedSQLTransaction) QueryContext(ctx context.Context, rawSQ
 	if err := transaction.active(); err != nil {
 		return nil, err
 	}
-	if err := validateRawStatement(rawSQL, len(args)); err != nil {
+	if err := validateRawStatement(rawSQL, len(args), sqlBuilderDialect(transaction.connection.Builder)); err != nil {
 		return nil, err
 	}
 	if err := validateBindParameterBudget(transaction.connection.Builder, len(args)); err != nil {
@@ -320,7 +320,7 @@ func (transaction *pinnedSQLTransaction) ExecuteContext(ctx context.Context, raw
 	if err := transaction.active(); err != nil {
 		return 0, err
 	}
-	if err := validateRawStatement(rawSQL, len(args)); err != nil {
+	if err := validateRawStatement(rawSQL, len(args), sqlBuilderDialect(transaction.connection.Builder)); err != nil {
 		return 0, err
 	}
 	if err := validateBindParameterBudget(transaction.connection.Builder, len(args)); err != nil {
