@@ -19,6 +19,18 @@ const (
 // 调用方收到该错误后不能假定目标仍处于旧状态，应重新读取目标确认结果。
 var ErrFilesystemOperationCommitted = errors.New("文件系统操作已提交")
 
+// ErrUnsafeLocalWriteDirectory 表示原子写入依赖的目录不能安全用于暂存与发布。
+// Unix 检查 POSIX 所有者和权限位；扩展 ACL 的信任条件见包文档。
+var ErrUnsafeLocalWriteDirectory = errors.New("本地原子写入目录不可信")
+
+var errLocalTemporaryChanged = errors.New("本地原子写入临时项已被替换")
+
+type localAtomicTemporary struct {
+	name        string
+	file        *os.File
+	information os.FileInfo
+}
+
 func (disk *Local) writeReaderWithSource(
 	filePath string,
 	contents io.Reader,
@@ -72,7 +84,7 @@ func (disk *Local) writeReaderWithSource(
 	} else if !errors.Is(statErr, os.ErrNotExist) {
 		return fmt.Errorf("检查写入目标失败: %w", statErr)
 	}
-	if err = disk.ensureParentDirectoryLocked(logicalPath, directoryVisibility); err != nil {
+	if err = disk.ensureAtomicParentDirectoryLocked(logicalPath, directoryVisibility); err != nil {
 		return err
 	}
 	committed, err := disk.replaceReaderLocked(
@@ -98,19 +110,19 @@ func (disk *Local) replaceReaderLocked(
 	copyMessage string,
 	sourceCloseMessage string,
 ) (bool, error) {
-	temporaryName, prepareErr := disk.prepareAtomicFileLocked(target, contents, mode, copyMessage)
+	temporary, prepareErr := disk.prepareAtomicFileLocked(target, contents, mode, copyMessage)
 	sourceCloseErr := error(nil)
 	if source != nil {
 		sourceCloseErr = wrapOperationError(sourceCloseMessage, disk.closeOwnedSource(source))
 	}
 	if prepareErr != nil || sourceCloseErr != nil {
 		cleanupErr := error(nil)
-		if temporaryName != "" {
-			cleanupErr = disk.removeTemporaryLocked(temporaryName)
+		if temporary != nil {
+			cleanupErr = disk.removeTemporaryLocked(temporary)
 		}
 		return false, errors.Join(prepareErr, sourceCloseErr, cleanupErr)
 	}
-	return disk.publishAtomicFileLocked(temporaryName, target)
+	return disk.publishAtomicFileLocked(temporary, target)
 }
 
 func (disk *Local) prepareAtomicFileLocked(
@@ -118,44 +130,50 @@ func (disk *Local) prepareAtomicFileLocked(
 	contents io.Reader,
 	mode os.FileMode,
 	copyMessage string,
-) (string, error) {
-	temporaryName, temporary, err := disk.createAtomicTemporaryLocked(target)
+) (*localAtomicTemporary, error) {
+	temporary, err := disk.createAtomicTemporaryLocked(target)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	fail := func(operationErr error, closeAttempted bool) (string, error) {
+	fail := func(operationErr error, closeAttempted bool) (*localAtomicTemporary, error) {
 		closeErr := error(nil)
 		if closeAttempted {
 			// 关闭实现可能在返回错误前后关闭句柄，直接再关闭一次仅用于确保可清理。
-			_ = temporary.Close()
+			_ = temporary.file.Close()
 		} else {
-			closeErr = disk.operations.closeTemporary(temporary)
+			closeErr = disk.operations.closeTemporary(temporary.file)
 			if closeErr != nil {
-				_ = temporary.Close()
+				_ = temporary.file.Close()
 			}
 		}
-		return temporaryName, errors.Join(
+		return temporary, errors.Join(
 			operationErr,
 			wrapOperationError("关闭临时文件失败", closeErr),
-			disk.removeTemporaryLocked(temporaryName),
+			disk.removeTemporaryLocked(temporary),
 		)
 	}
-	if _, err = disk.operations.copy(temporary, contents); err != nil {
+	if _, err = disk.operations.copy(temporary.file, contents); err != nil {
 		return fail(wrapOperationError(copyMessage, err), false)
 	}
-	if err = disk.operations.chmod(disk.root, temporaryName, mode); err != nil {
+	if err = disk.validateAtomicTemporaryLocked(temporary); err != nil {
+		return fail(err, false)
+	}
+	if err = disk.operations.chmodTemporary(temporary.file, mode); err != nil {
 		return fail(fmt.Errorf("设置临时文件权限失败: %w", err), false)
 	}
-	if err = disk.operations.syncFile(temporary); err != nil {
+	if err = disk.operations.syncFile(temporary.file); err != nil {
 		return fail(fmt.Errorf("同步临时文件失败: %w", err), false)
 	}
-	if err = disk.operations.closeTemporary(temporary); err != nil {
+	if err = disk.operations.closeTemporary(temporary.file); err != nil {
 		return fail(fmt.Errorf("关闭临时文件失败: %w", err), true)
 	}
-	return temporaryName, nil
+	return temporary, nil
 }
 
-func (disk *Local) createAtomicTemporaryLocked(target string) (string, *os.File, error) {
+func (disk *Local) createAtomicTemporaryLocked(target string) (*localAtomicTemporary, error) {
+	if err := disk.validateAtomicParentDirectoryLocked(target); err != nil {
+		return nil, err
+	}
 	parent := path.Dir(target)
 	if parent == "." {
 		parent = ""
@@ -163,7 +181,7 @@ func (disk *Local) createAtomicTemporaryLocked(target string) (string, *os.File,
 	for attempt := 0; attempt < localTemporaryAttempts; attempt++ {
 		randomBytes := make([]byte, 16)
 		if _, err := rand.Read(randomBytes); err != nil {
-			return "", nil, fmt.Errorf("生成临时文件名失败: %w", err)
+			return nil, fmt.Errorf("生成临时文件名失败: %w", err)
 		}
 		temporaryName := localTemporaryPrefix + hex.EncodeToString(randomBytes)
 		if parent != "" {
@@ -171,20 +189,28 @@ func (disk *Local) createAtomicTemporaryLocked(target string) (string, *os.File,
 		}
 		temporary, err := disk.root.OpenFile(temporaryName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 		if err == nil {
-			return temporaryName, temporary, nil
+			information, statErr := temporary.Stat()
+			if statErr != nil {
+				// Without the descriptor identity, never unlink an uncertain path.
+				return nil, errors.Join(fmt.Errorf("读取临时文件身份失败: %w", statErr), temporary.Close())
+			}
+			return &localAtomicTemporary{name: temporaryName, file: temporary, information: information}, nil
 		}
 		if !errors.Is(err, os.ErrExist) {
-			return "", nil, fmt.Errorf("创建同目录临时文件失败: %w", err)
+			return nil, fmt.Errorf("创建同目录临时文件失败: %w", err)
 		}
 	}
-	return "", nil, fmt.Errorf("创建同目录临时文件失败: 随机名称连续冲突 %d 次", localTemporaryAttempts)
+	return nil, fmt.Errorf("创建同目录临时文件失败: 随机名称连续冲突 %d 次", localTemporaryAttempts)
 }
 
-func (disk *Local) publishAtomicFileLocked(temporaryName string, target string) (bool, error) {
-	if err := disk.operations.replace(disk.root, temporaryName, target); err != nil {
+func (disk *Local) publishAtomicFileLocked(temporary *localAtomicTemporary, target string) (bool, error) {
+	if err := disk.validateAtomicTemporaryLocked(temporary); err != nil {
+		return false, err
+	}
+	if err := disk.operations.replace(disk.root, temporary.name, target); err != nil {
 		return false, errors.Join(
 			fmt.Errorf("原子替换目标失败: %w", err),
-			disk.removeTemporaryLocked(temporaryName),
+			disk.removeTemporaryLocked(temporary),
 		)
 	}
 	if err := disk.operations.syncDirectory(disk.root, path.Dir(target)); err != nil {
@@ -211,11 +237,35 @@ func (disk *Local) closeOwnedSource(source io.Closer) error {
 	return err
 }
 
-func (disk *Local) removeTemporaryLocked(temporaryName string) error {
-	if temporaryName == "" {
+func (disk *Local) validateAtomicTemporaryLocked(temporary *localAtomicTemporary) error {
+	if temporary == nil || temporary.information == nil {
+		return errLocalTemporaryChanged
+	}
+	if err := disk.validateAtomicParentDirectoryLocked(temporary.name); err != nil {
+		return err
+	}
+	information, err := disk.root.Lstat(temporary.name)
+	if err != nil {
+		return errors.Join(errLocalTemporaryChanged, err)
+	}
+	if !information.Mode().IsRegular() || !os.SameFile(temporary.information, information) {
+		return errLocalTemporaryChanged
+	}
+	return nil
+}
+
+func (disk *Local) removeTemporaryLocked(temporary *localAtomicTemporary) error {
+	if temporary == nil {
 		return nil
 	}
-	err := disk.root.Remove(temporaryName)
+	if err := disk.validateAtomicTemporaryLocked(temporary); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		// Do not delete a replacement directory entry, including on failure paths.
+		return err
+	}
+	err := disk.root.Remove(temporary.name)
 	if err == nil || errors.Is(err, os.ErrNotExist) {
 		return nil
 	}

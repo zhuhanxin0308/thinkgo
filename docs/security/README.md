@@ -22,6 +22,7 @@
 | 数据库错误对外展示 | [内部错误与公共响应](database-errors.md) |
 | 参数来源与授权对象 | [Request.Route / Param 的安全用法](request-parameter-sources.md) |
 | 内部路径与对外文件引用 | [Local.Path、上传 key 和 URL](filesystem-paths.md) |
+| 本地文件原子发布 | [目录所有权、权限与平台信任边界](filesystem-atomic-write.md) |
 | 来自用户输入的跳转 | [站内重定向](local-redirects.md) |
 | 锁竞争负载 | [缓存锁退避](cache-lock-contention.md) |
 | 开发服务器监听 | [回环默认值与显式外部监听](development-listen-address.md) |
