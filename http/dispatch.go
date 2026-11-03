@@ -66,7 +66,20 @@ func (h *Http) dispatch(matchedRoute *route.Route, req *context.Request) *contex
 		if !exists {
 			return h.dispatchInternalError("", errors.New("标准库路由处理器缺少响应写入器"))
 		}
-		standardHandler.ServeHTTP(writer, req.Raw())
+		raw := req.Raw()
+		method := req.Method()
+		if raw != nil && raw.Method != method {
+			// 标准库处理器必须看到路由和鉴权使用的有效方法；保留原请求
+			// 供 Method(true) 与审计使用，并沿用同一取消/截止时间上下文。
+			raw = raw.Clone(raw.Context())
+			raw.Method = method
+		}
+		if method == http.MethodHead {
+			// 原始 GET 可覆盖为 HEAD。即使处理器忽略 HEAD，适配层也不能
+			// 将实体写出；能力门面继续如实保留底层支持的接口。
+			writer = adaptResponseWriterCapabilities(&headResponseWriter{ResponseWriter: writer}, writer)
+		}
+		standardHandler.ServeHTTP(writer, raw)
 		return context.NewCommittedResponse(responseWriterStatus(writer))
 	}
 	if callback := reflect.ValueOf(handler); callback.IsValid() && callback.Kind() == reflect.Func {

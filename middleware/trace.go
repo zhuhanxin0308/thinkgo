@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	htmlparser "golang.org/x/net/html"
+
 	"github.com/zhuhanxin0308/thinkgo/v3/context"
 	"github.com/zhuhanxin0308/thinkgo/v3/debug"
 	"github.com/zhuhanxin0308/thinkgo/v3/exception"
@@ -129,6 +131,13 @@ func (t *Trace) Handle(req *context.Request, next func(*context.Request) *contex
 	if resp == nil || shouldSkipTraceOutput(req, resp) {
 		return resp
 	}
+	content := string(resp.GetBody())
+	position := traceBodyEnd(content)
+	if position < 0 {
+		// 缺少可确认的正文结束位置时不追加 HTML，避免进入未闭合的
+		// script、textarea、注释等上下文并激活原本惰性的数据。
+		return resp
+	}
 
 	resp.Header("Cache-Control", "no-store")
 	info := reqDebug.GetInfo()
@@ -142,14 +151,41 @@ func (t *Trace) Handle(req *context.Request, next func(*context.Request) *contex
 	if traceType == "console" {
 		output = buildConsoleTrace(info)
 	}
-	content := string(resp.GetBody())
-	lowerContent := strings.ToLower(content)
-	if position := strings.LastIndex(lowerContent, "</body>"); position >= 0 {
-		resp.Content(content[:position] + output + content[position:])
-	} else {
-		resp.Content(content + output)
-	}
+	resp.Content(content[:position] + output + content[position:])
 	return resp
+}
+
+// traceBodyEnd 使用 tokenizer 的原始字节长度定位正文结束标签。不能先做
+// Unicode 大小写转换再用新偏移切分原文；JSON/script 中的伪标签也不能作为插入点。
+func traceBodyEnd(content string) int {
+	tokenizer := htmlparser.NewTokenizer(strings.NewReader(content))
+	offset, templateDepth := 0, 0
+	for {
+		tokenType := tokenizer.Next()
+		start := offset
+		offset += len(tokenizer.Raw())
+		switch tokenType {
+		case htmlparser.ErrorToken:
+			return -1
+		case htmlparser.StartTagToken, htmlparser.SelfClosingTagToken:
+			name, _ := tokenizer.TagName()
+			if string(name) == "template" {
+				templateDepth++
+			}
+		case htmlparser.EndTagToken:
+			name, _ := tokenizer.TagName()
+			switch string(name) {
+			case "template":
+				if templateDepth > 0 {
+					templateDepth--
+				}
+			case "body":
+				if templateDepth == 0 {
+					return start
+				}
+			}
+		}
+	}
 }
 
 func (t *Trace) traceType() string {

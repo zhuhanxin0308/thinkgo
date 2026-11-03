@@ -366,8 +366,22 @@ func (w *CompressionResponseWriter) shouldBypassCompression() bool {
 	if w.statusCode < http.StatusOK || w.statusCode == http.StatusNoContent || w.statusCode == http.StatusNotModified || w.statusCode == http.StatusPartialContent {
 		return true
 	}
-	if w.Header().Get("Content-Range") != "" || headerTokenContains(w.Header().Get("Cache-Control"), "no-transform") {
+	if w.Header().Get("Content-Range") != "" {
 		return true
+	}
+	for _, value := range w.Header().Values("Cache-Control") {
+		if headerTokenContains(value, "no-transform") {
+			return true
+		}
+	}
+	// 强 ETag 标识具体表示的字节。透明压缩层不能复用 identity 的强
+	// 标签，也不能只改 200 标签而让处理器仍按原标签生成 304。
+	// 保留带强标签的原表示，弱标签仍允许语义等价的内容编码。
+	for _, value := range w.Header().Values("ETag") {
+		value = strings.TrimSpace(value)
+		if value != "" && !strings.HasPrefix(value, "W/") {
+			return true
+		}
 	}
 
 	contentType := strings.ToLower(w.Header().Get("Content-Type"))

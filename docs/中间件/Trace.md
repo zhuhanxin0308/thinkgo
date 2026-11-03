@@ -16,7 +16,7 @@ Trace 使用 `debug.NewRequestDebug(true)` 为每个请求创建私有 collector
 
 ## 响应注入
 
-Trace 把请求级调试对象写入 `_debug`，记录处理开始时间和耗时。只有响应 `Content-Type` 为空或包含 `text/html` 时才考虑注入；JSON、二进制和其他明确类型不注入。HTML 检测不区分大小写：存在 `</body>` 时插入其前面，否则存在 `</html>` 时追加到响应末尾；两者都不存在则保持原体。
+Trace 把请求级调试对象写入 `_debug`，记录处理开始时间和耗时。只有响应 `Content-Type` 明确声明为 `text/html` 时才考虑注入；未声明类型、JSON、二进制和其他类型不注入。框架使用 HTML tokenizer 按原始字节位置定位真实的正文结束标签，不把 script、textarea、注释或 template 内的 `</body>` 当作插入点，也不对全文做会改变字节长度的 Unicode 大小写转换。找到安全位置时在标签前插入，标签名不区分 ASCII 大小写；没有安全插入点时完整保留响应。Html 与 Console 两种 Trace 模式都遵守这一规则。
 
 面板中的请求 URI、IP、SQL、缓存键、日志消息、文件路径和变量键值都先经过 HTML 转义。调试资源不内联，而是使用：
 

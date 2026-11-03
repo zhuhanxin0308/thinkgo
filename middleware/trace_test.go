@@ -412,11 +412,11 @@ func TestTraceCollectorResponseBoundaries(t *testing.T) {
 			if response != testCase.response {
 				t.Fatalf("Trace 应原样保留边界响应，期望 %#v，实际 %#v", testCase.response, response)
 			}
-			if testCase.name == "html-without-closing-tag" && !strings.Contains(string(response.GetBody()), "tg-debug-bar") {
-				t.Fatalf("无闭合标签的 Html 响应应在末尾追加调试面板，响应为 %s", response.GetBody())
+			if testCase.name == "html-without-closing-tag" && string(response.GetBody()) != "plain fragment" {
+				t.Fatalf("无安全插入点的 HTML 必须保持原体，响应为 %s", response.GetBody())
 			}
-			if testCase.name != "html-without-closing-tag" && response != nil && strings.Contains(string(response.GetBody()), "tg-debug-bar") {
-				t.Fatalf("非 Html 边界响应不应注入调试面板，响应为 %s", response.GetBody())
+			if response != nil && strings.Contains(string(response.GetBody()), "tg-debug-bar") {
+				t.Fatalf("边界响应不应注入调试面板，响应为 %s", response.GetBody())
 			}
 			collector := debug.FromRequest(request)
 			if collector == nil {
