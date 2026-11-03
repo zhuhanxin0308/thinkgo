@@ -3,9 +3,51 @@ package binding
 import (
 	"encoding/json"
 	"math"
+	"math/big"
 	"reflect"
 	"strconv"
 )
+
+func isNumericRangeRule(rule string) bool {
+	switch rule {
+	case "gt", "lt", "egt", "elt", "min", "max", "between", "notBetween":
+		return true
+	default:
+		return false
+	}
+}
+
+// assignedFloatValue 将实际二进制浮点值表示为精确十进制，避免再次用最短
+// 格式化舍入掩盖边界。分母为 2^n；乘以 5^n 后使用十进制指数，连最小
+// float64 次正规数也保持在验证器的 1024 字节数值预算内。
+func assignedFloatValue(plan *node, value reflect.Value) (json.Number, bool) {
+	for plan.optional || value.Kind() == reflect.Pointer {
+		if plan.optional {
+			holder := value.Addr().Interface().(optionalValue)
+			value = reflect.ValueOf(holder.valuePointer()).Elem()
+		} else {
+			if value.IsNil() {
+				return "", false
+			}
+			value = value.Elem()
+		}
+		plan = plan.elem
+	}
+	if value.Kind() != reflect.Float32 && value.Kind() != reflect.Float64 {
+		return "", false
+	}
+	rational := new(big.Rat).SetFloat64(value.Float())
+	if rational == nil {
+		return "", false
+	}
+	precision := rational.Denom().BitLen() - 1
+	if precision == 0 {
+		return json.Number(rational.Num().String()), true
+	}
+	factor := new(big.Int).Exp(big.NewInt(5), big.NewInt(int64(precision)), nil)
+	coefficient := new(big.Int).Mul(rational.Num(), factor)
+	return json.Number(coefficient.String() + "e-" + strconv.Itoa(precision)), true
+}
 
 // assignScalar 直接执行类型和范围检查，避免每个标量都经过 JSON 编码和再次解码。
 func assignScalar(target reflect.Value, raw any) bool {

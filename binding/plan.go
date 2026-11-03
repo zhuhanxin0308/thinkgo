@@ -336,6 +336,19 @@ func compileFields(typ reflect.Type, root, output bool, building map[planKey]*no
 				if err != nil || !validation.Valid() {
 					return nil, fmt.Errorf("%w: 字段 %s 默认值不符合规则", ErrDefinition, spec.Name)
 				}
+				if item.defaultValue != nil {
+					if assigned, ok := assignedFloatValue(child, probe); ok {
+						validation, err = validate.ValidateRules(map[string]interface{}{item.name: assigned}, map[string]string{item.name: item.rules}, validate.CollectAllErrors())
+						if err != nil {
+							return nil, fmt.Errorf("%w: 字段 %s 默认值规则无效", ErrDefinition, spec.Name)
+						}
+						for _, violation := range validation.Violations() {
+							if isNumericRangeRule(violation.Rule) {
+								return nil, fmt.Errorf("%w: 字段 %s 默认值舍入后不符合规则", ErrDefinition, spec.Name)
+							}
+						}
+					}
+				}
 			}
 		}
 		result = append(result, item)
