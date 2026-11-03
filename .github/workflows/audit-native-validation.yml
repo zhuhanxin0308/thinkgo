@@ -8,7 +8,7 @@ permissions:
 jobs:
   audit:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 35
     steps:
       - name: Read exact source without credentials
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -17,22 +17,49 @@ jobs:
           path: source
           persist-credentials: false
           fetch-depth: 1
-      - name: Install verified toolchain, dependencies and container toolset
+      - name: Prepare authenticated offline dependency graphs and bounded disk
         shell: bash
         run: |
           set -euo pipefail
           BASE="$RUNNER_TEMP/thinkgo-native"
-          mkdir -p "$BASE"/{go-dist,meta,home,tmp,modcache,gocache,artifacts,image}
+          mkdir -p "$BASE"/{go-dist,meta,prefetch,home,tmp,modcache,gocache,artifacts,image,scratch}
           curl --fail --location --proto '=https' --tlsv1.2 --retry 2 --max-time 180 https://go.dev/dl/go1.26.10.linux-amd64.tar.gz -o "$BASE/go.tar.gz"
           printf '%s  %s\n' ccfe7ae822d2c2f41f4fe7c956199967a4dac22d0ee0d2b2bfdb440aab3b20c5 "$BASE/go.tar.gz" | sha256sum --check --strict
           tar --no-same-owner -xzf "$BASE/go.tar.gz" -C "$BASE/go-dist"
           cp source/go.mod source/go.sum "$BASE/meta/"
+          cp source/go.mod "$BASE/artifacts/original-go.mod"
+          cp source/go.sum "$BASE/artifacts/original-go.sum"
+          goenv=(env -i PATH="$BASE/go-dist/go/bin:/usr/bin:/bin" HOME="$BASE/home" TMPDIR="$BASE/tmp" GOTOOLCHAIN=local GOENV=off GOWORK=off GOTELEMETRY=off GOPROXY=https://proxy.golang.org GOSUMDB=sum.golang.org GOVCS='*:off' GOMODCACHE="$BASE/modcache" GOCACHE="$BASE/gocache")
           cd "$BASE/meta"
-          env -i PATH="$BASE/go-dist/go/bin:/usr/bin:/bin" HOME="$BASE/home" TMPDIR="$BASE/tmp" GOTOOLCHAIN=local GOENV=off GOWORK=off GOTELEMETRY=off GOPROXY=https://proxy.golang.org GOSUMDB=sum.golang.org GOMODCACHE="$BASE/modcache" GOCACHE="$BASE/gocache" go mod download
-          env -i PATH="$BASE/go-dist/go/bin:/usr/bin:/bin" HOME="$BASE/home" TMPDIR="$BASE/tmp" GOTOOLCHAIN=local GOENV=off GOWORK=off GOTELEMETRY=off GOPROXY=off GOSUMDB=sum.golang.org GOMODCACHE="$BASE/modcache" GOCACHE="$BASE/gocache" go mod verify > "$BASE/artifacts/module-verification.txt"
+          "${goenv[@]}" go mod download all
+          "${goenv[@]}" go list -m -json all > "$BASE/artifacts/module-graph.json"
+          "${goenv[@]}" go mod graph > "$BASE/artifacts/module-edges.txt"
+          # Static import resolution only: no target build, test, generator or binary is executed here.
+          # Scaffold integration tests run tidy in a downstream module and require dependency-test modules.
+          printf 'module audit-prefetch\n\ngo 1.26.10\n\nrequire github.com/zhuhanxin0308/thinkgo/v3 v3.0.0\nreplace github.com/zhuhanxin0308/thinkgo/v3 => %s\n' "$GITHUB_WORKSPACE/source" > "$BASE/prefetch/go.mod"
+          cp "$BASE/artifacts/original-go.sum" "$BASE/prefetch/go.sum"
+          cat > "$BASE/prefetch/imports.go" <<'GO'
+          package auditprefetch
+          import (
+            _ "github.com/zhuhanxin0308/thinkgo/v3"
+            _ "github.com/zhuhanxin0308/thinkgo/v3/http"
+            _ "github.com/zhuhanxin0308/thinkgo/v3/db/connector"
+            _ "github.com/zhuhanxin0308/thinkgo/v3/console/command"
+            _ "github.com/zhuhanxin0308/thinkgo/v3/openapi"
+          )
+          GO
+          cd "$BASE/prefetch"
+          "${goenv[@]}" go mod tidy
+          "${goenv[@]}" go mod download all
+          cp go.mod "$BASE/artifacts/prefetch-go.mod"
+          cp go.sum "$BASE/artifacts/prefetch-go.sum"
+          "${goenv[@]}" go mod verify > "$BASE/artifacts/prefetch-verification.txt"
+          cd "$BASE/meta"
+          "${goenv[@]}" go mod verify > "$BASE/artifacts/module-verification.txt"
+          env -i PATH="$BASE/go-dist/go/bin:/usr/bin:/bin" HOME="$BASE/home" TMPDIR="$BASE/tmp" GOTOOLCHAIN=local GOENV=off GOWORK=off GOTELEMETRY=off GOPROXY=off GOSUMDB=sum.golang.org GOMODCACHE="$BASE/modcache" GOCACHE="$BASE/gocache" go list -m all > "$BASE/artifacts/offline-module-list.txt"
           cd "$GITHUB_WORKSPACE"
-          cmp source/go.mod "$BASE/meta/go.mod"
-          cmp source/go.sum "$BASE/meta/go.sum"
+          cmp source/go.mod "$BASE/artifacts/original-go.mod"
+          cmp source/go.sum "$BASE/artifacts/original-go.sum"
           cat > "$BASE/image/Dockerfile" <<'DOCKER'
           FROM ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852
           RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends gcc libc6-dev git ca-certificates tzdata iproute2 && rm -rf /var/lib/apt/lists/*
@@ -41,6 +68,11 @@ jobs:
           docker image inspect thinkgo-audit-tools --format '{{.Id}}' > "$BASE/artifacts/container-image-id.txt"
           printf '%s\n' 'ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852' > "$BASE/artifacts/base-image-digest.txt"
           chmod -R a+rX "$BASE/go-dist" "$BASE/modcache"
+          truncate -s 8G "$BASE/scratch.ext4"
+          mkfs.ext4 -q -F "$BASE/scratch.ext4"
+          sudo mount -o loop,exec,nodev,nosuid "$BASE/scratch.ext4" "$BASE/scratch"
+          sudo chown 65534:65534 "$BASE/scratch"
+          sudo chmod 0700 "$BASE/scratch"
       - name: Native tests, race tests and vet inside a no-network container
         shell: bash
         run: |
@@ -61,6 +93,7 @@ jobs:
           ip -brief address
           grep -E 'CapEff|NoNewPrivs' /proc/self/status
           grep ' /scratch ' /proc/mounts
+          df -h /scratch
           cat /sys/fs/cgroup/memory.max /sys/fs/cgroup/pids.max
           for f in /src/go.mod /go/VERSION /modcache/audit-probe /etc/audit-probe; do
             if ( : > "$f" ) 2>/dev/null; then echo "FAIL_WRITABLE=$f"; exit 99; else echo "READ_ONLY_OK=$f"; fi
@@ -82,25 +115,27 @@ jobs:
           test "$baseline" -eq 0 && test "$race" -eq 0 && test "$vet" -eq 0
           PLAN
           chmod a+r "$BASE/plan.sh"
-          # Only source, toolchain, modules and the plan enter the sandbox.
-          # No Actions environment, tokens, Docker socket, host home or artifacts are mounted.
+          # The only writable host mount is an empty, dedicated 8 GiB filesystem.
+          # No Actions environment, tokens, Docker socket, host home or artifacts enter the container.
+          ulimit -f 131072
           set +e
           timeout --signal=TERM --kill-after=15s 1500s docker run --name thinkgo-native-audit --rm \
             --network none --read-only --user 65534:65534 --cap-drop ALL --security-opt no-new-privileges \
             --cpus 2 --memory 3g --memory-swap 3g --pids-limit 256 \
             --ulimit nofile=512:512 --ulimit fsize=134217728:134217728 --ulimit core=0:0 \
-            --tmpfs /scratch:rw,exec,nosuid,nodev,size=2g,uid=65534,gid=65534,mode=0700 \
+            --mount type=bind,src="$BASE/scratch",dst=/scratch \
             --mount type=bind,src="$GITHUB_WORKSPACE/source",dst=/src,readonly \
             --mount type=bind,src="$BASE/go-dist/go",dst=/go,readonly \
             --mount type=bind,src="$BASE/modcache",dst=/modcache,readonly \
             --mount type=bind,src="$BASE/plan.sh",dst=/plan.sh,readonly \
             --entrypoint /usr/bin/env thinkgo-audit-tools -i \
             PATH=/go/bin:/usr/bin:/bin HOME=/scratch/home TMPDIR=/scratch/tmp \
-            GOROOT=/go GOTOOLCHAIN=local GOENV=off GOWORK=off GOTELEMETRY=off GOPROXY=off GOSUMDB=sum.golang.org \
+            GOROOT=/go GOTOOLCHAIN=local GOENV=off GOWORK=off GOTELEMETRY=off GOPROXY=off GOSUMDB=sum.golang.org GOVCS='*:off' \
             GOMODCACHE=/modcache GOCACHE=/scratch/gocache GOPATH=/scratch/gopath GOMAXPROCS=2 GOMEMLIMIT=768MiB LANG=C.UTF-8 \
             /bin/bash /plan.sh > "$BASE/artifacts/native-validation.log" 2>&1
           result=$?
           docker rm -f thinkgo-native-audit >/dev/null 2>&1 || true
+          sudo umount "$BASE/scratch" || true
           printf '%s\n' "$result" > "$BASE/artifacts/exit-code.txt"
           cp "$BASE/plan.sh" "$BASE/artifacts/test-plan.sh"
           printf '%s\n' 47fde62dd4a88e0df93cba41ab02fc89516ae035 > "$BASE/artifacts/source-ref.txt"
