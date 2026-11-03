@@ -1,0 +1,113 @@
+name: Audit native offline validation
+on:
+  push:
+    branches: ['audit/env-bootstrap-20261103-astra']
+    paths: ['.github/workflows/audit-native-validation.yml']
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Read exact source without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 47fde62dd4a88e0df93cba41ab02fc89516ae035
+          path: source
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Install verified toolchain, dependencies and container toolset
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE="$RUNNER_TEMP/thinkgo-native"
+          mkdir -p "$BASE"/{go-dist,meta,home,tmp,modcache,gocache,artifacts,image}
+          curl --fail --location --proto '=https' --tlsv1.2 --retry 2 --max-time 180 https://go.dev/dl/go1.26.10.linux-amd64.tar.gz -o "$BASE/go.tar.gz"
+          printf '%s  %s\n' ccfe7ae822d2c2f41f4fe7c956199967a4dac22d0ee0d2b2bfdb440aab3b20c5 "$BASE/go.tar.gz" | sha256sum --check --strict
+          tar --no-same-owner -xzf "$BASE/go.tar.gz" -C "$BASE/go-dist"
+          cp source/go.mod source/go.sum "$BASE/meta/"
+          cd "$BASE/meta"
+          env -i PATH="$BASE/go-dist/go/bin:/usr/bin:/bin" HOME="$BASE/home" TMPDIR="$BASE/tmp" GOTOOLCHAIN=local GOENV=off GOWORK=off GOTELEMETRY=off GOPROXY=https://proxy.golang.org GOSUMDB=sum.golang.org GOMODCACHE="$BASE/modcache" GOCACHE="$BASE/gocache" go mod download
+          env -i PATH="$BASE/go-dist/go/bin:/usr/bin:/bin" HOME="$BASE/home" TMPDIR="$BASE/tmp" GOTOOLCHAIN=local GOENV=off GOWORK=off GOTELEMETRY=off GOPROXY=off GOSUMDB=sum.golang.org GOMODCACHE="$BASE/modcache" GOCACHE="$BASE/gocache" go mod verify > "$BASE/artifacts/module-verification.txt"
+          cd "$GITHUB_WORKSPACE"
+          cmp source/go.mod "$BASE/meta/go.mod"
+          cmp source/go.sum "$BASE/meta/go.sum"
+          cat > "$BASE/image/Dockerfile" <<'DOCKER'
+          FROM ubuntu:24.04
+          RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends gcc libc6-dev git ca-certificates tzdata iproute2 && rm -rf /var/lib/apt/lists/*
+          DOCKER
+          docker build --pull -t thinkgo-audit-tools "$BASE/image"
+          docker image inspect thinkgo-audit-tools --format '{{.Id}}' > "$BASE/artifacts/container-image-id.txt"
+          docker image inspect ubuntu:24.04 --format '{{json .RepoDigests}}' > "$BASE/artifacts/base-image-digests.json"
+          chmod -R a+rX "$BASE/go-dist" "$BASE/modcache"
+      - name: Native tests, race tests and vet inside a no-network container
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE="$RUNNER_TEMP/thinkgo-native"
+          cat > "$BASE/plan.sh" <<'PLAN'
+          set -uo pipefail
+          mkdir -p /scratch/home /scratch/tmp /scratch/gocache /scratch/gopath /scratch/work
+          cp -a /src/. /scratch/work/
+          rm -rf /scratch/work/.git
+          cd /scratch/work
+          echo AUDIT_ENVIRONMENT_BEGIN
+          id
+          go version
+          gcc --version | head -1
+          ip -brief address
+          grep -E 'CapEff|NoNewPrivs' /proc/self/status
+          cat /sys/fs/cgroup/memory.max /sys/fs/cgroup/pids.max
+          for f in /src/go.mod /go/VERSION /modcache/audit-probe /etc/audit-probe; do
+            if ( : > "$f" ) 2>/dev/null; then echo "FAIL_WRITABLE=$f"; exit 99; else echo "READ_ONLY_OK=$f"; fi
+          done
+          echo AUDIT_ENVIRONMENT_END
+          go mod verify
+          echo AUDIT_BASELINE_BEGIN
+          CGO_ENABLED=1 go test -json -mod=readonly -p 1 -parallel 2 -shuffle=1234567 -count=1 -timeout=180s ./...
+          baseline=$?
+          echo AUDIT_BASELINE_EXIT=$baseline
+          echo AUDIT_RACE_BEGIN
+          CGO_ENABLED=1 go test -json -race -mod=readonly -p 1 -parallel 2 -shuffle=7654321 -count=1 -timeout=180s ./auth ./binding ./context ./middleware ./session ./session/driver ./filesystem ./ratelimit ./cache ./queue/asynq ./http
+          race=$?
+          echo AUDIT_RACE_EXIT=$race
+          echo AUDIT_VET_BEGIN
+          CGO_ENABLED=1 go vet -mod=readonly -p 1 ./...
+          vet=$?
+          echo AUDIT_VET_EXIT=$vet
+          test "$baseline" -eq 0 && test "$race" -eq 0 && test "$vet" -eq 0
+          PLAN
+          chmod a+r "$BASE/plan.sh"
+          # Only the selected source, toolchain, module cache and plan enter the sandbox.
+          # No Actions environment, tokens, Docker socket, host home, or artifacts are mounted.
+          set +e
+          timeout --signal=TERM --kill-after=15s 1500s docker run --name thinkgo-native-audit --rm \
+            --network none --read-only --user 65534:65534 --cap-drop ALL --security-opt no-new-privileges \
+            --cpus 2 --memory 3g --memory-swap 3g --pids-limit 256 \
+            --ulimit nofile=512:512 --ulimit fsize=134217728:134217728 --ulimit core=0:0 \
+            --tmpfs /scratch:rw,nosuid,nodev,size=2g,uid=65534,gid=65534,mode=0700 \
+            --mount type=bind,src="$GITHUB_WORKSPACE/source",dst=/src,readonly \
+            --mount type=bind,src="$BASE/go-dist/go",dst=/go,readonly \
+            --mount type=bind,src="$BASE/modcache",dst=/modcache,readonly \
+            --mount type=bind,src="$BASE/plan.sh",dst=/plan.sh,readonly \
+            --entrypoint /usr/bin/env thinkgo-audit-tools -i \
+            PATH=/go/bin:/usr/bin:/bin HOME=/scratch/home TMPDIR=/scratch/tmp \
+            GOROOT=/go GOTOOLCHAIN=local GOENV=off GOWORK=off GOTELEMETRY=off GOPROXY=off GOSUMDB=sum.golang.org \
+            GOMODCACHE=/modcache GOCACHE=/scratch/gocache GOPATH=/scratch/gopath GOMAXPROCS=2 GOMEMLIMIT=768MiB LANG=C.UTF-8 \
+            /bin/bash /plan.sh > "$BASE/artifacts/native-validation.log" 2>&1
+          result=$?
+          docker rm -f thinkgo-native-audit >/dev/null 2>&1 || true
+          printf '%s\n' "$result" > "$BASE/artifacts/exit-code.txt"
+          cp "$BASE/plan.sh" "$BASE/artifacts/test-plan.sh"
+          printf '%s\n' 47fde62dd4a88e0df93cba41ab02fc89516ae035 > "$BASE/artifacts/source-ref.txt"
+          echo "Native validation exited with code $result; inspect the bounded test artifact."
+          exit "$result"
+      - name: Upload validation evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: audit-native-validation-47fde62
+          path: ${{ runner.temp }}/thinkgo-native/artifacts/*
+          retention-days: 7
+          if-no-files-found: error
