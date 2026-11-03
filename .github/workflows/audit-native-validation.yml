@@ -34,12 +34,12 @@ jobs:
           cmp source/go.mod "$BASE/meta/go.mod"
           cmp source/go.sum "$BASE/meta/go.sum"
           cat > "$BASE/image/Dockerfile" <<'DOCKER'
-          FROM ubuntu:24.04
+          FROM ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852
           RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends gcc libc6-dev git ca-certificates tzdata iproute2 && rm -rf /var/lib/apt/lists/*
           DOCKER
           docker build --pull -t thinkgo-audit-tools "$BASE/image"
           docker image inspect thinkgo-audit-tools --format '{{.Id}}' > "$BASE/artifacts/container-image-id.txt"
-          docker image inspect ubuntu:24.04 --format '{{json .RepoDigests}}' > "$BASE/artifacts/base-image-digests.json"
+          printf '%s\n' 'ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852' > "$BASE/artifacts/base-image-digest.txt"
           chmod -R a+rX "$BASE/go-dist" "$BASE/modcache"
       - name: Native tests, race tests and vet inside a no-network container
         shell: bash
@@ -79,8 +79,8 @@ jobs:
           test "$baseline" -eq 0 && test "$race" -eq 0 && test "$vet" -eq 0
           PLAN
           chmod a+r "$BASE/plan.sh"
-          # Only the selected source, toolchain, module cache and plan enter the sandbox.
-          # No Actions environment, tokens, Docker socket, host home, or artifacts are mounted.
+          # Only source, toolchain, modules and the plan enter the sandbox.
+          # No Actions environment, tokens, Docker socket, host home or artifacts are mounted.
           set +e
           timeout --signal=TERM --kill-after=15s 1500s docker run --name thinkgo-native-audit --rm \
             --network none --read-only --user 65534:65534 --cap-drop ALL --security-opt no-new-privileges \
@@ -101,7 +101,7 @@ jobs:
           printf '%s\n' "$result" > "$BASE/artifacts/exit-code.txt"
           cp "$BASE/plan.sh" "$BASE/artifacts/test-plan.sh"
           printf '%s\n' 47fde62dd4a88e0df93cba41ab02fc89516ae035 > "$BASE/artifacts/source-ref.txt"
-          echo "Native validation exited with code $result; inspect the bounded test artifact."
+          echo "Native validation exited with code $result; inspect the test artifact."
           exit "$result"
       - name: Upload validation evidence
         if: always()
