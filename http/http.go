@@ -176,8 +176,8 @@ func (h *Http) ensureInitialized() error {
 // loadServices 从完成初始化的 App 取得 HTTP 所需服务和严格服务器配置。
 func (h *Http) loadServices() error {
 	parseConfiguration := parseHTTPConfig
-	if h.allowApplications && len(h.app.ApplicationNames()) > 0 {
-		parseConfiguration = parseProjectHTTPConfig
+	if h.allowApplications {
+		parseConfiguration = parseHostHTTPConfig
 	}
 	serverConfig, compressionConfig, err := parseConfiguration(h.app)
 	if err != nil {
@@ -376,6 +376,10 @@ func (h *Http) serveHTTP(originalWriter http.ResponseWriter, raw *http.Request, 
 		return
 	}
 	state.req = req
+	state.statusWriter.method = req
+	if state.compressionWriter != nil {
+		state.compressionWriter.bodyPolicy = state.statusWriter
+	}
 	h.rememberRequestTask(req, task, true)
 	if application, exists := resolvedApplication(raw); exists {
 		req.SetApplicationContext(application)

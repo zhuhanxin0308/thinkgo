@@ -57,6 +57,7 @@ type statusTrackingResponseWriter struct {
 	commitErr    error
 	aborted      bool
 	suppressBody bool
+	method       interface{ Method(...bool) string }
 }
 
 // newStatusTrackingResponseWriter 创建带最终提交事务和状态跟踪能力的响应写入器。
@@ -110,6 +111,9 @@ func (w *statusTrackingResponseWriter) Write(body []byte) (int, error) {
 	if w.aborted {
 		return 0, w.commitErr
 	}
+	if w.suppressBody {
+		return len(body), nil
+	}
 	return w.ResponseWriter.Write(body)
 }
 
@@ -117,6 +121,9 @@ func (w *statusTrackingResponseWriter) commitFinal(statusCode int) {
 	if w == nil || w.state != responseStateOpen {
 		return
 	}
+	// 最终提交前才读取有效方法，包含中间件 SetMethod；之后实体策略保持不变。
+	w.suppressBody = w.bodySuppressed()
+	w.method = nil
 	if err := w.runBeforeCommitHooks(); err != nil {
 		w.commitFailure(err)
 		return
@@ -196,11 +203,16 @@ func (w *statusTrackingResponseWriter) ResetUncommitted() bool {
 	return true
 }
 
-// SuppressBody 保证 HEAD 的内核级错误也不会输出实体。
+// SuppressBody 保证 HEAD 的正常响应和内核级错误都不会输出实体。
 func (w *statusTrackingResponseWriter) SuppressBody(suppress bool) {
 	if w != nil && w.state == responseStateOpen {
 		w.suppressBody = suppress
 	}
+}
+
+// bodySuppressed 供压缩层在创建编码器前读取同一实体策略；提交后只返回冻结值。
+func (w *statusTrackingResponseWriter) bodySuppressed() bool {
+	return w != nil && (w.suppressBody || w.method != nil && w.method.Method() == http.MethodHead)
 }
 
 // Status 返回已确认的最终状态；尚未最终提交时返回隐式默认值 200。

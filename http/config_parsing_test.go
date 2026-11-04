@@ -221,7 +221,7 @@ func TestProjectHTTPConfigUsesExplicitRuntimeAddress(t *testing.T) {
 		t.Fatalf("覆盖项目 HTTP 地址失败: %v", err)
 	}
 
-	server, _, err := parseProjectHTTPConfig(app)
+	server, _, err := parseHostHTTPConfig(app)
 	if err != nil {
 		t.Fatalf("解析覆盖后的项目 HTTP 配置失败: %v", err)
 	}

@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/regularfile"
 )
 
 const (
@@ -84,34 +86,25 @@ func (r *Response) sendFile(w http.ResponseWriter) error {
 		writeErr := writePlainHTTPError(w, status)
 		return errors.Join(r.err, err, markResponseTransmissionError(writeErr))
 	}
+	return r.sendOpenedDownload(w, file, info)
+}
 
+// sendOpenedDownload 接管已经核验的句柄；成功、写入失败和取消错误均关闭同一文件。
+func (r *Response) sendOpenedDownload(w http.ResponseWriter, file *os.File, info os.FileInfo) (resultErr error) {
+	defer func() { resultErr = errors.Join(resultErr, file.Close()) }()
 	r.writeHeaders(w)
 	if err := r.saveSession(w); err != nil {
-		_ = file.Close()
 		return errors.Join(r.err, err)
 	}
 	w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
 	w.WriteHeader(r.status)
 	_, copyErr := io.Copy(w, file)
-	closeErr := file.Close()
-	return errors.Join(r.err, markResponseTransmissionError(copyErr), closeErr)
+	return errors.Join(r.err, markResponseTransmissionError(copyErr))
 }
 
 func (r *Response) openDownloadFile() (*os.File, os.FileInfo, error) {
 	if r.fileRoot == "" {
-		file, err := os.Open(r.filePath)
-		if err != nil {
-			return nil, nil, err
-		}
-		info, err := file.Stat()
-		if err != nil || !info.Mode().IsRegular() {
-			_ = file.Close()
-			if err != nil {
-				return nil, nil, err
-			}
-			return nil, nil, ErrDownloadNotRegular
-		}
-		return file, info, nil
+		return openDownloadCandidate(r.filePath)
 	}
 
 	rootReal, err := filepath.EvalSymlinks(r.fileRoot)
@@ -126,34 +119,33 @@ func (r *Response) openDownloadFile() (*os.File, os.FileInfo, error) {
 		return nil, nil, ErrUnsafeDownloadPath
 	}
 
-	file, err := os.Open(targetReal)
+	file, info, err := openDownloadCandidate(targetReal)
 	if err != nil {
 		return nil, nil, err
 	}
-	info, statErr := file.Stat()
-	if statErr != nil {
-		_ = file.Close()
-		return nil, nil, statErr
-	}
 	verifiedReal, verifyErr := filepath.EvalSymlinks(r.filePath)
 	if verifyErr != nil {
-		_ = file.Close()
-		return nil, nil, verifyErr
+		return nil, nil, errors.Join(verifyErr, file.Close())
 	}
 	if !pathWithinDownloadRoot(rootReal, verifiedReal) {
-		_ = file.Close()
-		return nil, nil, ErrUnsafeDownloadPath
+		return nil, nil, errors.Join(ErrUnsafeDownloadPath, file.Close())
 	}
 	verifiedInfo, verifiedStatErr := os.Stat(verifiedReal)
 	if verifiedStatErr != nil {
-		_ = file.Close()
-		return nil, nil, verifiedStatErr
+		return nil, nil, errors.Join(verifiedStatErr, file.Close())
 	}
 	if !os.SameFile(info, verifiedInfo) || !info.Mode().IsRegular() {
-		_ = file.Close()
-		return nil, nil, ErrDownloadNotRegular
+		return nil, nil, errors.Join(ErrDownloadNotRegular, file.Close())
 	}
 	return file, info, nil
+}
+
+func openDownloadCandidate(path string) (*os.File, os.FileInfo, error) {
+	file, info, err := regularfile.Open(path)
+	if errors.Is(err, regularfile.ErrNotRegular) {
+		err = errors.Join(ErrDownloadNotRegular, err)
+	}
+	return file, info, err
 }
 
 // resolveWithinBase 完成跨平台词法校验，并对已经存在的目标提前验证真实路径归属。

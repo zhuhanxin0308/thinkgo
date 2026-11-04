@@ -81,11 +81,11 @@ func (c *Cache) withTagMutationLockContext(ctx context.Context, driver Driver, c
 		}
 		return callback()
 	}
-	owner, err := newLockOwner(c.storeName)
+	owner, err := newLockOwner(cacheMetadataScope)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalidCacheLock, err)
 	}
-	lockKey := lockKeyPrefix + "tag:" + c.storeName
+	lockKey := lockKeyPrefix + "tag:" + cacheMetadataScope
 	acquired, err := acquireDistributedLockContext(ctx, locker, lockKey, owner, tagMutationLockTTL, tagMutationWait)
 	if err != nil {
 		return err

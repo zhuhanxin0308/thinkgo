@@ -873,19 +873,29 @@ func (disk *Local) forgetVisibility(logicalPath string, recursive bool) {
 }
 
 func (disk *Local) moveRememberedVisibility(source string, destination string) {
+	if source == destination {
+		return
+	}
 	disk.metadataMu.Lock()
 	defer disk.metadataMu.Unlock()
 	updates := make(map[string]string)
-	prefix := strings.TrimSuffix(source, "/") + "/"
+	sourcePrefix := strings.TrimSuffix(source, "/") + "/"
+	destinationPrefix := strings.TrimSuffix(destination, "/") + "/"
+	// 先保存源对象的元数据，避免路径域重叠时清理目标误删待迁移条目。
 	for name, visibility := range disk.visibilityOverrides {
 		if name == source {
 			updates[destination] = visibility
-			delete(disk.visibilityOverrides, name)
 			continue
 		}
-		if strings.HasPrefix(name, prefix) {
-			relative := strings.TrimPrefix(name, prefix)
+		if strings.HasPrefix(name, sourcePrefix) {
+			relative := strings.TrimPrefix(name, sourcePrefix)
 			updates[path.Join(destination, relative)] = visibility
+		}
+	}
+	// rename 已提交；即使源没有缓存，也必须使被替换目标及其后代失效。
+	for name := range disk.visibilityOverrides {
+		if name == source || strings.HasPrefix(name, sourcePrefix) ||
+			name == destination || strings.HasPrefix(name, destinationPrefix) {
 			delete(disk.visibilityOverrides, name)
 		}
 	}

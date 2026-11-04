@@ -131,6 +131,7 @@ type CompressionResponseWriter struct {
 	buffer         bytes.Buffer
 	pooledWriter   *pooledCompressionWriter
 	compressionErr error
+	bodyPolicy     *statusTrackingResponseWriter
 }
 
 // NewCompressionResponseWriter 创建新的压缩响应写入器。
@@ -360,6 +361,9 @@ func (w *CompressionResponseWriter) flushResponse() error {
 
 // shouldBypassCompression 判断当前响应是否应该跳过压缩。
 func (w *CompressionResponseWriter) shouldBypassCompression() bool {
+	if w.bodyPolicy != nil && w.bodyPolicy.bodySuppressed() {
+		return true
+	}
 	if w.encoding == "" || w.Header().Get("Content-Encoding") != "" {
 		return true
 	}
