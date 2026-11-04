@@ -2,15 +2,94 @@ package db
 
 import (
 	"context"
+	"database/sql"
+	"database/sql/driver"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/zhuhanxin0308/thinkgo/v3/db/builder"
 )
 
+// The original pinned-session fixture deliberately rejects Prepare. These public
+// DB entry points also exercise the default statement cache, so their recording
+// driver must support prepared and direct execution with the same recorder.
+type postgresArrayRecordingDriver struct {
+	*pinnedSQLDriver
+}
+
+func (d *postgresArrayRecordingDriver) Open(name string) (driver.Conn, error) {
+	connection, err := d.pinnedSQLDriver.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	return &postgresArrayRecordingConnection{connection.(*pinnedSQLDriverConnection)}, nil
+}
+
+type postgresArrayRecordingConnection struct {
+	*pinnedSQLDriverConnection
+}
+
+func (c *postgresArrayRecordingConnection) Prepare(query string) (driver.Stmt, error) {
+	return &postgresArrayRecordingStatement{connection: c.pinnedSQLDriverConnection, query: query}, nil
+}
+
+type postgresArrayRecordingStatement struct {
+	connection *pinnedSQLDriverConnection
+	query      string
+}
+
+func (*postgresArrayRecordingStatement) Close() error {
+	return nil
+}
+
+func (*postgresArrayRecordingStatement) NumInput() int {
+	return -1
+}
+
+func (s *postgresArrayRecordingStatement) Exec(args []driver.Value) (driver.Result, error) {
+	return s.ExecContext(context.Background(), postgresArrayNamedValues(args))
+}
+
+func (s *postgresArrayRecordingStatement) Query(args []driver.Value) (driver.Rows, error) {
+	return s.QueryContext(context.Background(), postgresArrayNamedValues(args))
+}
+
+func (s *postgresArrayRecordingStatement) ExecContext(ctx context.Context, args []driver.NamedValue) (driver.Result, error) {
+	return s.connection.ExecContext(ctx, s.query, args)
+}
+
+func (s *postgresArrayRecordingStatement) QueryContext(ctx context.Context, args []driver.NamedValue) (driver.Rows, error) {
+	return s.connection.QueryContext(ctx, s.query, args)
+}
+
+func postgresArrayNamedValues(values []driver.Value) []driver.NamedValue {
+	args := make([]driver.NamedValue, len(values))
+	for index, value := range values {
+		args[index] = driver.NamedValue{Ordinal: index + 1, Value: value}
+	}
+	return args
+}
+
+func newPostgresArrayValidationDatabase(t *testing.T) (*DB, *pinnedSQLDriverState) {
+	t.Helper()
+	state := &pinnedSQLDriverState{}
+	driverName := fmt.Sprintf("thinkgo_postgres_array_%d", pinnedSQLDriverSequence.Add(1))
+	sql.Register(driverName, &postgresArrayRecordingDriver{&pinnedSQLDriver{state: state}})
+	handle, err := sql.Open(driverName, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle.SetMaxOpenConns(2)
+	handle.SetMaxIdleConns(2)
+	database := NewDB(NewSQLConnection(handle, &builder.Pgsql{}))
+	t.Cleanup(func() { _ = database.Close() })
+	return database, state
+}
+
 func TestIssue145PostgresArraysReachEveryRawExecutor(t *testing.T) {
-	database, state := newPinnedSQLTestDatabase(t)
+	database, state := newPostgresArrayValidationDatabase(t)
 	ctx := context.Background()
 	exercise := func(t *testing.T, executor ContextualRawQueryable) {
 		t.Helper()
@@ -97,7 +176,7 @@ func TestIssue145PostgresArraysReachEveryRawExecutor(t *testing.T) {
 }
 
 func TestIssue145PostgresArraysInRawQueryClauses(t *testing.T) {
-	database, state := newPinnedSQLTestDatabase(t)
+	database, state := newPostgresArrayValidationDatabase(t)
 	query := database.Table("records").Field("id").
 		WhereRaw(`id = ANY(ARRAY[?, ?]) AND numbers[?] = ?`, 1, 2, 1, 11).
 		Group("id").HavingRaw(`COUNT(*) = ANY(ARRAY[?, ?])`, 1, 2)
