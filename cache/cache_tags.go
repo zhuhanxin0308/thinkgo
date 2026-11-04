@@ -422,12 +422,12 @@ func cloneStrings(values []string) []string {
 }
 
 func (c *Cache) tagMetaKey(tag string) string {
-	return tagMetaPrefix + c.storeName + ":" + tag
+	return tagMetaPrefix + cacheMetadataScope + ":" + tag
 }
 
 func (c *Cache) tagReverseKey(key string) string {
 	digest := sha256.Sum256([]byte(key))
-	return tagReversePrefix + c.storeName + ":" + hex.EncodeToString(digest[:])
+	return tagReversePrefix + cacheMetadataScope + ":" + hex.EncodeToString(digest[:])
 }
 
 func validateCacheTag(tag string) error {

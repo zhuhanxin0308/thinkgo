@@ -28,7 +28,7 @@ func keyInvalidationScope(key string) string {
 }
 
 func (c *Cache) scopedInvalidationKey() string {
-	return cacheFencePrefix + c.storeName + ":prefixes"
+	return cacheFencePrefix + cacheMetadataScope + ":prefixes"
 }
 
 func keyInvalidationBucket(key string) int {
@@ -37,7 +37,7 @@ func keyInvalidationBucket(key string) int {
 }
 
 func (c *Cache) keyInvalidationBucketKey(bucket int) string {
-	return cacheFencePrefix + c.storeName + ":keys:" + strconv.Itoa(bucket)
+	return cacheFencePrefix + cacheMetadataScope + ":keys:" + strconv.Itoa(bucket)
 }
 
 // boundedScopeWatermarks 同时限制数量与 JSON 转义后的字节数，给文件后端的外层信封保留空间。

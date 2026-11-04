@@ -21,6 +21,7 @@ import (
 
 	"github.com/zhuhanxin0308/thinkgo/v3"
 	"github.com/zhuhanxin0308/thinkgo/v3/config"
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/httplistener"
 )
 
 const (
@@ -79,10 +80,22 @@ func checkTLSFilesWithOptions(app *framework.App, options tlsValidationOptions) 
 	if err != nil {
 		return fail(err.Error())
 	}
-	if !configuration.GetBool("app.server.tls.enable") {
+	hostValues, err := httplistener.HostApplicationConfig(app)
+	if err != nil {
+		return fail("TLS 监听配置不可用")
+	}
+	listener, err := httplistener.ApplicationTLS(hostValues, app.BasePath)
+	if err != nil {
+		return fail("TLS 监听配置不可用")
+	}
+	if !listener.Enable {
 		return fail("生产部署未启用 TLS")
 	}
-	report, err := validateTLSMaterial(app, configuration, options)
+	hostConfiguration := config.NewConfig()
+	if err := hostConfiguration.Set("app", hostValues); err != nil {
+		return fail("TLS 监听配置不可用")
+	}
+	report, err := validateTLSMaterialForListener(listener, options, hostConfiguration, configuration)
 	if err != nil {
 		return fail(err.Error())
 	}
@@ -96,13 +109,21 @@ func validateTLSMaterial(app *framework.App, configuration *config.Config, optio
 	if app == nil || configuration == nil {
 		return tlsValidationReport{}, newTLSValidationError(TLSValidationCertificateFile, "TLS 应用或配置不可用", nil)
 	}
-	certPath := resolveApplicationPath(app.BasePath, configuration.GetString("app.server.tls.cert_file"))
-	keyPath := resolveApplicationPath(app.BasePath, configuration.GetString("app.server.tls.key_file"))
-	certificatePEM, _, err := readTLSRegularFile(certPath, tlsMaximumCertificateBytes, TLSValidationCertificateFile, "TLS 证书文件不可用")
+	listener, err := httplistener.ApplicationTLS(configuration.Get("app"), app.BasePath)
+	if err != nil {
+		return tlsValidationReport{}, newTLSValidationError(TLSValidationCertificateFile, "TLS 监听配置不可用", err)
+	}
+	return validateTLSMaterialForListener(listener, options, configuration)
+}
+
+// The process listener owns TLS material. Its targets and each selected
+// application's targets must all be covered by that material's SANs.
+func validateTLSMaterialForListener(listener httplistener.TLSConfig, options tlsValidationOptions, configurations ...*config.Config) (tlsValidationReport, error) {
+	certificatePEM, _, err := readTLSRegularFile(listener.CertFile, tlsMaximumCertificateBytes, TLSValidationCertificateFile, "TLS 证书文件不可用")
 	if err != nil {
 		return tlsValidationReport{}, err
 	}
-	privateKeyPEM, keyInfo, err := readTLSRegularFile(keyPath, tlsMaximumPrivateKeyBytes, TLSValidationPrivateKeyFile, "TLS 私钥文件不可用")
+	privateKeyPEM, keyInfo, err := readTLSRegularFile(listener.KeyFile, tlsMaximumPrivateKeyBytes, TLSValidationPrivateKeyFile, "TLS 私钥文件不可用")
 	if err != nil {
 		return tlsValidationReport{}, err
 	}
@@ -144,7 +165,7 @@ func validateTLSMaterial(app *framework.App, configuration *config.Config, optio
 	if err := verifyTLSCertificateChain(certificates, now, options.roots); err != nil {
 		return tlsValidationReport{}, err
 	}
-	targets, err := configuredTLSTargets(configuration)
+	targets, err := configuredTLSTargets(configurations...)
 	if err != nil {
 		return tlsValidationReport{}, err
 	}
@@ -323,33 +344,45 @@ func verifyTLSCertificateChain(certificates []*x509.Certificate, now time.Time, 
 	return nil
 }
 
-func configuredTLSTargets(configuration *config.Config) ([]string, error) {
+func configuredTLSTargets(configurations ...*config.Config) ([]string, error) {
 	targets := make([]string, 0, 4)
-	domain := strings.TrimSpace(configuration.GetString("app.server.domain"))
-	if domain != "" {
-		parsed, err := url.Parse(domain)
-		if err != nil || !strings.EqualFold(parsed.Scheme, "https") || parsed.Hostname() == "" || parsed.User != nil {
-			return nil, newTLSValidationError(TLSValidationTarget, "TLS 服务主域名必须是有效的 HTTPS URL", err)
+	for _, configuration := range configurations {
+		if configuration == nil {
+			return nil, newTLSValidationError(TLSValidationTarget, "TLS 服务目标配置不可用", nil)
 		}
-		targets = append(targets, parsed.Hostname())
+		if rawDomain := configuration.Get("app.server.domain"); rawDomain != nil {
+			domain, ok := rawDomain.(string)
+			if !ok {
+				return nil, newTLSValidationError(TLSValidationTarget, "TLS 服务主域名必须是有效的 HTTPS URL", nil)
+			}
+			if domain = strings.TrimSpace(domain); domain != "" {
+				parsed, err := url.Parse(domain)
+				if err != nil || !strings.EqualFold(parsed.Scheme, "https") || parsed.Hostname() == "" || parsed.User != nil {
+					return nil, newTLSValidationError(TLSValidationTarget, "TLS 服务主域名必须是有效的 HTTPS URL", err)
+				}
+				targets = append(targets, parsed.Hostname())
+			}
+		}
+		if rawHosts := configuration.Get("app.server.allowed_hosts"); rawHosts != nil {
+			hosts, err := stringList(rawHosts)
+			if err != nil {
+				return nil, newTLSValidationError(TLSValidationTarget, "TLS Host 白名单格式非法", err)
+			}
+			targets = append(targets, hosts...)
+		}
 	}
-	hosts, err := stringList(configuration.Get("app.server.allowed_hosts"))
-	if err != nil {
-		return nil, newTLSValidationError(TLSValidationTarget, "TLS Host 白名单格式非法", err)
-	}
-	targets = append(targets, hosts...)
 	seen := make(map[string]struct{}, len(targets))
 	normalized := make([]string, 0, len(targets))
 	for _, target := range targets {
-		target, err = normalizeTLSTarget(target)
+		normalizedTarget, err := normalizeTLSTarget(target)
 		if err != nil {
 			return nil, err
 		}
-		if _, exists := seen[target]; exists {
+		if _, exists := seen[normalizedTarget]; exists {
 			continue
 		}
-		seen[target] = struct{}{}
-		normalized = append(normalized, target)
+		seen[normalizedTarget] = struct{}{}
+		normalized = append(normalized, normalizedTarget)
 	}
 	if len(normalized) == 0 {
 		return nil, newTLSValidationError(TLSValidationTarget, "TLS 服务目标不能为空", nil)

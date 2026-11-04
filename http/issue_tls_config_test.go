@@ -61,7 +61,7 @@ func TestTLSConfigPathsUseApplicationRoot(t *testing.T) {
 			t.Cleanup(func() { _ = app.Close() })
 			for name, parse := range map[string]func(*framework.App) (serverConf, compressionConf, error){
 				"application": parseHTTPConfig,
-				"project":     parseProjectHTTPConfig,
+				"host":        parseHostHTTPConfig,
 			} {
 				server, _, err := parse(app)
 				if err != nil {

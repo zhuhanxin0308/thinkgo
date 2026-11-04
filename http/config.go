@@ -11,9 +11,8 @@ import (
 	"time"
 
 	"github.com/zhuhanxin0308/thinkgo/v3"
-	"github.com/zhuhanxin0308/thinkgo/v3/config"
 	"github.com/zhuhanxin0308/thinkgo/v3/context"
-	"github.com/zhuhanxin0308/thinkgo/v3/internal/apppath"
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/httplistener"
 )
 
 var ErrInvalidHTTPConfig = errors.New("HTTP 配置非法")
@@ -51,20 +50,27 @@ type compressionConf struct {
 }
 
 func parseHTTPConfig(app *framework.App) (serverConf, compressionConf, error) {
-	configuration, err := framework.ResolveServiceAs[*config.Config](app, framework.ServiceConfig)
-	if err != nil {
-		return serverConf{}, compressionConf{}, fmt.Errorf("%w: 应用配置服务不可用: %v", ErrInvalidHTTPConfig, err)
-	}
-	return parseHTTPApplicationConfigAtPath(configuration.Get("app", map[string]interface{}{}), app.BasePath)
+	return parseHTTPConfigSource(app, false)
 }
 
-// parseProjectHTTPConfig 使用业务应用配置叠加前的项目快照解析宿主监听配置，
-// 防止任一 app/<name>/config 修改整个进程的地址、端口或 TLS 协议。
-func parseProjectHTTPConfig(app *framework.App) (serverConf, compressionConf, error) {
-	if app == nil {
-		return serverConf{}, compressionConf{}, fmt.Errorf("%w: 应用不能为空", ErrInvalidHTTPConfig)
+// parseHostHTTPConfig 与部署诊断共用宿主来源选择。原生应用（包括没有
+// catalog 的子实例）使用项目快照，普通应用使用当前配置服务。
+func parseHostHTTPConfig(app *framework.App) (serverConf, compressionConf, error) {
+	return parseHTTPConfigSource(app, true)
+}
+
+func parseHTTPConfigSource(app *framework.App, host bool) (serverConf, compressionConf, error) {
+	var raw interface{}
+	var err error
+	if host {
+		raw, err = httplistener.HostApplicationConfig(app)
+	} else {
+		raw, err = httplistener.ApplicationConfig(app, false)
 	}
-	return parseHTTPApplicationConfigAtPath(app.ProjectApplicationConfig(), app.BasePath)
+	if err != nil {
+		return serverConf{}, compressionConf{}, invalidHTTPConfig("%v", err)
+	}
+	return parseHTTPApplicationConfigAtPath(raw, app.BasePath)
 }
 
 func parseHTTPApplicationConfigAtPath(raw interface{}, basePath string) (serverConf, compressionConf, error) {
@@ -74,8 +80,9 @@ func parseHTTPApplicationConfigAtPath(raw interface{}, basePath string) (serverC
 	}
 	// Deployment checks and every TCP/HTTP3 listener must load the same material,
 	// even when the launcher uses a different working directory.
-	server.CertFile = apppath.Resolve(basePath, server.CertFile)
-	server.KeyFile = apppath.Resolve(basePath, server.KeyFile)
+	material := (httplistener.TLSConfig{Enable: server.EnableTLS, CertFile: server.CertFile, KeyFile: server.KeyFile}).AtPath(basePath)
+	server.CertFile = material.CertFile
+	server.KeyFile = material.KeyFile
 	return server, compression, nil
 }
 
@@ -122,8 +129,6 @@ func parseServerConfig(values map[string]interface{}) (serverConf, error) {
 	config := serverConf{
 		Host:                   framework.DefaultServerHost,
 		Port:                   8000,
-		CertFile:               "./runtime/cert.pem",
-		KeyFile:                "./runtime/key.pem",
 		AllowedHosts:           []string{},
 		TrustedProxies:         []string{},
 		ReadHeaderTimeout:      2 * time.Second,
@@ -160,35 +165,18 @@ func parseServerConfig(values map[string]interface{}) (serverConf, error) {
 		return serverConf{}, err
 	}
 
-	tlsValues := map[string]interface{}{}
-	if rawTLS, exists := values["tls"]; exists {
-		tlsValues, err = strictConfigMap(rawTLS, "app.server.tls")
-		if err != nil {
-			return serverConf{}, err
-		}
-		if err = rejectUnknownConfigKeys(tlsValues, "app.server.tls", map[string]bool{
-			"enable": true, "cert_file": true, "key_file": true,
-		}); err != nil {
-			return serverConf{}, err
-		}
+	tls, err := httplistener.ParseTLS(values["tls"])
+	if err != nil {
+		return serverConf{}, invalidHTTPConfig("%v", err)
 	}
-	if config.EnableTLS, err = configBool(tlsValues, "enable", false); err != nil {
-		return serverConf{}, err
-	}
-	if config.CertFile, err = configString(tlsValues, "cert_file", config.CertFile); err != nil {
-		return serverConf{}, err
-	}
-	if config.KeyFile, err = configString(tlsValues, "key_file", config.KeyFile); err != nil {
-		return serverConf{}, err
-	}
+	config.EnableTLS = tls.Enable
+	config.CertFile = tls.CertFile
+	config.KeyFile = tls.KeyFile
 	if config.EnableHTTP3, err = configBool(values, "http3", false); err != nil {
 		return serverConf{}, err
 	}
 	if config.EnableHTTP3 && !config.EnableTLS {
 		return serverConf{}, invalidHTTPConfig("启用 HTTP/3 时必须同时启用 TLS")
-	}
-	if config.EnableTLS && (strings.TrimSpace(config.CertFile) == "" || strings.TrimSpace(config.KeyFile) == "") {
-		return serverConf{}, invalidHTTPConfig("启用 TLS 时证书和私钥路径不能为空")
 	}
 
 	if config.ReadHeaderTimeout, err = configDuration(values, "read_header_timeout_ms", config.ReadHeaderTimeout); err != nil {
