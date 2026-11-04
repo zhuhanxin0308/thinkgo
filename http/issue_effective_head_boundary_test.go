@@ -38,7 +38,9 @@ func TestEffectiveHEADCoversMiddlewareWritesAndCommitFailure(t *testing.T) {
 					}
 					writer.Header().Set("Content-Type", "text/plain")
 					if kind == "commit failure" {
-						registrar, ok := writer.(interface{ BeforeCommit(func(http.Header) error) error })
+						registrar, ok := writer.(interface {
+							BeforeCommit(func(http.Header) error) error
+						})
 						if !ok {
 							t.Fatal("可选接口门面丢失提交钩子")
 						}
