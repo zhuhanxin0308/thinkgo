@@ -256,6 +256,12 @@ func (c *Cookie) GetConfig() CookieConfig {
 	return c.config
 }
 
+// ResolveName 返回与读写 Cookie 相同的、经过前缀映射和语法校验的最终名称。
+// 它不要求绑定请求或 writer；nil 接收者和非法名称返回 ErrInvalidCookieName。
+func (c *Cookie) ResolveName(name string) (string, error) {
+	return c.finalName(name)
+}
+
 // Set 写入 Cookie，并显式返回配置、签名和响应错误。
 func (c *Cookie) Set(name, value string, options ...CookieOptions) error {
 	if c == nil {
