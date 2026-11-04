@@ -88,8 +88,10 @@ func TestOpenedDownloadClosesOnCompletionAndWriteCancellation(t *testing.T) {
 			if !errors.Is(err, test.err) || IsResponseTransmissionError(err) != (test.err != nil) {
 				t.Errorf("发送未保留写入或取消错误: got=%v want=%v", err, test.err)
 			}
-			if _, err := file.Stat(); !errors.Is(err, os.ErrClosed) {
-				t.Errorf("发送返回后文件句柄未关闭: %v", err)
+			// Read 通过 Go 的关闭状态检查；Windows 的 Stat 可能只返回无效句柄错误。
+			var probe [1]byte
+			if count, err := file.Read(probe[:]); count != 0 || !errors.Is(err, os.ErrClosed) {
+				t.Errorf("发送返回后文件句柄未关闭: count=%d err=%v", count, err)
 			}
 		})
 	}

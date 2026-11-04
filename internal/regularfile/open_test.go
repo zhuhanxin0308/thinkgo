@@ -66,8 +66,10 @@ func TestValidationClosesRejectedDescriptor(t *testing.T) {
 	if opened != nil || info != nil || !errors.Is(err, ErrNotRegular) {
 		t.Fatalf("directory was accepted: opened=%v info=%v err=%v", opened, info, err)
 	}
-	if _, err := file.Stat(); !errors.Is(err, os.ErrClosed) {
-		t.Fatalf("rejected descriptor was not closed: %v", err)
+	// Read checks Go's closed state; Windows Stat may return an invalid-handle error.
+	var probe [1]byte
+	if count, err := file.Read(probe[:]); count != 0 || !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("rejected descriptor was not closed: count=%d err=%v", count, err)
 	}
 }
 
