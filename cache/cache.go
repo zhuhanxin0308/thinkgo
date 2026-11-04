@@ -15,12 +15,13 @@ import (
 	"unicode/utf8"
 
 	"github.com/zhuhanxin0308/thinkgo/v3/debug"
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/cachekey"
 )
 
 const (
 	defaultStoreName     = "default"
-	tagMetaPrefix        = "__thinkgo_tag__:"
-	tagReversePrefix     = "__thinkgo_tag_reverse__:"
+	tagMetaPrefix        = cachekey.TagMetadataPrefix
+	tagReversePrefix     = cachekey.TagReverseMetadataPrefix
 	cacheFencePrefix     = "__thinkgo_cache_fence__:"
 	lockKeyPrefix        = "__thinkgo_lock__:"
 	defaultLockTTL       = 10 * time.Second
@@ -961,7 +962,7 @@ func validatePublicCacheKey(key string) error {
 	if key == "" || len(key) > maxCacheKeyBytes || !utf8.ValidString(key) || hasControlCharacter(key) {
 		return fmt.Errorf("%w: %q", ErrInvalidCacheKey, key)
 	}
-	if strings.HasPrefix(key, tagMetaPrefix) || strings.HasPrefix(key, tagReversePrefix) || strings.HasPrefix(key, cacheFencePrefix) || strings.HasPrefix(key, lockKeyPrefix) {
+	if strings.HasPrefix(key, tagMetaPrefix) || strings.HasPrefix(key, tagReversePrefix) || strings.HasPrefix(key, cacheFencePrefix) || strings.HasPrefix(key, lockKeyPrefix) || strings.HasPrefix(key, cachekey.NamespacePrefix) {
 		return fmt.Errorf("%w: %q", ErrReservedCacheKey, key)
 	}
 	return nil
