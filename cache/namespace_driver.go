@@ -4,9 +4,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"strconv"
 	"strings"
 	"time"
+
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/cachekey"
 )
 
 // NamespaceDriver 将 ThinkPHP store 的 prefix 与 tag_prefix 应用到所有后端键。
@@ -53,7 +54,7 @@ func NewNamespaceDriver(driver Driver, prefix string, tagPrefix string) (*Namesp
 	// Length framing makes every configured namespace a distinct key prefix,
 	// including empty and nested prefixes. Do not fall back to legacy keys:
 	// their unframed representation cannot identify the owning namespace.
-	namespace := "__thinkgo_namespace__:v2:" + strconv.Itoa(len(prefix)) + ":" + prefix + ":"
+	namespace := cachekey.Namespace(prefix)
 	return &NamespaceDriver{driver: driver, tagPrefix: tagPrefix, namespace: namespace}, nil
 }
 
@@ -72,7 +73,7 @@ func (driver *NamespaceDriver) key(key string) string {
 }
 
 func (driver *NamespaceDriver) tagNamespace() string {
-	return strconv.Itoa(len(driver.tagPrefix)) + ":" + driver.tagPrefix + ":"
+	return cachekey.TagNamespace(driver.tagPrefix)
 }
 
 func (driver *NamespaceDriver) Get(key string) (interface{}, bool, error) {

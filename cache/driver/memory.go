@@ -9,13 +9,14 @@ import (
 	"time"
 
 	"github.com/zhuhanxin0308/thinkgo/v3/cache/contract"
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/cachekey"
 )
 
 const memorySweepInterval = time.Minute
 
 const (
-	cacheTagMetadataPrefix        = "__thinkgo_tag__:"
-	cacheTagReverseMetadataPrefix = "__thinkgo_tag_reverse__:"
+	cacheTagMetadataPrefix        = cachekey.TagMetadataPrefix
+	cacheTagReverseMetadataPrefix = cachekey.TagReverseMetadataPrefix
 	cacheFenceMetadataPrefix      = contract.FenceMetadataPrefix
 )
 
@@ -590,7 +591,7 @@ func (c *Memory) oldestEvictableItemLocked() (string, item, bool) {
 }
 
 func isMetadataKey(key string) bool {
-	return strings.HasPrefix(key, cacheTagMetadataPrefix) || strings.HasPrefix(key, cacheTagReverseMetadataPrefix) || strings.HasPrefix(key, cacheFenceMetadataPrefix)
+	return cachekey.IsTagMetadata(key) || strings.HasPrefix(key, cacheFenceMetadataPrefix)
 }
 
 func isCapacityExemptKey(key string) bool {
