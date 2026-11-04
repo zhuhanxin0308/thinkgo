@@ -127,6 +127,19 @@ func (s *Session) GetConfig() Config {
 	return s.config
 }
 
+// CookieName 返回 Cookie 层确定的实际会话 Cookie 名称，包括配置的 Cookie 前缀。
+// 管理器和请求级实例共享此只读规则；缺少依赖或名称非法时显式返回错误。
+func (s *Session) CookieName() (string, error) {
+	if s == nil || s.cookie == nil {
+		return "", ErrInvalidSessionDependency
+	}
+	name, err := s.cookie.ResolveName(s.config.Name)
+	if err != nil {
+		return "", errors.Join(ErrSessionCookie, err)
+	}
+	return name, nil
+}
+
 // SetLogger 设置错误日志记录器；新请求会复制设置时的记录器引用。
 func (s *Session) SetLogger(logger Logger) {
 	if s == nil {

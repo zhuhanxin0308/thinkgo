@@ -146,7 +146,7 @@ func newConfiguredCompressionResponseWriter(w http.ResponseWriter, r *http.Reque
 func newCompressionResponseWriter(w http.ResponseWriter, r *http.Request, minSize int, levels map[string]int, cloneLevels bool) *CompressionResponseWriter {
 	encoding := ""
 	if r != nil && r.Method != http.MethodHead {
-		encoding = negotiateContentEncoding(r.Header.Get("Accept-Encoding"))
+		encoding = negotiateContentEncodingFields(r.Header.Values("Accept-Encoding"))
 	}
 
 	if minSize < 0 {
@@ -608,6 +608,24 @@ func (w *CompressionResponseWriter) pushResponse(target string, options *http.Pu
 		return ErrResponseBoundaryCrossed
 	}
 	return pushThroughResponseWriter(w.ResponseWriter, target, options)
+}
+
+// negotiateContentEncodingFields 在分配合并缓冲前校验所有字段及分隔逗号的总大小。
+func negotiateContentEncodingFields(values []string) string {
+	if len(values) == 0 || len(values) > maxAcceptEncodingEntries {
+		return ""
+	}
+	if len(values) == 1 {
+		return negotiateContentEncoding(values[0])
+	}
+	total := len(values) - 1
+	for _, value := range values {
+		if len(value) > maxAcceptEncodingBytes-total {
+			return ""
+		}
+		total += len(value)
+	}
+	return negotiateContentEncoding(strings.Join(values, ","))
 }
 
 func negotiateContentEncoding(header string) string {

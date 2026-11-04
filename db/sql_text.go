@@ -195,6 +195,7 @@ func validatePlaceholderCount(sqlText string, argsCount int, dialects ...string)
 // countSQLPlaceholders 忽略字符串、标识符引用和注释中的问号，只统计真实绑定占位符。
 func countSQLPlaceholders(sqlText string, dialects ...string) (int, error) {
 	backslashEscapes := sqlBackslashEscapes(dialects...)
+	postgres := len(dialects) > 0 && strings.EqualFold(strings.TrimSpace(dialects[0]), "postgres")
 	const (
 		stateNormal = iota
 		stateSingleQuote
@@ -231,7 +232,11 @@ func countSQLPlaceholders(sqlText string, dialects ...string) (int, error) {
 			case '`':
 				state = stateBacktick
 			case '[':
-				state = stateBracket
+				// PostgreSQL 的数组构造、下标和切片仍是 SQL 正文，与 Rebind 保持一致。
+				// 其他方言继续保留方括号标识符的引用规则。
+				if !postgres {
+					state = stateBracket
+				}
 			case '-':
 				if index+1 < len(sqlText) && sqlText[index+1] == '-' {
 					state = stateLineComment

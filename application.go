@@ -345,13 +345,25 @@ func (app *App) loadNativeApplication() error {
 	}
 	app.SetNamespace(namespace)
 
-	configPath := filepath.Join(applicationPath, "config")
-	if information, err := os.Stat(configPath); err == nil && information.IsDir() {
-		if err := app.config.LoadAll(configPath); err != nil {
-			return fmt.Errorf("加载应用 %q 配置失败: %w", name, err)
+	// 项目快照已在切换运行目录前捕获；应用缓存包含合并后的根配置，
+	// 因此只能加载到当前应用工作副本，不能写回项目 owner 或共享基线。
+	cached, err := app.loadConfigurationCache()
+	if err != nil {
+		return fmt.Errorf("加载应用 %q 配置缓存失败: %w", name, err)
+	}
+	if cached {
+		if err := app.reapplyProjectApplicationOverrides(); err != nil {
+			return fmt.Errorf("应用 %q 配置缓存覆盖失败: %w", name, err)
 		}
-	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("读取应用 %q 配置目录失败: %w", name, err)
+	} else {
+		configPath := filepath.Join(applicationPath, "config")
+		if information, err := os.Stat(configPath); err == nil && information.IsDir() {
+			if err := app.config.LoadAll(configPath); err != nil {
+				return fmt.Errorf("加载应用 %q 配置失败: %w", name, err)
+			}
+		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("读取应用 %q 配置目录失败: %w", name, err)
+		}
 	}
 	// 应用目录可能声明项目配置中不存在的新叶子；加载覆盖层后重新应用环境，
 	// 保证真实环境与 .env 始终保持最高优先级。

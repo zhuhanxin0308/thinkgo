@@ -91,7 +91,11 @@ func (c *sessionCommitCoordinator) beforeCommit(header http.Header) error {
 	if err := c.requestSession.CommitResponse(); err != nil {
 		return newSessionCommitError(err)
 	}
-	keepLatestSessionCookie(header, c.requestSession.GetConfig().Name)
+	name, err := c.requestSession.CookieName()
+	if err != nil {
+		return newSessionCommitError(err)
+	}
+	keepLatestSessionCookie(header, name)
 	return nil
 }
 
