@@ -15,12 +15,13 @@ import (
 	"unicode/utf8"
 
 	"github.com/zhuhanxin0308/thinkgo/v3/debug"
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/cachekey"
 )
 
 const (
 	defaultStoreName     = "default"
-	tagMetaPrefix        = "__thinkgo_tag__:"
-	tagReversePrefix     = "__thinkgo_tag_reverse__:"
+	tagMetaPrefix        = cachekey.TagMetadataPrefix
+	tagReversePrefix     = cachekey.TagReverseMetadataPrefix
 	cacheFencePrefix     = "__thinkgo_cache_fence__:"
 	lockKeyPrefix        = "__thinkgo_lock__:"
 	defaultLockTTL       = 10 * time.Second
@@ -36,6 +37,11 @@ const (
 	maxTagsPerCacheKey   = 64
 	maxCacheBatchEntries = 10000
 )
+
+// cacheMetadataScope 属于驱动的实际键空间，不属于 facade 的注册名称。
+// 保留原默认视图的编码；不同 store 必须由独立驱动或 namespace 隔离。
+// 别名与注册顺序不会改变同一实际 store 的持久控制身份。
+const cacheMetadataScope = defaultStoreName
 
 var (
 	cacheStorePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`)
@@ -110,6 +116,9 @@ type cacheState struct {
 	closeOnce    sync.Once
 	closeErr     error
 	closed       bool
+
+	// rememberNamespaces 仅用于本管理器的合并加载，不进入持久化元数据。
+	rememberNamespaces map[string]string
 }
 
 // Cache 是缓存管理器，同时承担 store、标签、合并加载和锁的统一入口。
@@ -141,13 +150,15 @@ type Lock struct {
 // trace 只绑定返回的兼容 facade，不进入共享 state；请求代码应优先使用 WithDebug 派生私有 facade。
 func NewCache(trace *debug.Debug, driver Driver) *Cache {
 	state := &cacheState{
-		stores:       make(map[string]Driver),
-		storeOptions: make(map[string]StoreOptions),
-		remembering:  make(map[string]*rememberCall),
+		stores:             make(map[string]Driver),
+		storeOptions:       make(map[string]StoreOptions),
+		rememberNamespaces: make(map[string]string),
+		remembering:        make(map[string]*rememberCall),
 	}
 	if !isNilCacheDriver(driver) {
 		state.stores[defaultStoreName] = driver
 		state.storeOptions[defaultStoreName] = StoreOptions{TagPrefix: "tag:"}
+		state.rememberNamespaces[defaultStoreName] = defaultStoreName
 	}
 	return &Cache{state: state, storeName: defaultStoreName, debug: trace}
 }
@@ -166,7 +177,7 @@ func (c *Cache) WithDebug(collector *debug.Debug) *Cache {
 	return &requestCache
 }
 
-// RegisterStore 注册或原子替换一个具名缓存 store。
+// RegisterStore 注册具名缓存 store；同一可识别驱动实例的别名共享合并加载组。
 func (c *Cache) RegisterStore(name string, driver Driver) error {
 	if c == nil || c.state == nil {
 		return ErrCacheDriverNotConfigured
@@ -185,12 +196,15 @@ func (c *Cache) RegisterStore(name string, driver Driver) error {
 		}
 		return fmt.Errorf("%w: %s", ErrCacheStoreExists, name)
 	}
+	rememberNamespace := name
 	newResource, newResourceOK := cacheDriverResourceIdentity(driver)
-	if newResourceOK {
-		for existingName, existingDriver := range c.state.stores {
-			if sameCacheDriver(existingDriver, driver) {
-				continue
-			}
+	for existingName, existingDriver := range c.state.stores {
+		if sameCacheDriver(existingDriver, driver) {
+			// 已有别名都持有同一组值；后来注册的名称不能改变进行中的加载身份。
+			rememberNamespace = c.state.rememberNamespaces[existingName]
+			continue
+		}
+		if newResourceOK {
 			existingResource, existingResourceOK := cacheDriverResourceIdentity(existingDriver)
 			if existingResourceOK && existingResource == newResource {
 				return fmt.Errorf("%w: %s 与 %s 共享后端 namespace", ErrCacheStoreExists, existingName, name)
@@ -198,6 +212,7 @@ func (c *Cache) RegisterStore(name string, driver Driver) error {
 		}
 	}
 	c.state.stores[name] = driver
+	c.state.rememberNamespaces[name] = rememberNamespace
 	if c.state.storeOptions == nil {
 		c.state.storeOptions = make(map[string]StoreOptions)
 	}
@@ -321,7 +336,7 @@ func (c *Cache) Lock(key string, ttl time.Duration) (*Lock, error) {
 		return nil, err
 	}
 	release()
-	owner, err := newLockOwner(c.storeName)
+	owner, err := newLockOwner(cacheMetadataScope)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidCacheLock, err)
 	}
@@ -517,7 +532,10 @@ func (c *Cache) RememberContext(ctx context.Context, key string, ttl time.Durati
 	if value, found, err := c.GetContext(ctx, key); err != nil || found {
 		return value, err
 	}
-	callKey := c.storeName + "\x00" + key
+	c.state.storesMu.RLock()
+	rememberNamespace := c.state.rememberNamespaces[c.storeName]
+	c.state.storesMu.RUnlock()
+	callKey := rememberNamespace + "\x00" + key
 	return c.state.doRememberContext(ctx, callKey, func() (interface{}, error) {
 		if value, found, err := c.GetContext(ctx, key); err != nil || found {
 			return value, err
@@ -961,7 +979,7 @@ func validatePublicCacheKey(key string) error {
 	if key == "" || len(key) > maxCacheKeyBytes || !utf8.ValidString(key) || hasControlCharacter(key) {
 		return fmt.Errorf("%w: %q", ErrInvalidCacheKey, key)
 	}
-	if strings.HasPrefix(key, tagMetaPrefix) || strings.HasPrefix(key, tagReversePrefix) || strings.HasPrefix(key, cacheFencePrefix) || strings.HasPrefix(key, lockKeyPrefix) {
+	if strings.HasPrefix(key, tagMetaPrefix) || strings.HasPrefix(key, tagReversePrefix) || strings.HasPrefix(key, cacheFencePrefix) || strings.HasPrefix(key, lockKeyPrefix) || strings.HasPrefix(key, cachekey.NamespacePrefix) {
 		return fmt.Errorf("%w: %q", ErrReservedCacheKey, key)
 	}
 	return nil

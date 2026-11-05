@@ -26,6 +26,16 @@ type projectConfigurationState struct {
 	envName     string
 	configExt   string
 	err         error
+
+	overridesMu          sync.RWMutex
+	applicationOverrides []projectApplicationOverride
+}
+
+// projectApplicationOverride 保留已校验的显式宿主补丁与提交顺序。
+// 值来自 Config 的隔离快照，不持有调用方可变 map 或 slice。
+type projectApplicationOverride struct {
+	key   string
+	value interface{}
 }
 
 func newProjectConfigurationState(owner *App) *projectConfigurationState {
@@ -167,6 +177,8 @@ func (app *App) ApplyProjectApplicationOverrides(overrides map[string]interface{
 	if activeConfig == nil || projectSnapshot == nil || projectState == nil || projectState.config == nil {
 		return fmt.Errorf("%w: 配置快照未完成初始化", ErrProjectConfigurationOverrideUnavailable)
 	}
+	projectState.overridesMu.Lock()
+	defer projectState.overridesMu.Unlock()
 
 	keys := make([]string, 0, len(overrides))
 	for key := range overrides {
@@ -199,5 +211,31 @@ func (app *App) ApplyProjectApplicationOverrides(overrides map[string]interface{
 	for index, target := range targets {
 		target.ReplaceWithSnapshot(candidates[index])
 	}
+	for _, key := range keys {
+		projectState.applicationOverrides = append(projectState.applicationOverrides, projectApplicationOverride{
+			key:   "app." + key,
+			value: candidates[0].Get("app." + key),
+		})
+	}
+	return nil
+}
+
+// reapplyProjectApplicationOverrides 防止完整应用缓存中的旧根值撤销显式宿主补丁。
+// 仅缓存路径调用；随后仍由冻结环境作最终覆盖，不改变无缓存时的源文件合并语义。
+func (app *App) reapplyProjectApplicationOverrides() error {
+	state := app.ensureProjectConfigurationState()
+	state.overridesMu.RLock()
+	overrides := append([]projectApplicationOverride(nil), state.applicationOverrides...)
+	state.overridesMu.RUnlock()
+	if len(overrides) == 0 {
+		return nil
+	}
+	candidate := app.config.Clone()
+	for _, override := range overrides {
+		if err := candidate.Set(override.key, override.value); err != nil {
+			return fmt.Errorf("重放项目配置覆盖 %s 失败: %w", override.key, err)
+		}
+	}
+	app.config.ReplaceWithSnapshot(candidate)
 	return nil
 }

@@ -208,16 +208,25 @@ func (app *App) LoadConfig() error {
 	if app == nil || app.config == nil {
 		return ErrNilApplication
 	}
+	if loaded, err := app.loadConfigurationCache(); loaded || err != nil {
+		return err
+	}
+	return app.config.LoadAll(app.GetConfigPath())
+}
+
+// loadConfigurationCache 只向当前应用的配置工作副本加载当前运行目录的快照。
+// 只有缓存不存在才允许回源；已有缓存的类型、权限或内容错误必须阻断启动。
+func (app *App) loadConfigurationCache() (bool, error) {
 	cachePath := filepath.Join(app.GetRuntimePath(), "config.json")
 	if information, err := os.Lstat(cachePath); err == nil {
 		if information.Mode()&os.ModeSymlink != 0 || !information.Mode().IsRegular() {
-			return fmt.Errorf("配置缓存必须是普通文件: %s", cachePath)
+			return true, fmt.Errorf("配置缓存必须是普通文件: %s", cachePath)
 		}
-		return app.config.Load(cachePath, "")
+		return true, app.config.Load(cachePath, "")
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("检查配置缓存失败: %w", err)
+		return false, fmt.Errorf("检查配置缓存失败: %w", err)
 	}
-	return app.config.LoadAll(app.GetConfigPath())
+	return false, nil
 }
 
 // LoadLangPack 切换到应用默认语言包，对应 ThinkPHP App::loadLangPack。

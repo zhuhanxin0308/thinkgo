@@ -194,11 +194,11 @@ func cacheDriverSupportsAtomicFencing(driver Driver) bool {
 }
 
 func (c *Cache) fenceSequenceKey() string {
-	return cacheFencePrefix + c.storeName + ":sequence"
+	return cacheFencePrefix + cacheMetadataScope + ":sequence"
 }
 
 func (c *Cache) fenceInvalidationKey() string {
-	return cacheFencePrefix + c.storeName + ":invalidation"
+	return cacheFencePrefix + cacheMetadataScope + ":invalidation"
 }
 
 func (c *Cache) nextFenceGeneration(driver Driver) (uint64, error) {

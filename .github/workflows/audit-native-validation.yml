@@ -1,10 +1,28 @@
 name: Audit native offline validation
 on:
+  workflow_dispatch:
   push:
-    branches: ['audit/env-bootstrap-20261103-astra']
-    paths: ['.github/workflows/audit-native-validation.yml']
+    branches: [main]
+    paths:
+      - '.github/workflows/audit-env-bootstrap.yml'
+      - '.github/workflows/audit-native-validation.yml'
+      - '.github/AUDIT_WORKFLOWS.md'
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/audit-env-bootstrap.yml'
+      - '.github/workflows/audit-native-validation.yml'
+      - '.github/AUDIT_WORKFLOWS.md'
 permissions:
   contents: read
+
+concurrency:
+  group: audit-native-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  AUDIT_SOURCE_SHA: ${{ github.sha }}
+  AUDIT_CONTAINER: thinkgo-native-${{ github.run_id }}-${{ github.run_attempt }}
 jobs:
   audit:
     runs-on: ubuntu-24.04
@@ -13,16 +31,24 @@ jobs:
       - name: Read exact source without credentials
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: 47fde62dd4a88e0df93cba41ab02fc89516ae035
+          ref: ${{ github.sha }}
           path: source
           persist-credentials: false
           fetch-depth: 1
+          submodules: false
+          lfs: false
       - name: Prepare authenticated offline dependency graphs and bounded disk
         shell: bash
         run: |
           set -euo pipefail
+          umask 077
           BASE="$RUNNER_TEMP/thinkgo-native"
           mkdir -p "$BASE"/{go-dist,meta,prefetch,home,tmp,modcache,gocache,gopath,artifacts,image,scratch}
+          [[ "$AUDIT_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git -C source rev-parse HEAD)" = "$AUDIT_SOURCE_SHA"
+          test "$(awk '$1 == "go" { print $2; exit }' source/go.mod)" = 1.26.10
+          printf '%s\n' "$AUDIT_SOURCE_SHA" > "$BASE/artifacts/source-ref.txt"
+          git -C source ls-tree -r HEAD > "$BASE/artifacts/source-blobs.txt"
           curl --fail --location --proto '=https' --tlsv1.2 --retry 2 --max-time 180 https://go.dev/dl/go1.26.10.linux-amd64.tar.gz -o "$BASE/go.tar.gz"
           printf '%s  %s\n' ccfe7ae822d2c2f41f4fe7c956199967a4dac22d0ee0d2b2bfdb440aab3b20c5 "$BASE/go.tar.gz" | sha256sum --check --strict
           tar --no-same-owner -xzf "$BASE/go.tar.gz" -C "$BASE/go-dist"
@@ -81,12 +107,12 @@ jobs:
           set -euo pipefail
           BASE="$RUNNER_TEMP/thinkgo-native"
           cat > "$BASE/plan.sh" <<'PLAN'
-          set -uo pipefail
+          set -euo pipefail
           mkdir -p /scratch/home /scratch/tmp /scratch/gocache /scratch/gopath/pkg /scratch/work /scratch/offline-probe
           cp -r /sumdb-checkpoints /scratch/gopath/pkg/sumdb
           cp /bin/true /scratch/exec-probe && chmod 0700 /scratch/exec-probe && /scratch/exec-probe || exit 98
           rm /scratch/exec-probe
-          cp -a /src/. /scratch/work/
+          cp -a --no-preserve=ownership /src/. /scratch/work/
           rm -rf /scratch/work/.git
           cd /scratch/work
           echo AUDIT_ENVIRONMENT_BEGIN
@@ -115,26 +141,38 @@ jobs:
           echo AUDIT_OFFLINE_CONSUMER_PREFLIGHT_EXIT=0
           cd /scratch/work
           echo AUDIT_BASELINE_BEGIN
-          CGO_ENABLED=1 go test -json -mod=readonly -p 1 -parallel 2 -shuffle=1234567 -count=1 -timeout=180s ./...
-          baseline=$?
+          # CLI integration tests perform several cold builds on two CPUs.
+          # Keep every test; the entire container still has a 1500-second deadline.
+          if CGO_ENABLED=1 go test -json -mod=readonly -p 1 -parallel 2 -shuffle=1234567 -count=1 -timeout=10m ./...; then
+            baseline=0
+          else
+            baseline=$?
+          fi
           echo AUDIT_BASELINE_EXIT=$baseline
           echo AUDIT_RACE_BEGIN
-          CGO_ENABLED=1 go test -json -race -mod=readonly -p 1 -parallel 2 -shuffle=7654321 -count=1 -timeout=180s ./auth ./binding ./context ./middleware ./session ./session/driver ./filesystem ./ratelimit ./cache ./queue/asynq ./http
-          race=$?
+          if CGO_ENABLED=1 go test -json -race -mod=readonly -p 1 -parallel 2 -shuffle=7654321 -count=1 -timeout=180s ./auth ./binding ./context ./middleware ./session ./session/driver ./filesystem ./ratelimit ./cache ./queue/asynq ./http; then
+            race=0
+          else
+            race=$?
+          fi
           echo AUDIT_RACE_EXIT=$race
           echo AUDIT_VET_BEGIN
-          CGO_ENABLED=1 go vet -mod=readonly -p 1 ./...
-          vet=$?
+          if CGO_ENABLED=1 go vet -mod=readonly -p 1 ./...; then
+            vet=0
+          else
+            vet=$?
+          fi
           echo AUDIT_VET_EXIT=$vet
           test "$baseline" -eq 0 && test "$race" -eq 0 && test "$vet" -eq 0
           PLAN
           chmod a+r "$BASE/plan.sh"
+          cp "$BASE/plan.sh" "$BASE/artifacts/test-plan.sh"
           # Only an empty, dedicated 8 GiB filesystem is writable. Sumdb public checkpoints are copied into it.
           # No target process receives credentials, host HOME, Docker socket or an external network.
           ulimit -f 131072
-          set +e
-          timeout --signal=TERM --kill-after=15s 1500s docker run --name thinkgo-native-audit --rm \
-            --network none --read-only --user 65534:65534 --cap-drop ALL --security-opt no-new-privileges \
+          if timeout --signal=TERM --kill-after=15s 1500s docker run --name "$AUDIT_CONTAINER" --rm \
+            --network none --read-only --ipc none --user 65534:65534 --cap-drop ALL --security-opt no-new-privileges \
+            --log-driver none \
             --cpus 2 --memory 3g --memory-swap 3g --pids-limit 256 \
             --ulimit nofile=512:512 --ulimit fsize=134217728:134217728 --ulimit core=0:0 \
             --mount type=bind,src="$BASE/scratch",dst=/scratch \
@@ -147,20 +185,44 @@ jobs:
             PATH=/go/bin:/usr/bin:/bin HOME=/scratch/home TMPDIR=/scratch/tmp \
             GOROOT=/go GOTOOLCHAIN=local GOENV=off GOWORK=off GOTELEMETRY=off GOPROXY=file:///modcache/cache/download GOSUMDB=sum.golang.org GOVCS='*:off' \
             GOMODCACHE=/modcache GOCACHE=/scratch/gocache GOPATH=/scratch/gopath GOMAXPROCS=2 GOMEMLIMIT=768MiB LANG=C.UTF-8 \
-            /bin/bash /plan.sh > "$BASE/artifacts/native-validation.log" 2>&1
-          result=$?
-          docker rm -f thinkgo-native-audit >/dev/null 2>&1 || true
-          sudo umount "$BASE/scratch" || true
+            /bin/bash /plan.sh > "$BASE/artifacts/native-validation.log" 2>&1; then
+            result=0
+          else
+            result=$?
+          fi
           printf '%s\n' "$result" > "$BASE/artifacts/exit-code.txt"
-          cp "$BASE/plan.sh" "$BASE/artifacts/test-plan.sh"
-          printf '%s\n' 47fde62dd4a88e0df93cba41ab02fc89516ae035 > "$BASE/artifacts/source-ref.txt"
+          # Emit only fixed labels and numeric exit codes, never raw target output.
+          python3 - "$BASE/artifacts/native-validation.log" <<'PY'
+          import re
+          import sys
+
+          statuses = {}
+          with open(sys.argv[1], encoding="utf-8", errors="replace") as log:
+              for line in log:
+                  match = re.fullmatch(r"AUDIT_(OFFLINE_CONSUMER_PREFLIGHT|BASELINE|RACE|VET)_EXIT=([0-9]{1,3})\n?", line)
+                  if match:
+                      statuses[match[1]] = int(match[2])
+          for stage in ("OFFLINE_CONSUMER_PREFLIGHT", "BASELINE", "RACE", "VET"):
+              print(f"{stage}: {statuses.get(stage, 'not reached')}")
+          PY
           echo "Native validation exited with code $result; inspect the test artifact."
           exit "$result"
+      - name: Clean up the audit container and bounded scratch
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if docker container inspect "$AUDIT_CONTAINER" >/dev/null 2>&1; then
+            docker rm -f "$AUDIT_CONTAINER" >/dev/null
+          fi
+          if mountpoint -q "$RUNNER_TEMP/thinkgo-native/scratch"; then
+            sudo umount "$RUNNER_TEMP/thinkgo-native/scratch"
+          fi
       - name: Upload validation evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: audit-native-validation-47fde62
+          name: audit-native-validation-${{ github.sha }}
           path: ${{ runner.temp }}/thinkgo-native/artifacts/*
           retention-days: 7
           if-no-files-found: error

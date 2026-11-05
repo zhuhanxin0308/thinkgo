@@ -103,7 +103,7 @@ func TestIssue27DirectHTTPKernelAddress(t *testing.T) {
 				if got := kernel.newServer().Addr; got != test.address {
 					t.Errorf("direct kernel address=%q want=%q", got, test.address)
 				}
-				project, _, err := parseProjectHTTPConfig(app)
+				project, _, err := parseHostHTTPConfig(app)
 				if err != nil {
 					t.Fatal(err)
 				}
