@@ -97,7 +97,9 @@ jobs:
           cp "$BASE/metadata/go.sum" "$BASE/artifacts/modules/resolved-go.sum"
           tar -czf "$BASE/artifacts/modules/modules.tar.gz" -C "$BASE" modcache gopath/pkg/sumdb
           for part in toolchain source modules; do
-            (cd "$BASE/artifacts/$part" && find . -maxdepth 1 -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
+            checksum_file="$BASE/${part}-SHA256SUMS"
+            (cd "$BASE/artifacts/$part" && find . -maxdepth 1 -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > "$checksum_file")
+            mv "$checksum_file" "$BASE/artifacts/$part/SHA256SUMS"
           done
           du -sh "$BASE/artifacts/"*
 
