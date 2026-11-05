@@ -1,0 +1,228 @@
+name: Audit native offline validation
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/audit-env-bootstrap.yml'
+      - '.github/workflows/audit-native-validation.yml'
+      - '.github/AUDIT_WORKFLOWS.md'
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/audit-env-bootstrap.yml'
+      - '.github/workflows/audit-native-validation.yml'
+      - '.github/AUDIT_WORKFLOWS.md'
+permissions:
+  contents: read
+
+concurrency:
+  group: audit-native-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  AUDIT_SOURCE_SHA: ${{ github.sha }}
+  AUDIT_CONTAINER: thinkgo-native-${{ github.run_id }}-${{ github.run_attempt }}
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Read exact source without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          path: source
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+          lfs: false
+      - name: Prepare authenticated offline dependency graphs and bounded disk
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          BASE="$RUNNER_TEMP/thinkgo-native"
+          mkdir -p "$BASE"/{go-dist,meta,prefetch,home,tmp,modcache,gocache,gopath,artifacts,image,scratch}
+          [[ "$AUDIT_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git -C source rev-parse HEAD)" = "$AUDIT_SOURCE_SHA"
+          test "$(awk '$1 == "go" { print $2; exit }' source/go.mod)" = 1.26.10
+          printf '%s\n' "$AUDIT_SOURCE_SHA" > "$BASE/artifacts/source-ref.txt"
+          git -C source ls-tree -r HEAD > "$BASE/artifacts/source-blobs.txt"
+          curl --fail --location --proto '=https' --tlsv1.2 --retry 2 --max-time 180 https://go.dev/dl/go1.26.10.linux-amd64.tar.gz -o "$BASE/go.tar.gz"
+          printf '%s  %s\n' ccfe7ae822d2c2f41f4fe7c956199967a4dac22d0ee0d2b2bfdb440aab3b20c5 "$BASE/go.tar.gz" | sha256sum --check --strict
+          tar --no-same-owner -xzf "$BASE/go.tar.gz" -C "$BASE/go-dist"
+          cp source/go.mod source/go.sum "$BASE/meta/"
+          cp source/go.mod "$BASE/artifacts/original-go.mod"
+          cp source/go.sum "$BASE/artifacts/original-go.sum"
+          goenv=(env -i PATH="$BASE/go-dist/go/bin:/usr/bin:/bin" HOME="$BASE/home" TMPDIR="$BASE/tmp" GOTOOLCHAIN=local GOENV=off GOWORK=off GOTELEMETRY=off GOPROXY=https://proxy.golang.org GOSUMDB=sum.golang.org GOVCS='*:off' GOMODCACHE="$BASE/modcache" GOCACHE="$BASE/gocache" GOPATH="$BASE/gopath")
+          cd "$BASE/meta"
+          "${goenv[@]}" go mod download all
+          "${goenv[@]}" go list -m -json all > "$BASE/artifacts/module-graph.json"
+          "${goenv[@]}" go mod graph > "$BASE/artifacts/module-edges.txt"
+          # Parse imports and fetch authenticated modules only. No target program runs during preparation.
+          printf 'module audit-prefetch\n\ngo 1.26.10\n\nrequire github.com/zhuhanxin0308/thinkgo/v3 v3.0.0\nreplace github.com/zhuhanxin0308/thinkgo/v3 => %s\n' "$GITHUB_WORKSPACE/source" > "$BASE/prefetch/go.mod"
+          cp "$BASE/artifacts/original-go.sum" "$BASE/prefetch/go.sum"
+          cat > "$BASE/prefetch/imports.go" <<'GO'
+          package auditprefetch
+          import (
+            _ "github.com/zhuhanxin0308/thinkgo/v3"
+            _ "github.com/zhuhanxin0308/thinkgo/v3/http"
+            _ "github.com/zhuhanxin0308/thinkgo/v3/db/connector"
+            _ "github.com/zhuhanxin0308/thinkgo/v3/console/command"
+            _ "github.com/zhuhanxin0308/thinkgo/v3/openapi"
+          )
+          GO
+          cd "$BASE/prefetch"
+          "${goenv[@]}" go mod tidy
+          "${goenv[@]}" go mod download all
+          cp go.mod "$BASE/artifacts/prefetch-go.mod"
+          cp go.sum "$BASE/artifacts/prefetch-go.sum"
+          "${goenv[@]}" go mod verify > "$BASE/artifacts/prefetch-verification.txt"
+          cd "$BASE/meta"
+          "${goenv[@]}" go mod verify > "$BASE/artifacts/module-verification.txt"
+          # A checksum lookup cache is not a complete sumdb state: preserve its signed latest tree checkpoint too.
+          test -s "$BASE/gopath/pkg/sumdb/sum.golang.org/latest"
+          cp -a "$BASE/gopath/pkg/sumdb" "$BASE/sumdb-checkpoints"
+          cp "$BASE/gopath/pkg/sumdb/sum.golang.org/latest" "$BASE/artifacts/sumdb-signed-checkpoint.txt"
+          cd "$GITHUB_WORKSPACE"
+          cmp source/go.mod "$BASE/artifacts/original-go.mod"
+          cmp source/go.sum "$BASE/artifacts/original-go.sum"
+          cat > "$BASE/image/Dockerfile" <<'DOCKER'
+          FROM ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852
+          RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends gcc libc6-dev git ca-certificates tzdata iproute2 && rm -rf /var/lib/apt/lists/*
+          DOCKER
+          docker build --pull -t thinkgo-audit-tools "$BASE/image"
+          docker image inspect thinkgo-audit-tools --format '{{.Id}}' > "$BASE/artifacts/container-image-id.txt"
+          printf '%s\n' 'ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852' > "$BASE/artifacts/base-image-digest.txt"
+          chmod -R a+rX "$BASE/go-dist" "$BASE/modcache" "$BASE/sumdb-checkpoints"
+          truncate -s 8G "$BASE/scratch.ext4"
+          mkfs.ext4 -q -F "$BASE/scratch.ext4"
+          sudo mount -o loop,exec,nodev,nosuid "$BASE/scratch.ext4" "$BASE/scratch"
+          sudo chown 65534:65534 "$BASE/scratch"
+          sudo chmod 0700 "$BASE/scratch"
+      - name: Native tests, race tests and vet inside a no-network container
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE="$RUNNER_TEMP/thinkgo-native"
+          cat > "$BASE/plan.sh" <<'PLAN'
+          set -euo pipefail
+          mkdir -p /scratch/home /scratch/tmp /scratch/gocache /scratch/gopath/pkg /scratch/work /scratch/offline-probe
+          cp -r /sumdb-checkpoints /scratch/gopath/pkg/sumdb
+          cp /bin/true /scratch/exec-probe && chmod 0700 /scratch/exec-probe && /scratch/exec-probe || exit 98
+          rm /scratch/exec-probe
+          cp -a --no-preserve=ownership /src/. /scratch/work/
+          rm -rf /scratch/work/.git
+          cd /scratch/work
+          echo AUDIT_ENVIRONMENT_BEGIN
+          id
+          go version
+          gcc --version | head -1
+          ip -brief address
+          grep -E 'CapEff|NoNewPrivs' /proc/self/status
+          grep ' /scratch ' /proc/mounts
+          df -h /scratch
+          cat /sys/fs/cgroup/memory.max /sys/fs/cgroup/pids.max
+          printf 'OFFLINE_MODULE_PROXY=%s\n' "$GOPROXY"
+          for f in /src/go.mod /go/VERSION /modcache/audit-probe /sumdb-checkpoints/audit-probe /etc/audit-probe; do
+            if ( : > "$f" ) 2>/dev/null; then echo "FAIL_WRITABLE=$f"; exit 99; else echo "READ_ONLY_OK=$f"; fi
+          done
+          echo AUDIT_ENVIRONMENT_END
+          go mod verify || exit 96
+          echo AUDIT_OFFLINE_CONSUMER_PREFLIGHT_BEGIN
+          cd /scratch/offline-probe
+          printf 'module audit-offline-probe\n\ngo 1.26.10\n\nrequire github.com/zhuhanxin0308/thinkgo/v3 v3.0.0\nreplace github.com/zhuhanxin0308/thinkgo/v3 => /src\n' > go.mod
+          cp /src/go.sum go.sum
+          printf 'package probe\nimport(_ "github.com/zhuhanxin0308/thinkgo/v3";_ "github.com/zhuhanxin0308/thinkgo/v3/http";_ "github.com/zhuhanxin0308/thinkgo/v3/db/connector";_ "github.com/zhuhanxin0308/thinkgo/v3/console/command";_ "github.com/zhuhanxin0308/thinkgo/v3/openapi")\n' > imports.go
+          CGO_ENABLED=0 go get github.com/zhuhanxin0308/thinkgo/v3 || exit 97
+          CGO_ENABLED=0 go mod tidy || exit 97
+          go mod verify || exit 97
+          echo AUDIT_OFFLINE_CONSUMER_PREFLIGHT_EXIT=0
+          cd /scratch/work
+          echo AUDIT_BASELINE_BEGIN
+          # CLI integration tests perform several cold builds on two CPUs.
+          # Keep every test; the entire container still has a 1500-second deadline.
+          if CGO_ENABLED=1 go test -json -mod=readonly -p 1 -parallel 2 -shuffle=1234567 -count=1 -timeout=10m ./...; then
+            baseline=0
+          else
+            baseline=$?
+          fi
+          echo AUDIT_BASELINE_EXIT=$baseline
+          echo AUDIT_RACE_BEGIN
+          if CGO_ENABLED=1 go test -json -race -mod=readonly -p 1 -parallel 2 -shuffle=7654321 -count=1 -timeout=180s ./auth ./binding ./context ./middleware ./session ./session/driver ./filesystem ./ratelimit ./cache ./queue/asynq ./http; then
+            race=0
+          else
+            race=$?
+          fi
+          echo AUDIT_RACE_EXIT=$race
+          echo AUDIT_VET_BEGIN
+          if CGO_ENABLED=1 go vet -mod=readonly -p 1 ./...; then
+            vet=0
+          else
+            vet=$?
+          fi
+          echo AUDIT_VET_EXIT=$vet
+          test "$baseline" -eq 0 && test "$race" -eq 0 && test "$vet" -eq 0
+          PLAN
+          chmod a+r "$BASE/plan.sh"
+          cp "$BASE/plan.sh" "$BASE/artifacts/test-plan.sh"
+          # Only an empty, dedicated 8 GiB filesystem is writable. Sumdb public checkpoints are copied into it.
+          # No target process receives credentials, host HOME, Docker socket or an external network.
+          ulimit -f 131072
+          if timeout --signal=TERM --kill-after=15s 1500s docker run --name "$AUDIT_CONTAINER" --rm \
+            --network none --read-only --ipc none --user 65534:65534 --cap-drop ALL --security-opt no-new-privileges \
+            --log-driver none \
+            --cpus 2 --memory 3g --memory-swap 3g --pids-limit 256 \
+            --ulimit nofile=512:512 --ulimit fsize=134217728:134217728 --ulimit core=0:0 \
+            --mount type=bind,src="$BASE/scratch",dst=/scratch \
+            --mount type=bind,src="$GITHUB_WORKSPACE/source",dst=/src,readonly \
+            --mount type=bind,src="$BASE/go-dist/go",dst=/go,readonly \
+            --mount type=bind,src="$BASE/modcache",dst=/modcache,readonly \
+            --mount type=bind,src="$BASE/sumdb-checkpoints",dst=/sumdb-checkpoints,readonly \
+            --mount type=bind,src="$BASE/plan.sh",dst=/plan.sh,readonly \
+            --entrypoint /usr/bin/env thinkgo-audit-tools -i \
+            PATH=/go/bin:/usr/bin:/bin HOME=/scratch/home TMPDIR=/scratch/tmp \
+            GOROOT=/go GOTOOLCHAIN=local GOENV=off GOWORK=off GOTELEMETRY=off GOPROXY=file:///modcache/cache/download GOSUMDB=sum.golang.org GOVCS='*:off' \
+            GOMODCACHE=/modcache GOCACHE=/scratch/gocache GOPATH=/scratch/gopath GOMAXPROCS=2 GOMEMLIMIT=768MiB LANG=C.UTF-8 \
+            /bin/bash /plan.sh > "$BASE/artifacts/native-validation.log" 2>&1; then
+            result=0
+          else
+            result=$?
+          fi
+          printf '%s\n' "$result" > "$BASE/artifacts/exit-code.txt"
+          # Emit only fixed labels and numeric exit codes, never raw target output.
+          python3 - "$BASE/artifacts/native-validation.log" <<'PY'
+          import re
+          import sys
+
+          statuses = {}
+          with open(sys.argv[1], encoding="utf-8", errors="replace") as log:
+              for line in log:
+                  match = re.fullmatch(r"AUDIT_(OFFLINE_CONSUMER_PREFLIGHT|BASELINE|RACE|VET)_EXIT=([0-9]{1,3})\n?", line)
+                  if match:
+                      statuses[match[1]] = int(match[2])
+          for stage in ("OFFLINE_CONSUMER_PREFLIGHT", "BASELINE", "RACE", "VET"):
+              print(f"{stage}: {statuses.get(stage, 'not reached')}")
+          PY
+          echo "Native validation exited with code $result; inspect the test artifact."
+          exit "$result"
+      - name: Clean up the audit container and bounded scratch
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if docker container inspect "$AUDIT_CONTAINER" >/dev/null 2>&1; then
+            docker rm -f "$AUDIT_CONTAINER" >/dev/null
+          fi
+          if mountpoint -q "$RUNNER_TEMP/thinkgo-native/scratch"; then
+            sudo umount "$RUNNER_TEMP/thinkgo-native/scratch"
+          fi
+      - name: Upload validation evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: audit-native-validation-${{ github.sha }}
+          path: ${{ runner.temp }}/thinkgo-native/artifacts/*
+          retention-days: 7
+          if-no-files-found: error
