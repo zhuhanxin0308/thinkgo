@@ -121,7 +121,7 @@ func validateCard(configuration Config, tenant int, card productCard) bool {
 	}
 	local := *card.ID - int64(tenant-1)*int64(configuration.ProductsPerTenant)
 	return local > 0 && local <= int64(configuration.ProductsPerTenant) && local%inactiveProductEvery != 0 &&
-		*card.PriceCents >= 0 && *card.Stock >= 0 && *card.Name != "" && *card.Category != ""
+		*card.PriceCents > 0 && *card.Stock >= 0 && *card.Name != "" && *card.Category != ""
 }
 
 func validateCatalog(configuration Config, request requestSpec, body []byte) error {
@@ -186,7 +186,7 @@ func validateOrder(request requestSpec, body []byte) error {
 	}
 	var total int64
 	for _, item := range response.Items {
-		if item.ProductID == nil || item.Quantity == nil || item.UnitPriceCents == nil || *item.Quantity < 1 || *item.UnitPriceCents < 0 || expected[*item.ProductID] != *item.Quantity {
+		if item.ProductID == nil || item.Quantity == nil || item.UnitPriceCents == nil || *item.Quantity < 1 || *item.UnitPriceCents <= 0 || expected[*item.ProductID] != *item.Quantity {
 			return errResponseData
 		}
 		if *item.UnitPriceCents > math.MaxInt64/(*item.Quantity) {
