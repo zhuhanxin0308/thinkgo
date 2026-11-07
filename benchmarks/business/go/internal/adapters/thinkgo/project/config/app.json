@@ -1,0 +1,15 @@
+{
+  "app_env": "production",
+  "app_debug": false,
+  "app_trace": false,
+  "security_profile": "stateless_api",
+  "security_strict": true,
+  "database_startup_policy": "disabled",
+  "session_enable": false,
+  "csrf_enable": false,
+  "metrics_enable": false,
+  "operational_routes_enable": false,
+  "url_route_must": true,
+  "compression": {"enable": false},
+  "server": {"allowed_hosts": ["127.0.0.1", "localhost"]}
+}

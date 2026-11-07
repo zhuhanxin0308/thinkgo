@@ -1,0 +1,11 @@
+# 依赖与运行目录不属于实测交付物。
+/bin/
+/runtime/
+**/vendor/
+**/node_modules/
+**/.phpunit.cache/
+**/bootstrap/cache/*.php
+**/storage/
+__pycache__/
+.pytest_cache/
+
