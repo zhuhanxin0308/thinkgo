@@ -1,0 +1,484 @@
+{
+  "activity": "Existing-evidence archival and coverage export only; no tests, compilation, services or load executed.",
+  "archived_at_utc": "2026-11-07T19:31:36.697885+00:00",
+  "artifacts": {
+    "final-build-info-v2.json": {
+      "bytes": 16429,
+      "derivation": "byte-for-byte copy",
+      "origin": "/workspace/scratch/c3281d4eed26/benchmark-runtime/final-build-info-v2.json",
+      "sha256": "c4aeeae6165603a68a3d976d31dd397af4b83bea57e267290bdb1415603f3789"
+    },
+    "go-adapters.coverprofile": {
+      "bytes": 46920,
+      "derivation": "byte-for-byte copy",
+      "origin": "/workspace/scratch/c3281d4eed26/benchmark-runtime/adapters-final-coverage.out",
+      "sha256": "71466f238fbc8315e00937088ff12e9887bf610a8041a0363e5d6bc7f1828663"
+    },
+    "go-business-test.log": {
+      "bytes": 113,
+      "derivation": "byte-for-byte copy",
+      "origin": "/workspace/scratch/c3281d4eed26/benchmark-runtime/logs/business-final-race-2.log",
+      "sha256": "e071e2e55816d1a7f5bcb861dc0d0b862c0de5fec82bf782f360c0edd9c93b14"
+    },
+    "go-business.coverprofile": {
+      "bytes": 26322,
+      "derivation": "byte-for-byte copy",
+      "origin": "/workspace/scratch/c3281d4eed26/benchmark-runtime/business-final-coverage-2.out",
+      "sha256": "0fb8a5e72a9720546821a2d95e975f3e1d925b22c963a0b13d48d32bc8ac5f77"
+    },
+    "go-loadrun.coverprofile": {
+      "bytes": 31388,
+      "derivation": "byte-for-byte copy",
+      "origin": "/workspace/scratch/c3281d4eed26/loadrun-coverage.out",
+      "sha256": "7c1c6a87d099adf549c2e1ff7dfecfa3a1908e65ecc86121bc792f1e0ff3995b"
+    },
+    "php-clover.xml": {
+      "bytes": 30064,
+      "derivation": "byte-for-byte copy",
+      "origin": "/workspace/scratch/c3281d4eed26/benchmark-runtime/logs/php-snapshot-clover.xml",
+      "sha256": "7d6f4a0309033b1d4c75581cf448fbbdc7f50801c21b89d22f00948189073ae9"
+    },
+    "php-tests.log": {
+      "bytes": 2581,
+      "derivation": "byte-for-byte copy",
+      "origin": "/workspace/scratch/c3281d4eed26/benchmark-runtime/logs/php-snapshot-final-phpunit.log",
+      "sha256": "96f2f16d40f177886bc2576ddcad9e23be22ed00a7650e2f26a43acb1bdaabf7"
+    },
+    "python-bootstrap-coverage.json": {
+      "bytes": 17102,
+      "derivation": "byte-for-byte copy",
+      "origin": "/workspace/scratch/c3281d4eed26/benchmark-runtime/evidence/bootstrap-coverage.json",
+      "sha256": "154729b35c7491287b2b3bbb50a0f2db6eb51bb952e75c0b71557fe789200556"
+    },
+    "python-bootstrap.coverage": {
+      "bytes": 53248,
+      "derivation": "byte-for-byte copy",
+      "origin": "/workspace/scratch/c3281d4eed26/benchmark-runtime/logs/bootstrap.coverage",
+      "sha256": "e2731c96823cc9dc6dd5ade4bf7d91644e64316385599b0c33582d64d35e6e8e"
+    },
+    "python-frozen-combined.coverage": {
+      "bytes": 98304,
+      "derivation": "coverage.py combine without executing tests",
+      "inputs": [
+        "python-frozen-unit.coverage",
+        "python-frozen-pilot.coverage"
+      ],
+      "sha256": "582e803b6804be988a318ac1274758d50bead33d8a8e7bc9d38bbc1ba28b4742"
+    },
+    "python-frozen-coverage.json": {
+      "bytes": 74434,
+      "derivation": "coverage.py JSON report against frozen source; no tests executed",
+      "inputs": [
+        "python-frozen-combined.coverage"
+      ],
+      "sha256": "309b4f3a3065b9faeb510306e5bc73e4ae008001b6659b8f3940b80b437e2387"
+    },
+    "python-frozen-pilot-index.json": {
+      "bytes": 97867,
+      "derivation": "byte-for-byte copy",
+      "origin": "/workspace/scratch/c3281d4eed26/benchmark-runtime/results/pilot-frozen/index.json",
+      "sha256": "c72e52ef5ce53be5e250bb7cb4981e208a3094e9285bf96128d819d0b4922682"
+    },
+    "python-frozen-pilot.coverage": {
+      "bytes": 94208,
+      "derivation": "byte-for-byte copy",
+      "origin": "/workspace/scratch/c3281d4eed26/benchmark-runtime/coverage/frozen-pilot",
+      "sha256": "17c8b82bd83dec7ec18dc1796fa8a3c099ef2832ec349730dd4e316c83a5e111"
+    },
+    "python-frozen-unit.coverage": {
+      "bytes": 77824,
+      "derivation": "byte-for-byte copy",
+      "origin": "/workspace/scratch/c3281d4eed26/benchmark-runtime/coverage/frozen-unit",
+      "sha256": "5ab01f56a991dfa0f603237ae5bc600b3a2b587aeb5eed582efa588c10e21cca"
+    },
+    "python-methodology-coverage.json": {
+      "bytes": 18248,
+      "derivation": "byte-for-byte copy",
+      "origin": "/workspace/scratch/c3281d4eed26/benchmark-runtime/evidence/methodology-coverage.json",
+      "sha256": "1b2c34f3b9b7f27813c098826c17b74738fa07d955a98484e2c31debcb46b64f"
+    },
+    "python-methodology.coverage": {
+      "bytes": 53248,
+      "derivation": "byte-for-byte copy",
+      "origin": "/workspace/scratch/c3281d4eed26/benchmark-tools.coverage",
+      "sha256": "eeb8b0ee78bdb95f75dbae61740552c1f63e48e3ba0e6faeb9b747b79fc71e1e"
+    },
+    "python-render-coverage.json": {
+      "bytes": 23667,
+      "derivation": "byte-for-byte copy",
+      "origin": "/workspace/scratch/c3281d4eed26/benchmark-runtime/evidence/render-coverage.json",
+      "sha256": "810ff389641b1609dd4c58ac937747e0c7fe68683c9544984666f15612b8508b"
+    },
+    "python-render.coverage": {
+      "bytes": 69632,
+      "derivation": "byte-for-byte copy",
+      "origin": "/workspace/scratch/c3281d4eed26/benchmark-runtime/logs/render.coverage",
+      "sha256": "83172dd3651d675b0a2f7279a38b69c8da54e6e0e69e40d955c280b110f5a05e"
+    },
+    "source-checkpoints.bundle": {
+      "bytes": 279023,
+      "derivation": "byte-for-byte copy",
+      "origin": "/workspace/scratch/c3281d4eed26/benchmark-runtime/source-checkpoints.bundle",
+      "sha256": "81c69b14101ec4dc98728e59f68f701beaf22af1f688795db614f0318d61da0f"
+    }
+  },
+  "coverage": {
+    "go_adapters_and_serve": {
+      "covered_statements": 509,
+      "duplicate_blocks_merged": 96,
+      "evidence": "go-adapters.coverprofile",
+      "metric": "Go statement coverage; identical source blocks merged before weighting by NumStmt",
+      "mode": "atomic",
+      "packages": {
+        "github.com/zhuhanxin0308/thinkgo/benchmarks/business/internal/adapters": {
+          "covered_statements": 77,
+          "percent": 91.66666666666667,
+          "statements": 84
+        },
+        "github.com/zhuhanxin0308/thinkgo/benchmarks/business/internal/adapters/beego": {
+          "covered_statements": 72,
+          "percent": 94.73684210526316,
+          "statements": 76
+        },
+        "github.com/zhuhanxin0308/thinkgo/benchmarks/business/internal/adapters/echo": {
+          "covered_statements": 60,
+          "percent": 98.36065573770492,
+          "statements": 61
+        },
+        "github.com/zhuhanxin0308/thinkgo/benchmarks/business/internal/adapters/fiber": {
+          "covered_statements": 54,
+          "percent": 94.73684210526316,
+          "statements": 57
+        },
+        "github.com/zhuhanxin0308/thinkgo/benchmarks/business/internal/adapters/gin": {
+          "covered_statements": 64,
+          "percent": 96.96969696969697,
+          "statements": 66
+        },
+        "github.com/zhuhanxin0308/thinkgo/benchmarks/business/internal/adapters/iris": {
+          "covered_statements": 63,
+          "percent": 96.92307692307692,
+          "statements": 65
+        },
+        "github.com/zhuhanxin0308/thinkgo/benchmarks/business/internal/adapters/thinkgo": {
+          "covered_statements": 97,
+          "percent": 84.34782608695652,
+          "statements": 115
+        },
+        "github.com/zhuhanxin0308/thinkgo/benchmarks/business/internal/serve": {
+          "covered_statements": 22,
+          "percent": 52.38095238095238,
+          "statements": 42
+        }
+      },
+      "percent": 89.92932862190813,
+      "statements": 566
+    },
+    "go_business": {
+      "covered_statements": 309,
+      "duplicate_blocks_merged": 0,
+      "evidence": "go-business.coverprofile",
+      "metric": "Go statement coverage; identical source blocks merged before weighting by NumStmt",
+      "mode": "atomic",
+      "packages": {
+        "github.com/zhuhanxin0308/thinkgo/benchmarks/business/internal/business": {
+          "covered_statements": 309,
+          "percent": 85.35911602209944,
+          "statements": 362
+        }
+      },
+      "percent": 85.35911602209944,
+      "statements": 362
+    },
+    "go_load_generator": {
+      "covered_statements": 492,
+      "duplicate_blocks_merged": 0,
+      "evidence": "go-loadrun.coverprofile",
+      "metric": "Go statement coverage; identical source blocks merged before weighting by NumStmt",
+      "mode": "atomic",
+      "packages": {
+        "github.com/zhuhanxin0308/thinkgo/benchmarks/business/cmd/load": {
+          "covered_statements": 49,
+          "percent": 89.0909090909091,
+          "statements": 55
+        },
+        "github.com/zhuhanxin0308/thinkgo/benchmarks/business/internal/loadrun": {
+          "covered_statements": 443,
+          "percent": 91.90871369294605,
+          "statements": 482
+        }
+      },
+      "percent": 91.62011173184358,
+      "statements": 537
+    },
+    "php_framework_adapters_separate": {
+      "covered_statements": 34,
+      "evidence": "php-clover.xml",
+      "files": [
+        "php/laravel/app/Http/Controllers/Business.php",
+        "php/laravel/app/Http/Middleware/Authenticate.php",
+        "php/thinkphp/app/ExceptionHandle.php",
+        "php/thinkphp/app/controller/Business.php",
+        "php/thinkphp/app/middleware/Authenticate.php",
+        "php/thinkphp/app/provider.php",
+        "php/thinkphp/app/service.php"
+      ],
+      "percent": 100.0,
+      "scope": "Application controllers, middleware, exception handler and ThinkPHP provider/service files; excluded from shared-business coverage claim",
+      "statements": 34
+    },
+    "php_original_clover_total": {
+      "covered_statements": 263,
+      "evidence": "php-clover.xml",
+      "note": "The original 263/263 total includes 34 adapter statements; shared business alone is 229/229. Thin compiler CLI and vendor are outside the original denominator.",
+      "statements": 263
+    },
+    "php_shared_business": {
+      "covered_statements": 229,
+      "evidence": "php-clover.xml",
+      "files": [
+        "php/shared/src/ApiError.php",
+        "php/shared/src/Authentication.php",
+        "php/shared/src/Contract.php",
+        "php/shared/src/ContractSnapshot.php",
+        "php/shared/src/Factory.php",
+        "php/shared/src/Input.php",
+        "php/shared/src/JsonMembers.php",
+        "php/shared/src/PdoDatabase.php",
+        "php/shared/src/RedisCache.php",
+        "php/shared/src/Result.php",
+        "php/shared/src/Service.php",
+        "php/shared/src/Cache.php",
+        "php/shared/src/Database.php"
+      ],
+      "metric": "PCOV executable statement/line coverage; branch coverage not measured",
+      "percent": 100.0,
+      "scope": "php/shared/src only, including ContractSnapshot; excludes framework adapters, thin CLI entrypoints, tests and vendor",
+      "statements": 229
+    },
+    "python_bootstrap": {
+      "branch_measurement": false,
+      "evidence": "python-bootstrap-coverage.json",
+      "files": {
+        "bootstrap.py": {
+          "covered_statements": 332,
+          "statement_percent": 91.46005509641873,
+          "statements": 363
+        }
+      },
+      "metric": "statement coverage; branches reported separately when measured",
+      "tool_version": "7.17.2",
+      "totals": {
+        "covered_statements": 332,
+        "statement_percent": 91.46005509641873,
+        "statements": 363
+      }
+    },
+    "python_frozen_orchestration": {
+      "branch_measurement": true,
+      "evidence": "python-frozen-coverage.json",
+      "files": {
+        "benchmarks/business/tools/audit.py": {
+          "branch_percent": 100.0,
+          "branches": 14,
+          "combined_statement_and_branch_percent": 100.0,
+          "covered_branches": 14,
+          "covered_statements": 44,
+          "statement_percent": 100.0,
+          "statements": 44
+        },
+        "benchmarks/business/tools/native.py": {
+          "branch_percent": 80.0,
+          "branches": 80,
+          "combined_statement_and_branch_percent": 87.75510204081633,
+          "covered_branches": 64,
+          "covered_statements": 237,
+          "statement_percent": 90.11406844106465,
+          "statements": 263
+        },
+        "benchmarks/business/tools/run.py": {
+          "branch_percent": 72.44897959183673,
+          "branches": 98,
+          "combined_statement_and_branch_percent": 86.66666666666667,
+          "covered_branches": 71,
+          "covered_statements": 267,
+          "statement_percent": 91.43835616438356,
+          "statements": 292
+        },
+        "benchmarks/business/tools/verify.py": {
+          "branch_percent": 100.0,
+          "branches": 52,
+          "combined_statement_and_branch_percent": 100.0,
+          "covered_branches": 52,
+          "covered_statements": 300,
+          "statement_percent": 100.0,
+          "statements": 300
+        }
+      },
+      "metric": "statement coverage; branches reported separately when measured",
+      "tool_version": "7.17.2",
+      "totals": {
+        "branch_percent": 82.37704918032787,
+        "branches": 244,
+        "combined_statement_and_branch_percent": 91.77602799650043,
+        "covered_branches": 201,
+        "covered_statements": 848,
+        "statement_percent": 94.3270300333704,
+        "statements": 899
+      }
+    },
+    "python_methodology": {
+      "branch_measurement": false,
+      "evidence": "python-methodology-coverage.json",
+      "files": {
+        "experiment.py": {
+          "covered_statements": 207,
+          "statement_percent": 92.41071428571429,
+          "statements": 224
+        },
+        "resources.py": {
+          "covered_statements": 179,
+          "statement_percent": 91.3265306122449,
+          "statements": 196
+        }
+      },
+      "metric": "statement coverage; branches reported separately when measured",
+      "tool_version": "7.17.2",
+      "totals": {
+        "covered_statements": 386,
+        "statement_percent": 91.9047619047619,
+        "statements": 420
+      }
+    },
+    "python_render": {
+      "branch_measurement": true,
+      "evidence": "python-render-coverage.json",
+      "files": {
+        "render.py": {
+          "branch_percent": 95.71428571428571,
+          "branches": 70,
+          "combined_statement_and_branch_percent": 98.68766404199475,
+          "covered_branches": 67,
+          "covered_statements": 309,
+          "statement_percent": 99.35691318327974,
+          "statements": 311
+        }
+      },
+      "metric": "statement coverage; branches reported separately when measured",
+      "tool_version": "7.17.2",
+      "totals": {
+        "branch_percent": 95.71428571428571,
+        "branches": 70,
+        "combined_statement_and_branch_percent": 98.68766404199475,
+        "covered_branches": 67,
+        "covered_statements": 309,
+        "statement_percent": 99.35691318327974,
+        "statements": 311
+      }
+    }
+  },
+  "frozen_source_commit": "db21dda7ae1761bf68c5848884a5ba2ed411088c",
+  "schema_version": 1,
+  "source_checkpoints": {
+    "artifact": "source-checkpoints.bundle",
+    "bundle_verification": "Previously verified by publisher; archive SHA256 independently matched during this archival step.",
+    "original_local_checkpoints": 36,
+    "sha256": "81c69b14101ec4dc98728e59f68f701beaf22af1f688795db614f0318d61da0f"
+  },
+  "test_observations": [
+    {
+      "evidence": [
+        "go-business-test.log",
+        "go-business.coverprofile"
+      ],
+      "scope": "Go business",
+      "standalone_log_available": true,
+      "status": "passed"
+    },
+    {
+      "basis": "Parent session observation; coverage profile is retained, no standalone test stdout log was identified.",
+      "evidence": [
+        "go-adapters.coverprofile"
+      ],
+      "scope": "Go adapters and serve",
+      "standalone_log_available": false,
+      "status": "previously_observed_passed"
+    },
+    {
+      "basis": "Prior methodology-agent session observation; standalone stdout was not saved.",
+      "evidence": [
+        "go-loadrun.coverprofile"
+      ],
+      "scope": "Go loadrun and cmd/load",
+      "standalone_log_available": false,
+      "status": "previously_observed_passed"
+    },
+    {
+      "assertions": 437,
+      "evidence": [
+        "php-tests.log",
+        "php-clover.xml"
+      ],
+      "scope": "PHP business and native lifecycle tests",
+      "standalone_log_available": true,
+      "status": "passed",
+      "tests": 83
+    },
+    {
+      "basis": "Parent session observed 41 test cases with one skip; coverage data cannot independently prove the test result and no stdout log is fabricated.",
+      "evidence": [
+        "python-frozen-unit.coverage"
+      ],
+      "scope": "Frozen Python orchestration unit tests",
+      "skipped": 1,
+      "standalone_log_available": false,
+      "status": "previously_observed_passed_with_skip",
+      "tests": 41
+    },
+    {
+      "basis": "Read from previously saved pilot index; no pilot rerun.",
+      "evidence": [
+        "python-frozen-pilot-index.json",
+        "python-frozen-pilot.coverage"
+      ],
+      "rounds": 20,
+      "scope": "Frozen real pilot",
+      "status": "passed_as_recorded",
+      "unsuccessful_requests": 0,
+      "valid_rounds": 20
+    },
+    {
+      "basis": "Prior methodology-agent session result; stdout was not retained as a standalone log.",
+      "evidence": [
+        "python-methodology.coverage",
+        "python-methodology-coverage.json"
+      ],
+      "scope": "Python experiment/resources",
+      "standalone_log_available": false,
+      "status": "previously_observed_passed",
+      "tests": 16
+    },
+    {
+      "basis": "Prior agent execution result; no standalone test stdout log is fabricated.",
+      "evidence": [
+        "python-bootstrap.coverage",
+        "python-bootstrap-coverage.json"
+      ],
+      "scope": "Python bootstrap",
+      "standalone_log_available": false,
+      "status": "previously_observed_passed",
+      "tests": 23
+    },
+    {
+      "basis": "Prior render-agent result using Matplotlib 3.11.2; no standalone test stdout log is fabricated.",
+      "evidence": [
+        "python-render.coverage",
+        "python-render-coverage.json"
+      ],
+      "scope": "Python render",
+      "standalone_log_available": false,
+      "status": "previously_observed_passed",
+      "tests": 17
+    }
+  ]
+}

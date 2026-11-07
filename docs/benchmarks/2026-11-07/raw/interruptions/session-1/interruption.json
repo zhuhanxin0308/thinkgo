@@ -1,0 +1,57 @@
+{
+  "observed_at_utc": "2026-11-07T21:18:30.937055+00:00",
+  "source_commit": "db21dda7ae1761bf68c5848884a5ba2ed411088c",
+  "completed_rounds": 148,
+  "runner_exit_code": 1,
+  "failed_round": "open-ticket-fiber-1",
+  "failed_phase": "initial_preheat before formal measurement",
+  "exception": "TimeoutError: timed out",
+  "traceback_locations": [
+    "run.py:245: initial_preheat = preheat(environment, secret)",
+    "verify.py:421: response = client.request(...)",
+    "verify.py:72: response = connection.getresponse()"
+  ],
+  "traceback_provenance": "Observed formal exec session 73819 stderr; locations above are a summary, not a full saved console log.",
+  "previous_round": "open-order-beego-1",
+  "previous_round_dropped": 4,
+  "previous_drop_reason": "schedule_window_elapsed",
+  "previous_round_started_and_success": 17126,
+  "previous_round_audit_valid": true,
+  "source_and_protocol_changed": false,
+  "resumed_session_started_at": "2026-11-07T21:24:35.202452+00:00",
+  "experiment_completed_at": "2026-11-07T22:54:23.102019+00:00",
+  "final_resume_exit_code": 0,
+  "completed_rounds_final": 270,
+  "preserved_complete_rounds_on_resume": 148,
+  "archived_resume_logs": {
+    "formal-resume-1.log": {
+      "bytes": 1754,
+      "sha256": "6ad71d573ee1121de233e2ebdf3b12ac5305f5a02c2b6984fe0c0ab1db355696"
+    },
+    "postgres-recovery-1.log": {
+      "bytes": 2445,
+      "sha256": "8abbc418f2e2ee6b055a5c1695ba1d06f5e2e056d409c4690a17f95181f58725"
+    },
+    "formal-resume-2.log": {
+      "bytes": 80970,
+      "sha256": "ee53fbd89b1e9f2ec6664bd29a1ca84d4685ea874fc49ee94852fa42a8eeba8c"
+    }
+  },
+  "go_cache_relocation": {
+    "source": "/home/agent/.cache/go-build",
+    "destination": "/workspace/scratch/c3281d4eed26/benchmark-runtime/go-build-cache-home-recovered",
+    "contents_preserved": true,
+    "source_is_now_symlink": false,
+    "symlink_followup": "The ln command returned success, but subsequent lstat found a directory at the original cache path and its occupancy continued growing; the source of this activity is not identified.",
+    "pre_move_file_count": 20281,
+    "pre_move_bytes": 3462850443,
+    "growth_source": "not reliably identified",
+    "causal_link_to_timeout": "not established"
+  },
+  "meminfo_after_relocation": "MemTotal:       10206472 kB\nMemFree:         3894212 kB\nMemAvailable:    4962116 kB\nBuffers:           35648 kB\nCached:          2811788 kB\nSwapCached:            0 kB\nActive:          1546632 kB\nInactive:        3489168 kB\nActive(anon):    1271896 kB\nInactive(anon):  2869508 kB\nActive(file):     274736 kB\nInactive(file):   619660 kB\nUnevictable:       29944 kB\nMlocked:               0 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\nDirty:              1960 kB\nWriteback:             0 kB\nAnonPages:       2202640 kB\nMapped:           374784 kB\nShmem:           1923172 kB\nKReclaimable:     487208 kB\nSlab:             643924 kB\nSReclaimable:     487208 kB\nSUnreclaim:       156716 kB\nKernelStack:       10232 kB\nPageTables:        46160 kB\nSecPageTables:         0 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:     5103236 kB\nCommitted_AS:    8957592 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:       11536 kB\nVmallocChunk:          0 kB\nPercpu:             3792 kB\nAnonHugePages:    133120 kB\nShmemHugePages:        0 kB\nShmemPmdMapped:        0 kB\nFileHugePages:         0 kB\nFilePmdMapped:         0 kB\nBalloon:               0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nHugetlb:               0 kB\nDirectMap4k:      493568 kB\nDirectMap2M:    11894784 kB\nDirectMap1G:    14680064 kB\n",
+  "home_disk_usage_after_relocation": {
+    "total": 5225713664,
+    "used": 1468436480,
+    "free": 3757277184
+  }
+}

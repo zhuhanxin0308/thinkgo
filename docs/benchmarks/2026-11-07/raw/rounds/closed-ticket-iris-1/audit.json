@@ -1,0 +1,20 @@
+{
+  "confirmed_comments": 199171,
+  "confirmed_orders": 0,
+  "database": {
+    "audit_rows": 0,
+    "cross_tenant_items": 0,
+    "invalid_totals": 0,
+    "inventory_mismatches": 0,
+    "missing_audits": 0,
+    "negative_stock": 0,
+    "new_comments": 199171,
+    "orders": 0,
+    "pending_orders": 0,
+    "ticket_version_mismatches": 0
+  },
+  "failures": {},
+  "unconfirmed_comments": 0,
+  "unconfirmed_orders": 0,
+  "valid": true
+}
