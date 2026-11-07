@@ -1,0 +1,24 @@
+test_absent_measurements_stay_null_instead_of_becoming_zero (test_render.RenderTests.test_absent_measurements_stay_null_instead_of_becoming_zero) ... ok
+test_artifact_names_cannot_escape_the_round_directory (test_render.RenderTests.test_artifact_names_cannot_escape_the_round_directory) ... ok
+test_audit_flag_cannot_hide_database_invariant_failure (test_render.RenderTests.test_audit_flag_cannot_hide_database_invariant_failure) ... ok
+test_command_line_never_enables_synthetic_inputs (test_render.RenderTests.test_command_line_never_enables_synthetic_inputs) ... ok
+test_complete_matrix_and_median_range_are_preserved (test_render.RenderTests.test_complete_matrix_and_median_range_are_preserved) ... ok
+test_counter_conservation_is_checked_after_hash_verification (test_render.RenderTests.test_counter_conservation_is_checked_after_hash_verification) ... ok
+test_cpu_uses_drained_success_and_memory_fallback_is_comparable (test_render.RenderTests.test_cpu_uses_drained_success_and_memory_fallback_is_comparable) ... ok
+test_dynamic_nine_variant_matrix_is_supported (test_render.RenderTests.test_dynamic_nine_variant_matrix_is_supported) ... ok
+test_failed_and_unscheduled_requests_remain_in_error_denominator (test_render.RenderTests.test_failed_and_unscheduled_requests_remain_in_error_denominator) ... ok
+test_hash_mismatch_and_path_traversal_are_rejected (test_render.RenderTests.test_hash_mismatch_and_path_traversal_are_rejected) ... ok
+test_incomplete_cpu_or_process_samples_are_not_ranked_as_low_usage (test_render.RenderTests.test_incomplete_cpu_or_process_samples_are_not_ranked_as_low_usage) ... ok
+test_latency_outlier_keeps_small_differences_readable_and_full_range_visible (test_render.RenderTests.test_latency_outlier_keeps_small_differences_readable_and_full_range_visible) ... ok
+test_log_latency_rejects_zero_and_preserves_missing_values (test_render.RenderTests.test_log_latency_rejects_zero_and_preserves_missing_values) ... ok
+test_missing_or_duplicate_round_is_rejected (test_render.RenderTests.test_missing_or_duplicate_round_is_rejected) ... ok
+test_nonfinite_or_negative_numbers_are_rejected (test_render.RenderTests.test_nonfinite_or_negative_numbers_are_rejected) ... ok
+test_open_rate_must_match_across_variants_and_calibration (test_render.RenderTests.test_open_rate_must_match_across_variants_and_calibration) ... ok
+test_render_writes_shareable_graphs_and_machine_readable_tables (test_render.RenderTests.test_render_writes_shareable_graphs_and_machine_readable_tables) ... ok
+test_synthetic_and_pilot_cannot_be_presented_as_measurement (test_render.RenderTests.test_synthetic_and_pilot_cannot_be_presented_as_measurement) ... ok
+test_unlisted_round_and_metadata_disagreement_are_rejected (test_render.RenderTests.test_unlisted_round_and_metadata_disagreement_are_rejected) ... ok
+
+----------------------------------------------------------------------
+Ran 19 tests in 9.624s
+
+OK

@@ -1,0 +1,29 @@
+2026-11-07 23:09:54.910 GMT [20] LOG:  starting PostgreSQL 18.6 on x86_64-pc-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit
+2026-11-07 23:09:54.910 GMT [20] LOG:  listening on IPv4 address "127.0.0.1", port 15432
+2026-11-07 23:09:54.913 GMT [27] LOG:  database system was shut down at 2026-11-07 23:09:54 GMT
+2026-11-07 23:09:54.915 GMT [20] LOG:  database system is ready to accept connections
+2026-11-07 23:09:59.005 GMT [25] LOG:  checkpoint starting: immediate force wait
+2026-11-07 23:09:59.201 GMT [25] LOG:  checkpoint complete: wrote 19991 buffers (30.5%), wrote 3 SLRU buffers; 0 WAL file(s) added, 0 removed, 12 recycled; write=0.064 s, sync=0.125 s, total=0.197 s; sync files=352, longest=0.020 s, average=0.001 s; distance=193079 kB, estimate=193079 kB; lsn=0/D393D78, redo lsn=0/D393D20
+2026-11-07 23:09:59.378 GMT [54] LOG:  starting PostgreSQL 18.6 on x86_64-pc-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit
+2026-11-07 23:09:59.378 GMT [54] LOG:  listening on IPv4 address "127.0.0.1", port 15432
+2026-11-07 23:09:59.380 GMT [61] LOG:  database system was interrupted; last known up at 2026-11-07 23:09:59 GMT
+2026-11-07 23:09:59.456 GMT [61] LOG:  database system was not properly shut down; automatic recovery in progress
+2026-11-07 23:09:59.457 GMT [61] LOG:  redo starts at 0/D393D20
+2026-11-07 23:09:59.458 GMT [61] LOG:  invalid magic number 0000 in WAL segment 00000001000000000000000D, LSN 0/D39C000, offset 3784704
+2026-11-07 23:09:59.458 GMT [61] LOG:  redo done at 0/D399A80 system usage: CPU: user: 0.00 s, system: 0.00 s, elapsed: 0.00 s
+2026-11-07 23:09:59.459 GMT [59] LOG:  checkpoint starting: end-of-recovery immediate wait
+2026-11-07 23:09:59.463 GMT [59] LOG:  checkpoint complete: wrote 5 buffers (0.0%), wrote 3 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=0.001 s, sync=0.002 s, total=0.004 s; sync files=5, longest=0.001 s, average=0.001 s; distance=32 kB, estimate=32 kB; lsn=0/D39C048, redo lsn=0/D39C048
+2026-11-07 23:09:59.464 GMT [54] LOG:  database system is ready to accept connections
+2026-11-07 23:10:00.222 GMT [59] LOG:  checkpoint starting: immediate force wait
+2026-11-07 23:10:00.235 GMT [59] LOG:  checkpoint complete: wrote 6 buffers (0.0%), wrote 1 SLRU buffers; 0 WAL file(s) added, 0 removed, 8 recycled; write=0.009 s, sync=0.001 s, total=0.014 s; sync files=5, longest=0.001 s, average=0.001 s; distance=139029 kB, estimate=139029 kB; lsn=0/15B61610, redo lsn=0/15B615B8
+2026-11-07 23:10:01.147 GMT [59] LOG:  checkpoint starting: immediate force wait
+2026-11-07 23:10:01.155 GMT [59] LOG:  checkpoint complete: wrote 3 buffers (0.0%), wrote 1 SLRU buffers; 0 WAL file(s) added, 0 removed, 9 recycled; write=0.002 s, sync=0.001 s, total=0.009 s; sync files=4, longest=0.001 s, average=0.001 s; distance=139005 kB, estimate=139027 kB; lsn=0/1E320DC0, redo lsn=0/1E320D68
+2026-11-07 23:10:02.648 GMT [59] LOG:  checkpoint starting: immediate force wait
+2026-11-07 23:10:02.663 GMT [59] LOG:  checkpoint complete: wrote 3 buffers (0.0%), wrote 1 SLRU buffers; 0 WAL file(s) added, 0 removed, 8 recycled; write=0.009 s, sync=0.001 s, total=0.016 s; sync files=4, longest=0.001 s, average=0.001 s; distance=139006 kB, estimate=139024 kB; lsn=0/26AE0630, redo lsn=0/26AE05D8
+2026-11-07 23:10:08.800 GMT [54] LOG:  received fast shutdown request
+2026-11-07 23:10:08.801 GMT [54] LOG:  aborting any active transactions
+2026-11-07 23:10:08.802 GMT [54] LOG:  background worker "logical replication launcher" (PID 65) exited with exit code 1
+2026-11-07 23:10:08.804 GMT [59] LOG:  shutting down
+2026-11-07 23:10:08.805 GMT [59] LOG:  checkpoint starting: shutdown immediate
+2026-11-07 23:10:08.991 GMT [59] LOG:  checkpoint complete: wrote 9414 buffers (14.4%), wrote 1 SLRU buffers; 0 WAL file(s) added, 0 removed, 9 recycled; write=0.039 s, sync=0.143 s, total=0.188 s; sync files=350, longest=0.022 s, average=0.001 s; distance=139006 kB, estimate=139023 kB; lsn=0/2F29FDF8, redo lsn=0/2F29FDF8
+2026-11-07 23:10:09.011 GMT [54] LOG:  database system is shut down

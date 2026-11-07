@@ -11,6 +11,7 @@ import signal
 import socket
 import subprocess
 import time
+import urllib.error
 import urllib.request
 
 
@@ -18,6 +19,9 @@ OWNER = "thinkgo-business-benchmark-v1"
 DATABASE = "benchmark_run"
 DATABASE_USER = "benchmark_owner"
 STARTUP_SECONDS = 45
+READINESS_PROBE_SECONDS = 1
+READINESS_POLL_SECONDS = 0.1
+PSQL_CONNECTION_FAILURE = 2
 STOP_SECONDS = 15
 PHP_CONTRACT_SCHEMA_VERSION = 1
 PHP_CONTRACT_SOURCE_FILES = ("dataset.json", "queries.json")
@@ -200,6 +204,10 @@ def octane_command(runtime, protocol, dataset):
             "--max-requests=0", "--rr-config=.rr.yaml", "--no-interaction"]
 
 
+class ServiceNotReady(Exception):
+    """仅表示有界启动等待中允许重试的暂时不可用状态。"""
+
+
 class Process:
     """只终止自身创建的会话，日志始终保留供失败分析。"""
 
@@ -239,21 +247,41 @@ class Process:
 
 def wait_for(check, process):
     deadline = time.monotonic() + STARTUP_SECONDS
-    last = None
-    while time.monotonic() < deadline:
+    last = "就绪条件尚未满足"
+    while True:
         process.check()
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
         try:
-            if check():
-                return
-        except (OSError, ValueError, subprocess.CalledProcessError) as error:
+            ready = check(timeout=min(READINESS_PROBE_SECONDS, remaining))
+        except ServiceNotReady as error:
             last = error
-        time.sleep(0.1)
+            ready = False
+        except BaseException as error:
+            # 致命探针错误和用户中断保持原样，进程退出只作为附加诊断。
+            try:
+                process.check()
+            except Exception as process_error:
+                error.add_note(str(process_error))
+            raise
+        # 成功响应或暂时连接失败都不能掩盖受管进程已经退出的事实。
+        process.check()
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        if ready:
+            return
+        time.sleep(min(READINESS_POLL_SECONDS, remaining))
     raise TimeoutError(f"服务启动超时: {process.command}; {last}")
 
 
-def tcp_ready(port):
-    with socket.create_connection(("127.0.0.1", port), timeout=1):
-        return True
+def tcp_ready(port, *, timeout=READINESS_PROBE_SECONDS):
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=timeout):
+            return True
+    except (ConnectionError, TimeoutError) as error:
+        raise ServiceNotReady(str(error)) from error
 
 
 class Environment:
@@ -308,6 +336,27 @@ class Environment:
         return self.command([self.binary("postgresql", "psql"), "-XAtq", "-v", "ON_ERROR_STOP=1", "-c", query],
                             database=database)
 
+    def postgres_ready(self, *, timeout=READINESS_PROBE_SECONDS):
+        """维护库可执行 SQL 且恢复结束后，才允许进入模板建库流程。"""
+        environment = {**self.base_env, "PGDATABASE": "postgres"}
+        query = "SELECT NOT pg_is_in_recovery() AND current_setting('transaction_read_only') = 'off'"
+        command = [str(self.binary("postgresql", "psql")), "-XAtq", "-w", "-v", "ON_ERROR_STOP=1", "-c", query]
+        try:
+            result = subprocess.run(command, stdin=subprocess.DEVNULL, text=True, capture_output=True,
+                                    env=environment, cwd=self.root, timeout=timeout)
+        except subprocess.TimeoutExpired as error:
+            raise ServiceNotReady(f"PostgreSQL SQL 探测超时({timeout}s): {error.stderr}") from error
+        if result.returncode == PSQL_CONNECTION_FAILURE:
+            raise ServiceNotReady(f"PostgreSQL 连接尚未就绪: {result.stderr.strip()}")
+        if result.returncode:
+            raise RuntimeError(f"PostgreSQL 就绪探针失败({result.returncode}): {result.stderr.strip()}")
+        value = result.stdout.strip()
+        if value == "f":
+            raise ServiceNotReady("PostgreSQL 尚未退出恢复或当前事务只读")
+        if value != "t":
+            raise ValueError(f"PostgreSQL 就绪探针输出无效: {value!r}")
+        return True
+
     def start(self):
         self.prepare()
         affinity = self.protocol["cpu_affinity"]
@@ -315,11 +364,11 @@ class Environment:
                             "-c", f"config_file={self.work / 'config/postgresql.conf'}"],
                            self.work, self.base_env, self.work / "logs/postgres.log", affinity["postgres"], signal.SIGINT)
         self.infrastructure["postgres"] = postgres
-        wait_for(lambda: tcp_ready(self.protocol["ports"]["postgres"]), postgres)
+        wait_for(self.postgres_ready, postgres)
         redis = Process([self.binary("redis", "redis-server"), self.work / "config/redis.conf"],
                         self.work, self.base_env, self.work / "logs/redis.log", affinity["redis"])
         self.infrastructure["redis"] = redis
-        wait_for(lambda: tcp_ready(self.protocol["ports"]["redis"]), redis)
+        wait_for(lambda timeout: tcp_ready(self.protocol["ports"]["redis"], timeout=timeout), redis)
         contracts = self.root / "contracts"
         digest = hashlib.sha256()
         for name in ["dataset.json", "schema.sql", "seed.sql"]:
@@ -416,7 +465,7 @@ class Environment:
         app = Process(command, cwd, environment, self.work / f"logs/{namespace}-app.log", affinity)
         self.application["app"] = app
         port = self.protocol["ports"]["fpm" if variant["kind"] == "fpm" else "application"]
-        wait_for(lambda: tcp_ready(port), app)
+        wait_for(lambda timeout: tcp_ready(port, timeout=timeout), app)
         configuration = self.work / "config/nginx.conf"
         configuration.write_text(gateway_config(self.protocol, self.dataset, self.work, self.root, variant))
         nginx = Process([self.runtime / "nginx/sbin/nginx", "-p", self.work, "-c", configuration],
@@ -429,10 +478,18 @@ class Environment:
     def url(self):
         return f"http://127.0.0.1:{self.protocol['ports']['gateway']}"
 
-    def healthy(self):
+    def healthy(self, *, timeout=READINESS_PROBE_SECONDS):
+        # urllib 超时约束单次 socket 阻塞；完整响应返回后再由等待器复核总期限。
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-        with opener.open(self.url + "/healthz", timeout=1) as response:
-            return response.status == 200 and json.load(response) == {"status": "ok"}
+        try:
+            with opener.open(self.url + "/healthz", timeout=timeout) as response:
+                return response.status == 200 and json.load(response) == {"status": "ok"}
+        except urllib.error.URLError as error:
+            if isinstance(error.reason, (FileNotFoundError, PermissionError)):
+                raise error.reason from error
+            raise ServiceNotReady(str(error)) from error
+        except (ConnectionError, TimeoutError, json.JSONDecodeError) as error:
+            raise ServiceNotReady(str(error)) from error
 
     def stop_app(self):
         for name in reversed(list(self.application)):

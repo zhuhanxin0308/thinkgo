@@ -27,6 +27,8 @@ LATENCY_FIELDS = ("p50_ms", "p95_ms", "p99_ms", "max_ms", "mean_ms")
 MEBIBYTE = 1024 * 1024
 MILLISECONDS_PER_SECOND = 1000
 PNG_DPI = 180
+AXIS_LIMIT_PADDING = 1.12
+EMPTY_LOG_LIMITS = (1.0, 10.0)
 VARIANT_COLORS = ("#175cd3", "#027a48", "#b54708", "#6941c6", "#026aa2", "#c11574",
                   "#4d7c0f", "#9e3c2f", "#475467")
 
@@ -295,11 +297,12 @@ def save_figure(figure, destination, name, pyplot):
     pyplot.close(figure)
 
 
-def note_panel(axis, summary, model, extra):
+def note_panel(axis, summary, model, extra, axis_scale="linear"):
     axis.axis("off")
     text = ["READING THIS FIGURE", "", "Dot: median of 3 independent repeats",
             "Whisker: observed minimum to maximum", "No confidence interval or combined score", "",
-            "Variant order follows the fixed protocol.", "Panel axes use independent linear scales.", "",
+            "Variant order follows the fixed protocol.",
+            "Panel axes use independent " + ("logarithmic" if axis_scale == "log" else "linear") + " scales.", "",
             "Application scope includes Nginx.", extra]
     if model == "open":
         text.append("Each panel applies one shared offered rate.")
@@ -307,7 +310,11 @@ def note_panel(axis, summary, model, extra):
 
 
 def draw_metric(summary, destination, metric, model, name, title, unit, note):
+    from matplotlib.ticker import LogLocator, NullFormatter, ScalarFormatter
+
     pyplot = plotting()
+    # 尾延迟跨数量级时保留慢轮，同时让常见延迟之间的差异可读。
+    axis_scale = "log" if metric == "p99_ms" else "linear"
     count = len(summary["variants"])
     figure, axes = pyplot.subplots(3, 2, figsize=(18, max(12, 0.31 * count * 3 + 3)),
                                   gridspec_kw={"hspace": 0.50, "wspace": 0.48})
@@ -317,30 +324,46 @@ def draw_metric(summary, destination, metric, model, name, title, unit, note):
     for axis, scenario in zip(axes.flat, summary["scenarios"]):
         selected = [group for group in summary["groups"] if group["model"] == model and group["scenario"] == scenario]
         labels = []
+        minimum = math.inf
         maximum = 0
         for position, group in enumerate(selected):
             values = group["metrics"][metric]
             labels.append(group["label"])
             color = VARIANT_COLORS[position % len(VARIANT_COLORS)]
             if values["median"] is None:
-                axis.text(0, position, "N/A", va="center", fontsize=9, color="#667085")
+                axis.text(0.02, position, "N/A", transform=axis.get_yaxis_transform(),
+                          va="center", fontsize=9, color="#667085")
                 continue
+            if axis_scale == "log":
+                require(values["min"] > 0, "对数延迟图要求全部观测值为正数")
+            minimum = min(minimum, values["min"])
             maximum = max(maximum, values["max"])
             axis.errorbar(values["median"], position,
                           xerr=[[values["median"] - values["min"]], [values["max"] - values["median"]]],
                           fmt="o", color=color, markersize=6, capsize=3, elinewidth=1.8)
         axis.set_yticks(range(count), labels, fontsize=9)
         axis.set_ylim(count - 0.4, -0.6)
-        axis.set_xlim(0, max(maximum * 1.12, 1))
-        axis.set_xlabel(unit, fontsize=10)
-        axis.xaxis.set_major_locator(pyplot.MaxNLocator(5))
+        if axis_scale == "log":
+            axis.set_xscale("log")
+            axis.set_xlim((minimum / AXIS_LIMIT_PADDING, maximum * AXIS_LIMIT_PADDING)
+                          if maximum > 0 else EMPTY_LOG_LIMITS)
+            axis.xaxis.set_major_locator(LogLocator(base=10, subs=(1, 2, 5), numticks=9))
+            formatter = ScalarFormatter()
+            formatter.set_scientific(False)
+            formatter.set_useOffset(False)
+            axis.xaxis.set_major_formatter(formatter)
+            axis.xaxis.set_minor_formatter(NullFormatter())
+        else:
+            axis.set_xlim(0, max(maximum * AXIS_LIMIT_PADDING, 1))
+            axis.xaxis.set_major_locator(pyplot.MaxNLocator(5))
+        axis.set_xlabel(unit + (" · log scale" if axis_scale == "log" else ""), fontsize=10)
         axis.grid(axis="x", color="#eaecf0", linewidth=0.8)
         axis.set_axisbelow(True)
         heading = SCENARIO_LABELS[scenario]
         if model == "open":
             heading += f"  ·  {summary['arrival_rates'][scenario]:,} requests/s"
         axis.set_title(heading, fontsize=13, pad=12)
-    note_panel(axes.flat[-1], summary, model, note)
+    note_panel(axes.flat[-1], summary, model, note, axis_scale)
     figure.text(0.055, 0.04, "All protocol variants and all three repeats are retained. Missing metrics appear as N/A.",
                 fontsize=10, color="#667085")
     save_figure(figure, destination, name, pyplot)

@@ -1,0 +1,21 @@
+{"time": "2026-11-07T21:22:56.290678+00:00", "event": "session_start", "mode": "measure"}
+Traceback (most recent call last):
+  File "/workspace/scratch/c3281d4eed26/thinkgo/benchmarks/business/tools/run.py", line 398, in <module>
+    main()
+  File "/workspace/scratch/c3281d4eed26/thinkgo/benchmarks/business/tools/run.py", line 394, in main
+    execute(parser.parse_args())
+  File "/workspace/scratch/c3281d4eed26/thinkgo/benchmarks/business/tools/run.py", line 345, in execute
+    environment.start()
+  File "/workspace/scratch/c3281d4eed26/thinkgo/benchmarks/business/tools/native.py", line 328, in start
+    exists = self.sql(f"SELECT 1 FROM pg_database WHERE datname='{self.template}'", "postgres")
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/c3281d4eed26/thinkgo/benchmarks/business/tools/native.py", line 308, in sql
+    return self.command([self.binary("postgresql", "psql"), "-XAtq", "-v", "ON_ERROR_STOP=1", "-c", query],
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/c3281d4eed26/thinkgo/benchmarks/business/tools/native.py", line 304, in command
+    raise RuntimeError(f"命令失败({result.returncode}): {command}\n{result.stdout}\n{result.stderr}")
+RuntimeError: 命令失败(2): [PosixPath('/workspace/scratch/c3281d4eed26/benchmark-runtime/postgresql/bin/psql'), '-XAtq', '-v', 'ON_ERROR_STOP=1', '-c', "SELECT 1 FROM pg_database WHERE datname='benchmark_seed_a231ac22746a'"]
+
+psql: error: connection to server at "127.0.0.1", port 15432 failed: FATAL:  the database system is not yet accepting connections
+DETAIL:  Consistent recovery state has not been yet reached.
+

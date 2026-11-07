@@ -1,0 +1,224 @@
+{
+  "schema_version": 1,
+  "scope": "post-measurement-controller-readiness-fix",
+  "created_at": "2026-11-07T23:12:24.160660+00:00",
+  "measured_source_git_commit": "db21dda7ae1761bf68c5848884a5ba2ed411088c",
+  "pre_change_checkpoint": "5b6ad27aef7c8ef9af9590591399fe6bee1763f4",
+  "source_sha256": {
+    "native.py": "461a45a759761911bb8cead53ebf7115ca8c8969cc10d3658d89b4f177450a45",
+    "test_native.py": "a39adadf54c24dc83a067adcb8f15b8d1c5d7a06337d5d1beac9665c6931f3cb",
+    "test_run.py": "41bbc5e8a666ffee0b1ac1bb6032c5203c1f7c875af7783d961da0d305eb3641"
+  },
+  "measurement_evidence": {
+    "manifest_sha256": "880902878a937b5db860325f1737add430d681cf3e51c3450c708eee91dbd4aa",
+    "manifest_identical_to_checkpoint": true,
+    "raw_contracts_and_run_py_diff_from_checkpoint": []
+  },
+  "tests": {
+    "original_defect_red": {
+      "tests": 1,
+      "failures": 1,
+      "evidence": "post-measurement-readiness-red.log"
+    },
+    "edge_case_red": {
+      "tests": 2,
+      "subtest_errors": 6,
+      "evidence": "post-measurement-readiness-edge-red.log"
+    },
+    "final_unit": {
+      "tests": 43,
+      "passed": 42,
+      "skipped": 1,
+      "evidence": "post-measurement-readiness-final-unit.log"
+    },
+    "real_integration": {
+      "tests": 1,
+      "passed": 1,
+      "postgres_crash_exit_status": -9,
+      "restart_sql_ready": true,
+      "variants": [
+        {
+          "id": "thinkgo",
+          "kind": "go",
+          "passed": true,
+          "contract_groups": 10
+        },
+        {
+          "id": "thinkphp-fpm",
+          "kind": "fpm",
+          "passed": true,
+          "contract_groups": 10
+        },
+        {
+          "id": "laravel-fpm",
+          "kind": "fpm",
+          "passed": true,
+          "contract_groups": 10
+        },
+        {
+          "id": "laravel-octane",
+          "kind": "octane",
+          "passed": true,
+          "contract_groups": 10
+        }
+      ],
+      "evidence": "post-measurement-readiness-integration.json"
+    },
+    "historical_intermediate_log": "post-measurement-readiness-unit.log"
+  },
+  "coverage": {
+    "version": "7.17.2",
+    "scope": [
+      "benchmarks/business/tools/native.py"
+    ],
+    "branch": true,
+    "combined_inputs": [
+      "post-measurement-readiness-final-unit.coverage",
+      "post-measurement-readiness-integration.coverage"
+    ],
+    "old_measurement_or_intermediate_coverage_merged": false,
+    "totals": {
+      "covered_lines": 296,
+      "num_statements": 311,
+      "percent_covered": 94.29280397022333,
+      "percent_covered_display": "94",
+      "missing_lines": 15,
+      "excluded_lines": 0,
+      "percent_statements_covered": 95.17684887459806,
+      "percent_statements_covered_display": "95",
+      "num_branches": 92,
+      "num_partial_branches": 8,
+      "covered_branches": 84,
+      "missing_branches": 8,
+      "percent_branches_covered": 91.30434782608695,
+      "percent_branches_covered_display": "91"
+    },
+    "changed_executable_lines": {
+      "covered": 63,
+      "total": 63,
+      "missing": []
+    },
+    "functions": {
+      "wait_for": {
+        "covered_lines": 26,
+        "num_statements": 26,
+        "percent_covered": 100.0,
+        "percent_covered_display": "100",
+        "missing_lines": 0,
+        "excluded_lines": 0,
+        "percent_statements_covered": 100.0,
+        "percent_statements_covered_display": "100",
+        "num_branches": 6,
+        "num_partial_branches": 0,
+        "covered_branches": 6,
+        "missing_branches": 0,
+        "percent_branches_covered": 100.0,
+        "percent_branches_covered_display": "100"
+      },
+      "tcp_ready": {
+        "covered_lines": 5,
+        "num_statements": 5,
+        "percent_covered": 100.0,
+        "percent_covered_display": "100",
+        "missing_lines": 0,
+        "excluded_lines": 0,
+        "percent_statements_covered": 100.0,
+        "percent_statements_covered_display": "100",
+        "num_branches": 0,
+        "num_partial_branches": 0,
+        "covered_branches": 0,
+        "missing_branches": 0,
+        "percent_branches_covered": 100.0,
+        "percent_branches_covered_display": "100"
+      },
+      "Environment.postgres_ready": {
+        "covered_lines": 17,
+        "num_statements": 17,
+        "percent_covered": 100.0,
+        "percent_covered_display": "100",
+        "missing_lines": 0,
+        "excluded_lines": 0,
+        "percent_statements_covered": 100.0,
+        "percent_statements_covered_display": "100",
+        "num_branches": 8,
+        "num_partial_branches": 0,
+        "covered_branches": 8,
+        "missing_branches": 0,
+        "percent_branches_covered": 100.0,
+        "percent_branches_covered_display": "100"
+      },
+      "Environment.healthy": {
+        "covered_lines": 10,
+        "num_statements": 10,
+        "percent_covered": 100.0,
+        "percent_covered_display": "100",
+        "missing_lines": 0,
+        "excluded_lines": 0,
+        "percent_statements_covered": 100.0,
+        "percent_statements_covered_display": "100",
+        "num_branches": 2,
+        "num_partial_branches": 0,
+        "covered_branches": 2,
+        "missing_branches": 0,
+        "percent_branches_covered": 100.0,
+        "percent_branches_covered_display": "100"
+      }
+    }
+  },
+  "timeout_contract": {
+    "startup_seconds": 45,
+    "sql_probe_max_seconds": 1,
+    "sql_probe_timeout_capped_by_remaining_deadline": true,
+    "http": "沿用 urllib 单次 socket 阻塞超时，回调返回后拒绝迟到成功；不声称完整响应硬期限"
+  },
+  "artifacts": {
+    "post-measurement-readiness-combined.coverage": {
+      "sha256": "56d07902d976c0388ac1c5cda764ad6adaf48698c32c6c28d4bcce221b35e5bf",
+      "bytes": 69632
+    },
+    "post-measurement-readiness-coverage.json": {
+      "sha256": "464eff94b225e97dae5fd6a32f26f55da28c4e3171e44746f93b545bc6e8a832",
+      "bytes": 27430
+    },
+    "post-measurement-readiness-coverage.log": {
+      "sha256": "a80d7546b1b385685e16b5e05c7f9ea5da02a4c4e20be234ebd60c2ef9752231",
+      "bytes": 453
+    },
+    "post-measurement-readiness-edge-red.log": {
+      "sha256": "cd81fb35699e9d5032b7a76219f1693d6e21d86b59330e3101cab67d640448c8",
+      "bytes": 12530
+    },
+    "post-measurement-readiness-final-unit.coverage": {
+      "sha256": "c24105a0290c4adf85e5a40ededa98e1c3f35011e3a46c4850cec44ed24e3299",
+      "bytes": 69632
+    },
+    "post-measurement-readiness-final-unit.log": {
+      "sha256": "d3e28c68c21bce18ca31ba89a4844081370a3f9b0d2f739a01f2d2197acddc02",
+      "bytes": 7034
+    },
+    "post-measurement-readiness-integration.coverage": {
+      "sha256": "ab62a1ff5346dcdb27e317528cf3c78fd4f5b6a10039ba48012e662f9908f726",
+      "bytes": 69632
+    },
+    "post-measurement-readiness-integration.json": {
+      "sha256": "f0794a039fded665267bcbbdb7f733492893200c79d8d0d1fa2db03f5134c5a2",
+      "bytes": 10147
+    },
+    "post-measurement-readiness-integration.log": {
+      "sha256": "cd90c13210f1ba05c2dfc843d689a0f3ebb44f26bf748f476047a46a9478873e",
+      "bytes": 238
+    },
+    "post-measurement-readiness-integration.postgres.log": {
+      "sha256": "c2a2313024632bee0fdb284c5913f12218e74648df74b0bd8a89df485bb1423f",
+      "bytes": 4064
+    },
+    "post-measurement-readiness-red.log": {
+      "sha256": "6c9893192658bf8ca078fd412078209e11834d1f0ca4252dcdaa0cf9ed3beaef",
+      "bytes": 2049
+    },
+    "post-measurement-readiness-unit.log": {
+      "sha256": "a9451d9aa326d311c6f0cfd088385d7c33f09840144af50e1a8e463ac3bfb95c",
+      "bytes": 6514
+    }
+  }
+}

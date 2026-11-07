@@ -33,6 +33,10 @@
 | Laravel-FPM | 1,443.6 [1,442.8–1,469.4] | 1,491.4 [1,386.9–1,498.1] | 1,142.0 [947.6–1,142.7] | 1,308.3 [1,302.0–1,317.9] | 1,361.6 [1,353.4–1,372.0] |
 | Laravel-Octane | 1,867.1 [1,767.3–1,870.7] | 1,929.6 [1,918.2–2,004.6] | 1,282.8 [1,261.2–1,289.6] | 1,616.0 [1,408.0–1,630.1] | 1,596.2 [1,500.3–1,669.1] |
 
+![五个业务场景的闭环成功吞吐，中位数及三轮完整范围](charts/closed_throughput.png)
+
+[矢量图 SVG](charts/closed_throughput.svg) · [逐轮数据 CSV](charts/rounds.csv) · [全部指标汇总 CSV](charts/summary.csv)
+
 ### ThinkGo 的具体表现
 
 **目录与详情是本次观察中较明确的吞吐差距。** ThinkGo 的目录中位数比其他五个 Go 配置低 16.82%–23.67%；其最高一轮 11,580.5 RPS 仍低于其他 Go 配置各自的最低值。详情中位数低 27.76%–40.97%，与 Gin、Echo、Beego、Iris 的三轮范围不重叠；但 Fiber 详情第一轮只有 11,586.3 RPS，因此不能说 ThinkGo 在详情的每一次观察都最慢。[ThinkGo 目录第三轮](raw/rounds/closed-catalog-thinkgo-3/round.json)、[ThinkGo 详情第三轮](raw/rounds/closed-detail-thinkgo-3/round.json)、[Fiber 详情第一轮](raw/rounds/closed-detail-fiber-1/round.json)。
@@ -72,6 +76,91 @@
 | 混合业务 | 1,361.5667 | 680 | 20,400 |
 
 这些共同到达率约相当于 ThinkGo 对应闭环中位数的 4.88%–22.17%，该比例不是 CPU 利用率。开放阶段比较的是这组共同流量下的延迟与资源消耗，不代表各 Go 配置临近饱和时的尾延迟，也没有覆盖完整容量曲线。
+
+## 开放实测：相同业务流量下的 P99
+
+下表为**单轮 P99 的三轮中位数 [最小值–最大值]**，单位毫秒。主延迟从计划发出时刻计到响应正文读取完成，包含发生器排队及调度滞后；未发出的丢弃单独统计。各列共同到达率分别为 721、745、571、654、680 请求/秒。[汇总数据](charts/summary.json)。
+
+| 配置 | 商品目录 | 商品详情 | 事务下单 | 工单评论 | 混合业务 |
+|---|---:|---:|---:|---:|---:|
+| ThinkGo | 2.389 [1.999–4.047] | 3.925 [2.471–10.207] | 6.087 [5.451–7.643] | 4.659 [3.361–13.623] | 4.251 [4.239–4.267] |
+| Gin | 2.807 [2.677–2.903] | 2.987 [2.661–3.161] | 7.267 [5.531–31.839] | 3.141 [2.919–9.999] | 4.591 [4.231–9.599] |
+| Echo | 2.991 [2.977–4.423] | 2.861 [2.445–3.829] | 5.707 [5.387–25.631] | 3.547 [3.255–3.575] | 4.275 [4.131–4.587] |
+| Fiber | 2.851 [2.767–3.471] | 2.733 [2.681–3.631] | 6.555 [6.255–55.807] | 4.595 [3.003–27.359] | 4.495 [4.087–9.535] |
+| Beego | 4.511 [3.199–6.315] | 3.339 [2.239–5.287] | 9.223 [5.715–262.143] | 3.093 [2.961–3.285] | 4.267 [4.019–8.179] |
+| Iris | 3.407 [2.523–5.127] | 3.181 [2.103–3.401] | 5.475 [5.127–5.931] | 3.869 [3.385–12.247] | 4.395 [4.199–51.711] |
+| ThinkPHP-FPM | 3.687 [3.103–4.015] | 4.267 [3.957–4.327] | 9.263 [6.023–22.479] | 5.231 [3.373–13.519] | 5.131 [4.595–5.315] |
+| Laravel-FPM | 8.647 [8.423–10.159] | 8.551 [8.447–8.703] | 13.167 [12.135–41.599] | 9.855 [9.703–10.879] | 9.943 [9.703–10.103] |
+| Laravel-Octane | 7.307 [6.175–9.983] | 6.151 [5.687–6.487] | 10.711 [10.047–58.815] | 8.711 [8.271–22.911] | 8.887 [8.043–11.079] |
+
+![五个业务场景在共同开放到达率下的 P99，对数时间轴显示三轮完整范围](charts/open_p99.png)
+
+P99 图采用**对数时间轴**，使常见的数毫秒差异与数百毫秒慢轮同时可见；它没有截断慢轮或改变统计值。其他吞吐、CPU 和内存图采用线性轴，各业务面板的刻度独立。[P99 矢量图](charts/open_p99.svg)。
+
+ThinkGo 的目录与混合 P99 中位数分别为 2.389、4.251 ms，是本次六个 Go 配置中的最低值；详情与工单分别为 3.925、4.659 ms，是 Go 组最高值，下单为第三。**这些中位数次序不等于稳定排序**：目录范围与所有其他 Go 配置重叠，混合中位数与 Beego、Echo 仅相差 0.016、0.024 ms，且全部 Go 配置的混合观察范围重叠。工单中 Beego 的最高值 3.285 ms 低于 ThinkGo 最低值 3.361 ms，但仍只有三次观察。
+
+开放阶段 45 个分组中，有 **21 组的单轮 P99 最大值至少为最小值的 2 倍，6 组至少为 5 倍**。例如 Beego 下单三轮为 262.143／9.223／5.715 ms，Iris 混合为 51.711／4.395／4.199 ms，Fiber 工单为 4.595／27.359／3.003 ms。ThinkGo 自身的详情为 10.207／3.925／2.471 ms，工单为 3.361／13.623／4.659 ms。所有这些轮次均有效保留，不根据波动删除数据。
+
+Beego 较慢的订单轮同时记录 HTTP 耗时 P99 为 257.663 ms、调度滞后 P99 为 7.731 ms。三者属于不同分布，不能相减来计算“调度贡献”，也不能相加来验证总延迟；当前证据不能把这次波动全部归因于某个框架或发生器。[原始时间分布](raw/rounds/open-order-beego-1/load.json.gz)。
+
+## 应用资源实测：CPU 成本与 PSS
+
+全部 270 轮应用与 Nginx 的 CPU、PSS 和 RSS 观测完整，因此以下应用内存图统一采用 **PSS**。CPU 成本使用完整负载调用期间的应用进程树 CPU 秒除以全部成功请求数，包含排空成功请求；内存是 0.5 秒采样下观察到的进程树峰值。PostgreSQL、Redis 与负载发生器不计入这个应用资源组，其他组的采样限制在后文单独披露。[资源口径与逐轮值](charts/rounds.csv)。
+
+下面以直接测得的混合业务展示资源数值；四个单业务的完整结果同时保留在图表与 CSV 中。每格为三轮中位数 [最小值–最大值]，CPU 显示三位小数，PSS 显示一位小数。
+
+| 配置 | 闭环 CPU ms/成功请求 | 开放 CPU ms/成功请求 | 闭环 PSS MiB | 开放 PSS MiB |
+|---|---:|---:|---:|---:|
+| ThinkGo | 0.303 [0.286–0.307] | 0.556 [0.555–0.571] | 38.1 [37.8–38.9] | 33.9 [33.4–34.0] |
+| Gin | 0.255 [0.246–0.272] | 0.478 [0.472–0.489] | 35.6 [35.2–35.8] | 33.4 [33.4–34.7] |
+| Echo | 0.254 [0.245–0.257] | 0.475 [0.459–0.475] | 26.1 [25.8–26.3] | 22.3 [22.3–22.5] |
+| Fiber | 0.228 [0.221–0.239] | 0.421 [0.406–0.438] | 29.2 [29.2–29.5] | 25.1 [25.1–25.4] |
+| Beego | 0.254 [0.248–0.256] | 0.493 [0.452–0.498] | 33.9 [33.5–34.2] | 30.7 [30.5–30.7] |
+| Iris | 0.245 [0.240–0.247] | 0.465 [0.441–0.475] | 41.3 [41.1–41.5] | 37.7 [36.7–37.8] |
+| ThinkPHP-FPM | 0.738 [0.730–0.745] | 0.806 [0.796–0.828] | 54.7 [54.6–57.9] | 55.5 [54.9–55.7] |
+| Laravel-FPM | 2.192 [2.176–2.211] | 2.252 [2.242–2.271] | 84.2 [84.0–84.5] | 84.3 [83.9–85.2] |
+| Laravel-Octane | 1.865 [1.777–1.899] | 2.128 [2.068–2.168] | 1,182.6 [1,180.5–1,199.6] | 1,197.4 [1,177.1–1,198.0] |
+
+ThinkGo 混合业务的应用 CPU 成本中位数在 Go 组最高：闭环比其余 Go 配置高 **18.7%–32.9%**，开放高 **12.9%–32.3%**，这两组观察范围也均未与其他 Go 配置重叠。其 PSS 中位数在 Go 组仅低于 Iris；开放阶段与 Gin 的内存范围存在重叠。CPU 较高与某项 P99 较低是并列观察，当前数据没有证明二者存在因果关系，也没有定位到某个框架内部组件。
+
+Laravel-Octane 在本次部署中的吞吐高于 Laravel-FPM，但混合场景的 PSS 峰值中位数约为 1,183–1,197 MiB（约 1.15–1.17 GiB），明显高于 FPM 的约 84 MiB。该值包括本次 24 worker 常驻部署的应用进程树与 Nginx，是实际 PSS 采样之和，不能只根据吞吐提升忽略资源代价，也不能推广到其他 worker 数量或部署方式。
+
+![闭环五场景的应用与 Nginx CPU 成本](charts/cpu_closed.png)
+
+![开放五场景的应用与 Nginx CPU 成本](charts/cpu_open.png)
+
+![闭环五场景的应用与 Nginx 采样 PSS 峰值](charts/memory_closed.png)
+
+![开放五场景的应用与 Nginx 采样 PSS 峰值](charts/memory_open.png)
+
+[闭环 CPU SVG](charts/cpu_closed.svg) · [开放 CPU SVG](charts/cpu_open.svg) · [闭环 PSS SVG](charts/memory_closed.svg) · [开放 PSS SVG](charts/memory_open.svg)
+
+## 错误与缓存观测
+
+正式请求的 HTTP 状态、传输与语义错误均为 0。开放阶段的 **4 次／2,730,510 次计划请求**丢弃集中在 Beego 一个订单轮，该轮丢弃比例为 **0.023350846%**；同组三轮失败比例中位数虽然为 0，仍保留最大值和绝对数量。错误图显示每类错误的中位数与完整范围，并突出出现过非零结果的单元格。
+
+![闭环全部配置的请求结果分类](charts/errors_closed.png)
+
+![开放全部配置的请求结果分类，保留 Beego 下单的非零丢弃范围](charts/errors_open.png)
+
+[闭环错误 SVG](charts/errors_closed.svg) · [开放错误 SVG](charts/errors_open.svg)
+
+详情场景的实测缓存命中率约为 90%；混合业务的比例略低。下表按原始 hits/misses 合并计数计算，**不是对九个中位数取平均**。缓存分母仅包含携带合法缓存状态头的响应；在本次全部已发请求成功的条件下，这些计数也对应成功详情响应。
+
+| 模型与场景 | 轮数 | hits 合计 | misses 合计 | 合并计数命中率 |
+|---|---:|---:|---:|---:|
+| 闭环详情 | 27 | 10,693,242 | 1,188,125 | 90.000098% |
+| 闭环混合 | 27 | 1,152,654 | 137,202 | 89.362999% |
+| 开放详情 | 27 | 543,105 | 60,345 | 90.000000% |
+| 开放混合 | 27 | 147,744 | 17,496 | 89.411765% |
+
+开放阶段九种配置的详情命中率均为 90%，混合详情命中率均为 89.411765%；闭环混合的各配置单轮中位数为 89.3520%–89.3911%。90/10 描述热、冷集合的访问轨迹，混合业务中的订单失效会影响实际缓存结果；不能强行把实测比例改写成恰好 90%。目录、订单和工单没有详情缓存响应，该指标为不适用，不是 0% 命中。[逐轮缓存计数](charts/rounds.csv)。
+
+![闭环详情与混合业务的缓存命中率](charts/cache_closed.png)
+
+![开放详情与混合业务的缓存命中率](charts/cache_open.png)
+
+[闭环缓存 SVG](charts/cache_closed.svg) · [开放缓存 SVG](charts/cache_open.svg)
 
 ## 比较范围与证据原则
 
@@ -265,11 +354,47 @@ failure_fraction = unsuccessful / planned
 
 各进程组的完整性分别判断。负载进程自然退出后，最终进程树采样可能记录 `NoSuchProcess` 或 `ProcessDisappeared`，使 `load.cpu_complete=false`；这不等同于应用、PostgreSQL 或 Redis 组缺失。负载端 CPU 优先读取子进程回收前后资源使用差值 `load_wait4_cpu_seconds`，同时原样保留其轮询采样缺失，不能笼统宣称所有进程组 CPU 都完整。应用 CPU 成本仍只使用 `application` 组自身的完整性判断。
 
+字段 `load_wait4_cpu_seconds` 虽包含 `wait4` 字样，冻结源码实际使用 `resource.getrusage(RUSAGE_CHILDREN)` 的用户态与内核态 CPU 前后差值，并非直接调用同名系统调用。全部 270 轮这一独立回收口径均有效，范围为 2.843144–41.473305 CPU 秒；它不使轮询采样中的缺失标记失效。
+
 采样间隔为 0.5 秒，包含开始与结束采样。每个样本保存 PID、创建时间、父 PID、进程名称与命令、可读取的 CPU 亲和性、CPU 秒、RSS、PSS 及读取错误。按 PID 与创建时间识别进程，组内去重，不把父进程的累计子进程 CPU 再加一次；组间重复归属会明确报告。读取失败、已观察子进程消失、PID 复用、计数回退和采样缺失均有标记，不能把残缺 CPU 作为更低的成本。
 
 内存指标优先采用**同一次样本中应用与 Nginx 进程树 PSS 之和的最大值**。PSS 将共享页按共享者分摊，RSS 直接求和可能重复计算共享页，两者不能混称。[Linux `/proc` 官方说明](https://www.kernel.org/doc/html/latest/filesystems/proc.html)。只有全部比较轮都有完整 PSS 时图表统一使用 PSS；否则统一回退到明确标记的 RSS。采样缺失或相应数据不完整时，不把局部峰值当作完整峰值排名。
 
 “峰值”指采样时刻观察到的峰值，不能保证捕获两个样本之间的瞬时峰值；完全出生并退出于两个采样点之间的短命进程也可能未被发现。应用启动峰值和长期运行内存增长不在本次测量定义内。原始采样证据比单个汇总数更适合判断这类限制。
+
+### 本次资源观测的实际完整性
+
+逐样本复核了 270 份资源文件中的 1,080 个资源组，与文件汇总一致。每轮记录 62 次采样，合计 16,740 次，调度器记录的 `missed_intervals` 均为 0；这只说明采样时点未跳过，不意味着每个进程都成功读取。
+
+| 资源组 | CPU 完整轮次 | PSS 完整轮次 | RSS 完整轮次 | 内存缺样数合计 |
+|---|---:|---:|---:|---:|
+| 应用与 Nginx | 270/270 | 270/270 | 270/270 | 0 |
+| PostgreSQL | 256/270 | 263/270 | 263/270 | 9 |
+| Redis | 270/270 | 270/270 | 270/270 | 0 |
+| 负载进程轮询采样 | 0/270 | 0/270 | 0/270 | 297 |
+
+以下 14 轮的 PostgreSQL CPU 汇总为缺失，其中 7 轮的内存也不完整。它们主要记录已观察到的进程在采样之间消失或读取时消失；这些是遥测完整性事实，不是数据库故障或某个性能波动的原因证明。
+
+| PostgreSQL 资源证据 | 内存缺样数 | PSS/RSS 完整性 |
+|---|---:|---|
+| [closed-detail-gin-1](raw/rounds/closed-detail-gin-1/resources.json.gz) | 2 | 不完整 |
+| [closed-mixed-fiber-1](raw/rounds/closed-mixed-fiber-1/resources.json.gz) | 0 | 完整 |
+| [closed-mixed-gin-2](raw/rounds/closed-mixed-gin-2/resources.json.gz) | 0 | 完整 |
+| [closed-order-echo-1](raw/rounds/closed-order-echo-1/resources.json.gz) | 0 | 完整 |
+| [closed-order-fiber-3](raw/rounds/closed-order-fiber-3/resources.json.gz) | 2 | 不完整 |
+| [closed-order-gin-3](raw/rounds/closed-order-gin-3/resources.json.gz) | 0 | 完整 |
+| [closed-ticket-echo-3](raw/rounds/closed-ticket-echo-3/resources.json.gz) | 0 | 完整 |
+| [closed-ticket-thinkgo-1](raw/rounds/closed-ticket-thinkgo-1/resources.json.gz) | 0 | 完整 |
+| [open-mixed-iris-1](raw/rounds/open-mixed-iris-1/resources.json.gz) | 1 | 不完整 |
+| [open-order-beego-3](raw/rounds/open-order-beego-3/resources.json.gz) | 0 | 完整 |
+| [open-order-echo-2](raw/rounds/open-order-echo-2/resources.json.gz) | 1 | 不完整 |
+| [open-order-iris-3](raw/rounds/open-order-iris-3/resources.json.gz) | 1 | 不完整 |
+| [open-order-laravel-octane-1](raw/rounds/open-order-laravel-octane-1/resources.json.gz) | 1 | 不完整 |
+| [open-order-thinkgo-3](raw/rounds/open-order-thinkgo-3/resources.json.gz) | 1 | 不完整 |
+
+负载进程所有最后样本均发生在自然退出之后，记录根进程 `NoSuchProcess` 及成员 `ProcessDisappeared`；另按上述独立子进程回收口径提供 CPU。任何组的 `observed_cpu_seconds` 都不能替代不完整的总 CPU。缺内存的 PostgreSQL 轮及负载组即使标记 `memory_metric="rss"`，其 `peak_rss_bytes` 也为 null，不能称作成功回退到 RSS。
+
+[summary.json](charts/summary.json) 中的 `telemetry_warnings=[]` 只表示**应用资源组**未触发渲染器警告，不代表所有基础设施或发生器资源完整。本报告不对上述残缺 PostgreSQL CPU／内存值作填零或排名。
 
 ## 数据库设计取舍与实证
 
@@ -358,7 +483,23 @@ Python 使用 coverage.py 7.17.2。冻结编排工具的结果合并单元测试
 
 冻结编排工具的 coverage.py 语句加分支合计值为 91.78%，不能把这个合计数写成纯语句或纯分支覆盖；其 `run.py` 单文件分支覆盖为 71/98，72.45%。上述 Python 文件的语句覆盖均超过 80%，但不代表每个文件的分支覆盖也超过 80%。测试包括完整矩阵、共同速率校准、错误保留、资源去重与读取失败、数据库审计、HTTP 验收、恢复与图表证据验证。
 
-Go 负载相关测试使用 race detector。本实验主动安排的测试与构建在正式测量前完成；宿主上的其他后台活动未被全面观测，不能保证整台机器不存在并行构建或其他资源竞争。测试目录和入口分别见 [Go 测试](../../../benchmarks/business/go/)、[PHP 测试配置](../../../benchmarks/business/php/phpunit.xml)、[Python 工具测试](../../../benchmarks/business/tools/)。部分历史测试没有单独保存 stdout 日志，归档明确区分留存日志、覆盖率原始数据与会话中已观察到的通过结果；覆盖率数据本身不能独立证明测试全部通过。覆盖率是辅助检查，不是性能排名依据；性能结论必须来自完整正式原始数据。
+Go 负载相关测试使用 race detector。本实验为正式测量准备的测试与构建在计时轮开始前完成；宿主上的其他后台活动未被全面观测，不能保证整台机器不存在并行构建或其他资源竞争。测试目录和入口分别见 [Go 测试](../../../benchmarks/business/go/)、[PHP 测试配置](../../../benchmarks/business/php/phpunit.xml)、[Python 工具测试](../../../benchmarks/business/tools/)。部分历史测试没有单独保存 stdout 日志，归档明确区分留存日志、覆盖率原始数据与会话中已观察到的通过结果；覆盖率数据本身不能独立证明测试全部通过。覆盖率是辅助检查，不是性能排名依据；性能结论必须来自完整正式原始数据。
+
+### 测量完成后的控制器修正
+
+正式测量全部完成并建立检查点后，当前分支修复了恢复过程中实际遇到的 PostgreSQL 就绪判断问题。启动器现在通过维护库中的固定只读 SQL，确认恢复已结束且事务允许写入，再进入模板数据库流程。等待器保留 45 秒总期限，每次 SQL 探针最多 1 秒且受剩余期限限制，检查探针前后的进程状态并拒绝迟到成功。可执行文件缺失或无执行权限、psql 自身或 SQL 错误及异常输出立即失败；连接失败与探针超时则在总期限内重试并保留最后诊断。连接失败类别也可能包含永久认证或连接配置问题，不能描述为已经识别全部永久故障。[修正实现](../../../benchmarks/business/tools/native.py)、[psql 退出状态定义](https://www.postgresql.org/docs/18/app-psql.html#APP-PSQL-EXIT-STATUS)。
+
+验证先捕获旧 TCP 就绪缺陷和异常分类边界，再执行最终针对性单测：43 项中 42 项通过，1 项真实集成测试默认显式跳过；随后单独启用该集成测试并通过。真实验收在专属实例上终止 PostgreSQL 后重启，日志确认发生自动恢复，SQL 就绪后 ThinkGo、ThinkPHP-FPM、Laravel-FPM、Laravel-Octane 四种配置各通过 10 组 HTTP 合同检查。没有重跑或替换正式测量轮次。[验证清单](validation/post-measurement-readiness-summary.json)、[最终单测日志](validation/post-measurement-readiness-final-unit.log)、[真实验收结果](validation/post-measurement-readiness-integration.json)、[数据库恢复日志](validation/post-measurement-readiness-integration.postgres.log)。
+
+最终相同源码的单测与真实验收覆盖合并后，`native.py` 语句覆盖为 **296/311，95.18%**，分支覆盖为 **84/92，91.30%**；本次变更的 63 条可执行行全部覆盖。没有混合旧测量源码或修正中间版本的覆盖数据。HTTP 健康检查仍沿用 urllib 的单次 socket 阻塞超时语义，等待器在返回后拒绝迟到成功，**没有宣称整次 HTTP 响应具有可强制中断的硬总时限**。[新鲜覆盖数据](validation/post-measurement-readiness-coverage.json)。
+
+本报告全部正式测量的 manifest 和构建信息绑定本地冻结提交 `db21dda7ae1761bf68c5848884a5ba2ed411088c`；远端提交 `6f332ab0122831ed75044aa63910aa2b57947b34` 提供相同源码 tree 供获取与复现，并非另一次测量来源。上述修正属于测后复现工具改进，没有改动业务、协议、二进制、原 manifest 或任何已封存正式轮；不能将其描述为参与了本次计时测量。
+
+### 测量完成后的图表验证
+
+270 轮完成并建立测后 Git 检查点后，仅为改善尾延迟图的可读性，把 P99 图改为明确标注的对数时间轴。新增回归检查先在旧渲染器上失败，再验证慢轮完整可见、常见延迟差异可读、非正数不被静默隐藏、缺失值仍为 N/A。修正后的渲染模块 **19 项测试全部通过**，新鲜覆盖数据为语句 **326/328，99.39%**、分支 **71/74，95.95%**；没有与冻结前覆盖数据混合。[验证清单](validation/python-render-postmeasure-summary.json)、[通过日志](validation/python-render-postmeasure-tests.log)、[覆盖数据](validation/python-render-postmeasure-coverage.json)。
+
+修正后重新核验并渲染完整正式矩阵，得到 10 张 SVG 与 10 张 PNG。与测后检查点逐项比较，所有统计数据完全相同，`rounds.csv` 与 `summary.csv` 字节完全相同；PNG 仅 P99 图变化，`summary.json` 仅更新渲染器摘要。该显示调整没有改动请求、轮次、指标定义、原始证据或分位数。
 
 ## 原始证据、恢复与复现
 
@@ -436,6 +577,7 @@ go mod download
 go build -trimpath -mod=readonly -p=2 -o "$BENCH_ROOT/bin/" ./cmd/...
 cd "$BENCH_REPOSITORY"
 
+env -u GOGC -u GOMEMLIMIT -u GODEBUG -u CGO_ENABLED -u GOTRACEBACK \
 python3 "$BENCH_ROOT/tools/run.py" \
   --runtime "$BENCH_RUNTIME" \
   --work "$BENCH_RUNTIME/work/business" \
@@ -448,6 +590,18 @@ python3 "$BENCH_ROOT/tools/render.py" \
 ```
 
 正式二进制的构建信息见 [final-build-info-v2.json](validation/final-build-info-v2.json)：Go 1.27.3、`-trimpath`、`CGO_ENABLED=1`、`GOAMD64=v1`，并嵌入本地冻结提交的 VCS 信息。上面的复现命令保留这些构建设置；远端同树提交的 VCS 标识和时间不同，系统编译器及链接环境也可能不同，因此不承诺新构建与本次归档二进制逐字节同一摘要。复现结果必须记录自己的实际二进制和环境身份。
+
+以上固定提交保留**测量时的原控制器与原线性 P99 图**，也保留了前述 PostgreSQL 恢复就绪边界。当前分支包含测后的 SQL 就绪修正和对数 P99 图；从当前分支开展新实验时，应生成新的结果目录和 manifest，不能以修改旧 manifest 的方式拼接历史测量。
+
+若只重绘本报告已封存的数据，不需要启动服务或重新压测。以下命令应在包含本报告、raw 归档及测后渲染器的 `bench/real-business-20261107` 报告分支工作区中执行，不能直接沿用上面检出 `6f332ab0122831ed75044aa63910aa2b57947b34` 的冻结源码工作区；报告分支工作区需已安装上述 Python 依赖。
+
+```bash
+python3 benchmarks/business/tools/render.py \
+  --input docs/benchmarks/2026-11-07/raw \
+  --output ../benchmark-charts-redraw
+```
+
+输出目录必须为空或不存在；渲染器重新核验全矩阵与原始摘要，并在新 `summary.json` 中记录实际渲染器 SHA256。本文当前图表由测后渲染器生成，统计值与冻结渲染器完全相同。
 
 `measure` 自带九种配置的 HTTP 验收，然后依次执行全部闭环及开放矩阵；正式模式拒绝只选择部分配置，也要求 `benchmarks/business` 没有未提交变更。`verify` 模式仅做功能验收；`pilot` 使用较短的预热和测量，作为链路检查，不能用于正式校准或性能结论。使用这些模式时应指定不同输出目录，防止身份混合。每个运行会话内，服务由同一控制程序统一创建和回收，避免将不同执行环境的本地端口误当成同一网络命名空间。
 

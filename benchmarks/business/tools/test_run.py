@@ -7,6 +7,7 @@ import gzip
 import pathlib
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 import run
@@ -88,6 +89,44 @@ class RunTest(unittest.TestCase):
             preserve_bytes(contract, b"original")
             with self.assertRaises(ValueError):
                 preserve_bytes(contract, b"changed")
+
+    def test_startup_failure_closes_environment_and_preserves_resumed_evidence(self):
+        for error in [TimeoutError("PostgreSQL recovery deadline"), RuntimeError("owned postgres exited")]:
+            with self.subTest(error=type(error).__name__), tempfile.TemporaryDirectory() as directory:
+                output = pathlib.Path(directory)
+                manifest = {"git_commit": "measured-source", "mode": "pilot"}
+                write_json(output / "manifest.json", manifest)
+                sealed = output / "rounds/completed-round/round.json"
+                write_json(sealed, {"valid": True, "earlier": "evidence"})
+                contracts = output / "contracts"
+                contracts.mkdir()
+                for name in ["dataset.json", "queries.json", "schema.sql", "seed.sql", "protocol.json"]:
+                    (contracts / name).write_bytes((ROOT / "contracts" / name).read_bytes())
+                original = {path: path.read_bytes() for path in output.rglob("*") if path.is_file()}
+                environment = mock.Mock()
+                environment.start.side_effect = error
+                arguments = SimpleNamespace(mode="pilot", variants="", runtime="runtime", work="work",
+                                            output=str(output), resume=True)
+                with mock.patch.object(run, "Environment", return_value=environment), \
+                        mock.patch.object(run, "identity", return_value=manifest), \
+                        mock.patch.object(run, "verify_all") as verify, \
+                        mock.patch.object(run, "run_round") as round_call, \
+                        mock.patch.object(run, "ensure_document") as collect:
+                    with self.assertRaises(type(error)) as caught:
+                        run.execute(arguments)
+                self.assertIs(caught.exception, error)
+                environment.start.assert_called_once_with()
+                environment.close.assert_called_once_with()
+                environment.reset.assert_not_called()
+                verify.assert_not_called()
+                round_call.assert_not_called()
+                collect.assert_not_called()
+                self.assertFalse((output / "index.json").exists())
+                for path, data in original.items():
+                    self.assertEqual(path.read_bytes(), data)
+                # 失败启动只能追加会话开始事件，不能留下成功完成的声明。
+                events = [json.loads(line)["event"] for line in (output / "progress.jsonl").read_text().splitlines()]
+                self.assertEqual(events, ["session_start"])
 
 
 class RoundSnapshotTest(unittest.TestCase):

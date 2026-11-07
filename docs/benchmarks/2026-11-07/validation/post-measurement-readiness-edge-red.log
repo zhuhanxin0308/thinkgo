@@ -1,0 +1,169 @@
+test_fatal_probe_error_survives_simultaneous_process_exit (test_native.ReadinessWaitTest.test_fatal_probe_error_survives_simultaneous_process_exit) ... 
+  test_fatal_probe_error_survives_simultaneous_process_exit (test_native.ReadinessWaitTest.test_fatal_probe_error_survives_simultaneous_process_exit) (error='FileNotFoundError') ... ERROR
+  test_fatal_probe_error_survives_simultaneous_process_exit (test_native.ReadinessWaitTest.test_fatal_probe_error_survives_simultaneous_process_exit) (error='PermissionError') ... ERROR
+  test_fatal_probe_error_survives_simultaneous_process_exit (test_native.ReadinessWaitTest.test_fatal_probe_error_survives_simultaneous_process_exit) (error='ValueError') ... ERROR
+  test_fatal_probe_error_survives_simultaneous_process_exit (test_native.ReadinessWaitTest.test_fatal_probe_error_survives_simultaneous_process_exit) (error='KeyboardInterrupt') ... ERROR
+test_wrapped_http_file_and_permission_errors_are_not_retried (test_native.PostgresStartupTest.test_wrapped_http_file_and_permission_errors_are_not_retried) ... 
+  test_wrapped_http_file_and_permission_errors_are_not_retried (test_native.PostgresStartupTest.test_wrapped_http_file_and_permission_errors_are_not_retried) (error='FileNotFoundError') ... ERROR
+  test_wrapped_http_file_and_permission_errors_are_not_retried (test_native.PostgresStartupTest.test_wrapped_http_file_and_permission_errors_are_not_retried) (error='PermissionError') ... ERROR
+
+======================================================================
+ERROR: test_fatal_probe_error_survives_simultaneous_process_exit (test_native.ReadinessWaitTest.test_fatal_probe_error_survives_simultaneous_process_exit) (error='FileNotFoundError')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/scratch/c3281d4eed26/thinkgo/benchmarks/business/tools/native.py", line 257, in wait_for
+    ready = check(timeout=min(READINESS_PROBE_SECONDS, remaining))
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/unittest/mock.py", line 1139, in __call__
+    return self._mock_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/unittest/mock.py", line 1143, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/unittest/mock.py", line 1198, in _execute_mock_call
+    raise effect
+FileNotFoundError: missing psql
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/workspace/scratch/c3281d4eed26/thinkgo/benchmarks/business/tools/test_native.py", line 126, in test_fatal_probe_error_survives_simultaneous_process_exit
+    native.wait_for(probe, self.process)
+  File "/workspace/scratch/c3281d4eed26/thinkgo/benchmarks/business/tools/native.py", line 263, in wait_for
+    process.check()
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/unittest/mock.py", line 1139, in __call__
+    return self._mock_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/unittest/mock.py", line 1143, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/unittest/mock.py", line 1202, in _execute_mock_call
+    raise result
+RuntimeError: owned postgres exited: 7
+
+======================================================================
+ERROR: test_fatal_probe_error_survives_simultaneous_process_exit (test_native.ReadinessWaitTest.test_fatal_probe_error_survives_simultaneous_process_exit) (error='PermissionError')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/scratch/c3281d4eed26/thinkgo/benchmarks/business/tools/native.py", line 257, in wait_for
+    ready = check(timeout=min(READINESS_PROBE_SECONDS, remaining))
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/unittest/mock.py", line 1139, in __call__
+    return self._mock_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/unittest/mock.py", line 1143, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/unittest/mock.py", line 1198, in _execute_mock_call
+    raise effect
+PermissionError: psql denied
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/workspace/scratch/c3281d4eed26/thinkgo/benchmarks/business/tools/test_native.py", line 126, in test_fatal_probe_error_survives_simultaneous_process_exit
+    native.wait_for(probe, self.process)
+  File "/workspace/scratch/c3281d4eed26/thinkgo/benchmarks/business/tools/native.py", line 263, in wait_for
+    process.check()
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/unittest/mock.py", line 1139, in __call__
+    return self._mock_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/unittest/mock.py", line 1143, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/unittest/mock.py", line 1202, in _execute_mock_call
+    raise result
+RuntimeError: owned postgres exited: 7
+
+======================================================================
+ERROR: test_fatal_probe_error_survives_simultaneous_process_exit (test_native.ReadinessWaitTest.test_fatal_probe_error_survives_simultaneous_process_exit) (error='ValueError')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/scratch/c3281d4eed26/thinkgo/benchmarks/business/tools/native.py", line 257, in wait_for
+    ready = check(timeout=min(READINESS_PROBE_SECONDS, remaining))
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/unittest/mock.py", line 1139, in __call__
+    return self._mock_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/unittest/mock.py", line 1143, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/unittest/mock.py", line 1198, in _execute_mock_call
+    raise effect
+ValueError: invalid readiness output
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/workspace/scratch/c3281d4eed26/thinkgo/benchmarks/business/tools/test_native.py", line 126, in test_fatal_probe_error_survives_simultaneous_process_exit
+    native.wait_for(probe, self.process)
+  File "/workspace/scratch/c3281d4eed26/thinkgo/benchmarks/business/tools/native.py", line 263, in wait_for
+    process.check()
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/unittest/mock.py", line 1139, in __call__
+    return self._mock_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/unittest/mock.py", line 1143, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/unittest/mock.py", line 1202, in _execute_mock_call
+    raise result
+RuntimeError: owned postgres exited: 7
+
+======================================================================
+ERROR: test_fatal_probe_error_survives_simultaneous_process_exit (test_native.ReadinessWaitTest.test_fatal_probe_error_survives_simultaneous_process_exit) (error='KeyboardInterrupt')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/scratch/c3281d4eed26/thinkgo/benchmarks/business/tools/native.py", line 257, in wait_for
+    ready = check(timeout=min(READINESS_PROBE_SECONDS, remaining))
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/unittest/mock.py", line 1139, in __call__
+    return self._mock_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/unittest/mock.py", line 1143, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/unittest/mock.py", line 1198, in _execute_mock_call
+    raise effect
+KeyboardInterrupt
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/workspace/scratch/c3281d4eed26/thinkgo/benchmarks/business/tools/test_native.py", line 126, in test_fatal_probe_error_survives_simultaneous_process_exit
+    native.wait_for(probe, self.process)
+  File "/workspace/scratch/c3281d4eed26/thinkgo/benchmarks/business/tools/native.py", line 263, in wait_for
+    process.check()
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/unittest/mock.py", line 1139, in __call__
+    return self._mock_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/unittest/mock.py", line 1143, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/unittest/mock.py", line 1202, in _execute_mock_call
+    raise result
+RuntimeError: owned postgres exited: 7
+
+======================================================================
+ERROR: test_wrapped_http_file_and_permission_errors_are_not_retried (test_native.PostgresStartupTest.test_wrapped_http_file_and_permission_errors_are_not_retried) (error='FileNotFoundError')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/scratch/c3281d4eed26/thinkgo/benchmarks/business/tools/test_native.py", line 321, in test_wrapped_http_file_and_permission_errors_are_not_retried
+    native.wait_for(self.environment.healthy, mock.Mock(command=["nginx"]))
+  File "/workspace/scratch/c3281d4eed26/thinkgo/benchmarks/business/tools/native.py", line 270, in wait_for
+    raise TimeoutError(f"服务启动超时: {process.command}; {last}")
+TimeoutError: 服务启动超时: ['nginx']; <urlopen error missing transport>
+
+======================================================================
+ERROR: test_wrapped_http_file_and_permission_errors_are_not_retried (test_native.PostgresStartupTest.test_wrapped_http_file_and_permission_errors_are_not_retried) (error='PermissionError')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/scratch/c3281d4eed26/thinkgo/benchmarks/business/tools/test_native.py", line 321, in test_wrapped_http_file_and_permission_errors_are_not_retried
+    native.wait_for(self.environment.healthy, mock.Mock(command=["nginx"]))
+  File "/workspace/scratch/c3281d4eed26/thinkgo/benchmarks/business/tools/native.py", line 270, in wait_for
+    raise TimeoutError(f"服务启动超时: {process.command}; {last}")
+TimeoutError: 服务启动超时: ['nginx']; <urlopen error network denied>
+
+----------------------------------------------------------------------
+Ran 2 tests in 0.032s
+
+FAILED (errors=6)

@@ -303,6 +303,47 @@ class RenderTests(unittest.TestCase):
         self.assertEqual(len(result["rounds"]), 270)
         self.assertEqual(len(render.summarize(result)["variants"]), 9)
 
+    def test_latency_outlier_keeps_small_differences_readable_and_full_range_visible(self):
+        summary = render.summarize(render.load_results(self.source, allow_synthetic=True))
+        for group in summary["groups"]:
+            group["metrics"]["p99_ms"] = {"median": 10, "min": 5, "max": 300, "n": 3}
+        unchanged = copy.deepcopy(summary)
+        pyplot = render.plotting()
+        self.addCleanup(pyplot.close, "all")
+        with mock.patch("render.save_figure") as saved:
+            render.draw_metric(summary, self.root, "p99_ms", "open", "open_p99",
+                               "Latency", "P99 (ms)", "All repeats retained")
+        figure = saved.call_args.args[0]
+        figure.canvas.draw()
+        for axis in figure.axes[:-1]:
+            lower, upper = axis.get_xlim()
+            self.assertGreater(lower, 0)
+            self.assertLessEqual(lower, 5)
+            self.assertGreaterEqual(upper, 300)
+            points = axis.transData.transform([(5, 0), (10, 0)])
+            # 慢轮仍完整显示，同时常见延迟的两倍差异至少占轴宽的十分之一。
+            self.assertGreater((points[1][0] - points[0][0]) / axis.bbox.width, 0.1)
+            self.assertIn("log", axis.get_xlabel())
+        self.assertEqual(summary, unchanged)
+
+    def test_log_latency_rejects_zero_and_preserves_missing_values(self):
+        summary = render.summarize(render.load_results(self.source, allow_synthetic=True))
+        selected = [group for group in summary["groups"] if group["model"] == "open"]
+        selected[0]["metrics"]["p99_ms"]["min"] = 0
+        pyplot = render.plotting()
+        self.addCleanup(pyplot.close, "all")
+        with self.assertRaisesRegex(ValueError, "正数"):
+            render.draw_metric(summary, self.root, "p99_ms", "open", "open_p99",
+                               "Latency", "P99 (ms)", "All repeats retained")
+        for group in selected:
+            group["metrics"]["p99_ms"] = {"median": None, "min": None, "max": None, "n": 0}
+        with mock.patch("render.save_figure") as saved:
+            render.draw_metric(summary, self.root, "p99_ms", "open", "open_p99",
+                               "Latency", "P99 (ms)", "Missing values stay N/A")
+        for axis in saved.call_args.args[0].axes[:-1]:
+            self.assertGreater(axis.get_xlim()[0], 0)
+            self.assertEqual([text.get_text() for text in axis.texts], ["N/A"] * len(summary["variants"]))
+
     def test_render_writes_shareable_graphs_and_machine_readable_tables(self):
         resource = resources_fixture(1, 0)
         resource["groups"]["application"].update(cpu_complete=False, pss_complete=False,
