@@ -150,15 +150,21 @@ jobs:
               result = json.load(report)
           stats = result["Stats"]
           issues = result.get("Issues") or []
-          for issue in issues[:20]:
+          load_errors = result.get("Golang errors") or {}
+          MAX_VISIBLE_FINDINGS = 20
+          MAX_ERROR_TEXT_LENGTH = 4096
+          print(f"安全扫描统计：{stats}", file=sys.stderr)
+          for issue in issues[:MAX_VISIBLE_FINDINGS]:
               print(
                   f"{issue.get('rule_id')}: {issue.get('file')}:{issue.get('line')} "
                   f"[{issue.get('severity')}] {issue.get('details')}",
                   file=sys.stderr,
               )
-          if len(issues) > 20:
-              print(f"另有 {len(issues) - 20} 项发现未逐条打印", file=sys.stderr)
-          if stats["files"] <= 0 or stats["found"] != 0 or result.get("Golang errors"):
+          if len(issues) > MAX_VISIBLE_FINDINGS:
+              print(f"另有 {len(issues) - MAX_VISIBLE_FINDINGS} 项发现未逐条打印", file=sys.stderr)
+          if load_errors:
+              print(f"Go 包加载错误：{str(load_errors)[:MAX_ERROR_TEXT_LENGTH]}", file=sys.stderr)
+          if stats["files"] <= 0 or stats["found"] != 0 or load_errors:
               raise SystemExit("安全扫描未覆盖源码或存在错误，拒绝发布")
           print(f"安全扫描覆盖 {stats['files']} 个源码文件，未发现问题")
           PY
