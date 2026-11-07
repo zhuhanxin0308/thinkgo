@@ -140,7 +140,8 @@ jobs:
           CGO_ENABLED=0 GOWORK=off go run -mod=readonly honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...
           GOWORK=off go run -mod=readonly github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
           gosec_report="$RUNNER_TEMP/gosec-framework.json"
-          CGO_ENABLED=0 GOWORK=off go run -mod=readonly github.com/securego/gosec/v2/cmd/gosec@v2.25.0 -fmt=json -out="$gosec_report" -exclude-dir=tmp -exclude-dir=bin ./...
+          # 保留安全扫描失败门禁，但允许先生成机器可读报告定位真实问题。
+          CGO_ENABLED=0 GOWORK=off go run -mod=readonly github.com/securego/gosec/v2/cmd/gosec@v2.25.0 -no-fail -fmt=json -out="$gosec_report" -exclude-dir=tmp -exclude-dir=bin ./...
           python3 - "$gosec_report" <<'PY'
           import json
           import sys
@@ -148,6 +149,15 @@ jobs:
           with open(sys.argv[1], encoding="utf-8") as report:
               result = json.load(report)
           stats = result["Stats"]
+          issues = result.get("Issues") or []
+          for issue in issues[:20]:
+              print(
+                  f"{issue.get('rule_id')}: {issue.get('file')}:{issue.get('line')} "
+                  f"[{issue.get('severity')}] {issue.get('details')}",
+                  file=sys.stderr,
+              )
+          if len(issues) > 20:
+              print(f"另有 {len(issues) - 20} 项发现未逐条打印", file=sys.stderr)
           if stats["files"] <= 0 or stats["found"] != 0 or result.get("Golang errors"):
               raise SystemExit("安全扫描未覆盖源码或存在错误，拒绝发布")
           print(f"安全扫描覆盖 {stats['files']} 个源码文件，未发现问题")
