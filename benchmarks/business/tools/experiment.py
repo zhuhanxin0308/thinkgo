@@ -98,6 +98,31 @@ def validate_protocol(protocol):
         if "app" in variant:
             _require(isinstance(variant["app"], str) and IDENTIFIER.fullmatch(variant["app"]) is not None,
                      "variant.app 不是合法应用名称")
+        if "label" in variant:
+            label = variant["label"]
+            _require(isinstance(label, str) and bool(label.strip()) and label.isprintable(),
+                     "variant.label 必须为非空的单行可显示文本")
+        if "command" in variant:
+            _require(variant["kind"] == "go" and isinstance(variant["command"], str) and
+                     IDENTIFIER.fullmatch(variant["command"]) is not None, "variant.command 不是合法 Go 应用名称")
+        if "source_revision" in variant:
+            revision = variant["source_revision"]
+            _require(variant["kind"] == "go" and isinstance(revision, str) and
+                     (revision == "HEAD" or re.fullmatch(r"[0-9a-f]{40}", revision)),
+                     "variant.source_revision 必须为 HEAD 或完整提交 SHA")
+    if "build_provenance" in protocol:
+        provenance = _mapping(protocol["build_provenance"], "build_provenance")
+        for field in ("go_version", "module"):
+            _require(isinstance(provenance.get(field), str) and bool(provenance[field].strip()) and
+                     provenance[field].isprintable(), f"build_provenance.{field} 不能为空")
+        settings = _mapping(provenance.get("settings"), "build_provenance.settings")
+        _require(bool(settings) and all(isinstance(key, str) and key and isinstance(value, str)
+                 for key, value in settings.items()), "构建参数必须为非空字符串映射")
+        absent = provenance.get("absent_settings", [])
+        _require(isinstance(absent, list) and all(isinstance(key, str) and bool(key) for key in absent) and
+                 len(set(absent)) == len(absent) and not set(absent) & settings.keys(),
+                 "禁止的构建参数必须为不重复字符串列表，且不能与必需参数冲突")
+        _require("load" not in identifiers, "应用变体不能占用负载器标识 load")
     if "ports" in protocol:
         ports = _mapping(protocol["ports"], "ports")
         for value in ports.values():

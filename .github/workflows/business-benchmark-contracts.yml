@@ -237,5 +237,5 @@ jobs:
           python -m pip install --only-binary=:all: --require-hashes -r benchmarks/business/tools/requirements.txt
       - name: Test controller and renderer
         working-directory: benchmarks/business/tools
-        # 只运行已变更工具及其直接调用方测试，不触发正式性能矩阵。
-        run: python -m unittest -v test_native test_run test_render
+        # 覆盖完整矩阵、实际构建来源和渲染契约；测试不会触发正式性能负载。
+        run: python -m unittest -v test_native test_run test_render test_experiment test_provenance test_cohort

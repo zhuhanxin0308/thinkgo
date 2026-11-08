@@ -5,6 +5,7 @@ import hashlib
 import json
 import gzip
 import pathlib
+import subprocess
 import tempfile
 import unittest
 from types import SimpleNamespace
@@ -12,6 +13,7 @@ from unittest import mock
 
 import run
 from run import write_json, file_digest, load_command, validate_artifacts, ensure_document, preserve_bytes
+from test_experiment import load_fixture
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -127,6 +129,103 @@ class RunTest(unittest.TestCase):
                 # 失败启动只能追加会话开始事件，不能留下成功完成的声明。
                 events = [json.loads(line)["event"] for line in (output / "progress.jsonl").read_text().splitlines()]
                 self.assertEqual(events, ["session_start"])
+
+
+class LoadLifecycleTest(unittest.TestCase):
+    """只替换进程边界，实际读取压缩报告并执行统计守恒校验。"""
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.path = pathlib.Path(temporary.name) / "load.json.gz"
+        self.report = load_fixture()
+        write_json(self.path, self.report)
+        self.protocol = json.loads((ROOT / "contracts/protocol.json").read_text())
+        self.environment = SimpleNamespace(
+            root=ROOT, protocol=self.protocol,
+            dataset=json.loads((ROOT / "contracts/dataset.json").read_text()),
+            url="http://127.0.0.1:18081",
+            application={"app": SimpleNamespace(pid=101)},
+            infrastructure={"postgres": SimpleNamespace(pid=102), "redis": SimpleNamespace(pid=103)},
+        )
+        self.variables = {"BENCH_SECRET": "private-secret", "GOMAXPROCS": "99"}
+        self.child = mock.Mock(pid=104)
+        self.child.child.wait.return_value = 0
+        self.process = self.enterContext(mock.patch.object(run, "Process", return_value=self.child))
+        self.sampler = mock.Mock()
+        self.sampler.stop.return_value = {"samples": []}
+        self.sampler_factory = self.enterContext(mock.patch("resources.Sampler", return_value=self.sampler))
+        usage = [SimpleNamespace(ru_utime=user, ru_stime=system)
+                 for user, system in [(10, 5), (20, 10), (12, 6), (21, 10.5)]]
+        self.enterContext(mock.patch.object(run.resource, "getrusage", side_effect=usage))
+        self.enterContext(mock.patch.object(run.os, "sched_getaffinity", return_value={8}))
+
+    def load(self, measured=True):
+        return run.run_load(self.environment, self.variables, self.path, "test-detail",
+                            "detail", 1, 100, measured)
+
+    def test_measurement_keeps_complete_report_and_accounts_for_drained_processes(self):
+        report, checked, usage, command = self.load()
+        self.assertEqual(report, self.report)
+        self.assertEqual(checked, {"unsuccessful": 30, "failure_fraction": 0.3})
+        self.assertEqual(usage["load_wait4_cpu_seconds"], 3)
+        self.assertEqual(usage["controller_cpu_seconds"], 1.5)
+        self.assertEqual(usage["controller_affinity"], [8])
+        self.assertEqual(self.sampler_factory.call_args.args[0], {
+            "application": [101], "postgres": [102], "redis": [103], "load": [104]})
+        self.assertEqual(self.process.call_args.args[2]["GOMAXPROCS"],
+                         str(len(self.protocol["cpu_affinity"]["load"])))
+        self.assertEqual(self.variables["GOMAXPROCS"], "99")
+        self.assertNotIn("private-secret", " ".join(command))
+        self.sampler.start.assert_called_once_with()
+        self.sampler.stop.assert_called_once_with()
+        self.child.stop.assert_called_once_with()
+
+    def test_warmup_uses_same_report_validation_without_resource_sampling(self):
+        report, checked, usage, _ = self.load(measured=False)
+        self.assertEqual(report, self.report)
+        self.assertEqual(checked["unsuccessful"], 30)
+        self.assertIsNone(usage)
+        self.sampler_factory.assert_not_called()
+        self.child.stop.assert_called_once_with()
+
+    def test_nonzero_exit_keeps_console_and_never_accepts_partial_report(self):
+        self.child.child.wait.return_value = 17
+        console = self.path.with_suffix(".console.txt")
+        console.write_text("负载初始化失败", encoding="utf-8")
+        with mock.patch.object(run, "read_report") as read, \
+                self.assertRaisesRegex(RuntimeError, "17.*负载初始化失败"):
+            self.load()
+        read.assert_not_called()
+        self.assertEqual(console.read_text(), "负载初始化失败")
+        self.sampler.stop.assert_called_once_with()
+        self.child.stop.assert_called_once_with()
+
+    def test_timeout_and_user_interrupt_both_release_sampler_and_child(self):
+        for error in [subprocess.TimeoutExpired("load", 36), KeyboardInterrupt()]:
+            with self.subTest(error=type(error).__name__):
+                self.child.reset_mock()
+                self.sampler.reset_mock()
+                self.child.child.wait.side_effect = error
+                with mock.patch.object(run, "read_report") as read, self.assertRaises(type(error)):
+                    self.load()
+                read.assert_not_called()
+                self.sampler.stop.assert_called_once_with()
+                self.child.stop.assert_called_once_with()
+
+    def test_invalid_measurement_cannot_escape_validation_after_process_cleanup(self):
+        self.path.unlink()
+        write_json(self.path, {**self.report, "canceled": True})
+        with self.assertRaises(ValueError):
+            self.load()
+        self.sampler.stop.assert_called_once_with()
+        self.child.stop.assert_called_once_with()
+
+    def test_sampler_failure_still_releases_load_process(self):
+        self.sampler.stop.side_effect = RuntimeError("采样收尾失败")
+        with self.assertRaisesRegex(RuntimeError, "采样收尾失败"):
+            self.load()
+        self.child.stop.assert_called_once_with()
 
 
 class RoundSnapshotTest(unittest.TestCase):

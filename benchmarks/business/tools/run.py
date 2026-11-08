@@ -107,7 +107,7 @@ def progress(output, event, **fields):
     print(json.dumps(record, ensure_ascii=False), flush=True)
 
 
-def identity(environment, protocol, mode):
+def identity(environment, protocol, mode, *, go_tool="go"):
     root = environment.root
     repository = root.parents[1]
     git = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repository, text=True).strip()
@@ -132,7 +132,7 @@ def identity(environment, protocol, mode):
     model = next((line.split(":", 1)[1].strip() for line in cpu.splitlines() if line.startswith("model name")), "unknown")
     memory = pathlib.Path("/proc/meminfo").read_text().splitlines()
     total_memory = next(line.split(":", 1)[1].strip() for line in memory if line.startswith("MemTotal:"))
-    return {"schema_version": 1, "mode": mode, "git_commit": git, "protocol": protocol,
+    result = {"schema_version": 1, "mode": mode, "git_commit": git, "protocol": protocol,
             "sources_sha256": source, "binaries_sha256": binaries, "runtime_configuration_sha256": runtime_configuration,
             "go_runtime_environment": {key: os.getenv(key) for key in ["GOGC", "GOMEMLIMIT", "GODEBUG", "CGO_ENABLED", "GOTRACEBACK"]},
             "host": {"kernel": platform.release(), "machine": platform.machine(), "cpu_model": model,
@@ -140,6 +140,11 @@ def identity(environment, protocol, mode):
                      "cgroup_quota": "unavailable", "exclusive_cpu_allocation": False,
                      "total_memory": total_memory,
                      "cgroup_membership": pathlib.Path("/proc/self/cgroup").read_text()}}
+    if "build_provenance" in protocol:
+        from provenance import collect
+
+        result["go_build_provenance"] = collect(repository, root, protocol, binaries, go_tool)
+    return result
 
 
 def run_load(environment, variables, path, run_id, scenario, duration, rate, measured):
@@ -166,9 +171,12 @@ def run_load(environment, variables, path, run_id, scenario, duration, rate, mea
         if status:
             raise RuntimeError(f"负载进程失败({status}): {path.with_suffix('.console.txt').read_text()}")
     finally:
-        if sampler is not None:
-            usage = sampler.stop()
-        child.stop()
+        try:
+            if sampler is not None:
+                usage = sampler.stop()
+        finally:
+            # 采样收尾失败也必须回收负载进程，避免干扰下一次恢复运行。
+            child.stop()
     after = resource.getrusage(resource.RUSAGE_CHILDREN)
     controller_after = resource.getrusage(resource.RUSAGE_SELF)
     report = read_report(path)
@@ -304,10 +312,10 @@ def verify_all(environment, output, protocol, secret):
 
 
 def execute(arguments):
-    from experiment import build_schedule, choose_rates, validate_protocol
+    from experiment import build_schedule, choose_rates, load_protocol
 
-    protocol = json.loads((ROOT / "contracts/protocol.json").read_text())
-    validate_protocol(protocol)
+    protocol_path = pathlib.Path(getattr(arguments, "protocol", None) or ROOT / "contracts/protocol.json")
+    protocol = load_protocol(protocol_path)
     if arguments.mode == "measure":
         changed = subprocess.check_output(["git", "status", "--porcelain", "--", "benchmarks/business"],
                                           cwd=ROOT.parents[1], text=True)
@@ -323,7 +331,7 @@ def execute(arguments):
     output = pathlib.Path(arguments.output).resolve()
     output.mkdir(parents=True, exist_ok=True)
     environment = Environment(ROOT, arguments.runtime, arguments.work, protocol)
-    manifest = identity(environment, protocol, arguments.mode)
+    manifest = identity(environment, protocol, arguments.mode, go_tool=getattr(arguments, "go_tool", "go"))
     manifest_path = output / "manifest.json"
     if manifest_path.exists():
         previous = json.loads(manifest_path.read_text())
@@ -332,7 +340,9 @@ def execute(arguments):
     else:
         write_json(manifest_path, manifest)
     for name in ["dataset.json", "queries.json", "schema.sql", "seed.sql", "protocol.json"]:
-        preserve_bytes(output / "contracts" / name, (ROOT / "contracts" / name).read_bytes())
+        # 明确归档实际选择的协议，不能把十配置实验错误标成默认九配置。
+        source = protocol_path if name == "protocol.json" else ROOT / "contracts" / name
+        preserve_bytes(output / "contracts" / name, source.read_bytes())
     if (output / "index.json").exists():
         index = json.loads((output / "index.json").read_text())
         for record in index["rounds"]:
@@ -388,6 +398,8 @@ def main():
     parser.add_argument("--runtime", required=True, help="原生运行依赖根目录")
     parser.add_argument("--work", required=True, help="本实验专属的运行目录")
     parser.add_argument("--output", required=True, help="新结果目录，已有证据不覆盖")
+    parser.add_argument("--protocol", help="显式实验协议；省略时使用默认完整九配置协议")
+    parser.add_argument("--go-tool", default="go", help="读取实际二进制构建来源的 Go 工具绝对路径或命令")
     parser.add_argument("--mode", choices=["verify", "pilot", "measure"], default="verify")
     parser.add_argument("--variants", default="", help="只用于验收或冒烟的逗号分隔变体ID")
     parser.add_argument("--resume", action="store_true")

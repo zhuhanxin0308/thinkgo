@@ -61,6 +61,11 @@ def finite(value, name, *, positive=False):
 
 
 def label_variant(variant):
+    if "label" in variant:
+        label = variant["label"]
+        require(isinstance(label, str) and bool(label.strip()) and label.isprintable(),
+                "配置标签必须为非空的单行可显示文本")
+        return label
     if variant["kind"] == "fpm":
         return variant["framework"] + " · PHP-FPM"
     if variant["kind"] in {"octane", "roadrunner"} or "Octane" in variant["engine"]:
@@ -153,6 +158,15 @@ def load_results(source, *, allow_synthetic=False):
         require(mode == "measure", "仅接受 measure 正式矩阵，不接收 pilot 或 verify")
     require(index["mode"] == mode, "manifest 与 index 的实验模式不一致")
     protocol = manifest["protocol"]
+    from experiment import validate_protocol
+
+    validate_protocol(protocol)
+    if "build_provenance" in protocol:
+        from provenance import validate
+
+        validate(protocol, manifest.get("go_build_provenance"), manifest.get("binaries_sha256"),
+                 manifest.get("git_commit"))
+        require(read_json(source / "contracts/protocol.json") == protocol, "归档协议与实验清单不一致")
     require(set(protocol["scenarios"]) == set(SCENARIOS) and len(protocol["scenarios"]) == len(SCENARIOS),
             "协议必须包含全部五个业务场景")
     require(protocol["repetitions"] == 3, "正式图表要求三次独立重复")
@@ -221,7 +235,7 @@ def summarize(result):
                        "label": label_variant(variant), "rate": selected[0]["rate"],
                        "round_ids": [row["id"] for row in selected],
                        "metrics": {metric: range_summary([row[metric] for row in selected]) for metric in metrics}})
-    return {"schema_version": 1, "mode": result["mode"], "source": result["source"],
+    summary = {"schema_version": 1, "mode": result["mode"], "source": result["source"],
             "evidence_sha256": result["evidence_sha256"], "repetitions": protocol["repetitions"],
             "scenarios": protocol["scenarios"], "closed_concurrency": protocol["closed_concurrency"],
             "variants": [dict(variant, label=label_variant(variant)) for variant in protocol["variants"]],
@@ -238,7 +252,12 @@ def summarize(result):
                 "peak_memory_mib": "Maximum sampled application process-tree memory including Nginx; startup before measurement is excluded.",
                 "error_percent": "Each outcome count / (planned + not_scheduled); categories remain separate.",
                 "cache_hit_percent": "cache_hits / (cache_hits + cache_misses); null means no cache-bearing responses."},
-            "groups": groups}
+             "groups": groups}
+    if "go_build_provenance" in result["manifest"]:
+        # 数据表随图表携带来源，分享图表目录时仍可追溯修复前后的真实构建。
+        summary["go_build_provenance"] = result["manifest"]["go_build_provenance"]
+        summary["host"] = result["manifest"]["host"]
+    return summary
 
 
 def write_csv(path, rows):
