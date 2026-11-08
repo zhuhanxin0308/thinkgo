@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/zhuhanxin0308/thinkgo/v3/db"
 	"github.com/zhuhanxin0308/thinkgo/v3/env"
@@ -62,6 +62,9 @@ func TestControllerViewFiltersErrorLogging(t *testing.T) {
 	}
 }
 
+// Windows 等平台的时钟精度不能保证时间戳唯一，包级序号覆盖子用例与重复运行。
+var filteredWarningConnectorSequence atomic.Uint64
+
 type filteredWarningDatabaseConnector struct {
 	failure error
 }
@@ -78,7 +81,7 @@ func TestDatabaseConnectionFiltersLoggingOnly(t *testing.T) {
 				capture := &databaseWarningCaptureDriver{}
 				logger := newCallsiteTestLogger(t, mode, capture)
 				failure := &lifecycleLogCountingError{}
-				connectorName := fmt.Sprintf("filtered_warning_%d", time.Now().UnixNano())
+				connectorName := fmt.Sprintf("filtered_warning_%d", filteredWarningConnectorSequence.Add(1))
 				if err := db.RegisterConnector(connectorName, &filteredWarningDatabaseConnector{failure: failure}); err != nil {
 					t.Fatalf("注册连接失败测试驱动失败: %v", err)
 				}
