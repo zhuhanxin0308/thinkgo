@@ -1,0 +1,94 @@
+{
+  "checks": [
+    {
+      "evidence": {
+        "audit": 0,
+        "order_items": 0,
+        "orders": 0
+      },
+      "name": "fresh_database",
+      "passed": true
+    },
+    {
+      "name": "seed_fixtures",
+      "passed": true
+    },
+    {
+      "evidence": {
+        "invalid_credentials": 4,
+        "protected_routes": 4
+      },
+      "name": "authentication",
+      "passed": true
+    },
+    {
+      "evidence": {
+        "invalid_queries": 13,
+        "ordered_unique_products": 4,
+        "pages": 2
+      },
+      "name": "catalog",
+      "passed": true
+    },
+    {
+      "evidence": {
+        "cache_sequence": [
+          "miss",
+          "hit"
+        ],
+        "product_id": 1
+      },
+      "name": "detail_cache_tenant",
+      "passed": true
+    },
+    {
+      "evidence": {
+        "items": 2,
+        "order_id": 1,
+        "total_cents": 419887
+      },
+      "name": "order_commit_replay",
+      "passed": true
+    },
+    {
+      "evidence": {
+        "created": 1,
+        "replays": 7,
+        "requests": 8
+      },
+      "name": "concurrent_idempotency",
+      "passed": true
+    },
+    {
+      "evidence": {
+        "rollback_cases": [
+          "foreign_tenant_product",
+          "insufficient_stock"
+        ]
+      },
+      "name": "transaction_rollback",
+      "passed": true
+    },
+    {
+      "evidence": {
+        "invalid_json_bodies": 7,
+        "invalid_media": 7,
+        "invalid_order_inputs": 7,
+        "oversized_rejected": true
+      },
+      "name": "input_boundaries",
+      "passed": true
+    },
+    {
+      "evidence": {
+        "closed_checked": true,
+        "ownership_checked": true,
+        "ticket_id": 1,
+        "version": 4
+      },
+      "name": "ticket_permissions_version",
+      "passed": true
+    }
+  ],
+  "passed": true
+}

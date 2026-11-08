@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "seed": 20261107,
+  "scenarios": ["catalog", "detail", "order", "ticket", "mixed"],
+  "repetitions": 3,
+  "warmup_seconds": 10,
+  "warmup_rate": 100,
+  "measurement_seconds": 30,
+  "closed_concurrency": 64,
+  "open_max_inflight": 256,
+  "open_rate_ratio": 0.5,
+  "sample_interval_seconds": 0.5,
+  "request_timeout_seconds": 5,
+  "cooldown_seconds": 1,
+  "ports": {"postgres": 15432, "redis": 16379, "application": 18080, "gateway": 18081, "fpm": 19000, "rpc": 16081},
+  "cpu_affinity": {"application": [0, 1, 2], "postgres": [3, 4, 5], "load": [6, 7], "redis": [8], "controller": [8]},
+  "postgres": {"shared_buffers": "512MB", "work_mem": "8MB", "max_connections": 96, "checkpoint_timeout": "5min", "max_wal_size": "1GB"},
+  "redis_maxmemory": "512mb",
+  "gateway_workers": 1,
+  "gateway_connections": 4096,
+  "gateway_upstream_keepalive": 64,
+  "build_provenance": {
+    "go_version": "go1.27.3",
+    "module": "github.com/zhuhanxin0308/thinkgo/benchmarks/business",
+    "absent_settings": ["-race", "-cover", "-asan", "-msan"],
+    "settings": {"-trimpath": "true", "CGO_ENABLED": "1", "GOAMD64": "v1", "GOOS": "linux", "GOARCH": "amd64"}
+  },
+  "variants": [
+    {"id": "thinkgo", "framework": "ThinkGo", "label": "ThinkGo · log.close fixed", "version": "3.0.3", "engine": "Go net/http", "kind": "go"},
+    {"id": "thinkgo-before", "framework": "ThinkGo", "label": "ThinkGo · before log.close fix", "version": "3.0.3", "engine": "Go net/http", "kind": "go", "command": "thinkgo", "source_revision": "d5460a4ec301e42e0064e686437d405c066b3228"},
+    {"id": "gin", "framework": "Gin", "version": "1.12.0", "engine": "Go net/http", "kind": "go"},
+    {"id": "echo", "framework": "Echo", "version": "5.4.4", "engine": "Go net/http", "kind": "go"},
+    {"id": "fiber", "framework": "Fiber", "version": "3.6.1", "engine": "Go fasthttp", "kind": "go"},
+    {"id": "beego", "framework": "Beego", "version": "2.3.10", "engine": "Go net/http", "kind": "go"},
+    {"id": "iris", "framework": "Iris", "version": "12.2.11", "engine": "Go net/http", "kind": "go"},
+    {"id": "thinkphp-fpm", "framework": "ThinkPHP", "version": "8.1.4", "engine": "PHP-FPM + OPcache", "kind": "fpm", "app": "thinkphp"},
+    {"id": "laravel-fpm", "framework": "Laravel", "version": "13.40.0", "engine": "PHP-FPM + OPcache", "kind": "fpm", "app": "laravel"},
+    {"id": "laravel-octane", "framework": "Laravel", "version": "13.40.0", "engine": "Octane 2.23.0 / RoadRunner 3.0.1", "kind": "octane", "app": "laravel"}
+  ],
+  "interpretation": {
+    "closed": "固定64并发的短时有效吞吐；不是框架理论最大吞吐或生产容量承诺。",
+    "open": "本次完整十配置闭环矩阵独立校准：每个场景取全部配置闭环中位有效吞吐最小值的50%，向下取整且至少1请求/秒；同一场景全部配置使用相同绝对到达率。",
+    "uncertainty": "展示三次独立重置运行的中位数及最小/最大值，不把三个样本包装成高置信度总体估计。",
+    "cache": "预热每租户100个商品；详情轨迹90%访问热点，10%按租户交错遍历全部租户的活动冷商品，遍历完整个全域冷键集合后才复用。混合场景使用独立详情序号保持90/10配比；实际命中率单独记录。",
+    "scope": "固定SQL与业务算法，框架原生HTTP路由、中间件、绑定、JSON和生命周期；不代表各自ORM或完整生态的比较。",
+    "comparison": "修复前与修复后ThinkGo使用同一业务源码、合同、负载器、构建参数及本次主机；历史实验独立保留，不以跨主机结果计算日志修复收益。"
+  }
+}
