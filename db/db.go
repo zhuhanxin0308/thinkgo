@@ -6,14 +6,17 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
 
-const defaultDatabaseOperationTimeout = 30 * time.Second
+const (
+	defaultDatabaseOperationTimeout = 30 * time.Second
+	databaseErrorLogLevel           = "error"
+	databaseSQLLogLevel             = "sql"
+)
 
 var (
 	sqlSensitiveAssignmentPattern  = regexp.MustCompile(`(?i)\b(password|passwd|token|secret|authorization|api_key|refresh_token)\b\s*=\s*[^,\s)]+`)
@@ -446,9 +449,7 @@ func (db *DB) queryContext(ctx context.Context, allowLegacy bool, sql string, ar
 	if raw, ok := connection.(ContextualRawQueryable); ok {
 		rows, err := raw.QueryContext(ctx, sql, args...)
 		if err != nil {
-			return nil, db.reportError("query", err, map[string]interface{}{
-				"sql": redactSQLText(sql, dialect), "args": redactArgCount(args),
-			})
+			return nil, db.reportRawError("query", err, sql, args, dialect)
 		}
 		if err := validateMaterializedRows(rows); err != nil {
 			return nil, db.reportError("query", err, nil)
@@ -458,10 +459,7 @@ func (db *DB) queryContext(ctx context.Context, allowLegacy bool, sql string, ar
 	if raw, ok := connection.(RawQueryable); allowLegacy && ok {
 		rows, err := raw.Query(sql, args...)
 		if err != nil {
-			return nil, db.reportError("query", err, map[string]interface{}{
-				"sql":  redactSQLText(sql, dialect),
-				"args": redactArgCount(args),
-			})
+			return nil, db.reportRawError("query", err, sql, args, dialect)
 		}
 		if err := validateMaterializedRows(rows); err != nil {
 			return nil, db.reportError("query", err, nil)
@@ -469,10 +467,7 @@ func (db *DB) queryContext(ctx context.Context, allowLegacy bool, sql string, ar
 		return rows, nil
 	}
 
-	return nil, db.reportError("query", fmt.Errorf("%w: 当前连接不支持可取消的原生查询", ErrUnsupportedFeature), map[string]interface{}{
-		"sql":  redactSQLText(sql, dialect),
-		"args": redactArgCount(args),
-	})
+	return nil, db.reportRawError("query", fmt.Errorf("%w: 当前连接不支持可取消的原生查询", ErrUnsupportedFeature), sql, args, dialect)
 }
 
 // Execute 执行原生 SQL 命令；传统驱动可继续使用 RawQueryable，
@@ -516,27 +511,19 @@ func (db *DB) executeContext(ctx context.Context, allowLegacy bool, sql string, 
 	if raw, ok := connection.(ContextualRawQueryable); ok {
 		affected, err := raw.ExecuteContext(ctx, sql, args...)
 		if err != nil {
-			return 0, db.reportError("execute", err, map[string]interface{}{
-				"sql": redactSQLText(sql, dialect), "args": redactArgCount(args),
-			})
+			return 0, db.reportRawError("execute", err, sql, args, dialect)
 		}
 		return affected, nil
 	}
 	if raw, ok := connection.(RawQueryable); allowLegacy && ok {
 		affected, err := raw.Execute(sql, args...)
 		if err != nil {
-			return 0, db.reportError("execute", err, map[string]interface{}{
-				"sql":  redactSQLText(sql, dialect),
-				"args": redactArgCount(args),
-			})
+			return 0, db.reportRawError("execute", err, sql, args, dialect)
 		}
 		return affected, nil
 	}
 
-	return 0, db.reportError("execute", fmt.Errorf("%w: 当前连接不支持可取消的原生命令", ErrUnsupportedFeature), map[string]interface{}{
-		"sql":  redactSQLText(sql, dialect),
-		"args": redactArgCount(args),
-	})
+	return 0, db.reportRawError("execute", fmt.Errorf("%w: 当前连接不支持可取消的原生命令", ErrUnsupportedFeature), sql, args, dialect)
 }
 
 // databaseOperationContext 为未显式设置截止时间的原生 SQL 操作提供默认超时。
@@ -545,17 +532,6 @@ func databaseOperationContext(ctx context.Context) (context.Context, context.Can
 		return ctx, func() {}
 	}
 	return context.WithTimeout(ctx, defaultDatabaseOperationTimeout)
-}
-
-// redactDataKeys 仅保留写入数据的字段名用于排障，绝不记录字段值，
-// 避免密码、令牌、个人信息等通过错误日志泄露。
-func redactDataKeys(data map[string]interface{}) map[string]interface{} {
-	keys := make([]string, 0, len(data))
-	for key := range data {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	return map[string]interface{}{"fields": keys}
 }
 
 // redactArgCount 把参数列表降级为数量描述，避免把绑定值（可能含敏感数据）写入日志。
@@ -600,13 +576,50 @@ func (db *DB) reportError(operation string, err error, ctx map[string]interface{
 	if err == nil {
 		return nil
 	}
+	return reportDatabaseError(db.errorLogger(), operation, err, ctx)
+}
 
-	var logger Logger
-	if db != nil {
-		db.mu.RLock()
-		logger = db.logger
-		db.mu.RUnlock()
+// errorLogger 返回已经通过级别检查的日志快照，不在数据库锁内调用扩展方法。
+func (db *DB) errorLogger() Logger {
+	if db == nil {
+		return nil
 	}
+	db.mu.RLock()
+	logger := db.logger
+	db.mu.RUnlock()
+	if !databaseLogLevelEnabled(logger, databaseErrorLogLevel) {
+		return nil
+	}
+	return logger
+}
+
+// databaseLogLevelEnabled 仅探测可选过滤能力，未实现该能力的旧日志器保持原行为。
+func databaseLogLevelEnabled(logger Logger, level string) bool {
+	if logger == nil {
+		return false
+	}
+	if filter, ok := logger.(interface{ IsLevelEnabled(string) bool }); ok {
+		return filter.IsLevelEnabled(level)
+	}
+	return true
+}
+
+// reportRawError 在确认日志会被接收后才脱敏 SQL 和格式化参数数量。
+func (db *DB) reportRawError(operation string, err error, statement string, args []interface{}, dialect string) error {
+	if err == nil {
+		return nil
+	}
+	logger := db.errorLogger()
+	if logger == nil {
+		return err
+	}
+	return reportDatabaseError(logger, operation, err, map[string]interface{}{
+		"sql": redactSQLText(statement, dialect), "args": redactArgCount(args),
+	})
+}
+
+// reportDatabaseError 复用已检查的日志快照，防止上下文构造期间的日志替换改变本次接收者。
+func reportDatabaseError(logger Logger, operation string, err error, ctx map[string]interface{}) error {
 	if logger != nil {
 		logCtx := map[string]interface{}{
 			"component": "db",
@@ -637,26 +650,29 @@ func (db *DB) traceQueryOperation(operation string, ctx map[string]interface{}) 
 
 // queryLoggingEnabled 在构造诊断上下文前读取开关，避免关闭诊断时产生脱敏和 map 分配。
 func (db *DB) queryLoggingEnabled() bool {
-	if db == nil {
-		return false
-	}
-	db.mu.RLock()
-	enabled := db.queryLogging
-	db.mu.RUnlock()
-	return enabled
+	return db.queryLogger() != nil
 }
 
-// reportQuery 只记录脱敏后的查询形状和耗时，不记录任何绑定值。
-func (db *DB) reportQuery(operation string, duration time.Duration, ctx map[string]interface{}) {
+// queryLogger 同时检查诊断配置、SQL 输出能力和级别；这些条件只影响日志，不影响查询执行。
+func (db *DB) queryLogger() QueryLogger {
 	if db == nil {
-		return
+		return nil
 	}
 	db.mu.RLock()
 	enabled := db.queryLogging
 	logger := db.logger
 	db.mu.RUnlock()
 	queryLogger, ok := logger.(QueryLogger)
-	if !enabled || !ok || queryLogger == nil {
+	if !enabled || !ok || !databaseLogLevelEnabled(logger, databaseSQLLogLevel) {
+		return nil
+	}
+	return queryLogger
+}
+
+// reportQuery 只记录脱敏后的查询形状和耗时，不记录任何绑定值。
+func (db *DB) reportQuery(operation string, duration time.Duration, ctx map[string]interface{}) {
+	queryLogger := db.queryLogger()
+	if queryLogger == nil {
 		return
 	}
 	logContext := map[string]interface{}{

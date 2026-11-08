@@ -87,6 +87,7 @@ type Log struct {
 	channels         map[string]*Log
 	parent           *Log
 	levels           atomic.Pointer[levelSnapshot]
+	disabled         bool // 仅在构造时设置，后续级别配置和驱动注册不能重新启用。
 	callerEnabled    bool
 	asyncCh          chan *LogEntry
 	flushCh          chan chan struct{}
@@ -124,6 +125,14 @@ func NewLog(drivers ...Driver) *Log {
 		location:       time.UTC,
 	}
 	logger.levels.Store(newLevelSnapshot(nil))
+	return logger
+}
+
+// NewDisabledLog 创建永久忽略本实例日志记录的管理器，且不启动异步队列。
+// 它仍负责关闭显式添加的驱动和命名通道；命名通道保持自身独立的级别配置。
+func NewDisabledLog() *Log {
+	logger := NewLog()
+	logger.disabled = true
 	return logger
 }
 
@@ -199,7 +208,7 @@ func (l *Log) SetLevels(levels []string) {
 
 // IsLevelEnabled 判断日志级别是否启用，读取不可变快照时不获取互斥锁。
 func (l *Log) IsLevelEnabled(level string) bool {
-	if l == nil {
+	if l == nil || l.disabled {
 		return false
 	}
 	snapshot := l.levels.Load()
@@ -440,8 +449,11 @@ func (l *Log) isCallerEnabled() bool {
 	return l.callerEnabled
 }
 
-// ensureAsyncStarted 懒启动异步刷盘协程，并在关闭后禁止再次启动。
+// ensureAsyncStarted 懒启动异步刷盘协程，显式禁用或关闭后禁止启动。
 func (l *Log) ensureAsyncStarted() {
+	if l.disabled {
+		return
+	}
 	l.asyncOnce.Do(func() {
 		l.stateMu.Lock()
 		defer l.stateMu.Unlock()

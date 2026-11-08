@@ -19,6 +19,7 @@ import (
 
 	"github.com/quic-go/quic-go/http3"
 	"github.com/zhuhanxin0308/thinkgo/v3"
+	frameworkLog "github.com/zhuhanxin0308/thinkgo/v3/log"
 )
 
 type serverResult struct {
@@ -448,7 +449,7 @@ func (h *Http) logServerStarted(address string) {
 		return
 	}
 	writeServerListeningAddress(h.startupOutput, address, h.srvConf.EnableTLS)
-	if h.log == nil {
+	if h.log == nil || !h.log.IsLevelEnabled(frameworkLog.LevelInfo) {
 		return
 	}
 	h.log.InfoCtx("HTTP 服务已启动", map[string]interface{}{

@@ -35,7 +35,7 @@ func (h *Http) warnApplicationRunListeners() {
 		return
 	}
 	dispatcher, logger := h.event, h.log
-	if dispatcher == nil || logger == nil || !dispatcher.HasApplicationListener(event.EventHttpRun) {
+	if dispatcher == nil || logger == nil || !logger.IsLevelEnabled(frameworklog.LevelWarning) || !dispatcher.HasApplicationListener(event.EventHttpRun) {
 		return
 	}
 	if !h.httpRunWarning.claim(dispatcher, logger) {

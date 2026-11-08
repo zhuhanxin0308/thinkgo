@@ -896,7 +896,7 @@ func isNilReflectValue(value reflect.Value) bool {
 }
 
 func (h *Http) dispatchInternalError(handler string, err error) *context.Response {
-	if h.log != nil && err != nil {
+	if h.log != nil && err != nil && h.log.IsLevelEnabled(frameworkLog.LevelError) {
 		h.log.ErrorCtx("HTTP 控制器分发失败", map[string]interface{}{
 			"handler": handler,
 			"error":   frameworkLog.SanitizeErrorText(err.Error()),

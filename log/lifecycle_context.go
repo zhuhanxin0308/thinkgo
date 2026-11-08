@@ -134,6 +134,16 @@ func (l *Log) Flush(ctx context.Context) error {
 	if l == nil {
 		return ErrLogClosed
 	}
+	if l.disabled {
+		// 禁用实例没有待刷盘条目，但真实关闭后的状态错误仍需保留。
+		l.stateMu.RLock()
+		closed := l.closed
+		l.stateMu.RUnlock()
+		if closed {
+			return ErrLogClosed
+		}
+		return nil
+	}
 	l.ensureAsyncStarted()
 
 	flushed := make(chan struct{}, 1)

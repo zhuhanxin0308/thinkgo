@@ -11,12 +11,10 @@ import (
 	"io"
 	"net/http"
 	"reflect"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/zhuhanxin0308/thinkgo/v3/cookie"
-	frameworklog "github.com/zhuhanxin0308/thinkgo/v3/log"
 )
 
 const (
@@ -483,7 +481,7 @@ func (s *Session) regenerateLocked() error {
 			return encodeRevokedEnvelope(s.config, s.nowTime())
 		})
 		if err != nil {
-			return s.reportError("撤销旧 Session ID 失败", err, map[string]interface{}{"session_id": snapshot.ID})
+			return s.reportIDError("撤销旧 Session ID 失败", err, snapshot.ID)
 		}
 	}
 	s.mu.Lock()
@@ -548,7 +546,7 @@ func (s *Session) Destroy() error {
 			s.mu.Lock()
 			s.destroying = false
 			s.mu.Unlock()
-			return s.reportError("撤销 Session 失败", err, map[string]interface{}{"session_id": snapshot.ID})
+			return s.reportIDError("撤销 Session 失败", err, snapshot.ID)
 		}
 	}
 	s.mu.Lock()
@@ -643,7 +641,7 @@ func (s *Session) bootstrapID(id string, markInvalid bool) error {
 	}
 	content, stored, err := s.readDriver(id)
 	if err != nil {
-		return s.reportError("读取 Session 存储失败", err, map[string]interface{}{"session_id": id})
+		return s.reportIDError("读取 Session 存储失败", err, id)
 	}
 	if !stored {
 		if s.config.RejectUnknownID {
@@ -659,7 +657,7 @@ func (s *Session) bootstrapID(id string, markInvalid bool) error {
 	}
 	envelope, err := decodeSessionEnvelope(content, s.config.MaxDataBytes)
 	if err != nil {
-		return s.reportError("解析 Session 存储失败", err, map[string]interface{}{"session_id": id})
+		return s.reportIDError("解析 Session 存储失败", err, id)
 	}
 	if envelope.Revoked || sessionEnvelopeExpired(envelope, s.nowTime()) {
 		s.invalidCookie = true
@@ -874,35 +872,6 @@ func (s *Session) nowLocked() time.Time {
 		return time.Now()
 	}
 	return s.now()
-}
-
-func (s *Session) reportError(message string, err error, context map[string]interface{}) error {
-	if err == nil {
-		return nil
-	}
-	s.mu.RLock()
-	logger, sessionID := s.logger, s.id
-	s.mu.RUnlock()
-	if logger != nil {
-		logContext := map[string]interface{}{"component": "session"}
-		detail := fmt.Sprintf("%s: %v", message, err)
-		if sessionID != "" {
-			detail = strings.ReplaceAll(detail, sessionID, "[REDACTED]")
-		}
-		for key, value := range context {
-			if strings.Contains(strings.ToLower(key), "session") {
-				logContext[key] = "[REDACTED]"
-				if id, ok := value.(string); ok && id != "" {
-					detail = strings.ReplaceAll(detail, id, "[REDACTED]")
-				}
-				continue
-			}
-			logContext[key] = value
-		}
-		// Logger is an extension boundary: sanitize before invoking custom implementations.
-		logger.ErrorCtx(frameworklog.SanitizeErrorTextFully(detail), logContext)
-	}
-	return err
 }
 
 func applySessionSnapshot(base map[string]json.RawMessage, snapshot saveSnapshot) map[string]json.RawMessage {

@@ -387,7 +387,7 @@ func (app *App) recordStartupError(err error) {
 }
 
 func (app *App) logLifecycleError(message string, err error) {
-	if app.log != nil && err != nil {
+	if app.log != nil && err != nil && app.log.IsLevelEnabled(log.LevelError) {
 		app.log.Error(message + ": " + log.SanitizeErrorText(err.Error()))
 	}
 }

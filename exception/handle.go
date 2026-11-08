@@ -295,6 +295,10 @@ func (h *Handle) Report(err interface{}) {
 	if h == nil || h.Log == nil {
 		return
 	}
+	// 完全关闭报告时也跳过错误链分类，避免仅为丢弃日志创建反射目标和上下文。
+	if !exceptionLogLevelEnabled(h.Log, frameworkLog.LevelError) && !exceptionLogLevelEnabled(h.Log, frameworkLog.LevelWarning) {
+		return
+	}
 	if business := asBusinessException(err); business != nil {
 		h.reportBusinessException(business)
 		return
@@ -307,6 +311,9 @@ func (h *Handle) Report(err interface{}) {
 		h.reportHTTPException(httpException)
 		return
 	}
+	if !exceptionLogLevelEnabled(h.Log, frameworkLog.LevelError) {
+		return
+	}
 
 	h.Log.ErrorCtx(safeExceptionLogText(err), map[string]interface{}{
 		"stack": string(debug.Stack()),
@@ -315,6 +322,9 @@ func (h *Handle) Report(err interface{}) {
 
 func (h *Handle) reportHTTPException(err *HttpException) {
 	if h == nil || h.Log == nil || err == nil {
+		return
+	}
+	if !exceptionLogLevelEnabled(h.Log, exceptionStatusLogLevel(err.StatusCode)) {
 		return
 	}
 
@@ -328,7 +338,7 @@ func (h *Handle) reportHTTPException(err *HttpException) {
 }
 
 func (h *Handle) reportValidateException(err *ValidateException) {
-	if h == nil || h.Log == nil || err == nil {
+	if h == nil || err == nil || !exceptionLogLevelEnabled(h.Log, frameworkLog.LevelWarning) {
 		return
 	}
 
@@ -344,6 +354,9 @@ func (h *Handle) reportBusinessException(err *BusinessException) {
 	}
 
 	status := err.StatusCode()
+	if !exceptionLogLevelEnabled(h.Log, exceptionStatusLogLevel(status)) {
+		return
+	}
 	ctx := map[string]interface{}{
 		"code":   err.Code,
 		"status": status,

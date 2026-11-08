@@ -234,7 +234,7 @@ func (app *App) LoadRoutes() error {
 		}
 		if err := app.loadRouteNameCache(); err != nil && app.log != nil {
 			// 缓存损坏时保留编译路由，保证可重新执行优化命令修复产物。
-			app.log.Warning(fmt.Sprintf("命名路由缓存未启用，使用编译路由: %v", err))
+			app.log.Warningf("命名路由缓存未启用，使用编译路由: %v", err)
 		}
 	})
 	return app.routeLoadErr
