@@ -78,9 +78,12 @@ def validate_report(result: object) -> None:
         raise ValueError("安全扫描未覆盖源码或存在错误，拒绝发布")
 
 
-def scan_module(module: Path, report_path: Path) -> None:
+def scan_module(module: Path, report_path: Path, *, nested: bool = False) -> None:
     """只读解析本模块依赖；保留扫描器退出失败，不复用旧报告。"""
     environment = {**os.environ, "GOWORK": "off", "CGO_ENABLED": "0"}
+    if nested:
+        # 中文注释：嵌套基准模块保留冻结的 go.mod 版本，仅该模块允许自动获取工具链。
+        environment["GOTOOLCHAIN"] = "auto"
     packages = subprocess.run(
         ["go", "list", "-mod=readonly", "-f", "{{.Dir}}", "./..."],
         cwd=module, env=environment, check=True, stdout=subprocess.PIPE, text=True,
@@ -110,7 +113,7 @@ def run_scans(repository: Path, reports_directory: Path) -> bool:
         try:
             module = (repository / relative).resolve()
             module.relative_to(repository)
-            scan_module(module, report_path)
+            scan_module(module, report_path, nested=relative != Path("."))
         except (OSError, subprocess.CalledProcessError, ValueError) as error:
             passed = False
             print(f"模块 {str(relative)!r} 未通过：{error!r}", file=sys.stderr)
