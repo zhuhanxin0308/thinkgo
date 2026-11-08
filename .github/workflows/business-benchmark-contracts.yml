@@ -1,0 +1,43 @@
+name: Business benchmark response-contract tests
+
+on:
+  pull_request:
+    branches:
+      - bench/real-business-20261107
+    paths:
+      - 'benchmarks/business/go/**'
+      - '.github/workflows/business-benchmark-contracts.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: business-contracts-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  response-contracts:
+    name: Go loadrun response contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GOTOOLCHAIN: local
+      GOWORK: "off"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: benchmarks/business/go/go.mod
+          cache-dependency-path: benchmarks/business/go/go.sum
+          check-latest: false
+      - name: Validate response contracts under race detector
+        working-directory: benchmarks/business/go
+        run: go test -mod=readonly -race -count=1 ./internal/loadrun
+      - name: Check response contract static analysis
+        working-directory: benchmarks/business/go
+        run: go vet -mod=readonly ./internal/loadrun
