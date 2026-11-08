@@ -1,12 +1,11 @@
 name: Business benchmark response-contract tests
 
 on:
+  # 根框架通过本地 replace 被适配器使用，所有 PR 都需要验证真实依赖组合。
   pull_request:
+  push:
     branches:
-      - bench/real-business-20261107
-    paths:
-      - 'benchmarks/business/go/**'
-      - '.github/workflows/business-benchmark-contracts.yml'
+      - main
   workflow_dispatch:
 
 permissions:
@@ -14,16 +13,52 @@ permissions:
 
 concurrency:
   group: business-contracts-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   response-contracts:
-    name: Go loadrun response contracts
+    name: Go business contracts and package coverage
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       GOTOOLCHAIN: local
       GOWORK: "off"
+      CGO_ENABLED: "1"
+      BENCH_INTEGRATION: "1"
+      BENCH_ADDR: 127.0.0.1:18080
+      BENCH_CONTRACT_DIR: ${{ github.workspace }}/benchmarks/business/contracts
+      BENCH_DATABASE_URL: postgres://benchmark:benchmark-ci-password@127.0.0.1:5432/benchmark_ci?sslmode=disable
+      BENCH_REDIS_ADDR: 127.0.0.1:6379
+      BENCH_NAMESPACE: bench:ci
+      # 只用于本 job 的临时服务，不能作为部署凭据使用。
+      BENCH_SECRET: ci-only-benchmark-signing-key-never-use-in-production
+      BENCH_POSTGRES_USER: benchmark
+      BENCH_POSTGRES_DATABASE: benchmark_ci
+      BENCH_MINIMUM_COVERAGE: "80"
+    services:
+      postgres:
+        # 复用框架 CI 已固定的服务镜像；本任务验证正确性，不重新测量性能。
+        image: postgres:18.6-alpine3.23@sha256:697c180dbf244d3ce4a8f4cbc0156cde840af055c1bf8b76aebe422a4822086f
+        env:
+          POSTGRES_DB: benchmark_ci
+          POSTGRES_USER: benchmark
+          POSTGRES_PASSWORD: benchmark-ci-password
+        ports:
+          - 127.0.0.1:5432:5432
+        options: >-
+          --health-cmd "pg_isready -U benchmark -d benchmark_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 12
+      redis:
+        image: redis:8.6.6-alpine3.23@sha256:75934ddb37bfaebe3b4082ba673cac39f66495244134f33dd0a502ce03cdcd36
+        ports:
+          - 127.0.0.1:6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -35,9 +70,172 @@ jobs:
           go-version-file: benchmarks/business/go/go.mod
           cache-dependency-path: benchmarks/business/go/go.sum
           check-latest: false
-      - name: Validate response contracts under race detector
+      - name: Record tested source and toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            git rev-parse HEAD
+            go version
+          } | tee "$RUNNER_TEMP/business-checkout.txt"
+      - name: Prepare isolated business database
+        shell: bash
+        env:
+          BENCH_POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import pathlib
+          import subprocess
+
+          contracts = pathlib.Path(os.environ["BENCH_CONTRACT_DIR"])
+          dataset = json.loads((contracts / "dataset.json").read_text(encoding="utf-8"))
+          command = [
+              "docker", "exec", "-i", os.environ["BENCH_POSTGRES_CONTAINER"],
+              "psql", "-X", "--set", "ON_ERROR_STOP=1", "--single-transaction",
+              "--username", os.environ["BENCH_POSTGRES_USER"],
+              "--dbname", os.environ["BENCH_POSTGRES_DATABASE"],
+          ]
+          subprocess.run(command, input=(contracts / "schema.sql").read_bytes(), check=True)
+          # 与原生运行器一致，从共同数据合同读取整数参数，禁止另造缩小版种子。
+          variables = [
+              argument
+              for key, value in dataset.items()
+              if type(value) is int
+              for argument in ("--set", f"{key}={value}")
+          ]
+          subprocess.run(
+              command + variables,
+              input=(contracts / "seed.sql").read_bytes(),
+              check=True,
+          )
+          PY
+      - name: Validate business contracts under race detector
         working-directory: benchmarks/business/go
-        run: go test -mod=readonly -race -count=1 ./internal/loadrun
-      - name: Check response contract static analysis
+        shell: bash
+        run: |
+          set -euo pipefail
+          go list -mod=readonly ./internal/... ./cmd/load > "$RUNNER_TEMP/business-packages.txt"
+          # 父适配器包会执行六个子包的代码，必须显式纳入跨包覆盖统计。
+          go test -json -mod=readonly -race -shuffle=on -count=1 \
+            -covermode=atomic -coverpkg=./internal/...,./cmd/load \
+            -coverprofile="$RUNNER_TEMP/business.coverprofile" \
+            ./internal/... ./cmd/load | tee "$RUNNER_TEMP/business-tests.jsonl"
+          go tool cover -func="$RUNNER_TEMP/business.coverprofile" | tee "$RUNNER_TEMP/business-coverage.txt"
+      - name: Enforce integration execution and package coverage
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import pathlib
+
+          temporary = pathlib.Path(os.environ["RUNNER_TEMP"])
+          packages = set((temporary / "business-packages.txt").read_text().splitlines())
+          minimum = int(os.environ["BENCH_MINIMUM_COVERAGE"])
+          blocks = {}
+          profile = (temporary / "business.coverprofile").read_text().splitlines()
+          if not profile or profile[0] != "mode: atomic":
+              raise SystemExit("缺少有效的 atomic 覆盖数据")
+          for line in profile[1:]:
+              location, statements_text, count_text = line.split()
+              statements, count = int(statements_text), int(count_text)
+              filename, _ = location.rsplit(":", 1)
+              package = filename.rsplit("/", 1)[0]
+              if package not in packages or statements < 0 or count < 0:
+                  raise SystemExit(f"覆盖数据包含非法包或计数: {line}")
+              previous = blocks.get(location)
+              if previous is not None and previous[:2] != (package, statements):
+                  raise SystemExit(f"同一源码块的覆盖定义不一致: {location}")
+              # 同一源码块可能被多个包的测试执行，只计一次语句权重。
+              covered = count > 0 or (previous is not None and previous[2])
+              blocks[location] = (package, statements, covered)
+          totals = {package: [0, 0] for package in packages}
+          for package, statements, covered in blocks.values():
+              totals[package][0] += statements
+              totals[package][1] += statements if covered else 0
+          failures = []
+          for package in sorted(packages):
+              total, covered = totals[package]
+              if total == 0:
+                  failures.append(f"{package}: 缺少可执行语句覆盖")
+                  continue
+              print(f"{package}: {covered}/{total} = {covered * 100 / total:.2f}%")
+              if covered * 100 < minimum * total:
+                  failures.append(f"{package}: 未达到 {minimum}%")
+          events = [
+              json.loads(line)
+              for line in (temporary / "business-tests.jsonl").read_text().splitlines()
+              if line.strip()
+          ]
+          required_tests = {
+              "/internal/business": {
+                  "TestServiceCatalogAndRealCache",
+                  "TestServiceOrderIdempotencyRollbackAndInventory",
+                  "TestServiceConcurrentIdempotencyHasOneEffect",
+                  "TestServiceTicketOwnershipAndCancellation",
+              },
+              "/internal/serve": {
+                  "TestExecuteCanceledContextDoesNotCallFactory",
+                  "TestExecuteFactoryFailureClosesRealDependencies",
+                  "TestExecuteClosesRealDependenciesAfterApplication",
+              },
+          }
+          passed = {
+              (event.get("Package"), event.get("Test"))
+              for event in events
+              if event.get("Action") == "pass"
+          }
+          for suffix, names in required_tests.items():
+              package = next((item for item in packages if item.endswith(suffix)), None)
+              for name in sorted(names):
+                  if (package, name) not in passed:
+                      failures.append(f"真实集成测试未通过或被跳过: {suffix}/{name}")
+          if failures:
+              raise SystemExit("\n".join(failures))
+          PY
+      - name: Check nested module static analysis and applications
         working-directory: benchmarks/business/go
-        run: go vet -mod=readonly ./internal/loadrun
+        shell: bash
+        run: |
+          set -euo pipefail
+          go vet -mod=readonly ./...
+          go build -mod=readonly ./cmd/...
+      - name: Preserve current validation evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: business-validation-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/business-checkout.txt
+            ${{ runner.temp }}/business-packages.txt
+            ${{ runner.temp }}/business-tests.jsonl
+            ${{ runner.temp }}/business.coverprofile
+            ${{ runner.temp }}/business-coverage.txt
+
+  python-tools:
+    name: Business controller and renderer tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Setup Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: benchmarks/business/tools/requirements.txt
+      - name: Install locked tool dependencies
+        run: |
+          python -m pip install --only-binary=:all: --require-hashes -r benchmarks/business/tools/requirements.txt
+      - name: Test controller and renderer
+        working-directory: benchmarks/business/tools
+        # 只运行已变更工具及其直接调用方测试，不触发正式性能矩阵。
+        run: python -m unittest -v test_native test_run test_render

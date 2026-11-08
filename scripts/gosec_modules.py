@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 
-GOSEC_TOOL = "github.com/securego/gosec/v2/cmd/gosec@v2.25.0"
+GOSEC_TOOL = "github.com/securego/gosec/v2/cmd/gosec@v2.30.0"
 EXCLUDED_PARTS = frozenset({"vendor", "testdata", "tmp", "bin"})
 MAX_VISIBLE_FINDINGS = 20
 MAX_ERROR_TEXT_LENGTH = 4096
@@ -55,6 +55,20 @@ def package_directories(raw_paths: str, module: Path) -> list[str]:
     return directories
 
 
+def module_package_patterns(directories: list[str], module: Path) -> list[str]:
+    """将已核验的绝对目录改为模块相对包模式，避免 go/packages 构造 command-line-arguments。"""
+    module = module.resolve()
+    # 中文注释：再次验证目录归属，禁止外部调用绕过前面的 go list 边界检查。
+    checked = package_directories("\n".join(directories), module)
+    if checked != directories or len(set(checked)) != len(checked):
+        raise ValueError("扫描目录未完整通过归属校验或存在重复")
+    patterns = []
+    for directory in checked:
+        relative = Path(directory).relative_to(module)
+        patterns.append("." if relative == Path(".") else f"./{relative.as_posix()}")
+    return patterns
+
+
 def validate_report(result: object) -> None:
     """缺字段、空覆盖、发现、加载错误及格式错误均不能通过门禁。"""
     if not isinstance(result, dict) or not {"Stats", "Issues", "Golang errors"}.issubset(result):
@@ -78,17 +92,21 @@ def validate_report(result: object) -> None:
         raise ValueError("安全扫描未覆盖源码或存在错误，拒绝发布")
 
 
-def scan_module(module: Path, report_path: Path) -> None:
+def scan_module(module: Path, report_path: Path, *, nested: bool = False) -> None:
     """只读解析本模块依赖；保留扫描器退出失败，不复用旧报告。"""
     environment = {**os.environ, "GOWORK": "off", "CGO_ENABLED": "0"}
+    if nested:
+        # 中文注释：嵌套基准模块保留冻结的 go.mod 版本，仅该模块允许自动获取工具链。
+        environment["GOTOOLCHAIN"] = "auto"
     packages = subprocess.run(
         ["go", "list", "-mod=readonly", "-f", "{{.Dir}}", "./..."],
         cwd=module, env=environment, check=True, stdout=subprocess.PIPE, text=True,
     )
     directories = package_directories(packages.stdout, module)
+    patterns = module_package_patterns(directories, module)
     report_path.unlink(missing_ok=True)
     scanned = subprocess.run(
-        ["go", "run", "-mod=readonly", GOSEC_TOOL, "-no-fail", "-fmt=json", f"-out={report_path}", *directories],
+        ["go", "run", "-mod=readonly", GOSEC_TOOL, "-no-fail", "-fmt=json", f"-out={report_path}", *patterns],
         cwd=module, env=environment, check=False,
     )
     with report_path.open(encoding="utf-8") as report:
@@ -110,7 +128,7 @@ def run_scans(repository: Path, reports_directory: Path) -> bool:
         try:
             module = (repository / relative).resolve()
             module.relative_to(repository)
-            scan_module(module, report_path)
+            scan_module(module, report_path, nested=relative != Path("."))
         except (OSError, subprocess.CalledProcessError, ValueError) as error:
             passed = False
             print(f"模块 {str(relative)!r} 未通过：{error!r}", file=sys.stderr)

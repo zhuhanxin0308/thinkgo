@@ -126,11 +126,19 @@ func (histogram *latencyHistogram) record(duration time.Duration) {
 	}
 }
 
+// histogramCount 拒绝异常的负样本数，防止有符号整数转换产生虚假的超大计数。
+func histogramCount(total int64) uint64 {
+	if total < 0 {
+		return 0
+	}
+	return uint64(total) // #nosec G115 -- 非负的 int64 计数可以无损表示为 uint64
+}
+
 func (histogram *latencyHistogram) report() HistogramReport {
 	const microsecondsPerMillisecond = float64(time.Millisecond / time.Microsecond)
 	value := histogram.histogram
 	return HistogramReport{
-		Count: uint64(value.TotalCount()), P50MS: float64(value.ValueAtPercentile(50)) / microsecondsPerMillisecond,
+		Count: histogramCount(value.TotalCount()), P50MS: float64(value.ValueAtPercentile(50)) / microsecondsPerMillisecond,
 		P95MS: float64(value.ValueAtPercentile(95)) / microsecondsPerMillisecond,
 		P99MS: float64(value.ValueAtPercentile(99)) / microsecondsPerMillisecond,
 		MaxMS: float64(value.Max()) / microsecondsPerMillisecond, MeanMS: value.Mean() / microsecondsPerMillisecond,
