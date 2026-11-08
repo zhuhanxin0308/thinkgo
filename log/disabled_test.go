@@ -135,6 +135,7 @@ func TestDisabledLogContextValidationAndFiltering(t *testing.T) {
 func TestDisabledLogFlushPreservesCloseContract(t *testing.T) {
 	logger := NewDisabledLog()
 	t.Cleanup(func() { closeTestLogger(t, logger) })
+	//lint:ignore SA1012 此处刻意传入 nil，验证关闭接口拒绝空上下文且不会提前关闭日志器。
 	if err := logger.CloseContext(nil); !errors.Is(err, ErrInvalidLogCloseContext) {
 		t.Fatalf("nil 关闭上下文必须返回参数错误，实际为 %v", err)
 	}
@@ -260,6 +261,7 @@ func TestDisabledLogConcurrentConfigurationAndClose(t *testing.T) {
 				if err := logger.RecordContext(context.Background(), "并发记录", LevelInfo, nil); err != nil {
 					t.Errorf("被配置过滤的记录不应失败: %v", err)
 				}
+				//lint:ignore SA1012 此处刻意传入 nil，验证兼容刷新入口在并发关闭时仍返回成功或 ErrLogClosed。
 				if err := logger.Flush(nil); err != nil && !errors.Is(err, ErrLogClosed) {
 					t.Errorf("并发刷新返回意外错误: %v", err)
 				}
