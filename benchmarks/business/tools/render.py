@@ -507,7 +507,7 @@ def note_panel(axis, summary, model, extra, axis_scale="linear"):
 
 
 def draw_metric(summary, destination, metric, model, name, title, unit, note):
-    from matplotlib.ticker import LogLocator, NullFormatter, ScalarFormatter
+    from matplotlib.ticker import EngFormatter, LogLocator, NullFormatter
 
     pyplot = plotting()
     # 尾延迟跨数量级时保留慢轮，同时让常见延迟之间的差异可读。
@@ -545,10 +545,8 @@ def draw_metric(summary, destination, metric, model, name, title, unit, note):
             axis.set_xlim((minimum / AXIS_LIMIT_PADDING, maximum * AXIS_LIMIT_PADDING)
                           if maximum > 0 else EMPTY_LOG_LIMITS)
             axis.xaxis.set_major_locator(LogLocator(base=10, subs=(1, 2, 5), numticks=9))
-            formatter = ScalarFormatter()
-            formatter.set_scientific(False)
-            formatter.set_useOffset(False)
-            axis.xaxis.set_major_formatter(formatter)
+            # 紧凑数量级标签避免长整数相接；刻度位置、毫秒单位和完整观测范围保持不变。
+            axis.xaxis.set_major_formatter(EngFormatter(sep="", useOffset=False))
             axis.xaxis.set_minor_formatter(NullFormatter())
         else:
             axis.set_xlim(0, max(maximum * AXIS_LIMIT_PADDING, 1))
