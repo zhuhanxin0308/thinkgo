@@ -171,22 +171,29 @@ jobs:
               for line in (temporary / "business-tests.jsonl").read_text().splitlines()
               if line.strip()
           ]
-          business_package = next(
-              (package for package in packages if package.endswith("/internal/business")),
-              None,
-          )
           required_tests = {
-              "TestServiceCatalogAndRealCache",
-              "TestServiceOrderIdempotencyRollbackAndInventory",
-              "TestServiceConcurrentIdempotencyHasOneEffect",
-              "TestServiceTicketOwnershipAndCancellation",
+              "/internal/business": {
+                  "TestServiceCatalogAndRealCache",
+                  "TestServiceOrderIdempotencyRollbackAndInventory",
+                  "TestServiceConcurrentIdempotencyHasOneEffect",
+                  "TestServiceTicketOwnershipAndCancellation",
+              },
+              "/internal/serve": {
+                  "TestExecuteCanceledContextDoesNotCallFactory",
+                  "TestExecuteFactoryFailureClosesRealDependencies",
+                  "TestExecuteClosesRealDependenciesAfterApplication",
+              },
           }
           passed = {
-              event.get("Test")
+              (event.get("Package"), event.get("Test"))
               for event in events
-              if event.get("Package") == business_package and event.get("Action") == "pass"
+              if event.get("Action") == "pass"
           }
-          failures.extend(f"真实业务集成测试未通过或被跳过: {name}" for name in sorted(required_tests - passed))
+          for suffix, names in required_tests.items():
+              package = next((item for item in packages if item.endswith(suffix)), None)
+              for name in sorted(names):
+                  if (package, name) not in passed:
+                      failures.append(f"真实集成测试未通过或被跳过: {suffix}/{name}")
           if failures:
               raise SystemExit("\n".join(failures))
           PY
