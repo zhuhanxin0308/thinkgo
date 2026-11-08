@@ -58,6 +58,7 @@ func newWorkload(configuration Config, now time.Time) *workload {
 			result.tokens[tenant-1][localUser-1] = "Bearer " + payload + "." + hex.EncodeToString(mac.Sum(nil))
 		}
 	}
+	// #nosec G404 -- PCG 仅生成可复现的非安全性场景排列，鉴权令牌仍使用独立的 HMAC-SHA256。
 	random := rand.New(rand.NewPCG(configuration.Seed, configuration.Seed))
 	random.Shuffle(len(result.mix), func(left, right int) { result.mix[left], result.mix[right] = result.mix[right], result.mix[left] })
 	result.positions = make([]uint64, len(result.mix))
@@ -82,6 +83,7 @@ func (workload *workload) scenario(sequence uint64) (string, uint64) {
 func (workload *workload) request(sequence uint64) requestSpec {
 	configuration := workload.configuration
 	scenario, ordinal := workload.scenario(sequence)
+	// #nosec G404 -- 每个请求的 PCG 仅确定租户与业务样本，不生成密钥、签名或认证随机数。
 	random := rand.New(rand.NewPCG(configuration.Seed, sequence))
 	tenant := random.IntN(configuration.TenantCount) + 1
 	localUser := random.IntN(configuration.UsersPerTenant) + 1
@@ -99,9 +101,11 @@ func (workload *workload) request(sequence uint64) requestSpec {
 		} else {
 			// 冷请求按租户交错遍历全域键空间，全部租户的冷键访问完之后才允许复用。
 			coldOrdinal := ordinal / detailCycleSize
+			// #nosec G115 -- 配置验证要求租户数为正且总身份数至多一百万，取模后必能装入 int。
 			tenant = int(coldOrdinal%uint64(configuration.TenantCount)) + 1
 			request.Tenant = tenant
 			productOffset = int64(tenant-1) * int64(configuration.ProductsPerTenant)
+			// #nosec G115 -- 冷商品总数为正，余数小于已验证的 int 商品规模，索引加热点偏移仍在界内。
 			activeIndex = hotProductCount + int(coldOrdinal/uint64(configuration.TenantCount)%uint64(activeProducts-hotProductCount))
 		}
 		request.ResourceID = productOffset + activeProductID(activeIndex)
