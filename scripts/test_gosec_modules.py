@@ -65,6 +65,18 @@ class PackageBoundaryTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             gate.package_directories(str(self.root), self.root)
 
+    def test_scanner_receives_module_relative_patterns_after_directory_validation(self):
+        # 中文注释：将真实 go list 目录转为包模式，避免绝对路径触发 command-line-arguments 类型加载问题。
+        (self.root / "pkg").mkdir()
+        checked = gate.package_directories(f"{self.root}\n{self.root / 'pkg'}\n", self.root)
+        self.assertEqual(gate.module_package_patterns(checked, self.root), [".", "./pkg"])
+
+    def test_module_relative_patterns_reject_escaping_and_nested_modules(self):
+        # 中文注释：包模式转换必须再次守住模块边界，不让调用方跳过前置校验。
+        for source in (self.root.parent, self.root / "nested"):
+            with self.subTest(source=source), self.assertRaises(ValueError):
+                gate.module_package_patterns([str(source)], self.root)
+
 
 class ReportValidationTests(unittest.TestCase):
     def test_clean_nonempty_report_passes(self):
@@ -132,7 +144,7 @@ class ScanExecutionTests(unittest.TestCase):
         if command[1] == "list":
             self.assertIn("-mod=readonly", command)
             return subprocess.CompletedProcess(command, 0, stdout=str(module) + "\n")
-        self.assertEqual(command[-1], str(module))
+        self.assertEqual(command[-1], ".")
         self.assertNotIn("./...", command)
         self.assertIn(gate.GOSEC_TOOL, command)
         report_path = Path(next(value.split("=", 1)[1] for value in command if value.startswith("-out=")))
