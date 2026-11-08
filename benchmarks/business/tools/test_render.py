@@ -551,6 +551,46 @@ class RenderTests(unittest.TestCase):
             self.assertIn("log", axis.get_xlabel())
         self.assertEqual(summary, unchanged)
 
+    def test_wide_latency_axis_keeps_tick_labels_separate_at_export_resolution(self):
+        summary = render.summarize(render.load_results(self.source, allow_synthetic=True))
+        pyplot = render.plotting()
+        self.addCleanup(pyplot.close, "all")
+        minimum, median = 5, 10
+        # 覆盖真实慢轮所在的数量级以及更长尾部，直接检查文字边框而非格式化器类型。
+        for maximum in (50_000, 150_000):
+            for group in summary["groups"]:
+                group["metrics"]["p99_ms"] = {"median": median, "min": minimum, "max": maximum, "n": 3}
+            unchanged = copy.deepcopy(summary)
+            with mock.patch("render.save_figure") as saved:
+                render.draw_metric(summary, self.root, "p99_ms", "open", "open_p99",
+                                   "Latency", "P99 (ms)", "All repeats retained")
+            figure = saved.call_args.args[0]
+            for dpi in (figure.dpi, render.PNG_DPI):
+                with self.subTest(maximum=maximum, dpi=dpi):
+                    figure.set_dpi(dpi)
+                    figure.canvas.draw()
+                    renderer = figure.canvas.get_renderer()
+                    for axis in figure.axes[:-1]:
+                        lower, upper = axis.get_xlim()
+                        self.assertGreater(lower, 0)
+                        self.assertLessEqual(lower, minimum)
+                        self.assertGreaterEqual(upper, maximum)
+                        ticks = [(position, label) for position, label in
+                                 zip(axis.get_xticks(), axis.get_xticklabels())
+                                 if lower <= position <= upper and label.get_visible() and label.get_text()]
+                        self.assertGreaterEqual(len(ticks), 3)
+                        bounds = [label.get_window_extent(renderer) for _, label in ticks]
+                        for (left_value, _), left, (right_value, _), right in zip(ticks, bounds, ticks[1:], bounds[1:]):
+                            self.assertLess(left.x1, right.x0, f"刻度文字重叠: {left_value:g}, {right_value:g}")
+                        # 小值刻度仍有明确标签，常见延迟的两倍差异不能压缩到一个标签宽度以内。
+                        median_labels = [label for position, label in ticks if position == median]
+                        self.assertEqual(len(median_labels), 1)
+                        points = axis.transData.transform([(minimum, 0), (median, 0)])
+                        self.assertGreater(points[1][0] - points[0][0],
+                                           median_labels[0].get_window_extent(renderer).width)
+            self.assertEqual(summary, unchanged)
+            pyplot.close(figure)
+
     def test_log_latency_rejects_zero_and_preserves_missing_values(self):
         summary = render.summarize(render.load_results(self.source, allow_synthetic=True))
         selected = [group for group in summary["groups"] if group["model"] == "open"]
