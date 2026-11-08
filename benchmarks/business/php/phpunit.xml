@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit bootstrap="shared/tests/bootstrap.php" colors="true" cacheDirectory=".phpunit.cache" failOnWarning="true" failOnRisky="true">
+  <testsuites><testsuite name="业务合同"><directory>shared/tests</directory></testsuite></testsuites>
+  <source><include><directory>shared/src</directory><directory>thinkphp/app</directory><directory>laravel/app</directory></include></source>
+  <coverage><report><text outputFile="php://stdout" showUncoveredFiles="true"/><clover outputFile="coverage/clover.xml"/></report></coverage>
+</phpunit>

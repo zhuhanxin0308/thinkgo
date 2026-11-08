@@ -1,0 +1,48 @@
+test_latency_outlier_keeps_small_differences_readable_and_full_range_visible (test_render.RenderTests.test_latency_outlier_keeps_small_differences_readable_and_full_range_visible) ... /workspace/scratch/c3281d4eed26/thinkgo/benchmarks/business/tools/test_render.py:317: UserWarning: Glyph 20445 (\N{CJK UNIFIED IDEOGRAPH-4FDD}) missing from font(s) DejaVu Sans.
+  figure.canvas.draw()
+/workspace/scratch/c3281d4eed26/thinkgo/benchmarks/business/tools/test_render.py:317: UserWarning: Glyph 30041 (\N{CJK UNIFIED IDEOGRAPH-7559}) missing from font(s) DejaVu Sans.
+  figure.canvas.draw()
+/workspace/scratch/c3281d4eed26/thinkgo/benchmarks/business/tools/test_render.py:317: UserWarning: Glyph 25152 (\N{CJK UNIFIED IDEOGRAPH-6240}) missing from font(s) DejaVu Sans.
+  figure.canvas.draw()
+/workspace/scratch/c3281d4eed26/thinkgo/benchmarks/business/tools/test_render.py:317: UserWarning: Glyph 26377 (\N{CJK UNIFIED IDEOGRAPH-6709}) missing from font(s) DejaVu Sans.
+  figure.canvas.draw()
+/workspace/scratch/c3281d4eed26/thinkgo/benchmarks/business/tools/test_render.py:317: UserWarning: Glyph 37325 (\N{CJK UNIFIED IDEOGRAPH-91CD}) missing from font(s) DejaVu Sans.
+  figure.canvas.draw()
+/workspace/scratch/c3281d4eed26/thinkgo/benchmarks/business/tools/test_render.py:317: UserWarning: Glyph 22797 (\N{CJK UNIFIED IDEOGRAPH-590D}) missing from font(s) DejaVu Sans.
+  figure.canvas.draw()
+FAIL
+test_log_latency_rejects_zero_and_preserves_missing_values (test_render.RenderTests.test_log_latency_rejects_zero_and_preserves_missing_values) ... /workspace/scratch/c3281d4eed26/thinkgo/benchmarks/business/tools/render.py:294: UserWarning: Glyph 20445 (\N{CJK UNIFIED IDEOGRAPH-4FDD}) missing from font(s) DejaVu Sans.
+  figure.savefig(destination / (name + "." + extension), dpi=PNG_DPI, bbox_inches="tight", metadata=metadata)
+/workspace/scratch/c3281d4eed26/thinkgo/benchmarks/business/tools/render.py:294: UserWarning: Glyph 30041 (\N{CJK UNIFIED IDEOGRAPH-7559}) missing from font(s) DejaVu Sans.
+  figure.savefig(destination / (name + "." + extension), dpi=PNG_DPI, bbox_inches="tight", metadata=metadata)
+/workspace/scratch/c3281d4eed26/thinkgo/benchmarks/business/tools/render.py:294: UserWarning: Glyph 25152 (\N{CJK UNIFIED IDEOGRAPH-6240}) missing from font(s) DejaVu Sans.
+  figure.savefig(destination / (name + "." + extension), dpi=PNG_DPI, bbox_inches="tight", metadata=metadata)
+/workspace/scratch/c3281d4eed26/thinkgo/benchmarks/business/tools/render.py:294: UserWarning: Glyph 26377 (\N{CJK UNIFIED IDEOGRAPH-6709}) missing from font(s) DejaVu Sans.
+  figure.savefig(destination / (name + "." + extension), dpi=PNG_DPI, bbox_inches="tight", metadata=metadata)
+/workspace/scratch/c3281d4eed26/thinkgo/benchmarks/business/tools/render.py:294: UserWarning: Glyph 37325 (\N{CJK UNIFIED IDEOGRAPH-91CD}) missing from font(s) DejaVu Sans.
+  figure.savefig(destination / (name + "." + extension), dpi=PNG_DPI, bbox_inches="tight", metadata=metadata)
+/workspace/scratch/c3281d4eed26/thinkgo/benchmarks/business/tools/render.py:294: UserWarning: Glyph 22797 (\N{CJK UNIFIED IDEOGRAPH-590D}) missing from font(s) DejaVu Sans.
+  figure.savefig(destination / (name + "." + extension), dpi=PNG_DPI, bbox_inches="tight", metadata=metadata)
+FAIL
+
+======================================================================
+FAIL: test_latency_outlier_keeps_small_differences_readable_and_full_range_visible (test_render.RenderTests.test_latency_outlier_keeps_small_differences_readable_and_full_range_visible)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/scratch/c3281d4eed26/thinkgo/benchmarks/business/tools/test_render.py", line 320, in test_latency_outlier_keeps_small_differences_readable_and_full_range_visible
+    self.assertGreater(lower, 0)
+AssertionError: np.float64(0.0) not greater than 0
+
+======================================================================
+FAIL: test_log_latency_rejects_zero_and_preserves_missing_values (test_render.RenderTests.test_log_latency_rejects_zero_and_preserves_missing_values)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/scratch/c3281d4eed26/thinkgo/benchmarks/business/tools/test_render.py", line 335, in test_log_latency_rejects_zero_and_preserves_missing_values
+    with self.assertRaisesRegex(ValueError, "正数"):
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: ValueError not raised
+
+----------------------------------------------------------------------
+Ran 2 tests in 1.212s
+
+FAILED (failures=2)

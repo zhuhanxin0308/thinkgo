@@ -1,0 +1,8 @@
+# 使用 Octane 官方 RoadRunner worker；监听地址和进程数由启动命令传入。
+version: '3'
+server:
+  command: 'php vendor/bin/roadrunner-worker'
+  relay: pipes
+logs:
+  mode: production
+  level: error

@@ -1,0 +1,7 @@
+{
+  "name": "thinkgo/benchmark-thinkphp",
+  "type": "project",
+  "require": {"php": "^8.5", "ext-mbstring": "*", "ext-pdo_pgsql": "*", "ext-redis": "*", "topthink/framework": "8.1.4", "topthink/think-worker": "5.0.2"},
+  "autoload": {"psr-4": {"app\\": "app/", "Benchmark\\Business\\": "../shared/src/"}},
+  "config": {"sort-packages": true, "allow-plugins": false, "optimize-autoloader": true}
+}

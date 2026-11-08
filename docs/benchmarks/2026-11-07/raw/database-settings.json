@@ -1,0 +1,46 @@
+{
+  "checkpoint_timeout": {
+    "setting": "300",
+    "unit": "s"
+  },
+  "fsync": {
+    "setting": "on",
+    "unit": null
+  },
+  "full_page_writes": {
+    "setting": "on",
+    "unit": null
+  },
+  "max_connections": {
+    "setting": "96",
+    "unit": null
+  },
+  "max_wal_size": {
+    "setting": "1024",
+    "unit": "MB"
+  },
+  "server_version": {
+    "setting": "18.6",
+    "unit": null
+  },
+  "shared_buffers": {
+    "setting": "65536",
+    "unit": "8kB"
+  },
+  "shared_preload_libraries": {
+    "setting": "pg_stat_statements",
+    "unit": null
+  },
+  "synchronous_commit": {
+    "setting": "on",
+    "unit": null
+  },
+  "track_io_timing": {
+    "setting": "on",
+    "unit": null
+  },
+  "work_mem": {
+    "setting": "8192",
+    "unit": "kB"
+  }
+}

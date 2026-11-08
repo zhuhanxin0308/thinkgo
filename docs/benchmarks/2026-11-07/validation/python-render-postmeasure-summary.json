@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "stage": "post_measurement",
+  "purpose": "对数尾延迟图保留全部慢轮范围，并让常见延迟差异可读；不改变测量或统计口径。",
+  "checkpoint_before_change": "5b6ad27aef7c8ef9af9590591399fe6bee1763f4",
+  "measured_source_commit": "db21dda7ae1761bf68c5848884a5ba2ed411088c",
+  "source_sha256": {
+    "benchmarks/business/tools/render.py": "5d88794f6a39ed842ba45c3a2516089902db0e9a870f91449298b4294fe27c3a",
+    "benchmarks/business/tools/test_render.py": "5b4fe25f5dbd4ded47573d246f3e89479ea819c1bb57f445ec7e0650b05ece32"
+  },
+  "tests": {
+    "before_fix": {
+      "tests": 2,
+      "failures": 2,
+      "exit_code": 1,
+      "log": "python-render-readability-red.log",
+      "note": "旧线性图未满足正数对数轴要求，且没有拒绝零延迟；日志中的中文测试标签字体警告不属于测试失败原因。"
+    },
+    "after_fix": {
+      "tests": 19,
+      "failures": 0,
+      "exit_code": 0,
+      "log": "python-render-postmeasure-tests.log"
+    }
+  },
+  "coverage": {
+    "scope": "render.py，当前源码上的独立单元测试运行",
+    "covered_statements": 326,
+    "total_statements": 328,
+    "covered_branches": 71,
+    "total_branches": 74,
+    "json": "python-render-postmeasure-coverage.json",
+    "combined_with_frozen_profiles": false
+  },
+  "formal_result_revalidation": {
+    "rounds": 270,
+    "groups": 90,
+    "mode": "measure",
+    "renderer_exit_code": 0,
+    "statistics_identical_to_checkpoint": true,
+    "rounds_csv_bytes_identical_to_checkpoint": true,
+    "summary_csv_bytes_identical_to_checkpoint": true,
+    "summary_change": "只有 rendering.renderer_sha256 更新；其余清单、定义和统计值不变。",
+    "svg_files": 10,
+    "png_files": 10,
+    "changed_png_files": ["open_p99.png"]
+  },
+  "artifacts_sha256": {
+    "python-render-readability-red.log": "b90e59301c65dada768cd166676cf9afe7a0ac1ee6b1b80dcd9cb8bcc03e7c6c",
+    "python-render-postmeasure-tests.log": "6e8934193606788a93b61ab74fa749c40ea684b0918d92662f0f55e6427d419b",
+    "python-render-postmeasure-coverage.json": "5a0cede711a13b1e2ba8bf29b8c7bc27e58ef45378386db28fd5a401e6ce62d3"
+  }
+}

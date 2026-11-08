@@ -1,0 +1,135 @@
+{
+  "schema_version": 1,
+  "verified_at_utc": "2026-11-07",
+  "platform": {"system": "Linux", "machine": "x86_64"},
+  "jobs": 2,
+  "components": [
+    {
+      "name": "go", "version": "1.27.3", "kind": "archive", "prefix": "go-1.27.3",
+      "url": "https://go.dev/dl/go1.27.3.linux-amd64.tar.gz",
+      "sha256": "65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40",
+      "archive_root": "go", "dependencies": [],
+      "outputs": ["go-1.27.3/bin/*", "go-1.27.3/pkg/tool/linux_amd64/*", "go-1.27.3/VERSION"],
+      "probe": ["{prefix}/bin/go", "version"]
+    },
+    {
+      "name": "m4", "version": "1.4.21", "kind": "configure", "prefix": "build-tools",
+      "url": "https://ftp.gnu.org/gnu/m4/m4-1.4.21.tar.xz",
+      "sha256": "f25c6ab51548a73a75558742fb031e0625d6485fe5f9155949d6486a2408ab66",
+      "archive_root": "m4-1.4.21", "dependencies": [],
+      "configure": ["--prefix={prefix}"], "outputs": ["build-tools/bin/m4"],
+      "probe": ["{prefix}/bin/m4", "--version"]
+    },
+    {
+      "name": "autoconf", "version": "2.73", "kind": "configure", "prefix": "build-tools",
+      "url": "https://ftp.gnu.org/gnu/autoconf/autoconf-2.73.tar.xz",
+      "sha256": "9fd672b1c8425fac2fa67fa0477b990987268b90ff36d5f016dae57be0d6b52e",
+      "archive_root": "autoconf-2.73", "dependencies": ["m4"],
+      "configure": ["--prefix={prefix}"], "outputs": ["build-tools/bin/autoconf", "build-tools/bin/autom4te", "build-tools/share/autoconf/autoconf/*"],
+      "probe": ["{prefix}/bin/autoconf", "--version"]
+    },
+    {
+      "name": "bison", "version": "3.8.2", "kind": "configure", "prefix": "build-tools",
+      "url": "https://ftp.gnu.org/gnu/bison/bison-3.8.2.tar.xz",
+      "sha256": "9bba0214ccf7f1079c5d59210045227bcf619519840ebfa80cd3849cff5a5bf2",
+      "archive_root": "bison-3.8.2", "dependencies": ["m4"],
+      "configure": ["--prefix={prefix}"], "outputs": ["build-tools/bin/bison", "build-tools/share/bison/skeletons/*"],
+      "probe": ["{prefix}/bin/bison", "--version"]
+    },
+    {
+      "name": "flex", "version": "2.6.4", "kind": "configure", "prefix": "build-tools",
+      "url": "https://github.com/westes/flex/releases/download/v2.6.4/flex-2.6.4.tar.gz",
+      "sha256": "e87aae032bf07c26f85ac0ed3250998c37621d95f8bd748b31f15b33c45ee995",
+      "archive_root": "flex-2.6.4", "dependencies": ["m4"],
+      "configure": ["--prefix={prefix}"], "outputs": ["build-tools/bin/flex", "build-tools/lib/libfl*"],
+      "probe": ["{prefix}/bin/flex", "--version"]
+    },
+    {
+      "name": "libxml2", "version": "2.15.4", "kind": "configure", "prefix": "php-deps",
+      "url": "https://download.gnome.org/sources/libxml2/2.15/libxml2-2.15.4.tar.xz",
+      "sha256": "98087fd181d9070724f3fbc65c7377db03038eb92bd882374daff44940138821",
+      "archive_root": "libxml2-2.15.4", "dependencies": [],
+      "configure": ["--prefix={prefix}", "--without-python", "--without-docs", "--with-zlib", "--disable-static"],
+      "outputs": ["php-deps/lib/libxml2.so*", "php-deps/lib/pkgconfig/libxml-2.0.pc"],
+      "probe": ["{prefix}/bin/xml2-config", "--version"]
+    },
+    {
+      "name": "oniguruma", "version": "6.9.10", "kind": "configure", "prefix": "php-deps",
+      "url": "https://github.com/kkos/oniguruma/releases/download/v6.9.10/onig-6.9.10.tar.gz",
+      "sha256": "2a5cfc5ae259e4e97f86b68dfffc152cdaffe94e2060b770cb827238d769fc05",
+      "archive_root": "onig-6.9.10", "dependencies": [],
+      "configure": ["--prefix={prefix}", "--disable-static"],
+      "outputs": ["php-deps/lib/libonig.so*", "php-deps/lib/pkgconfig/oniguruma.pc"],
+      "probe": ["{prefix}/bin/onig-config", "--version"]
+    },
+    {
+      "name": "postgresql", "version": "18.6", "kind": "postgresql", "prefix": "postgresql",
+      "url": "https://ftp.postgresql.org/pub/source/v18.6/postgresql-18.6.tar.bz2",
+      "sha256": "555610c24d53e4316da5b7d3fc25c279d96856d5e0e23ee308c328c5fa881d9f",
+      "archive_root": "postgresql-18.6", "dependencies": ["bison", "flex"],
+      "configure": ["--prefix={prefix}", "--without-icu", "--without-readline", "--with-ssl=openssl", "--with-zstd"],
+      "outputs": ["postgresql/bin/*", "postgresql/lib/libpq.so*", "postgresql/lib/pg_stat_statements.so", "postgresql/share/extension/pg_stat_statements*"],
+      "probe": ["{prefix}/bin/postgres", "--version"]
+    },
+    {
+      "name": "redis", "version": "8.10.3", "kind": "redis", "prefix": "redis",
+      "url": "https://download.redis.io/releases/redis-8.10.3.tar.gz",
+      "sha256": "edde778f6bdee7581e42fc139ca9e07e2822212092f7501f99989656e3629d02",
+      "archive_root": "redis-8.10.3", "dependencies": [],
+      "build": ["make", "-j2", "build", "redis", "BUILD_TLS=yes"],
+      "install": ["make", "install", "PREFIX={prefix}", "BUILD_TLS=yes"],
+      "outputs": ["redis/bin/redis-server", "redis/bin/redis-cli"], "probe": ["{prefix}/bin/redis-server", "--version"]
+    },
+    {
+      "name": "nginx", "version": "1.30.6", "kind": "configure", "prefix": "nginx",
+      "url": "https://nginx.org/download/nginx-1.30.6.tar.gz",
+      "sha256": "3cf46f5ed7504d460125866b7bea99fb357f31d887e2e63b35503310e9b8b6c8",
+      "archive_root": "nginx-1.30.6", "dependencies": [],
+      "configure": ["--prefix={prefix}", "--with-http_ssl_module", "--with-http_v2_module", "--with-http_stub_status_module", "--with-threads", "--with-pcre-jit"],
+      "outputs": ["nginx/sbin/nginx"], "probe": ["{prefix}/sbin/nginx", "-v"]
+    },
+    {
+      "name": "php", "version": "8.5.12", "kind": "php", "prefix": "php",
+      "url": "https://www.php.net/distributions/php-8.5.12.tar.xz",
+      "sha256": "08bc2eba2a588654ade1357174aa646b761556c862dda0678345ee29ed481209",
+      "archive_root": "php-8.5.12", "dependencies": ["autoconf", "bison", "flex", "libxml2", "oniguruma", "postgresql"],
+      "configure": ["--prefix={prefix}", "--with-config-file-path={prefix}/etc", "--with-config-file-scan-dir={prefix}/etc/conf.d", "--enable-fpm", "--disable-cgi", "--disable-phpdbg", "--with-openssl", "--with-zlib", "--with-curl", "--enable-mbstring", "--with-pdo-pgsql={runtime}/postgresql", "--with-pgsql={runtime}/postgresql", "--enable-pcntl", "--enable-sockets", "--enable-bcmath", "--with-gmp", "--without-sqlite3", "--without-pdo-sqlite", "--without-pear"],
+      "environment": {"LDFLAGS": "-Wl,-rpath,{runtime}/php-deps/lib -Wl,-rpath,{runtime}/postgresql/lib", "PKG_CONFIG_PATH": "{runtime}/php-deps/lib/pkgconfig:{runtime}/postgresql/lib/pkgconfig"},
+      "outputs": ["php/bin/php", "php/bin/php-config", "php/bin/phpize", "php/sbin/php-fpm", "php/etc/php.ini"],
+      "probe": ["{prefix}/bin/php", "-r", "echo PHP_VERSION;"]
+    },
+    {
+      "name": "phpredis", "version": "6.3.0", "kind": "extension", "prefix": "php", "extension": "redis",
+      "url": "https://pecl.php.net/get/redis-6.3.0.tgz",
+      "sha256": "0d5141f634bd1db6c1ddcda053d25ecf2c4fc1c395430d534fd3f8d51dd7f0b5",
+      "archive_root": "redis-6.3.0", "dependencies": ["php"],
+      "configure": ["--with-php-config={prefix}/bin/php-config", "--enable-redis"],
+      "outputs": ["php/lib/php/extensions/*/redis.so", "php/etc/conf.d/20-redis.ini"],
+      "probe": ["{prefix}/bin/php", "-r", "echo phpversion('redis');"]
+    },
+    {
+      "name": "composer", "version": "2.11.1", "kind": "composer", "prefix": "php",
+      "url": "https://getcomposer.org/download/2.11.1/composer.phar",
+      "filename": "composer-2.11.1.phar",
+      "sha256": "6f1b891e1d4927d62740276c540fb490e47689e19e102c49e8da849794882f8c",
+      "dependencies": ["phpredis"], "outputs": ["php/bin/composer"],
+      "probe": ["{prefix}/bin/php", "{prefix}/bin/composer", "--version", "--no-ansi"]
+    },
+    {
+      "name": "roadrunner", "version": "3.0.1", "kind": "archive", "prefix": "roadrunner",
+      "url": "https://github.com/roadrunner-server/roadrunner/releases/download/v3.0.1/roadrunner-3.0.1-linux-amd64.tar.gz",
+      "sha256": "a6156d34a08cfdfba4934e737ed3208b11c6eab666def5c81f1b640ef43568e7",
+      "archive_root": "roadrunner-3.0.1-linux-amd64", "dependencies": [],
+      "outputs": ["roadrunner/rr"], "probe": ["{prefix}/rr", "--version"]
+    },
+    {
+      "name": "pcov", "version": "1.0.12", "kind": "extension", "prefix": "php", "extension": "pcov", "optional": true,
+      "url": "https://pecl.php.net/get/pcov-1.0.12.tgz",
+      "sha256": "23255c8c9335a9636ccb743f5302436a97a582a0bbde9869485be911bbc15da8",
+      "archive_root": "pcov-1.0.12", "dependencies": ["php"],
+      "configure": ["--with-php-config={prefix}/bin/php-config", "--enable-pcov"],
+      "outputs": ["php/lib/php/extensions/*/pcov.so"],
+      "probe": ["{prefix}/bin/php", "-d", "extension=pcov", "-r", "echo phpversion('pcov');"]
+    }
+  ]
+}

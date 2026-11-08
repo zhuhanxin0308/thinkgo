@@ -1,0 +1,21 @@
+2026-11-07 21:24:34.359 GMT [8] LOG:  starting PostgreSQL 18.6 on x86_64-pc-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit
+2026-11-07 21:24:34.359 GMT [8] LOG:  listening on IPv4 address "127.0.0.1", port 15432
+2026-11-07 21:24:34.362 GMT [14] LOG:  database system was shut down in recovery at 2026-11-07 21:22:56 GMT
+2026-11-07 21:24:34.362 GMT [14] LOG:  database system was not properly shut down; automatic recovery in progress
+2026-11-07 21:24:34.363 GMT [14] LOG:  redo starts at C/33609C90
+2026-11-07 21:24:34.363 GMT [14] WARNING:  could not open directory "base/16959": No such file or directory
+2026-11-07 21:24:34.363 GMT [14] CONTEXT:  WAL redo at C/33609D98 for Database/DROP: dir 1663/16959
+2026-11-07 21:24:34.363 GMT [14] WARNING:  some useless files may be left behind in old database directory "base/16959"
+2026-11-07 21:24:34.363 GMT [14] CONTEXT:  WAL redo at C/33609D98 for Database/DROP: dir 1663/16959
+2026-11-07 21:24:34.458 GMT [14] LOG:  invalid record length at C/3BDA6CD8: expected at least 24, got 0
+2026-11-07 21:24:34.458 GMT [14] LOG:  redo done at C/3BDA6C90 system usage: CPU: user: 0.05 s, system: 0.04 s, elapsed: 0.09 s
+2026-11-07 21:24:34.461 GMT [12] LOG:  checkpoint starting: end-of-recovery immediate wait
+2026-11-07 21:24:34.669 GMT [12] LOG:  checkpoint complete: wrote 20020 buffers (30.5%), wrote 2 SLRU buffers; 0 WAL file(s) added, 0 removed, 8 recycled; write=0.077 s, sync=0.123 s, total=0.209 s; sync files=357, longest=0.025 s, average=0.001 s; distance=138868 kB, estimate=138868 kB; lsn=C/3BDA6CD8, redo lsn=C/3BDA6CD8
+2026-11-07 21:24:34.673 GMT [8] LOG:  database system is ready to accept connections
+2026-11-07 21:24:34.745 GMT [8] LOG:  received fast shutdown request
+2026-11-07 21:24:34.745 GMT [8] LOG:  aborting any active transactions
+2026-11-07 21:24:34.747 GMT [8] LOG:  background worker "logical replication launcher" (PID 17) exited with exit code 1
+2026-11-07 21:24:34.747 GMT [12] LOG:  shutting down
+2026-11-07 21:24:34.747 GMT [12] LOG:  checkpoint starting: shutdown immediate
+2026-11-07 21:24:34.750 GMT [12] LOG:  checkpoint complete: wrote 1 buffers (0.0%), wrote 0 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=0.001 s, sync=0.001 s, total=0.003 s; sync files=1, longest=0.001 s, average=0.001 s; distance=1 kB, estimate=124981 kB; lsn=C/3BDA72E8, redo lsn=C/3BDA72E8
+2026-11-07 21:24:34.765 GMT [8] LOG:  database system is shut down

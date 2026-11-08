@@ -1,0 +1,28 @@
+test_start_waits_for_writable_sql_before_template_queries (test_native.PostgresStartupTest.test_start_waits_for_writable_sql_before_template_queries) ... FAIL
+
+======================================================================
+FAIL: test_start_waits_for_writable_sql_before_template_queries (test_native.PostgresStartupTest.test_start_waits_for_writable_sql_before_template_queries)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/scratch/c3281d4eed26/thinkgo/benchmarks/business/tools/test_native.py", line 119, in test_start_waits_for_writable_sql_before_template_queries
+    self.environment.start()
+  File "/workspace/scratch/c3281d4eed26/thinkgo/benchmarks/business/tools/native.py", line 328, in start
+    exists = self.sql(f"SELECT 1 FROM pg_database WHERE datname='{self.template}'", "postgres")
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/unittest/mock.py", line 1139, in __call__
+    return self._mock_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/unittest/mock.py", line 1143, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/unittest/mock.py", line 1204, in _execute_mock_call
+    result = effect(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/c3281d4eed26/thinkgo/benchmarks/business/tools/test_native.py", line 105, in template_query
+    self.assertTrue(ready, "TCP 已开放但 SQL 尚未就绪时不得查询模板")
+AssertionError: False is not true : TCP 已开放但 SQL 尚未就绪时不得查询模板
+
+----------------------------------------------------------------------
+Ran 1 test in 0.002s
+
+FAILED (failures=1)
