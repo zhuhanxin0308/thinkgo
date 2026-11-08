@@ -139,35 +139,9 @@ jobs:
           GOWORK=off go vet ./...
           CGO_ENABLED=0 GOWORK=off go run -mod=readonly honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...
           GOWORK=off go run -mod=readonly github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
-          gosec_report="$RUNNER_TEMP/gosec-framework.json"
-          # 保留安全扫描失败门禁，但允许先生成机器可读报告定位真实问题。
-          CGO_ENABLED=0 GOWORK=off go run -mod=readonly github.com/securego/gosec/v2/cmd/gosec@v2.25.0 -no-fail -fmt=json -out="$gosec_report" -exclude-dir=tmp -exclude-dir=bin ./...
-          python3 - "$gosec_report" <<'PY'
-          import json
-          import sys
-
-          with open(sys.argv[1], encoding="utf-8") as report:
-              result = json.load(report)
-          stats = result["Stats"]
-          issues = result.get("Issues") or []
-          load_errors = result.get("Golang errors") or {}
-          MAX_VISIBLE_FINDINGS = 20
-          MAX_ERROR_TEXT_LENGTH = 4096
-          print(f"安全扫描统计：{stats}", file=sys.stderr)
-          for issue in issues[:MAX_VISIBLE_FINDINGS]:
-              print(
-                  f"{issue.get('rule_id')}: {issue.get('file')}:{issue.get('line')} "
-                  f"[{issue.get('severity')}] {issue.get('details')}",
-                  file=sys.stderr,
-              )
-          if len(issues) > MAX_VISIBLE_FINDINGS:
-              print(f"另有 {len(issues) - MAX_VISIBLE_FINDINGS} 项发现未逐条打印", file=sys.stderr)
-          if load_errors:
-              print(f"Go 包加载错误：{str(load_errors)[:MAX_ERROR_TEXT_LENGTH]}", file=sys.stderr)
-          if stats["files"] <= 0 or stats["found"] != 0 or load_errors:
-              raise SystemExit("安全扫描未覆盖源码或存在错误，拒绝发布")
-          print(f"安全扫描覆盖 {stats['files']} 个源码文件，未发现问题")
-          PY
+          # 按独立模块解析包目录并扫描，不能在根模块误加载基准模块或跳过它。
+          python3 -B -m unittest discover -s scripts -p 'test_gosec_modules.py'
+          python3 -B scripts/gosec_modules.py --reports-dir "$RUNNER_TEMP/gosec-modules"
           CGO_ENABLED=1 GOWORK=off go test -mod=readonly -shuffle=on -count=1 ./...
           CGO_ENABLED=0 GOWORK=off go test -mod=readonly -shuffle=on -count=1 ./...
           CGO_ENABLED=1 GOWORK=off go test -tags oracle -mod=readonly -count=1 ./db/builder ./db/connector

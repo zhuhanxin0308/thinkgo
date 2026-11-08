@@ -64,7 +64,7 @@ type Config struct {
 
 func LoadDataset(path string) (Dataset, error) {
 	var dataset Dataset
-	data, err := os.ReadFile(path)
+	data, err := readBoundedContractFile(path)
 	if err != nil {
 		return dataset, err
 	}
