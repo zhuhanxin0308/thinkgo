@@ -16088,7 +16088,7 @@
   "rendering": {
     "matplotlib_version": "3.11.2",
     "png_dpi": 180,
-    "renderer_sha256": "eee861f523a3658bc6d7bab4faf5487b296b3fa8a8261d7612c06f44b49a3c59",
+    "renderer_sha256": "2da08b72d44876f36b162d75eff9f202f8b9122d29f1b8194001c10dc84f81fc",
     "svg_text": "editable text"
   }
 }
