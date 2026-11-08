@@ -146,6 +146,26 @@ class ScanExecutionTests(unittest.TestCase):
         self.assertEqual([Path(call.kwargs["cwd"]) for call in scans], [self.root, self.root / "nested"])
         self.assertEqual(len(list(self.reports.glob("*.json"))), 2)
 
+    def test_nested_module_uses_its_frozen_toolchain_without_changing_parent(self):
+        # 中文注释：根模块保持固定 Go 版本，嵌套基准模块允许下载其 go.mod 指定的版本。
+        seen = []
+
+        def command(arguments, **kwargs):
+            if arguments[:2] in (["go", "list"], ["go", "run"]):
+                seen.append((Path(kwargs["cwd"]), kwargs["env"]["GOTOOLCHAIN"]))
+            return self.fake_command(arguments, **kwargs)
+
+        with patch.dict(gate.os.environ, {"GOTOOLCHAIN": "local"}), \
+                patch.object(gate.subprocess, "run", side_effect=command), \
+                contextlib.redirect_stderr(io.StringIO()):
+            self.assertTrue(gate.run_scans(self.root, self.reports))
+
+        self.assertEqual(
+            seen,
+            [(self.root, "local"), (self.root, "local"),
+             (self.root / "nested", "auto"), (self.root / "nested", "auto")],
+        )
+
     def test_one_module_failure_does_not_skip_other_modules_or_pass_gate(self):
         def command(arguments, **kwargs):
             if arguments[:2] == ["go", "list"] and Path(kwargs["cwd"]) == self.root:
