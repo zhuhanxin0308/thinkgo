@@ -1,0 +1,626 @@
+{"time": "2026-11-08T15:00:21.286678+00:00", "event": "session_start", "mode": "measure"}
+{"time": "2026-11-08T15:00:22.290718+00:00", "event": "round_start", "id": "closed-mixed-gin-1", "number": 1, "total": 150}
+{"time": "2026-11-08T15:00:22.293559+00:00", "event": "round_complete", "id": "closed-mixed-gin-1", "success_rps": 3341.366666666667, "p99_ms": 80.191, "unsuccessful": 0}
+{"time": "2026-11-08T15:00:23.293775+00:00", "event": "round_start", "id": "closed-detail-beego-1", "number": 2, "total": 150}
+{"time": "2026-11-08T15:00:23.296463+00:00", "event": "round_complete", "id": "closed-detail-beego-1", "success_rps": 13537.1, "p99_ms": 17.055, "unsuccessful": 0}
+{"time": "2026-11-08T15:00:24.296666+00:00", "event": "round_start", "id": "closed-detail-gin-1", "number": 3, "total": 150}
+{"time": "2026-11-08T15:00:24.299399+00:00", "event": "round_complete", "id": "closed-detail-gin-1", "success_rps": 10982.533333333333, "p99_ms": 28.255, "unsuccessful": 0}
+{"time": "2026-11-08T15:00:25.299608+00:00", "event": "round_start", "id": "closed-order-fiber-1", "number": 4, "total": 150}
+{"time": "2026-11-08T15:00:25.301913+00:00", "event": "round_complete", "id": "closed-order-fiber-1", "success_rps": 1398.4, "p99_ms": 143.487, "unsuccessful": 0}
+{"time": "2026-11-08T15:00:26.302183+00:00", "event": "round_start", "id": "closed-detail-laravel-octane-1", "number": 5, "total": 150}
+{"time": "2026-11-08T15:00:26.305148+00:00", "event": "round_complete", "id": "closed-detail-laravel-octane-1", "success_rps": 1114.4333333333334, "p99_ms": 230.143, "unsuccessful": 0}
+{"time": "2026-11-08T15:00:27.305463+00:00", "event": "round_start", "id": "closed-detail-thinkgo-1", "number": 6, "total": 150}
+{"time": "2026-11-08T15:00:27.308448+00:00", "event": "round_complete", "id": "closed-detail-thinkgo-1", "success_rps": 11518.866666666667, "p99_ms": 19.247, "unsuccessful": 0}
+{"time": "2026-11-08T15:00:28.308676+00:00", "event": "round_start", "id": "closed-order-iris-1", "number": 7, "total": 150}
+{"time": "2026-11-08T15:00:28.311436+00:00", "event": "round_complete", "id": "closed-order-iris-1", "success_rps": 1000.8666666666667, "p99_ms": 276.223, "unsuccessful": 0}
+{"time": "2026-11-08T15:00:29.311659+00:00", "event": "round_start", "id": "closed-detail-laravel-fpm-1", "number": 8, "total": 150}
+{"time": "2026-11-08T15:00:29.314536+00:00", "event": "round_complete", "id": "closed-detail-laravel-fpm-1", "success_rps": 775.9666666666667, "p99_ms": 129.599, "unsuccessful": 0}
+{"time": "2026-11-08T15:00:30.314765+00:00", "event": "round_start", "id": "closed-order-gin-1", "number": 9, "total": 150}
+{"time": "2026-11-08T15:00:30.317539+00:00", "event": "round_complete", "id": "closed-order-gin-1", "success_rps": 1317.1, "p99_ms": 164.991, "unsuccessful": 0}
+{"time": "2026-11-08T15:00:31.318133+00:00", "event": "round_start", "id": "closed-ticket-thinkgo-before-1", "number": 10, "total": 150}
+{"time": "2026-11-08T15:00:31.320505+00:00", "event": "round_complete", "id": "closed-ticket-thinkgo-before-1", "success_rps": 3059.766666666667, "p99_ms": 68.415, "unsuccessful": 0}
+{"time": "2026-11-08T15:00:32.320752+00:00", "event": "round_start", "id": "closed-detail-thinkgo-before-1", "number": 11, "total": 150}
+{"time": "2026-11-08T15:00:32.323245+00:00", "event": "round_complete", "id": "closed-detail-thinkgo-before-1", "success_rps": 9943.433333333332, "p99_ms": 22.959, "unsuccessful": 0}
+{"time": "2026-11-08T15:00:33.323498+00:00", "event": "round_start", "id": "closed-order-laravel-octane-1", "number": 12, "total": 150}
+{"time": "2026-11-08T15:00:33.326716+00:00", "event": "round_complete", "id": "closed-order-laravel-octane-1", "success_rps": 792.9666666666667, "p99_ms": 145.023, "unsuccessful": 0}
+{"time": "2026-11-08T15:00:34.327175+00:00", "event": "round_start", "id": "closed-detail-iris-1", "number": 13, "total": 150}
+{"time": "2026-11-08T15:00:34.330527+00:00", "event": "round_complete", "id": "closed-detail-iris-1", "success_rps": 14337.8, "p99_ms": 16.879, "unsuccessful": 0}
+{"time": "2026-11-08T15:00:35.330854+00:00", "event": "round_start", "id": "closed-ticket-fiber-1", "number": 14, "total": 150}
+{"time": "2026-11-08T15:00:35.335312+00:00", "event": "round_complete", "id": "closed-ticket-fiber-1", "success_rps": 3347.3333333333335, "p99_ms": 63.039, "unsuccessful": 0}
+{"time": "2026-11-08T15:00:36.335650+00:00", "event": "round_start", "id": "closed-ticket-thinkgo-1", "number": 15, "total": 150}
+{"time": "2026-11-08T15:00:36.339001+00:00", "event": "round_complete", "id": "closed-ticket-thinkgo-1", "success_rps": 3235.3, "p99_ms": 63.071, "unsuccessful": 0}
+{"time": "2026-11-08T15:00:37.339497+00:00", "event": "round_start", "id": "closed-catalog-iris-1", "number": 16, "total": 150}
+{"time": "2026-11-08T15:00:37.342782+00:00", "event": "round_complete", "id": "closed-catalog-iris-1", "success_rps": 6676.333333333333, "p99_ms": 35.839, "unsuccessful": 0}
+{"time": "2026-11-08T15:00:38.343053+00:00", "event": "round_start", "id": "closed-detail-echo-1", "number": 17, "total": 150}
+{"time": "2026-11-08T15:00:38.345729+00:00", "event": "round_complete", "id": "closed-detail-echo-1", "success_rps": 15153.966666666667, "p99_ms": 15.079, "unsuccessful": 0}
+{"time": "2026-11-08T15:00:39.345969+00:00", "event": "round_start", "id": "closed-catalog-laravel-octane-1", "number": 18, "total": 150}
+{"time": "2026-11-08T15:00:39.349671+00:00", "event": "round_complete", "id": "closed-catalog-laravel-octane-1", "success_rps": 1206.9, "p99_ms": 84.543, "unsuccessful": 0}
+{"time": "2026-11-08T15:00:40.349980+00:00", "event": "round_start", "id": "closed-catalog-thinkgo-1", "number": 19, "total": 150}
+{"time": "2026-11-08T15:00:40.352852+00:00", "event": "round_complete", "id": "closed-catalog-thinkgo-1", "success_rps": 6372.2, "p99_ms": 37.727, "unsuccessful": 0}
+{"time": "2026-11-08T15:00:41.353282+00:00", "event": "round_start", "id": "closed-order-thinkphp-fpm-1", "number": 20, "total": 150}
+{"time": "2026-11-08T15:00:41.356228+00:00", "event": "round_complete", "id": "closed-order-thinkphp-fpm-1", "success_rps": 1178.7, "p99_ms": 111.295, "unsuccessful": 0}
+{"time": "2026-11-08T15:00:42.356440+00:00", "event": "round_start", "id": "closed-catalog-fiber-1", "number": 21, "total": 150}
+{"time": "2026-11-08T15:00:42.359986+00:00", "event": "round_complete", "id": "closed-catalog-fiber-1", "success_rps": 7374.3, "p99_ms": 29.215, "unsuccessful": 0}
+{"time": "2026-11-08T15:00:43.360282+00:00", "event": "round_start", "id": "closed-mixed-iris-1", "number": 22, "total": 150}
+{"time": "2026-11-08T15:00:43.362674+00:00", "event": "round_complete", "id": "closed-mixed-iris-1", "success_rps": 3877.6, "p99_ms": 66.367, "unsuccessful": 0}
+{"time": "2026-11-08T15:00:44.363183+00:00", "event": "round_start", "id": "closed-order-beego-1", "number": 23, "total": 150}
+{"time": "2026-11-08T15:00:44.365816+00:00", "event": "round_complete", "id": "closed-order-beego-1", "success_rps": 1231.9333333333334, "p99_ms": 161.407, "unsuccessful": 0}
+{"time": "2026-11-08T15:00:45.366053+00:00", "event": "round_start", "id": "closed-detail-fiber-1", "number": 24, "total": 150}
+{"time": "2026-11-08T15:00:45.368901+00:00", "event": "round_complete", "id": "closed-detail-fiber-1", "success_rps": 16865.766666666666, "p99_ms": 14.303, "unsuccessful": 0}
+{"time": "2026-11-08T15:00:46.369901+00:00", "event": "round_start", "id": "closed-ticket-laravel-fpm-1", "number": 25, "total": 150}
+{"time": "2026-11-08T15:00:46.372922+00:00", "event": "round_complete", "id": "closed-ticket-laravel-fpm-1", "success_rps": 711.2666666666667, "p99_ms": 150.015, "unsuccessful": 0}
+{"time": "2026-11-08T15:00:47.373202+00:00", "event": "round_start", "id": "closed-order-thinkgo-before-1", "number": 26, "total": 150}
+{"time": "2026-11-08T15:00:47.375595+00:00", "event": "round_complete", "id": "closed-order-thinkgo-before-1", "success_rps": 1226.2, "p99_ms": 186.367, "unsuccessful": 0}
+{"time": "2026-11-08T15:00:48.375914+00:00", "event": "round_start", "id": "closed-order-echo-1", "number": 27, "total": 150}
+{"time": "2026-11-08T15:00:48.378623+00:00", "event": "round_complete", "id": "closed-order-echo-1", "success_rps": 1425.0666666666666, "p99_ms": 142.079, "unsuccessful": 0}
+{"time": "2026-11-08T15:00:49.378891+00:00", "event": "round_start", "id": "closed-mixed-beego-1", "number": 28, "total": 150}
+{"time": "2026-11-08T15:00:49.381318+00:00", "event": "round_complete", "id": "closed-mixed-beego-1", "success_rps": 3233.9333333333334, "p99_ms": 82.495, "unsuccessful": 0}
+{"time": "2026-11-08T15:00:50.381719+00:00", "event": "round_start", "id": "closed-catalog-gin-1", "number": 29, "total": 150}
+{"time": "2026-11-08T15:00:50.384342+00:00", "event": "round_complete", "id": "closed-catalog-gin-1", "success_rps": 5893.633333333333, "p99_ms": 36.895, "unsuccessful": 0}
+{"time": "2026-11-08T15:00:51.384584+00:00", "event": "round_start", "id": "closed-catalog-thinkgo-before-1", "number": 30, "total": 150}
+{"time": "2026-11-08T15:00:51.387289+00:00", "event": "round_complete", "id": "closed-catalog-thinkgo-before-1", "success_rps": 5404.133333333333, "p99_ms": 42.879, "unsuccessful": 0}
+{"time": "2026-11-08T15:00:52.387597+00:00", "event": "round_start", "id": "closed-ticket-iris-1", "number": 31, "total": 150}
+{"time": "2026-11-08T15:00:52.389852+00:00", "event": "round_complete", "id": "closed-ticket-iris-1", "success_rps": 2853.5, "p99_ms": 95.615, "unsuccessful": 0}
+{"time": "2026-11-08T15:00:53.390090+00:00", "event": "round_start", "id": "closed-ticket-echo-1", "number": 32, "total": 150}
+{"time": "2026-11-08T15:00:53.392861+00:00", "event": "round_complete", "id": "closed-ticket-echo-1", "success_rps": 3499.1666666666665, "p99_ms": 56.447, "unsuccessful": 0}
+{"time": "2026-11-08T15:00:54.393201+00:00", "event": "round_start", "id": "closed-mixed-laravel-octane-1", "number": 33, "total": 150}
+{"time": "2026-11-08T15:00:54.396349+00:00", "event": "round_complete", "id": "closed-mixed-laravel-octane-1", "success_rps": 1050.8666666666666, "p99_ms": 143.231, "unsuccessful": 0}
+{"time": "2026-11-08T15:00:55.396623+00:00", "event": "round_start", "id": "closed-catalog-beego-1", "number": 34, "total": 150}
+{"time": "2026-11-08T15:00:55.399120+00:00", "event": "round_complete", "id": "closed-catalog-beego-1", "success_rps": 7810, "p99_ms": 23.311, "unsuccessful": 0}
+{"time": "2026-11-08T15:00:56.399355+00:00", "event": "round_start", "id": "closed-catalog-laravel-fpm-1", "number": 35, "total": 150}
+{"time": "2026-11-08T15:00:56.402038+00:00", "event": "round_complete", "id": "closed-catalog-laravel-fpm-1", "success_rps": 782.3, "p99_ms": 116.287, "unsuccessful": 0}
+{"time": "2026-11-08T15:00:57.402359+00:00", "event": "round_start", "id": "closed-mixed-laravel-fpm-1", "number": 36, "total": 150}
+{"time": "2026-11-08T15:00:57.406040+00:00", "event": "round_complete", "id": "closed-mixed-laravel-fpm-1", "success_rps": 730.6333333333333, "p99_ms": 139.007, "unsuccessful": 0}
+{"time": "2026-11-08T15:00:58.406273+00:00", "event": "round_start", "id": "closed-mixed-thinkphp-fpm-1", "number": 37, "total": 150}
+{"time": "2026-11-08T15:00:58.411219+00:00", "event": "round_complete", "id": "closed-mixed-thinkphp-fpm-1", "success_rps": 2097.3, "p99_ms": 54.751, "unsuccessful": 0}
+{"time": "2026-11-08T15:00:59.411626+00:00", "event": "round_start", "id": "closed-ticket-laravel-octane-1", "number": 38, "total": 150}
+{"time": "2026-11-08T15:00:59.414475+00:00", "event": "round_complete", "id": "closed-ticket-laravel-octane-1", "success_rps": 1076.1666666666667, "p99_ms": 93.247, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:00.414677+00:00", "event": "round_start", "id": "closed-catalog-thinkphp-fpm-1", "number": 39, "total": 150}
+{"time": "2026-11-08T15:01:00.417323+00:00", "event": "round_complete", "id": "closed-catalog-thinkphp-fpm-1", "success_rps": 2312.266666666667, "p99_ms": 58.367, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:01.417553+00:00", "event": "round_start", "id": "closed-mixed-thinkgo-1", "number": 40, "total": 150}
+{"time": "2026-11-08T15:01:01.420463+00:00", "event": "round_complete", "id": "closed-mixed-thinkgo-1", "success_rps": 3324.266666666667, "p99_ms": 86.847, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:02.420874+00:00", "event": "round_start", "id": "closed-ticket-gin-1", "number": 41, "total": 150}
+{"time": "2026-11-08T15:01:02.423641+00:00", "event": "round_complete", "id": "closed-ticket-gin-1", "success_rps": 3596.233333333333, "p99_ms": 54.399, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:03.423885+00:00", "event": "round_start", "id": "closed-catalog-echo-1", "number": 42, "total": 150}
+{"time": "2026-11-08T15:01:03.426671+00:00", "event": "round_complete", "id": "closed-catalog-echo-1", "success_rps": 7854.8, "p99_ms": 24.863, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:04.427335+00:00", "event": "round_start", "id": "closed-mixed-echo-1", "number": 43, "total": 150}
+{"time": "2026-11-08T15:01:04.431127+00:00", "event": "round_complete", "id": "closed-mixed-echo-1", "success_rps": 3757.8333333333335, "p99_ms": 71.359, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:05.431419+00:00", "event": "round_start", "id": "closed-ticket-thinkphp-fpm-1", "number": 44, "total": 150}
+{"time": "2026-11-08T15:01:05.434835+00:00", "event": "round_complete", "id": "closed-ticket-thinkphp-fpm-1", "success_rps": 1952.5666666666666, "p99_ms": 49.567, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:06.435086+00:00", "event": "round_start", "id": "closed-mixed-thinkgo-before-1", "number": 45, "total": 150}
+{"time": "2026-11-08T15:01:06.437905+00:00", "event": "round_complete", "id": "closed-mixed-thinkgo-before-1", "success_rps": 3620.3333333333335, "p99_ms": 73.919, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:07.438191+00:00", "event": "round_start", "id": "closed-order-thinkgo-1", "number": 46, "total": 150}
+{"time": "2026-11-08T15:01:07.440866+00:00", "event": "round_complete", "id": "closed-order-thinkgo-1", "success_rps": 1309.3666666666666, "p99_ms": 162.943, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:08.441124+00:00", "event": "round_start", "id": "closed-ticket-beego-1", "number": 47, "total": 150}
+{"time": "2026-11-08T15:01:08.443710+00:00", "event": "round_complete", "id": "closed-ticket-beego-1", "success_rps": 3261.5, "p99_ms": 64.415, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:09.443974+00:00", "event": "round_start", "id": "closed-mixed-fiber-1", "number": 48, "total": 150}
+{"time": "2026-11-08T15:01:09.446957+00:00", "event": "round_complete", "id": "closed-mixed-fiber-1", "success_rps": 3737.3, "p99_ms": 72.255, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:10.447220+00:00", "event": "round_start", "id": "closed-order-laravel-fpm-1", "number": 49, "total": 150}
+{"time": "2026-11-08T15:01:10.449948+00:00", "event": "round_complete", "id": "closed-order-laravel-fpm-1", "success_rps": 546.7, "p99_ms": 180.735, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:11.450181+00:00", "event": "round_start", "id": "closed-detail-thinkphp-fpm-1", "number": 50, "total": 150}
+{"time": "2026-11-08T15:01:11.453177+00:00", "event": "round_complete", "id": "closed-detail-thinkphp-fpm-1", "success_rps": 2363.0666666666666, "p99_ms": 52.543, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:12.453466+00:00", "event": "round_start", "id": "closed-detail-fiber-2", "number": 51, "total": 150}
+{"time": "2026-11-08T15:01:12.456466+00:00", "event": "round_complete", "id": "closed-detail-fiber-2", "success_rps": 16882.633333333335, "p99_ms": 14.991, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:13.456883+00:00", "event": "round_start", "id": "closed-detail-thinkgo-2", "number": 52, "total": 150}
+{"time": "2026-11-08T15:01:13.459484+00:00", "event": "round_complete", "id": "closed-detail-thinkgo-2", "success_rps": 12048.433333333332, "p99_ms": 18.159, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:14.459956+00:00", "event": "round_start", "id": "closed-catalog-fiber-2", "number": 53, "total": 150}
+{"time": "2026-11-08T15:01:14.465298+00:00", "event": "round_complete", "id": "closed-catalog-fiber-2", "success_rps": 7905.266666666666, "p99_ms": 24.191, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:15.467581+00:00", "event": "round_start", "id": "closed-ticket-thinkphp-fpm-2", "number": 54, "total": 150}
+{"time": "2026-11-08T15:01:15.477495+00:00", "event": "round_complete", "id": "closed-ticket-thinkphp-fpm-2", "success_rps": 1907.2666666666667, "p99_ms": 59.871, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:16.667268+00:00", "event": "round_start", "id": "closed-catalog-thinkgo-before-2", "number": 55, "total": 150}
+{"time": "2026-11-08T15:01:16.672136+00:00", "event": "round_complete", "id": "closed-catalog-thinkgo-before-2", "success_rps": 6683.433333333333, "p99_ms": 30.671, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:17.672543+00:00", "event": "round_start", "id": "closed-order-laravel-octane-2", "number": 56, "total": 150}
+{"time": "2026-11-08T15:01:17.676275+00:00", "event": "round_complete", "id": "closed-order-laravel-octane-2", "success_rps": 804.7333333333333, "p99_ms": 144.383, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:18.676796+00:00", "event": "round_start", "id": "closed-order-gin-2", "number": 57, "total": 150}
+{"time": "2026-11-08T15:01:18.680131+00:00", "event": "round_complete", "id": "closed-order-gin-2", "success_rps": 1473.3, "p99_ms": 137.855, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:19.680745+00:00", "event": "round_start", "id": "closed-ticket-thinkgo-2", "number": 58, "total": 150}
+{"time": "2026-11-08T15:01:19.683803+00:00", "event": "round_complete", "id": "closed-ticket-thinkgo-2", "success_rps": 3181.266666666667, "p99_ms": 68.479, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:20.684087+00:00", "event": "round_start", "id": "closed-order-thinkphp-fpm-2", "number": 59, "total": 150}
+{"time": "2026-11-08T15:01:20.688578+00:00", "event": "round_complete", "id": "closed-order-thinkphp-fpm-2", "success_rps": 933.2333333333333, "p99_ms": 163.455, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:21.688865+00:00", "event": "round_start", "id": "closed-ticket-laravel-octane-2", "number": 60, "total": 150}
+{"time": "2026-11-08T15:01:21.691890+00:00", "event": "round_complete", "id": "closed-ticket-laravel-octane-2", "success_rps": 1065.5, "p99_ms": 105.535, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:22.692141+00:00", "event": "round_start", "id": "closed-catalog-beego-2", "number": 61, "total": 150}
+{"time": "2026-11-08T15:01:22.695411+00:00", "event": "round_complete", "id": "closed-catalog-beego-2", "success_rps": 7967.2, "p99_ms": 23.439, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:23.695721+00:00", "event": "round_start", "id": "closed-order-iris-2", "number": 62, "total": 150}
+{"time": "2026-11-08T15:01:23.699101+00:00", "event": "round_complete", "id": "closed-order-iris-2", "success_rps": 1354.1, "p99_ms": 150.655, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:24.701665+00:00", "event": "round_start", "id": "closed-catalog-echo-2", "number": 63, "total": 150}
+{"time": "2026-11-08T15:01:24.704483+00:00", "event": "round_complete", "id": "closed-catalog-echo-2", "success_rps": 7306.166666666667, "p99_ms": 31.535, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:25.704991+00:00", "event": "round_start", "id": "closed-order-thinkgo-2", "number": 64, "total": 150}
+{"time": "2026-11-08T15:01:25.707360+00:00", "event": "round_complete", "id": "closed-order-thinkgo-2", "success_rps": 1486.8666666666666, "p99_ms": 135.167, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:26.707686+00:00", "event": "round_start", "id": "closed-detail-thinkphp-fpm-2", "number": 65, "total": 150}
+{"time": "2026-11-08T15:01:26.710497+00:00", "event": "round_complete", "id": "closed-detail-thinkphp-fpm-2", "success_rps": 2310.3, "p99_ms": 55.711, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:27.710815+00:00", "event": "round_start", "id": "closed-order-echo-2", "number": 66, "total": 150}
+{"time": "2026-11-08T15:01:27.713554+00:00", "event": "round_complete", "id": "closed-order-echo-2", "success_rps": 1440.2333333333333, "p99_ms": 142.463, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:28.714063+00:00", "event": "round_start", "id": "closed-mixed-iris-2", "number": 67, "total": 150}
+{"time": "2026-11-08T15:01:28.717199+00:00", "event": "round_complete", "id": "closed-mixed-iris-2", "success_rps": 3929.0666666666666, "p99_ms": 66.815, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:29.717579+00:00", "event": "round_start", "id": "closed-order-thinkgo-before-2", "number": 68, "total": 150}
+{"time": "2026-11-08T15:01:29.732501+00:00", "event": "round_complete", "id": "closed-order-thinkgo-before-2", "success_rps": 1313.6666666666667, "p99_ms": 172.543, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:30.733180+00:00", "event": "round_start", "id": "closed-mixed-echo-2", "number": 69, "total": 150}
+{"time": "2026-11-08T15:01:30.739749+00:00", "event": "round_complete", "id": "closed-mixed-echo-2", "success_rps": 3227.4333333333334, "p99_ms": 85.375, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:31.740004+00:00", "event": "round_start", "id": "closed-ticket-fiber-2", "number": 70, "total": 150}
+{"time": "2026-11-08T15:01:31.745205+00:00", "event": "round_complete", "id": "closed-ticket-fiber-2", "success_rps": 3674.733333333333, "p99_ms": 55.807, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:32.745539+00:00", "event": "round_start", "id": "closed-mixed-fiber-2", "number": 71, "total": 150}
+{"time": "2026-11-08T15:01:32.748494+00:00", "event": "round_complete", "id": "closed-mixed-fiber-2", "success_rps": 3667.1666666666665, "p99_ms": 78.399, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:33.748790+00:00", "event": "round_start", "id": "closed-ticket-beego-2", "number": 72, "total": 150}
+{"time": "2026-11-08T15:01:33.752042+00:00", "event": "round_complete", "id": "closed-ticket-beego-2", "success_rps": 3470.133333333333, "p99_ms": 64.991, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:34.752380+00:00", "event": "round_start", "id": "closed-mixed-thinkgo-before-2", "number": 73, "total": 150}
+{"time": "2026-11-08T15:01:34.754853+00:00", "event": "round_complete", "id": "closed-mixed-thinkgo-before-2", "success_rps": 3897.3, "p99_ms": 67.775, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:35.755132+00:00", "event": "round_start", "id": "closed-mixed-laravel-fpm-2", "number": 74, "total": 150}
+{"time": "2026-11-08T15:01:35.758115+00:00", "event": "round_complete", "id": "closed-mixed-laravel-fpm-2", "success_rps": 783.5333333333333, "p99_ms": 124.991, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:36.758355+00:00", "event": "round_start", "id": "closed-catalog-laravel-fpm-2", "number": 75, "total": 150}
+{"time": "2026-11-08T15:01:36.761284+00:00", "event": "round_complete", "id": "closed-catalog-laravel-fpm-2", "success_rps": 707.8666666666667, "p99_ms": 195.327, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:37.761532+00:00", "event": "round_start", "id": "closed-catalog-thinkphp-fpm-2", "number": 76, "total": 150}
+{"time": "2026-11-08T15:01:37.764154+00:00", "event": "round_complete", "id": "closed-catalog-thinkphp-fpm-2", "success_rps": 1903.1333333333334, "p99_ms": 221.183, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:38.765375+00:00", "event": "round_start", "id": "closed-ticket-echo-2", "number": 77, "total": 150}
+{"time": "2026-11-08T15:01:38.769637+00:00", "event": "round_complete", "id": "closed-ticket-echo-2", "success_rps": 3356.9333333333334, "p99_ms": 61.183, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:39.769968+00:00", "event": "round_start", "id": "closed-order-laravel-fpm-2", "number": 78, "total": 150}
+{"time": "2026-11-08T15:01:39.773062+00:00", "event": "round_complete", "id": "closed-order-laravel-fpm-2", "success_rps": 678.3333333333334, "p99_ms": 129.919, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:40.773303+00:00", "event": "round_start", "id": "closed-detail-gin-2", "number": 79, "total": 150}
+{"time": "2026-11-08T15:01:40.776067+00:00", "event": "round_complete", "id": "closed-detail-gin-2", "success_rps": 15037.1, "p99_ms": 16.055, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:41.776369+00:00", "event": "round_start", "id": "closed-detail-iris-2", "number": 80, "total": 150}
+{"time": "2026-11-08T15:01:41.778802+00:00", "event": "round_complete", "id": "closed-detail-iris-2", "success_rps": 15078.1, "p99_ms": 15.983, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:42.779171+00:00", "event": "round_start", "id": "closed-catalog-gin-2", "number": 81, "total": 150}
+{"time": "2026-11-08T15:01:42.785678+00:00", "event": "round_complete", "id": "closed-catalog-gin-2", "success_rps": 8331, "p99_ms": 22.159, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:43.786034+00:00", "event": "round_start", "id": "closed-order-fiber-2", "number": 82, "total": 150}
+{"time": "2026-11-08T15:01:43.788144+00:00", "event": "round_complete", "id": "closed-order-fiber-2", "success_rps": 1480.9333333333334, "p99_ms": 137.855, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:44.788651+00:00", "event": "round_start", "id": "closed-detail-echo-2", "number": 83, "total": 150}
+{"time": "2026-11-08T15:01:44.791669+00:00", "event": "round_complete", "id": "closed-detail-echo-2", "success_rps": 16636, "p99_ms": 13.495, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:45.791951+00:00", "event": "round_start", "id": "closed-catalog-thinkgo-2", "number": 84, "total": 150}
+{"time": "2026-11-08T15:01:45.794660+00:00", "event": "round_complete", "id": "closed-catalog-thinkgo-2", "success_rps": 7127.1, "p99_ms": 31.151, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:46.794913+00:00", "event": "round_start", "id": "closed-ticket-laravel-fpm-2", "number": 85, "total": 150}
+{"time": "2026-11-08T15:01:46.797335+00:00", "event": "round_complete", "id": "closed-ticket-laravel-fpm-2", "success_rps": 745.4333333333333, "p99_ms": 133.119, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:47.797576+00:00", "event": "round_start", "id": "closed-mixed-gin-2", "number": 86, "total": 150}
+{"time": "2026-11-08T15:01:47.800981+00:00", "event": "round_complete", "id": "closed-mixed-gin-2", "success_rps": 3932.3333333333335, "p99_ms": 67.135, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:48.801323+00:00", "event": "round_start", "id": "closed-catalog-iris-2", "number": 87, "total": 150}
+{"time": "2026-11-08T15:01:48.804867+00:00", "event": "round_complete", "id": "closed-catalog-iris-2", "success_rps": 8031.6, "p99_ms": 25.631, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:49.805145+00:00", "event": "round_start", "id": "closed-mixed-thinkgo-2", "number": 88, "total": 150}
+{"time": "2026-11-08T15:01:49.807834+00:00", "event": "round_complete", "id": "closed-mixed-thinkgo-2", "success_rps": 3533.5666666666666, "p99_ms": 82.687, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:50.808067+00:00", "event": "round_start", "id": "closed-ticket-thinkgo-before-2", "number": 89, "total": 150}
+{"time": "2026-11-08T15:01:50.815052+00:00", "event": "round_complete", "id": "closed-ticket-thinkgo-before-2", "success_rps": 3637.7, "p99_ms": 52.095, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:51.815338+00:00", "event": "round_start", "id": "closed-ticket-gin-2", "number": 90, "total": 150}
+{"time": "2026-11-08T15:01:51.817866+00:00", "event": "round_complete", "id": "closed-ticket-gin-2", "success_rps": 3852.3, "p99_ms": 49.791, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:52.818138+00:00", "event": "round_start", "id": "closed-order-beego-2", "number": 91, "total": 150}
+{"time": "2026-11-08T15:01:52.820575+00:00", "event": "round_complete", "id": "closed-order-beego-2", "success_rps": 1168.4, "p99_ms": 215.935, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:53.820863+00:00", "event": "round_start", "id": "closed-catalog-laravel-octane-2", "number": 92, "total": 150}
+{"time": "2026-11-08T15:01:53.823758+00:00", "event": "round_complete", "id": "closed-catalog-laravel-octane-2", "success_rps": 1170.0333333333333, "p99_ms": 129.023, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:54.823986+00:00", "event": "round_start", "id": "closed-mixed-laravel-octane-2", "number": 93, "total": 150}
+{"time": "2026-11-08T15:01:54.827435+00:00", "event": "round_complete", "id": "closed-mixed-laravel-octane-2", "success_rps": 1159.4, "p99_ms": 88.127, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:55.827719+00:00", "event": "round_start", "id": "closed-detail-thinkgo-before-2", "number": 94, "total": 150}
+{"time": "2026-11-08T15:01:55.830565+00:00", "event": "round_complete", "id": "closed-detail-thinkgo-before-2", "success_rps": 10177.233333333334, "p99_ms": 23.855, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:56.830846+00:00", "event": "round_start", "id": "closed-ticket-iris-2", "number": 95, "total": 150}
+{"time": "2026-11-08T15:01:56.833393+00:00", "event": "round_complete", "id": "closed-ticket-iris-2", "success_rps": 3598.8333333333335, "p99_ms": 58.399, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:57.836993+00:00", "event": "round_start", "id": "closed-mixed-thinkphp-fpm-2", "number": 96, "total": 150}
+{"time": "2026-11-08T15:01:57.839621+00:00", "event": "round_complete", "id": "closed-mixed-thinkphp-fpm-2", "success_rps": 2152.9333333333334, "p99_ms": 55.455, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:58.839839+00:00", "event": "round_start", "id": "closed-detail-laravel-octane-2", "number": 97, "total": 150}
+{"time": "2026-11-08T15:01:58.842747+00:00", "event": "round_complete", "id": "closed-detail-laravel-octane-2", "success_rps": 1181.2333333333333, "p99_ms": 152.575, "unsuccessful": 0}
+{"time": "2026-11-08T15:01:59.842980+00:00", "event": "round_start", "id": "closed-detail-beego-2", "number": 98, "total": 150}
+{"time": "2026-11-08T15:01:59.845518+00:00", "event": "round_complete", "id": "closed-detail-beego-2", "success_rps": 14237.733333333334, "p99_ms": 17.327, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:00.845763+00:00", "event": "round_start", "id": "closed-detail-laravel-fpm-2", "number": 99, "total": 150}
+{"time": "2026-11-08T15:02:00.848334+00:00", "event": "round_complete", "id": "closed-detail-laravel-fpm-2", "success_rps": 819.8666666666667, "p99_ms": 125.375, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:01.848619+00:00", "event": "round_start", "id": "closed-mixed-beego-2", "number": 100, "total": 150}
+{"time": "2026-11-08T15:02:01.851576+00:00", "event": "round_complete", "id": "closed-mixed-beego-2", "success_rps": 3915.7, "p99_ms": 68.991, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:02.851935+00:00", "event": "round_start", "id": "closed-ticket-thinkgo-3", "number": 101, "total": 150}
+{"time": "2026-11-08T15:02:02.854372+00:00", "event": "round_complete", "id": "closed-ticket-thinkgo-3", "success_rps": 3575.2, "p99_ms": 54.879, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:03.854621+00:00", "event": "round_start", "id": "closed-order-gin-3", "number": 102, "total": 150}
+{"time": "2026-11-08T15:02:03.857410+00:00", "event": "round_complete", "id": "closed-order-gin-3", "success_rps": 1531.9, "p99_ms": 130.111, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:04.857669+00:00", "event": "round_start", "id": "closed-detail-gin-3", "number": 103, "total": 150}
+{"time": "2026-11-08T15:02:04.860256+00:00", "event": "round_complete", "id": "closed-detail-gin-3", "success_rps": 16426.4, "p99_ms": 13.631, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:05.860501+00:00", "event": "round_start", "id": "closed-order-laravel-octane-3", "number": 104, "total": 150}
+{"time": "2026-11-08T15:02:05.864068+00:00", "event": "round_complete", "id": "closed-order-laravel-octane-3", "success_rps": 767.9666666666667, "p99_ms": 238.079, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:06.864332+00:00", "event": "round_start", "id": "closed-mixed-beego-3", "number": 105, "total": 150}
+{"time": "2026-11-08T15:02:06.866551+00:00", "event": "round_complete", "id": "closed-mixed-beego-3", "success_rps": 3734.3, "p99_ms": 75.775, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:07.866887+00:00", "event": "round_start", "id": "closed-ticket-fiber-3", "number": 106, "total": 150}
+{"time": "2026-11-08T15:02:07.869456+00:00", "event": "round_complete", "id": "closed-ticket-fiber-3", "success_rps": 3734.5333333333333, "p99_ms": 53.983, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:08.869996+00:00", "event": "round_start", "id": "closed-mixed-thinkphp-fpm-3", "number": 107, "total": 150}
+{"time": "2026-11-08T15:02:08.877575+00:00", "event": "round_complete", "id": "closed-mixed-thinkphp-fpm-3", "success_rps": 1956.2, "p99_ms": 89.343, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:09.877880+00:00", "event": "round_start", "id": "closed-catalog-laravel-octane-3", "number": 108, "total": 150}
+{"time": "2026-11-08T15:02:09.880709+00:00", "event": "round_complete", "id": "closed-catalog-laravel-octane-3", "success_rps": 1260.5, "p99_ms": 82.943, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:10.881134+00:00", "event": "round_start", "id": "closed-ticket-iris-3", "number": 109, "total": 150}
+{"time": "2026-11-08T15:02:10.884383+00:00", "event": "round_complete", "id": "closed-ticket-iris-3", "success_rps": 3750.9666666666667, "p99_ms": 51.103, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:11.884850+00:00", "event": "round_start", "id": "closed-order-laravel-fpm-3", "number": 110, "total": 150}
+{"time": "2026-11-08T15:02:11.889659+00:00", "event": "round_complete", "id": "closed-order-laravel-fpm-3", "success_rps": 656.2, "p99_ms": 161.023, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:12.890054+00:00", "event": "round_start", "id": "closed-ticket-echo-3", "number": 111, "total": 150}
+{"time": "2026-11-08T15:02:12.892650+00:00", "event": "round_complete", "id": "closed-ticket-echo-3", "success_rps": 3722.133333333333, "p99_ms": 54.271, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:13.892887+00:00", "event": "round_start", "id": "closed-mixed-gin-3", "number": 112, "total": 150}
+{"time": "2026-11-08T15:02:13.895346+00:00", "event": "round_complete", "id": "closed-mixed-gin-3", "success_rps": 3907.9333333333334, "p99_ms": 72.767, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:14.895569+00:00", "event": "round_start", "id": "closed-catalog-iris-3", "number": 113, "total": 150}
+{"time": "2026-11-08T15:02:14.898400+00:00", "event": "round_complete", "id": "closed-catalog-iris-3", "success_rps": 8465.733333333334, "p99_ms": 21.999, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:15.901563+00:00", "event": "round_start", "id": "closed-order-thinkgo-3", "number": 114, "total": 150}
+{"time": "2026-11-08T15:02:15.933479+00:00", "event": "round_complete", "id": "closed-order-thinkgo-3", "success_rps": 1420.7, "p99_ms": 141.183, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:16.937962+00:00", "event": "round_start", "id": "closed-mixed-iris-3", "number": 115, "total": 150}
+{"time": "2026-11-08T15:02:16.957762+00:00", "event": "round_complete", "id": "closed-mixed-iris-3", "success_rps": 3760.3333333333335, "p99_ms": 74.175, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:17.958007+00:00", "event": "round_start", "id": "closed-detail-thinkgo-before-3", "number": 116, "total": 150}
+{"time": "2026-11-08T15:02:17.964320+00:00", "event": "round_complete", "id": "closed-detail-thinkgo-before-3", "success_rps": 11511.866666666667, "p99_ms": 18.143, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:18.964777+00:00", "event": "round_start", "id": "closed-order-echo-3", "number": 117, "total": 150}
+{"time": "2026-11-08T15:02:18.976299+00:00", "event": "round_complete", "id": "closed-order-echo-3", "success_rps": 1531.0666666666666, "p99_ms": 129.087, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:19.978907+00:00", "event": "round_start", "id": "closed-detail-iris-3", "number": 118, "total": 150}
+{"time": "2026-11-08T15:02:19.989005+00:00", "event": "round_complete", "id": "closed-detail-iris-3", "success_rps": 16432.6, "p99_ms": 14.223, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:20.993024+00:00", "event": "round_start", "id": "closed-mixed-fiber-3", "number": 119, "total": 150}
+{"time": "2026-11-08T15:02:21.006723+00:00", "event": "round_complete", "id": "closed-mixed-fiber-3", "success_rps": 3913.5, "p99_ms": 75.135, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:22.006987+00:00", "event": "round_start", "id": "closed-catalog-beego-3", "number": 120, "total": 150}
+{"time": "2026-11-08T15:02:22.024848+00:00", "event": "round_complete", "id": "closed-catalog-beego-3", "success_rps": 6651.4, "p99_ms": 38.335, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:23.025244+00:00", "event": "round_start", "id": "closed-ticket-thinkgo-before-3", "number": 121, "total": 150}
+{"time": "2026-11-08T15:02:23.036539+00:00", "event": "round_complete", "id": "closed-ticket-thinkgo-before-3", "success_rps": 3352.4666666666667, "p99_ms": 64.575, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:24.037049+00:00", "event": "round_start", "id": "closed-catalog-echo-3", "number": 122, "total": 150}
+{"time": "2026-11-08T15:02:24.040494+00:00", "event": "round_complete", "id": "closed-catalog-echo-3", "success_rps": 7618, "p99_ms": 28.495, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:25.044139+00:00", "event": "round_start", "id": "closed-catalog-thinkphp-fpm-3", "number": 123, "total": 150}
+{"time": "2026-11-08T15:02:25.047083+00:00", "event": "round_complete", "id": "closed-catalog-thinkphp-fpm-3", "success_rps": 2396.4, "p99_ms": 56.639, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:26.047368+00:00", "event": "round_start", "id": "closed-mixed-laravel-octane-3", "number": 124, "total": 150}
+{"time": "2026-11-08T15:02:26.049956+00:00", "event": "round_complete", "id": "closed-mixed-laravel-octane-3", "success_rps": 1129.9333333333334, "p99_ms": 89.407, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:27.050237+00:00", "event": "round_start", "id": "closed-detail-thinkgo-3", "number": 125, "total": 150}
+{"time": "2026-11-08T15:02:27.052685+00:00", "event": "round_complete", "id": "closed-detail-thinkgo-3", "success_rps": 11987.233333333334, "p99_ms": 18.415, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:28.053043+00:00", "event": "round_start", "id": "closed-ticket-laravel-fpm-3", "number": 126, "total": 150}
+{"time": "2026-11-08T15:02:28.055730+00:00", "event": "round_complete", "id": "closed-ticket-laravel-fpm-3", "success_rps": 740.5333333333333, "p99_ms": 125.695, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:29.055973+00:00", "event": "round_start", "id": "closed-order-iris-3", "number": 127, "total": 150}
+{"time": "2026-11-08T15:02:29.058254+00:00", "event": "round_complete", "id": "closed-order-iris-3", "success_rps": 1323.0333333333333, "p99_ms": 185.599, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:30.058495+00:00", "event": "round_start", "id": "closed-ticket-laravel-octane-3", "number": 128, "total": 150}
+{"time": "2026-11-08T15:02:30.061067+00:00", "event": "round_complete", "id": "closed-ticket-laravel-octane-3", "success_rps": 1064.2333333333333, "p99_ms": 96.191, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:31.061324+00:00", "event": "round_start", "id": "closed-detail-beego-3", "number": 129, "total": 150}
+{"time": "2026-11-08T15:02:31.063486+00:00", "event": "round_complete", "id": "closed-detail-beego-3", "success_rps": 14667.6, "p99_ms": 16.047, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:32.063790+00:00", "event": "round_start", "id": "closed-catalog-gin-3", "number": 130, "total": 150}
+{"time": "2026-11-08T15:02:32.066068+00:00", "event": "round_complete", "id": "closed-catalog-gin-3", "success_rps": 8126.333333333333, "p99_ms": 23.007, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:33.066330+00:00", "event": "round_start", "id": "closed-mixed-thinkgo-before-3", "number": 131, "total": 150}
+{"time": "2026-11-08T15:02:33.069518+00:00", "event": "round_complete", "id": "closed-mixed-thinkgo-before-3", "success_rps": 3157.5666666666666, "p99_ms": 86.399, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:34.069928+00:00", "event": "round_start", "id": "closed-order-thinkphp-fpm-3", "number": 132, "total": 150}
+{"time": "2026-11-08T15:02:34.079149+00:00", "event": "round_complete", "id": "closed-order-thinkphp-fpm-3", "success_rps": 1309.2666666666667, "p99_ms": 84.863, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:35.079491+00:00", "event": "round_start", "id": "closed-mixed-echo-3", "number": 133, "total": 150}
+{"time": "2026-11-08T15:02:35.082137+00:00", "event": "round_complete", "id": "closed-mixed-echo-3", "success_rps": 4085.5666666666666, "p99_ms": 63.903, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:36.082476+00:00", "event": "round_start", "id": "closed-order-thinkgo-before-3", "number": 134, "total": 150}
+{"time": "2026-11-08T15:02:36.084909+00:00", "event": "round_complete", "id": "closed-order-thinkgo-before-3", "success_rps": 1434.1333333333334, "p99_ms": 145.407, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:37.085214+00:00", "event": "round_start", "id": "closed-catalog-fiber-3", "number": 135, "total": 150}
+{"time": "2026-11-08T15:02:37.087546+00:00", "event": "round_complete", "id": "closed-catalog-fiber-3", "success_rps": 7763, "p99_ms": 29.023, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:38.087811+00:00", "event": "round_start", "id": "closed-mixed-laravel-fpm-3", "number": 136, "total": 150}
+{"time": "2026-11-08T15:02:38.090885+00:00", "event": "round_complete", "id": "closed-mixed-laravel-fpm-3", "success_rps": 718.1333333333333, "p99_ms": 192.767, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:39.091132+00:00", "event": "round_start", "id": "closed-detail-laravel-fpm-3", "number": 137, "total": 150}
+{"time": "2026-11-08T15:02:39.093825+00:00", "event": "round_complete", "id": "closed-detail-laravel-fpm-3", "success_rps": 790.0333333333333, "p99_ms": 131.199, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:40.094072+00:00", "event": "round_start", "id": "closed-catalog-thinkgo-3", "number": 138, "total": 150}
+{"time": "2026-11-08T15:02:40.096455+00:00", "event": "round_complete", "id": "closed-catalog-thinkgo-3", "success_rps": 7253.1, "p99_ms": 26.575, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:41.096695+00:00", "event": "round_start", "id": "closed-catalog-thinkgo-before-3", "number": 139, "total": 150}
+{"time": "2026-11-08T15:02:41.099198+00:00", "event": "round_complete", "id": "closed-catalog-thinkgo-before-3", "success_rps": 6305.4, "p99_ms": 39.071, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:42.099470+00:00", "event": "round_start", "id": "closed-detail-laravel-octane-3", "number": 140, "total": 150}
+{"time": "2026-11-08T15:02:42.102356+00:00", "event": "round_complete", "id": "closed-detail-laravel-octane-3", "success_rps": 1203.1, "p99_ms": 92.031, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:43.102678+00:00", "event": "round_start", "id": "closed-detail-thinkphp-fpm-3", "number": 141, "total": 150}
+{"time": "2026-11-08T15:02:43.105391+00:00", "event": "round_complete", "id": "closed-detail-thinkphp-fpm-3", "success_rps": 2363.866666666667, "p99_ms": 49.631, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:44.105642+00:00", "event": "round_start", "id": "closed-ticket-gin-3", "number": 142, "total": 150}
+{"time": "2026-11-08T15:02:44.107734+00:00", "event": "round_complete", "id": "closed-ticket-gin-3", "success_rps": 3503.9333333333334, "p99_ms": 64.735, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:45.108044+00:00", "event": "round_start", "id": "closed-order-fiber-3", "number": 143, "total": 150}
+{"time": "2026-11-08T15:02:45.110448+00:00", "event": "round_complete", "id": "closed-order-fiber-3", "success_rps": 1514.3333333333333, "p99_ms": 132.991, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:46.111105+00:00", "event": "round_start", "id": "closed-ticket-beego-3", "number": 144, "total": 150}
+{"time": "2026-11-08T15:02:46.113545+00:00", "event": "round_complete", "id": "closed-ticket-beego-3", "success_rps": 2854.9, "p99_ms": 88.063, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:47.113829+00:00", "event": "round_start", "id": "closed-order-beego-3", "number": 145, "total": 150}
+{"time": "2026-11-08T15:02:47.116909+00:00", "event": "round_complete", "id": "closed-order-beego-3", "success_rps": 1438.0666666666666, "p99_ms": 147.711, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:48.117195+00:00", "event": "round_start", "id": "closed-mixed-thinkgo-3", "number": 146, "total": 150}
+{"time": "2026-11-08T15:02:48.120061+00:00", "event": "round_complete", "id": "closed-mixed-thinkgo-3", "success_rps": 3669.2, "p99_ms": 77.631, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:49.120357+00:00", "event": "round_start", "id": "closed-ticket-thinkphp-fpm-3", "number": 147, "total": 150}
+{"time": "2026-11-08T15:02:49.124511+00:00", "event": "round_complete", "id": "closed-ticket-thinkphp-fpm-3", "success_rps": 1926.3, "p99_ms": 53.151, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:50.124783+00:00", "event": "round_start", "id": "closed-detail-echo-3", "number": 148, "total": 150}
+{"time": "2026-11-08T15:02:50.127335+00:00", "event": "round_complete", "id": "closed-detail-echo-3", "success_rps": 13581.066666666668, "p99_ms": 23.087, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:51.127595+00:00", "event": "round_start", "id": "closed-detail-fiber-3", "number": 149, "total": 150}
+{"time": "2026-11-08T15:02:51.130474+00:00", "event": "round_complete", "id": "closed-detail-fiber-3", "success_rps": 15972.1, "p99_ms": 20.447, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:52.131066+00:00", "event": "round_start", "id": "closed-catalog-laravel-fpm-3", "number": 150, "total": 150}
+{"time": "2026-11-08T15:02:52.134388+00:00", "event": "round_complete", "id": "closed-catalog-laravel-fpm-3", "success_rps": 818.2333333333333, "p99_ms": 150.015, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:53.135977+00:00", "event": "round_start", "id": "open-mixed-gin-1", "number": 1, "total": 150}
+{"time": "2026-11-08T15:02:53.138325+00:00", "event": "round_complete", "id": "open-mixed-gin-1", "success_rps": 364.96666666666664, "p99_ms": 30.431, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:54.138554+00:00", "event": "round_start", "id": "open-detail-beego-1", "number": 2, "total": 150}
+{"time": "2026-11-08T15:02:54.140819+00:00", "event": "round_complete", "id": "open-detail-beego-1", "success_rps": 395, "p99_ms": 27.407, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:55.141139+00:00", "event": "round_start", "id": "open-detail-gin-1", "number": 3, "total": 150}
+{"time": "2026-11-08T15:02:55.144022+00:00", "event": "round_complete", "id": "open-detail-gin-1", "success_rps": 394.96666666666664, "p99_ms": 28.351, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:56.144290+00:00", "event": "round_start", "id": "open-order-fiber-1", "number": 4, "total": 150}
+{"time": "2026-11-08T15:02:56.146796+00:00", "event": "round_complete", "id": "open-order-fiber-1", "success_rps": 327.96666666666664, "p99_ms": 56.415, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:57.147249+00:00", "event": "round_start", "id": "open-detail-laravel-octane-1", "number": 5, "total": 150}
+{"time": "2026-11-08T15:02:57.151820+00:00", "event": "round_complete", "id": "open-detail-laravel-octane-1", "success_rps": 394.96666666666664, "p99_ms": 80.127, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:58.152063+00:00", "event": "round_start", "id": "open-detail-thinkgo-1", "number": 6, "total": 150}
+{"time": "2026-11-08T15:02:58.154365+00:00", "event": "round_complete", "id": "open-detail-thinkgo-1", "success_rps": 394.96666666666664, "p99_ms": 5.583, "unsuccessful": 0}
+{"time": "2026-11-08T15:02:59.154633+00:00", "event": "round_start", "id": "open-order-iris-1", "number": 7, "total": 150}
+{"time": "2026-11-08T15:02:59.156926+00:00", "event": "round_complete", "id": "open-order-iris-1", "success_rps": 327.96666666666664, "p99_ms": 33.855, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:00.157201+00:00", "event": "round_start", "id": "open-detail-laravel-fpm-1", "number": 8, "total": 150}
+{"time": "2026-11-08T15:03:00.159815+00:00", "event": "round_complete", "id": "open-detail-laravel-fpm-1", "success_rps": 394.96666666666664, "p99_ms": 135.935, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:01.160035+00:00", "event": "round_start", "id": "open-order-gin-1", "number": 9, "total": 150}
+{"time": "2026-11-08T15:03:01.162228+00:00", "event": "round_complete", "id": "open-order-gin-1", "success_rps": 327.93333333333334, "p99_ms": 50.911, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:02.162503+00:00", "event": "round_start", "id": "open-ticket-thinkgo-before-1", "number": 10, "total": 150}
+{"time": "2026-11-08T15:03:02.181315+00:00", "event": "round_complete", "id": "open-ticket-thinkgo-before-1", "success_rps": 370, "p99_ms": 20.383, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:03.192086+00:00", "event": "round_start", "id": "open-detail-thinkgo-before-1", "number": 11, "total": 150}
+{"time": "2026-11-08T15:03:03.196972+00:00", "event": "round_complete", "id": "open-detail-thinkgo-before-1", "success_rps": 395, "p99_ms": 39.519, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:04.197363+00:00", "event": "round_start", "id": "open-order-laravel-octane-1", "number": 12, "total": 150}
+{"time": "2026-11-08T15:03:04.209147+00:00", "event": "round_complete", "id": "open-order-laravel-octane-1", "success_rps": 327.8666666666667, "p99_ms": 353.279, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:05.209393+00:00", "event": "round_start", "id": "open-detail-iris-1", "number": 13, "total": 150}
+{"time": "2026-11-08T15:03:05.216024+00:00", "event": "round_complete", "id": "open-detail-iris-1", "success_rps": 394.96666666666664, "p99_ms": 4.459, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:06.216386+00:00", "event": "round_start", "id": "open-ticket-fiber-1", "number": 14, "total": 150}
+{"time": "2026-11-08T15:03:06.223088+00:00", "event": "round_complete", "id": "open-ticket-fiber-1", "success_rps": 370, "p99_ms": 11.311, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:07.225001+00:00", "event": "round_start", "id": "open-ticket-thinkgo-1", "number": 15, "total": 150}
+{"time": "2026-11-08T15:03:07.233074+00:00", "event": "round_complete", "id": "open-ticket-thinkgo-1", "success_rps": 369.93333333333334, "p99_ms": 104.575, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:08.233350+00:00", "event": "round_start", "id": "open-catalog-iris-1", "number": 16, "total": 150}
+{"time": "2026-11-08T15:03:08.250851+00:00", "event": "round_complete", "id": "open-catalog-iris-1", "success_rps": 391, "p99_ms": 6.659, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:09.251478+00:00", "event": "round_start", "id": "open-detail-echo-1", "number": 17, "total": 150}
+{"time": "2026-11-08T15:03:09.258485+00:00", "event": "round_complete", "id": "open-detail-echo-1", "success_rps": 395, "p99_ms": 32.863, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:10.258809+00:00", "event": "round_start", "id": "open-catalog-laravel-octane-1", "number": 18, "total": 150}
+{"time": "2026-11-08T15:03:10.267984+00:00", "event": "round_complete", "id": "open-catalog-laravel-octane-1", "success_rps": 390.96666666666664, "p99_ms": 62.815, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:11.268325+00:00", "event": "round_start", "id": "open-catalog-thinkgo-1", "number": 19, "total": 150}
+{"time": "2026-11-08T15:03:11.273701+00:00", "event": "round_complete", "id": "open-catalog-thinkgo-1", "success_rps": 391, "p99_ms": 8.911, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:12.275298+00:00", "event": "round_start", "id": "open-order-thinkphp-fpm-1", "number": 20, "total": 150}
+{"time": "2026-11-08T15:03:12.285074+00:00", "event": "round_complete", "id": "open-order-thinkphp-fpm-1", "success_rps": 327.9, "p99_ms": 40.927, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:13.285311+00:00", "event": "round_start", "id": "open-catalog-fiber-1", "number": 21, "total": 150}
+{"time": "2026-11-08T15:03:13.288187+00:00", "event": "round_complete", "id": "open-catalog-fiber-1", "success_rps": 391, "p99_ms": 53.311, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:14.290701+00:00", "event": "round_start", "id": "open-mixed-iris-1", "number": 22, "total": 150}
+{"time": "2026-11-08T15:03:14.305883+00:00", "event": "round_complete", "id": "open-mixed-iris-1", "success_rps": 365, "p99_ms": 51.519, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:15.306164+00:00", "event": "round_start", "id": "open-order-beego-1", "number": 23, "total": 150}
+{"time": "2026-11-08T15:03:15.311847+00:00", "event": "round_complete", "id": "open-order-beego-1", "success_rps": 327.96666666666664, "p99_ms": 110.911, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:16.312263+00:00", "event": "round_start", "id": "open-detail-fiber-1", "number": 24, "total": 150}
+{"time": "2026-11-08T15:03:16.321194+00:00", "event": "round_complete", "id": "open-detail-fiber-1", "success_rps": 394.96666666666664, "p99_ms": 5.455, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:17.321490+00:00", "event": "round_start", "id": "open-ticket-laravel-fpm-1", "number": 25, "total": 150}
+{"time": "2026-11-08T15:03:17.333522+00:00", "event": "round_complete", "id": "open-ticket-laravel-fpm-1", "success_rps": 369.9, "p99_ms": 175.999, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:18.334068+00:00", "event": "round_start", "id": "open-order-thinkgo-before-1", "number": 26, "total": 150}
+{"time": "2026-11-08T15:03:18.353950+00:00", "event": "round_complete", "id": "open-order-thinkgo-before-1", "success_rps": 327.96666666666664, "p99_ms": 34.655, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:19.354272+00:00", "event": "round_start", "id": "open-order-echo-1", "number": 27, "total": 150}
+{"time": "2026-11-08T15:03:19.364364+00:00", "event": "round_complete", "id": "open-order-echo-1", "success_rps": 327.96666666666664, "p99_ms": 41.599, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:20.364802+00:00", "event": "round_start", "id": "open-mixed-beego-1", "number": 28, "total": 150}
+{"time": "2026-11-08T15:03:20.367718+00:00", "event": "round_complete", "id": "open-mixed-beego-1", "success_rps": 365, "p99_ms": 21.967, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:21.367920+00:00", "event": "round_start", "id": "open-catalog-gin-1", "number": 29, "total": 150}
+{"time": "2026-11-08T15:03:21.371225+00:00", "event": "round_complete", "id": "open-catalog-gin-1", "success_rps": 391, "p99_ms": 43.231, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:22.371804+00:00", "event": "round_start", "id": "open-catalog-thinkgo-before-1", "number": 30, "total": 150}
+{"time": "2026-11-08T15:03:22.383105+00:00", "event": "round_complete", "id": "open-catalog-thinkgo-before-1", "success_rps": 391, "p99_ms": 26.431, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:23.383372+00:00", "event": "round_start", "id": "open-ticket-iris-1", "number": 31, "total": 150}
+{"time": "2026-11-08T15:03:23.385928+00:00", "event": "round_complete", "id": "open-ticket-iris-1", "success_rps": 369.96666666666664, "p99_ms": 37.759, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:24.386301+00:00", "event": "round_start", "id": "open-ticket-echo-1", "number": 32, "total": 150}
+{"time": "2026-11-08T15:03:24.389179+00:00", "event": "round_complete", "id": "open-ticket-echo-1", "success_rps": 370, "p99_ms": 14.111, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:25.389455+00:00", "event": "round_start", "id": "open-mixed-laravel-octane-1", "number": 33, "total": 150}
+{"time": "2026-11-08T15:03:25.393476+00:00", "event": "round_complete", "id": "open-mixed-laravel-octane-1", "success_rps": 364.93333333333334, "p99_ms": 132.223, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:26.393771+00:00", "event": "round_start", "id": "open-catalog-beego-1", "number": 34, "total": 150}
+{"time": "2026-11-08T15:03:26.397133+00:00", "event": "round_complete", "id": "open-catalog-beego-1", "success_rps": 391, "p99_ms": 16.511, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:27.397377+00:00", "event": "round_start", "id": "open-catalog-laravel-fpm-1", "number": 35, "total": 150}
+{"time": "2026-11-08T15:03:27.400900+00:00", "event": "round_complete", "id": "open-catalog-laravel-fpm-1", "success_rps": 390.96666666666664, "p99_ms": 192.383, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:28.401169+00:00", "event": "round_start", "id": "open-mixed-laravel-fpm-1", "number": 36, "total": 150}
+{"time": "2026-11-08T15:03:28.404732+00:00", "event": "round_complete", "id": "open-mixed-laravel-fpm-1", "success_rps": 364.6333333333333, "p99_ms": 122.623, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:29.405656+00:00", "event": "round_start", "id": "open-mixed-thinkphp-fpm-1", "number": 37, "total": 150}
+{"time": "2026-11-08T15:03:29.408895+00:00", "event": "round_complete", "id": "open-mixed-thinkphp-fpm-1", "success_rps": 365, "p99_ms": 94.975, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:30.409157+00:00", "event": "round_start", "id": "open-ticket-laravel-octane-1", "number": 38, "total": 150}
+{"time": "2026-11-08T15:03:30.411738+00:00", "event": "round_complete", "id": "open-ticket-laravel-octane-1", "success_rps": 369.96666666666664, "p99_ms": 60.287, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:31.412177+00:00", "event": "round_start", "id": "open-catalog-thinkphp-fpm-1", "number": 39, "total": 150}
+{"time": "2026-11-08T15:03:31.415862+00:00", "event": "round_complete", "id": "open-catalog-thinkphp-fpm-1", "success_rps": 391, "p99_ms": 7.591, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:32.416263+00:00", "event": "round_start", "id": "open-mixed-thinkgo-1", "number": 40, "total": 150}
+{"time": "2026-11-08T15:03:32.422595+00:00", "event": "round_complete", "id": "open-mixed-thinkgo-1", "success_rps": 365, "p99_ms": 11.087, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:33.422839+00:00", "event": "round_start", "id": "open-ticket-gin-1", "number": 41, "total": 150}
+{"time": "2026-11-08T15:03:33.426989+00:00", "event": "round_complete", "id": "open-ticket-gin-1", "success_rps": 370, "p99_ms": 14.647, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:34.427248+00:00", "event": "round_start", "id": "open-catalog-echo-1", "number": 42, "total": 150}
+{"time": "2026-11-08T15:03:34.430432+00:00", "event": "round_complete", "id": "open-catalog-echo-1", "success_rps": 391, "p99_ms": 89.855, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:35.430674+00:00", "event": "round_start", "id": "open-mixed-echo-1", "number": 43, "total": 150}
+{"time": "2026-11-08T15:03:35.433895+00:00", "event": "round_complete", "id": "open-mixed-echo-1", "success_rps": 365, "p99_ms": 11.255, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:36.434400+00:00", "event": "round_start", "id": "open-ticket-thinkphp-fpm-1", "number": 44, "total": 150}
+{"time": "2026-11-08T15:03:36.437947+00:00", "event": "round_complete", "id": "open-ticket-thinkphp-fpm-1", "success_rps": 369.96666666666664, "p99_ms": 87.231, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:37.438232+00:00", "event": "round_start", "id": "open-mixed-thinkgo-before-1", "number": 45, "total": 150}
+{"time": "2026-11-08T15:03:37.440830+00:00", "event": "round_complete", "id": "open-mixed-thinkgo-before-1", "success_rps": 365, "p99_ms": 17.999, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:38.441128+00:00", "event": "round_start", "id": "open-order-thinkgo-1", "number": 46, "total": 150}
+{"time": "2026-11-08T15:03:38.443750+00:00", "event": "round_complete", "id": "open-order-thinkgo-1", "success_rps": 327.96666666666664, "p99_ms": 83.903, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:39.444041+00:00", "event": "round_start", "id": "open-ticket-beego-1", "number": 47, "total": 150}
+{"time": "2026-11-08T15:03:39.446738+00:00", "event": "round_complete", "id": "open-ticket-beego-1", "success_rps": 369.96666666666664, "p99_ms": 62.175, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:40.446965+00:00", "event": "round_start", "id": "open-mixed-fiber-1", "number": 48, "total": 150}
+{"time": "2026-11-08T15:03:40.449375+00:00", "event": "round_complete", "id": "open-mixed-fiber-1", "success_rps": 365, "p99_ms": 29.695, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:41.449621+00:00", "event": "round_start", "id": "open-order-laravel-fpm-1", "number": 49, "total": 150}
+{"time": "2026-11-08T15:03:41.452463+00:00", "event": "round_complete", "id": "open-order-laravel-fpm-1", "success_rps": 327.8666666666667, "p99_ms": 78.079, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:42.452694+00:00", "event": "round_start", "id": "open-detail-thinkphp-fpm-1", "number": 50, "total": 150}
+{"time": "2026-11-08T15:03:42.455462+00:00", "event": "round_complete", "id": "open-detail-thinkphp-fpm-1", "success_rps": 394.96666666666664, "p99_ms": 8.031, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:43.455665+00:00", "event": "round_start", "id": "open-detail-fiber-2", "number": 51, "total": 150}
+{"time": "2026-11-08T15:03:43.458086+00:00", "event": "round_complete", "id": "open-detail-fiber-2", "success_rps": 394.96666666666664, "p99_ms": 4.131, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:44.458333+00:00", "event": "round_start", "id": "open-detail-thinkgo-2", "number": 52, "total": 150}
+{"time": "2026-11-08T15:03:44.460890+00:00", "event": "round_complete", "id": "open-detail-thinkgo-2", "success_rps": 395, "p99_ms": 26.831, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:45.461164+00:00", "event": "round_start", "id": "open-catalog-fiber-2", "number": 53, "total": 150}
+{"time": "2026-11-08T15:03:45.464527+00:00", "event": "round_complete", "id": "open-catalog-fiber-2", "success_rps": 391, "p99_ms": 8.399, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:46.464861+00:00", "event": "round_start", "id": "open-ticket-thinkphp-fpm-2", "number": 54, "total": 150}
+{"time": "2026-11-08T15:03:46.468477+00:00", "event": "round_complete", "id": "open-ticket-thinkphp-fpm-2", "success_rps": 369.96666666666664, "p99_ms": 77.375, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:47.468793+00:00", "event": "round_start", "id": "open-catalog-thinkgo-before-2", "number": 55, "total": 150}
+{"time": "2026-11-08T15:03:47.472589+00:00", "event": "round_complete", "id": "open-catalog-thinkgo-before-2", "success_rps": 391, "p99_ms": 74.815, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:48.473012+00:00", "event": "round_start", "id": "open-order-laravel-octane-2", "number": 56, "total": 150}
+{"time": "2026-11-08T15:03:48.477157+00:00", "event": "round_complete", "id": "open-order-laravel-octane-2", "success_rps": 327.93333333333334, "p99_ms": 42.943, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:49.477976+00:00", "event": "round_start", "id": "open-order-gin-2", "number": 57, "total": 150}
+{"time": "2026-11-08T15:03:49.481737+00:00", "event": "round_complete", "id": "open-order-gin-2", "success_rps": 327.93333333333334, "p99_ms": 20.719, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:50.482102+00:00", "event": "round_start", "id": "open-ticket-thinkgo-2", "number": 58, "total": 150}
+{"time": "2026-11-08T15:03:50.485043+00:00", "event": "round_complete", "id": "open-ticket-thinkgo-2", "success_rps": 369.9, "p99_ms": 9.823, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:51.485731+00:00", "event": "round_start", "id": "open-order-thinkphp-fpm-2", "number": 59, "total": 150}
+{"time": "2026-11-08T15:03:51.489144+00:00", "event": "round_complete", "id": "open-order-thinkphp-fpm-2", "success_rps": 327.96666666666664, "p99_ms": 120.127, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:52.490264+00:00", "event": "round_start", "id": "open-ticket-laravel-octane-2", "number": 60, "total": 150}
+{"time": "2026-11-08T15:03:52.509646+00:00", "event": "round_complete", "id": "open-ticket-laravel-octane-2", "success_rps": 369.96666666666664, "p99_ms": 84.735, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:53.510043+00:00", "event": "round_start", "id": "open-catalog-beego-2", "number": 61, "total": 150}
+{"time": "2026-11-08T15:03:53.514554+00:00", "event": "round_complete", "id": "open-catalog-beego-2", "success_rps": 391, "p99_ms": 5.167, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:54.514980+00:00", "event": "round_start", "id": "open-order-iris-2", "number": 62, "total": 150}
+{"time": "2026-11-08T15:03:54.517465+00:00", "event": "round_complete", "id": "open-order-iris-2", "success_rps": 327.96666666666664, "p99_ms": 61.247, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:55.517845+00:00", "event": "round_start", "id": "open-catalog-echo-2", "number": 63, "total": 150}
+{"time": "2026-11-08T15:03:55.520532+00:00", "event": "round_complete", "id": "open-catalog-echo-2", "success_rps": 391, "p99_ms": 7.327, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:56.520987+00:00", "event": "round_start", "id": "open-order-thinkgo-2", "number": 64, "total": 150}
+{"time": "2026-11-08T15:03:56.523793+00:00", "event": "round_complete", "id": "open-order-thinkgo-2", "success_rps": 327.8333333333333, "p99_ms": 137.727, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:57.524044+00:00", "event": "round_start", "id": "open-detail-thinkphp-fpm-2", "number": 65, "total": 150}
+{"time": "2026-11-08T15:03:57.527010+00:00", "event": "round_complete", "id": "open-detail-thinkphp-fpm-2", "success_rps": 394.6333333333333, "p99_ms": 89.471, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:58.527402+00:00", "event": "round_start", "id": "open-order-echo-2", "number": 66, "total": 150}
+{"time": "2026-11-08T15:03:58.530397+00:00", "event": "round_complete", "id": "open-order-echo-2", "success_rps": 327.96666666666664, "p99_ms": 55.071, "unsuccessful": 0}
+{"time": "2026-11-08T15:03:59.531307+00:00", "event": "round_start", "id": "open-mixed-iris-2", "number": 67, "total": 150}
+{"time": "2026-11-08T15:03:59.534626+00:00", "event": "round_complete", "id": "open-mixed-iris-2", "success_rps": 365, "p99_ms": 40.991, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:00.535091+00:00", "event": "round_start", "id": "open-order-thinkgo-before-2", "number": 68, "total": 150}
+{"time": "2026-11-08T15:04:00.537587+00:00", "event": "round_complete", "id": "open-order-thinkgo-before-2", "success_rps": 327.96666666666664, "p99_ms": 41.471, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:01.537861+00:00", "event": "round_start", "id": "open-mixed-echo-2", "number": 69, "total": 150}
+{"time": "2026-11-08T15:04:01.540988+00:00", "event": "round_complete", "id": "open-mixed-echo-2", "success_rps": 365, "p99_ms": 9.047, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:02.541233+00:00", "event": "round_start", "id": "open-ticket-fiber-2", "number": 70, "total": 150}
+{"time": "2026-11-08T15:04:02.544302+00:00", "event": "round_complete", "id": "open-ticket-fiber-2", "success_rps": 369.96666666666664, "p99_ms": 95.167, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:03.544539+00:00", "event": "round_start", "id": "open-mixed-fiber-2", "number": 71, "total": 150}
+{"time": "2026-11-08T15:04:03.546857+00:00", "event": "round_complete", "id": "open-mixed-fiber-2", "success_rps": 365, "p99_ms": 29.615, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:04.547639+00:00", "event": "round_start", "id": "open-ticket-beego-2", "number": 72, "total": 150}
+{"time": "2026-11-08T15:04:04.552020+00:00", "event": "round_complete", "id": "open-ticket-beego-2", "success_rps": 369.96666666666664, "p99_ms": 56.575, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:05.552266+00:00", "event": "round_start", "id": "open-mixed-thinkgo-before-2", "number": 73, "total": 150}
+{"time": "2026-11-08T15:04:05.554925+00:00", "event": "round_complete", "id": "open-mixed-thinkgo-before-2", "success_rps": 365, "p99_ms": 23.343, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:06.555177+00:00", "event": "round_start", "id": "open-mixed-laravel-fpm-2", "number": 74, "total": 150}
+{"time": "2026-11-08T15:04:06.558388+00:00", "event": "round_complete", "id": "open-mixed-laravel-fpm-2", "success_rps": 364.93333333333334, "p99_ms": 69.311, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:07.558668+00:00", "event": "round_start", "id": "open-catalog-laravel-fpm-2", "number": 75, "total": 150}
+{"time": "2026-11-08T15:04:07.562129+00:00", "event": "round_complete", "id": "open-catalog-laravel-fpm-2", "success_rps": 390.96666666666664, "p99_ms": 294.655, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:08.562363+00:00", "event": "round_start", "id": "open-catalog-thinkphp-fpm-2", "number": 76, "total": 150}
+{"time": "2026-11-08T15:04:08.565051+00:00", "event": "round_complete", "id": "open-catalog-thinkphp-fpm-2", "success_rps": 391, "p99_ms": 19.839, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:09.565281+00:00", "event": "round_start", "id": "open-ticket-echo-2", "number": 77, "total": 150}
+{"time": "2026-11-08T15:04:09.567687+00:00", "event": "round_complete", "id": "open-ticket-echo-2", "success_rps": 370, "p99_ms": 43.647, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:10.567989+00:00", "event": "round_start", "id": "open-order-laravel-fpm-2", "number": 78, "total": 150}
+{"time": "2026-11-08T15:04:10.571258+00:00", "event": "round_complete", "id": "open-order-laravel-fpm-2", "success_rps": 327.73333333333335, "p99_ms": 179.199, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:11.571521+00:00", "event": "round_start", "id": "open-detail-gin-2", "number": 79, "total": 150}
+{"time": "2026-11-08T15:04:11.574227+00:00", "event": "round_complete", "id": "open-detail-gin-2", "success_rps": 394.96666666666664, "p99_ms": 60.543, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:12.574472+00:00", "event": "round_start", "id": "open-detail-iris-2", "number": 80, "total": 150}
+{"time": "2026-11-08T15:04:12.577095+00:00", "event": "round_complete", "id": "open-detail-iris-2", "success_rps": 395, "p99_ms": 5.483, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:13.577397+00:00", "event": "round_start", "id": "open-catalog-gin-2", "number": 81, "total": 150}
+{"time": "2026-11-08T15:04:13.579925+00:00", "event": "round_complete", "id": "open-catalog-gin-2", "success_rps": 391, "p99_ms": 9.807, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:14.580819+00:00", "event": "round_start", "id": "open-order-fiber-2", "number": 82, "total": 150}
+{"time": "2026-11-08T15:04:14.590353+00:00", "event": "round_complete", "id": "open-order-fiber-2", "success_rps": 327.93333333333334, "p99_ms": 20.255, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:15.592400+00:00", "event": "round_start", "id": "open-detail-echo-2", "number": 83, "total": 150}
+{"time": "2026-11-08T15:04:15.597319+00:00", "event": "round_complete", "id": "open-detail-echo-2", "success_rps": 394.96666666666664, "p99_ms": 4.623, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:16.600180+00:00", "event": "round_start", "id": "open-catalog-thinkgo-2", "number": 84, "total": 150}
+{"time": "2026-11-08T15:04:16.606270+00:00", "event": "round_complete", "id": "open-catalog-thinkgo-2", "success_rps": 391, "p99_ms": 5.347, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:17.606477+00:00", "event": "round_start", "id": "open-ticket-laravel-fpm-2", "number": 85, "total": 150}
+{"time": "2026-11-08T15:04:17.609351+00:00", "event": "round_complete", "id": "open-ticket-laravel-fpm-2", "success_rps": 369.93333333333334, "p99_ms": 65.855, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:18.609707+00:00", "event": "round_start", "id": "open-mixed-gin-2", "number": 86, "total": 150}
+{"time": "2026-11-08T15:04:18.612196+00:00", "event": "round_complete", "id": "open-mixed-gin-2", "success_rps": 365, "p99_ms": 12.295, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:19.612416+00:00", "event": "round_start", "id": "open-catalog-iris-2", "number": 87, "total": 150}
+{"time": "2026-11-08T15:04:19.614731+00:00", "event": "round_complete", "id": "open-catalog-iris-2", "success_rps": 391, "p99_ms": 36.191, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:20.615030+00:00", "event": "round_start", "id": "open-mixed-thinkgo-2", "number": 88, "total": 150}
+{"time": "2026-11-08T15:04:20.621150+00:00", "event": "round_complete", "id": "open-mixed-thinkgo-2", "success_rps": 365, "p99_ms": 24.079, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:21.621398+00:00", "event": "round_start", "id": "open-ticket-thinkgo-before-2", "number": 89, "total": 150}
+{"time": "2026-11-08T15:04:21.624500+00:00", "event": "round_complete", "id": "open-ticket-thinkgo-before-2", "success_rps": 369.96666666666664, "p99_ms": 9.615, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:22.624800+00:00", "event": "round_start", "id": "open-ticket-gin-2", "number": 90, "total": 150}
+{"time": "2026-11-08T15:04:22.628023+00:00", "event": "round_complete", "id": "open-ticket-gin-2", "success_rps": 369.96666666666664, "p99_ms": 10.431, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:23.628281+00:00", "event": "round_start", "id": "open-order-beego-2", "number": 91, "total": 150}
+{"time": "2026-11-08T15:04:23.630935+00:00", "event": "round_complete", "id": "open-order-beego-2", "success_rps": 327.93333333333334, "p99_ms": 15.111, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:24.631311+00:00", "event": "round_start", "id": "open-catalog-laravel-octane-2", "number": 92, "total": 150}
+{"time": "2026-11-08T15:04:24.634137+00:00", "event": "round_complete", "id": "open-catalog-laravel-octane-2", "success_rps": 390.96666666666664, "p99_ms": 13.247, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:25.634573+00:00", "event": "round_start", "id": "open-mixed-laravel-octane-2", "number": 93, "total": 150}
+{"time": "2026-11-08T15:04:25.637659+00:00", "event": "round_complete", "id": "open-mixed-laravel-octane-2", "success_rps": 364.93333333333334, "p99_ms": 20.799, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:26.637919+00:00", "event": "round_start", "id": "open-detail-thinkgo-before-2", "number": 94, "total": 150}
+{"time": "2026-11-08T15:04:26.640732+00:00", "event": "round_complete", "id": "open-detail-thinkgo-before-2", "success_rps": 394.96666666666664, "p99_ms": 6.819, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:27.640998+00:00", "event": "round_start", "id": "open-ticket-iris-2", "number": 95, "total": 150}
+{"time": "2026-11-08T15:04:27.643416+00:00", "event": "round_complete", "id": "open-ticket-iris-2", "success_rps": 369.96666666666664, "p99_ms": 75.711, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:28.643701+00:00", "event": "round_start", "id": "open-mixed-thinkphp-fpm-2", "number": 96, "total": 150}
+{"time": "2026-11-08T15:04:28.646462+00:00", "event": "round_complete", "id": "open-mixed-thinkphp-fpm-2", "success_rps": 365, "p99_ms": 64.895, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:29.655856+00:00", "event": "round_start", "id": "open-detail-laravel-octane-2", "number": 97, "total": 150}
+{"time": "2026-11-08T15:04:29.659772+00:00", "event": "round_complete", "id": "open-detail-laravel-octane-2", "success_rps": 394.96666666666664, "p99_ms": 17.103, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:30.660034+00:00", "event": "round_start", "id": "open-detail-beego-2", "number": 98, "total": 150}
+{"time": "2026-11-08T15:04:30.662491+00:00", "event": "round_complete", "id": "open-detail-beego-2", "success_rps": 395, "p99_ms": 28.367, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:31.664537+00:00", "event": "round_start", "id": "open-detail-laravel-fpm-2", "number": 99, "total": 150}
+{"time": "2026-11-08T15:04:31.675216+00:00", "event": "round_complete", "id": "open-detail-laravel-fpm-2", "success_rps": 394.9, "p99_ms": 25.119, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:32.675428+00:00", "event": "round_start", "id": "open-mixed-beego-2", "number": 100, "total": 150}
+{"time": "2026-11-08T15:04:32.682505+00:00", "event": "round_complete", "id": "open-mixed-beego-2", "success_rps": 365, "p99_ms": 22.575, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:33.682771+00:00", "event": "round_start", "id": "open-ticket-thinkgo-3", "number": 101, "total": 150}
+{"time": "2026-11-08T15:04:33.685040+00:00", "event": "round_complete", "id": "open-ticket-thinkgo-3", "success_rps": 370, "p99_ms": 93.055, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:34.685282+00:00", "event": "round_start", "id": "open-order-gin-3", "number": 102, "total": 150}
+{"time": "2026-11-08T15:04:34.687661+00:00", "event": "round_complete", "id": "open-order-gin-3", "success_rps": 327.96666666666664, "p99_ms": 11.535, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:35.687872+00:00", "event": "round_start", "id": "open-detail-gin-3", "number": 103, "total": 150}
+{"time": "2026-11-08T15:04:35.691655+00:00", "event": "round_complete", "id": "open-detail-gin-3", "success_rps": 395, "p99_ms": 28.095, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:36.692001+00:00", "event": "round_start", "id": "open-order-laravel-octane-3", "number": 104, "total": 150}
+{"time": "2026-11-08T15:04:36.696454+00:00", "event": "round_complete", "id": "open-order-laravel-octane-3", "success_rps": 327.93333333333334, "p99_ms": 174.335, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:37.696778+00:00", "event": "round_start", "id": "open-mixed-beego-3", "number": 105, "total": 150}
+{"time": "2026-11-08T15:04:37.704746+00:00", "event": "round_complete", "id": "open-mixed-beego-3", "success_rps": 365, "p99_ms": 8.055, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:38.705011+00:00", "event": "round_start", "id": "open-ticket-fiber-3", "number": 106, "total": 150}
+{"time": "2026-11-08T15:04:38.713011+00:00", "event": "round_complete", "id": "open-ticket-fiber-3", "success_rps": 370, "p99_ms": 72.191, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:39.713275+00:00", "event": "round_start", "id": "open-mixed-thinkphp-fpm-3", "number": 107, "total": 150}
+{"time": "2026-11-08T15:04:39.719551+00:00", "event": "round_complete", "id": "open-mixed-thinkphp-fpm-3", "success_rps": 365, "p99_ms": 13.119, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:40.721150+00:00", "event": "round_start", "id": "open-catalog-laravel-octane-3", "number": 108, "total": 150}
+{"time": "2026-11-08T15:04:40.728015+00:00", "event": "round_complete", "id": "open-catalog-laravel-octane-3", "success_rps": 390.93333333333334, "p99_ms": 69.503, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:41.728282+00:00", "event": "round_start", "id": "open-ticket-iris-3", "number": 109, "total": 150}
+{"time": "2026-11-08T15:04:41.732675+00:00", "event": "round_complete", "id": "open-ticket-iris-3", "success_rps": 370, "p99_ms": 33.599, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:42.732997+00:00", "event": "round_start", "id": "open-order-laravel-fpm-3", "number": 110, "total": 150}
+{"time": "2026-11-08T15:04:42.738586+00:00", "event": "round_complete", "id": "open-order-laravel-fpm-3", "success_rps": 327.8333333333333, "p99_ms": 97.791, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:43.738884+00:00", "event": "round_start", "id": "open-ticket-echo-3", "number": 111, "total": 150}
+{"time": "2026-11-08T15:04:43.745759+00:00", "event": "round_complete", "id": "open-ticket-echo-3", "success_rps": 369.96666666666664, "p99_ms": 29.263, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:44.746027+00:00", "event": "round_start", "id": "open-mixed-gin-3", "number": 112, "total": 150}
+{"time": "2026-11-08T15:04:44.760109+00:00", "event": "round_complete", "id": "open-mixed-gin-3", "success_rps": 365, "p99_ms": 16.591, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:45.760442+00:00", "event": "round_start", "id": "open-catalog-iris-3", "number": 113, "total": 150}
+{"time": "2026-11-08T15:04:45.764444+00:00", "event": "round_complete", "id": "open-catalog-iris-3", "success_rps": 391, "p99_ms": 5.783, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:46.764759+00:00", "event": "round_start", "id": "open-order-thinkgo-3", "number": 114, "total": 150}
+{"time": "2026-11-08T15:04:46.773071+00:00", "event": "round_complete", "id": "open-order-thinkgo-3", "success_rps": 327.96666666666664, "p99_ms": 18.831, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:47.773384+00:00", "event": "round_start", "id": "open-mixed-iris-3", "number": 115, "total": 150}
+{"time": "2026-11-08T15:04:47.776249+00:00", "event": "round_complete", "id": "open-mixed-iris-3", "success_rps": 365, "p99_ms": 20.911, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:48.776532+00:00", "event": "round_start", "id": "open-detail-thinkgo-before-3", "number": 116, "total": 150}
+{"time": "2026-11-08T15:04:48.779765+00:00", "event": "round_complete", "id": "open-detail-thinkgo-before-3", "success_rps": 395, "p99_ms": 31.551, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:49.780173+00:00", "event": "round_start", "id": "open-order-echo-3", "number": 117, "total": 150}
+{"time": "2026-11-08T15:04:49.782697+00:00", "event": "round_complete", "id": "open-order-echo-3", "success_rps": 327.96666666666664, "p99_ms": 22.863, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:50.783087+00:00", "event": "round_start", "id": "open-detail-iris-3", "number": 118, "total": 150}
+{"time": "2026-11-08T15:04:50.792360+00:00", "event": "round_complete", "id": "open-detail-iris-3", "success_rps": 395, "p99_ms": 55.327, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:51.792666+00:00", "event": "round_start", "id": "open-mixed-fiber-3", "number": 119, "total": 150}
+{"time": "2026-11-08T15:04:51.795471+00:00", "event": "round_complete", "id": "open-mixed-fiber-3", "success_rps": 365, "p99_ms": 11.383, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:52.795693+00:00", "event": "round_start", "id": "open-catalog-beego-3", "number": 120, "total": 150}
+{"time": "2026-11-08T15:04:52.805738+00:00", "event": "round_complete", "id": "open-catalog-beego-3", "success_rps": 391, "p99_ms": 13.199, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:53.808557+00:00", "event": "round_start", "id": "open-ticket-thinkgo-before-3", "number": 121, "total": 150}
+{"time": "2026-11-08T15:04:53.815408+00:00", "event": "round_complete", "id": "open-ticket-thinkgo-before-3", "success_rps": 369.96666666666664, "p99_ms": 115.583, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:54.815952+00:00", "event": "round_start", "id": "open-catalog-echo-3", "number": 122, "total": 150}
+{"time": "2026-11-08T15:04:54.821367+00:00", "event": "round_complete", "id": "open-catalog-echo-3", "success_rps": 390.93333333333334, "p99_ms": 29.263, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:55.821656+00:00", "event": "round_start", "id": "open-catalog-thinkphp-fpm-3", "number": 123, "total": 150}
+{"time": "2026-11-08T15:04:55.828743+00:00", "event": "round_complete", "id": "open-catalog-thinkphp-fpm-3", "success_rps": 391, "p99_ms": 62.079, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:56.829037+00:00", "event": "round_start", "id": "open-mixed-laravel-octane-3", "number": 124, "total": 150}
+{"time": "2026-11-08T15:04:56.842470+00:00", "event": "round_complete", "id": "open-mixed-laravel-octane-3", "success_rps": 364.96666666666664, "p99_ms": 50.975, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:57.842776+00:00", "event": "round_start", "id": "open-detail-thinkgo-3", "number": 125, "total": 150}
+{"time": "2026-11-08T15:04:57.847852+00:00", "event": "round_complete", "id": "open-detail-thinkgo-3", "success_rps": 394.96666666666664, "p99_ms": 7.903, "unsuccessful": 0}
+{"time": "2026-11-08T15:04:58.849865+00:00", "event": "round_start", "id": "open-ticket-laravel-fpm-3", "number": 126, "total": 150}
+{"time": "2026-11-08T15:04:58.858233+00:00", "event": "round_complete", "id": "open-ticket-laravel-fpm-3", "success_rps": 369.76666666666665, "p99_ms": 658.943, "unsuccessful": 5}
+{"time": "2026-11-08T15:04:59.873084+00:00", "event": "round_start", "id": "open-order-iris-3", "number": 127, "total": 150}
+{"time": "2026-11-08T15:04:59.878396+00:00", "event": "round_complete", "id": "open-order-iris-3", "success_rps": 327.8333333333333, "p99_ms": 464.383, "unsuccessful": 0}
+{"time": "2026-11-08T15:05:00.880647+00:00", "event": "round_start", "id": "open-ticket-laravel-octane-3", "number": 128, "total": 150}
+{"time": "2026-11-08T15:05:00.891387+00:00", "event": "round_complete", "id": "open-ticket-laravel-octane-3", "success_rps": 369.9, "p99_ms": 40.799, "unsuccessful": 0}
+{"time": "2026-11-08T15:05:01.891774+00:00", "event": "round_start", "id": "open-detail-beego-3", "number": 129, "total": 150}
+{"time": "2026-11-08T15:05:01.897714+00:00", "event": "round_complete", "id": "open-detail-beego-3", "success_rps": 394.96666666666664, "p99_ms": 12.919, "unsuccessful": 0}
+{"time": "2026-11-08T15:05:02.897995+00:00", "event": "round_start", "id": "open-catalog-gin-3", "number": 130, "total": 150}
+{"time": "2026-11-08T15:05:02.901892+00:00", "event": "round_complete", "id": "open-catalog-gin-3", "success_rps": 391, "p99_ms": 24.191, "unsuccessful": 0}
+{"time": "2026-11-08T15:05:03.902722+00:00", "event": "round_start", "id": "open-mixed-thinkgo-before-3", "number": 131, "total": 150}
+{"time": "2026-11-08T15:05:03.907195+00:00", "event": "round_complete", "id": "open-mixed-thinkgo-before-3", "success_rps": 365, "p99_ms": 13.471, "unsuccessful": 0}
+{"time": "2026-11-08T15:05:04.907733+00:00", "event": "round_start", "id": "open-order-thinkphp-fpm-3", "number": 132, "total": 150}
+{"time": "2026-11-08T15:05:04.912119+00:00", "event": "round_complete", "id": "open-order-thinkphp-fpm-3", "success_rps": 327.8, "p99_ms": 147.071, "unsuccessful": 0}
+{"time": "2026-11-08T15:05:05.912741+00:00", "event": "round_start", "id": "open-mixed-echo-3", "number": 133, "total": 150}
+{"time": "2026-11-08T15:05:05.917917+00:00", "event": "round_complete", "id": "open-mixed-echo-3", "success_rps": 365, "p99_ms": 22.015, "unsuccessful": 0}
+{"time": "2026-11-08T15:05:06.918296+00:00", "event": "round_start", "id": "open-order-thinkgo-before-3", "number": 134, "total": 150}
+{"time": "2026-11-08T15:05:06.922512+00:00", "event": "round_complete", "id": "open-order-thinkgo-before-3", "success_rps": 327.96666666666664, "p99_ms": 47.999, "unsuccessful": 0}
+{"time": "2026-11-08T15:05:07.925027+00:00", "event": "round_start", "id": "open-catalog-fiber-3", "number": 135, "total": 150}
+{"time": "2026-11-08T15:05:07.928657+00:00", "event": "round_complete", "id": "open-catalog-fiber-3", "success_rps": 391, "p99_ms": 48.095, "unsuccessful": 0}
+{"time": "2026-11-08T15:05:08.933248+00:00", "event": "round_start", "id": "open-mixed-laravel-fpm-3", "number": 136, "total": 150}
+{"time": "2026-11-08T15:05:08.938395+00:00", "event": "round_complete", "id": "open-mixed-laravel-fpm-3", "success_rps": 364.93333333333334, "p99_ms": 91.711, "unsuccessful": 0}
+{"time": "2026-11-08T15:05:09.939379+00:00", "event": "round_start", "id": "open-detail-laravel-fpm-3", "number": 137, "total": 150}
+{"time": "2026-11-08T15:05:09.946186+00:00", "event": "round_complete", "id": "open-detail-laravel-fpm-3", "success_rps": 394.53333333333336, "p99_ms": 29.183, "unsuccessful": 13}
+{"time": "2026-11-08T15:05:10.946417+00:00", "event": "round_start", "id": "open-catalog-thinkgo-3", "number": 138, "total": 150}
+{"time": "2026-11-08T15:05:10.950970+00:00", "event": "round_complete", "id": "open-catalog-thinkgo-3", "success_rps": 391, "p99_ms": 225.791, "unsuccessful": 0}
+{"time": "2026-11-08T15:05:11.951227+00:00", "event": "round_start", "id": "open-catalog-thinkgo-before-3", "number": 139, "total": 150}
+{"time": "2026-11-08T15:05:11.955822+00:00", "event": "round_complete", "id": "open-catalog-thinkgo-before-3", "success_rps": 391, "p99_ms": 130.559, "unsuccessful": 0}
+{"time": "2026-11-08T15:05:12.956139+00:00", "event": "round_start", "id": "open-detail-laravel-octane-3", "number": 140, "total": 150}
+Traceback (most recent call last):
+  File "/workspace/scratch/c70258927917/thinkgo/benchmarks/business/tools/run.py", line 410, in <module>
+    main()
+  File "/workspace/scratch/c70258927917/thinkgo/benchmarks/business/tools/run.py", line 406, in main
+    execute(parser.parse_args())
+  File "/workspace/scratch/c70258927917/thinkgo/benchmarks/business/tools/run.py", line 382, in execute
+    result = run_round(environment, output, item, variants[item["variant"]], secret, rate, arguments.mode)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/c70258927917/thinkgo/benchmarks/business/tools/run.py", line 253, in run_round
+    initial_preheat = preheat(environment, secret)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/c70258927917/thinkgo/benchmarks/business/tools/verify.py", line 430, in preheat
+    for state in executor.map(read, products):
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/concurrent/futures/_base.py", line 619, in result_iterator
+    yield _result_or_cancel(fs.pop())
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/concurrent/futures/_base.py", line 317, in _result_or_cancel
+    return fut.result(timeout)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/concurrent/futures/_base.py", line 456, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/concurrent/futures/_base.py", line 401, in __get_result
+    raise self._exception
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/concurrent/futures/thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/c70258927917/thinkgo/benchmarks/business/tools/verify.py", line 421, in read
+    response = client.request("GET", f"/api/products/{product['id']}", token=tokens[product["tenant_id"]])
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/c70258927917/thinkgo/benchmarks/business/tools/verify.py", line 72, in request
+    response = connection.getresponse()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/http/client.py", line 1478, in getresponse
+    response.begin()
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/http/client.py", line 343, in begin
+    version, status, reason = self._read_status()
+                              ^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/http/client.py", line 304, in _read_status
+    line = str(self.fp.readline(_MAXLINE + 1), "iso-8859-1")
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/socket.py", line 720, in readinto
+    return self._sock.recv_into(b)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+TimeoutError: timed out

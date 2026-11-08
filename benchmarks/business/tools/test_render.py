@@ -142,6 +142,231 @@ class RenderTests(unittest.TestCase):
         write_json(directory / "round.json", item)
         write_json(self.source / "index.json", index)
 
+    def interrupted_fixture(self, identifier="open-ticket-laravel-fpm-3", stamp="12345", report=True):
+        # 归档尝试与成功恢复共享计划轮次，但保留独立目录和原始报告。
+        directory = self.source / "incomplete" / (identifier + "-" + stamp)
+        directory.mkdir(parents=True)
+        (directory / "load.json.console.txt").write_text("", encoding="utf-8")
+        value = render.read_json(self.source / "rounds" / identifier / "load.json.gz")
+        value["config"]["run_id"] = identifier + "-measured"
+        value["elapsed_seconds"], value["drain_seconds"] = 118.568129141, 88.568129141
+        value["elapsed_success_rps"] = value["totals"]["success"] / value["elapsed_seconds"]
+        value["latency"] = histogram(value["totals"]["completed"], 107741.183)
+        value["scenarios"][value["config"]["scenario"]]["latency"] = value["latency"]
+        if report:
+            write_json(directory / "load.json.gz", value)
+        return directory, value
+
+    def test_interrupted_attempt_is_separate_from_completed_medians_and_audit(self):
+        baseline = render.summarize(render.load_results(self.source, allow_synthetic=True))
+        directory, load = self.interrupted_fixture()
+        original = {path.name: path.read_bytes() for path in directory.iterdir()}
+        result = render.load_results(self.source, allow_synthetic=True)
+        summary = render.summarize(result)
+        self.assertEqual([group["metrics"] for group in summary["groups"]],
+                         [group["metrics"] for group in baseline["groups"]])
+        self.assertEqual(summary["arrival_rates"], baseline["arrival_rates"])
+        self.assertEqual(summary["memory_metric"], baseline["memory_metric"])
+        accounting = summary["attempt_accounting"]
+        self.assertEqual(accounting["planned_round_count"], 90)
+        self.assertEqual(accounting["completed_round_count"], 90)
+        self.assertEqual(accounting["interrupted_measurement_attempt_count"], 1)
+        self.assertEqual(accounting["pre_measurement_incomplete_count"], 0)
+        attempt = summary["interrupted_attempts"][0]
+        self.assertEqual(attempt["round_id"], "open-ticket-laravel-fpm-3")
+        self.assertEqual(attempt["load_report_status"], "validated")
+        self.assertFalse(attempt["canceled"])
+        self.assertFalse(attempt["included_in_aggregates"])
+        self.assertEqual(attempt["p99_ms"], 107741.183)
+        self.assertEqual(attempt["success"], load["totals"]["success"])
+        self.assertEqual(attempt["transport_errors"], 0)
+        self.assertEqual(attempt["elapsed_seconds"], 118.568129141)
+        for field in ["audit_valid", "unconfirmed_orders", "unconfirmed_comments", "application_cpu_seconds",
+                      "peak_pss_mib", "peak_rss_mib", "termination_reason"]:
+            self.assertIsNone(attempt[field], field)
+        self.assertEqual(set(attempt["missing_artifacts"]),
+                         {"round.json", "audit.json", "resources.json.gz", "queries.json.gz"})
+        self.assertEqual(attempt["artifacts_sha256"], {name: hashlib.sha256(data).hexdigest()
+                                                     for name, data in original.items()})
+        self.assertEqual({path.name: path.read_bytes() for path in directory.iterdir()}, original)
+        affected = [group for group in summary["groups"] if group["interrupted_attempt_count"]]
+        self.assertEqual(len(affected), 1)
+        self.assertEqual(affected[0]["interrupted_repeats"], [3])
+        self.assertEqual(affected[0]["interrupted_attempt_ids"], [directory.name])
+        retained = [row for row in result["rounds"] if row["interrupted_attempt_count"]]
+        self.assertEqual([row["id"] for row in retained], [attempt["round_id"]])
+
+    def test_pre_measurement_failures_and_multiple_retries_are_counted_independently(self):
+        for index, files in enumerate([{}, {"warmup.json.gz": {}}, {"contract-snapshot.php": None}]):
+            directory = self.source / "incomplete" / ("closed-catalog-thinkgo-1-" + str(index))
+            directory.mkdir(parents=True)
+            for name, value in files.items():
+                write_json(directory / name, value)
+        first, _ = self.interrupted_fixture(stamp="40")
+        second, _ = self.interrupted_fixture(stamp="41")
+        summary = render.summarize(render.load_results(self.source, allow_synthetic=True))
+        self.assertEqual(summary["attempt_accounting"]["pre_measurement_incomplete_count"], 3)
+        self.assertEqual(summary["attempt_accounting"]["interrupted_measurement_attempt_count"], 2)
+        self.assertEqual(len(summary["pre_measurement_incomplete_attempts"]), 3)
+        self.assertEqual({item["attempt_id"] for item in summary["interrupted_attempts"]}, {first.name, second.name})
+        group = next(group for group in summary["groups"] if group["interrupted_attempt_count"])
+        self.assertEqual(group["interrupted_attempt_count"], 2)
+        self.assertEqual(group["interrupted_repeats"], [3])
+
+    def test_completed_all_failed_load_stays_in_formal_statistics_with_interruption_present(self):
+        # 完整审计轮次即使请求全部失败也不能被归档分类筛除，避免幸存者偏差。
+        identifier = "open-catalog-laravel-fpm-3"
+        path = self.source / "rounds" / identifier / "load.json.gz"
+        load = render.read_json(path)
+        counts = load["totals"]
+        counts.update(success=0, success_within_window=0, status_errors=counts["completed"])
+        load.update(success_rps=0, issued_success_rps=0, elapsed_success_rps=0,
+                    statuses={"503": counts["completed"]}, seconds=[{"second": 0, "counts": counts}])
+        empty = histogram(0, 0)
+        empty["max_ms"] = 0
+        load["success_latency"] = empty
+        load["scenarios"]["catalog"].update(totals=counts, success_latency=empty)
+        self.rewrite_artifact(identifier, "load.json.gz", load)
+        index = render.read_json(self.source / "index.json")
+        item = next(item for item in index["rounds"] if item["id"] == identifier)
+        item.update(totals=counts, success_rps=0)
+        write_json(path.parent / "round.json", item)
+        write_json(self.source / "index.json", index)
+        self.interrupted_fixture()
+        result = render.load_results(self.source, allow_synthetic=True)
+        retained = next(row for row in result["rounds"] if row["id"] == identifier)
+        self.assertEqual(retained["unsuccessful_percent"], 100)
+        self.assertEqual(retained["interrupted_attempt_count"], 0)
+        summary = render.summarize(result)
+        group = next(group for group in summary["groups"] if identifier in group["round_ids"])
+        self.assertEqual(group["metrics"]["success_rps"], {"median": 60, "min": 0, "max": 60, "n": 3})
+        self.assertEqual(group["metrics"]["status_errors"]["max"], counts["completed"])
+        self.assertEqual(summary["attempt_accounting"]["completed_round_count"], 90)
+
+    def test_disclosure_labels_mark_only_the_affected_model_scenario_and_variant(self):
+        self.interrupted_fixture()
+        summary = render.summarize(render.load_results(self.source, allow_synthetic=True))
+        pyplot = render.plotting()
+        self.addCleanup(pyplot.close, "all")
+        with mock.patch("render.save_figure") as saved:
+            render.draw_metric(summary, self.root, "p99_ms", "open", "open_p99", "Latency", "P99", "")
+        figure = saved.call_args.args[0]
+        for axis, scenario in zip(figure.axes, SCENARIOS):
+            labels = [label.get_text() for label in axis.get_yticklabels()]
+            self.assertEqual([label for label in labels if label.endswith(" *")],
+                             ["Laravel · PHP-FPM *"] if scenario == "ticket" else [])
+        with mock.patch("render.save_figure") as saved:
+            render.draw_cache(summary, self.root, "open")
+        for axis in saved.call_args.args[0].axes:
+            self.assertFalse(any(label.get_text().endswith(" *") for label in axis.get_yticklabels()))
+
+    def test_console_only_corrupt_canceled_and_invalid_attempts_remain_visible(self):
+        mutations = [None, b"broken gzip", gzip.compress(b"{broken json"), [],
+                     {"canceled": True}, {"not_scheduled": 1}, {"totals": {}}, {"success_rps": -1},
+                     {"config": {}}, {"totals": {"success": True}}]
+        for index, change in enumerate(mutations):
+            directory, value = self.interrupted_fixture(stamp=str(index), report=False)
+            if isinstance(change, bytes):
+                (directory / "load.json.gz").write_bytes(change)
+            elif change is not None:
+                write_json(directory / "load.json.gz", {**value, **change} if isinstance(change, dict) else change)
+        summary = render.summarize(render.load_results(self.source, allow_synthetic=True))
+        self.assertEqual(summary["attempt_accounting"]["interrupted_measurement_attempt_count"], len(mutations))
+        by_stamp = {item["archive_timestamp_ns"]: item for item in summary["interrupted_attempts"]}
+        self.assertEqual(by_stamp["0"]["load_report_status"], "missing")
+        for stamp in ["1", "2"]:
+            self.assertEqual(by_stamp[stamp]["load_report_status"], "unreadable")
+            self.assertIsNone(by_stamp[stamp]["success"])
+        for stamp in map(str, range(3, len(mutations))):
+            self.assertEqual(by_stamp[stamp]["load_report_status"], "invalid")
+        self.assertTrue(by_stamp["4"]["canceled"])
+        self.assertEqual(by_stamp["5"]["not_scheduled"], 1)
+        self.assertIsNone(by_stamp["6"]["success"])
+        self.assertIsNone(by_stamp["7"]["success_rps"])
+        self.assertIsNone(by_stamp["9"]["success"])
+        self.assertTrue(all(item["included_in_aggregates"] is False for item in by_stamp.values()))
+
+    def test_interrupted_identity_conflicts_are_rejected_even_for_invalid_reports(self):
+        directory, value = self.interrupted_fixture()
+        changes = [{"model": "closed"}, {"config": {"run_id": "another-measured"}},
+                   {"config": {"scenario": "order"}}, {"config": {"rate_per_second": 7}},
+                   {"config": {"duration_ns": 1}}, {"config": {"concurrency": 1}},
+                   {"config": {"max_inflight": 1}}]
+        for change in changes:
+            with self.subTest(change=change):
+                write_json(directory / "load.json.gz", {**value, **change, "canceled": True})
+                with self.assertRaisesRegex(ValueError, "身份|协议|不一致"):
+                    render.load_results(self.source, allow_synthetic=True)
+
+    def test_incomplete_directory_and_artifact_cannot_escape_or_impersonate_a_round(self):
+        directory, _ = self.interrupted_fixture()
+        foreign = self.root / "foreign"
+        foreign.mkdir()
+        link = self.source / "incomplete" / "open-catalog-thinkgo-1-99"
+        link.symlink_to(foreign, target_is_directory=True)
+        with self.assertRaisesRegex(ValueError, "归档|越界|链接"):
+            render.load_results(self.source, allow_synthetic=True)
+        link.unlink()
+        artifact = directory / "audit.json"
+        artifact.symlink_to(self.source / "rounds" / "closed-catalog-thinkgo-1" / "audit.json")
+        with self.assertRaisesRegex(ValueError, "归档|越界|链接"):
+            render.load_results(self.source, allow_synthetic=True)
+        artifact.unlink()
+        directory.rename(directory.with_name("open-ticket-unknown-3-12345"))
+        with self.assertRaisesRegex(ValueError, "归档|未知|计划"):
+            render.load_results(self.source, allow_synthetic=True)
+
+    def test_available_interrupted_evidence_is_validated_without_admitting_attempt(self):
+        directory, _ = self.interrupted_fixture()
+        completed = self.source / "rounds" / "open-ticket-laravel-fpm-3"
+        for name in ["audit.json", "resources.json.gz", "queries.json.gz"]:
+            (directory / name).write_bytes((completed / name).read_bytes())
+        attempt = render.load_results(self.source, allow_synthetic=True)["interrupted_attempts"][0]
+        self.assertEqual(attempt["missing_artifacts"], ["round.json"])
+        self.assertTrue(attempt["audit_valid"])
+        self.assertEqual(attempt["unconfirmed_comments"], 0)
+        self.assertGreater(attempt["application_cpu_seconds"], 0)
+        self.assertEqual(attempt["queries_status"], "validated")
+        self.assertFalse(attempt["included_in_aggregates"])
+        for name in ["audit.json", "resources.json.gz", "queries.json.gz"]:
+            write_json(directory / name, {"invalid": True})
+        attempt = render.load_results(self.source, allow_synthetic=True)["interrupted_attempts"][0]
+        self.assertEqual([attempt[key] for key in ["audit_status", "resources_status", "queries_status"]],
+                         ["invalid"] * 3)
+        self.assertIsNone(attempt["audit_valid"])
+
+    def test_interruption_tables_keep_unknowns_empty_and_empty_archive_has_headers(self):
+        directory, _ = self.interrupted_fixture()
+        result = render.load_results(self.source, allow_synthetic=True)
+        destination = self.root / "tables"
+        destination.mkdir()
+        render.write_tables(destination, result, render.summarize(result))
+        with (destination / "interrupted_attempts.csv").open() as stream:
+            attempts = list(csv.DictReader(stream))
+        self.assertEqual(len(attempts), 1)
+        self.assertEqual(attempts[0]["unconfirmed_comments"], "")
+        self.assertEqual(attempts[0]["transport_errors"], "0")
+        self.assertEqual(json.loads(attempts[0]["missing_artifacts"]),
+                         ["audit.json", "queries.json.gz", "resources.json.gz", "round.json"])
+        for filename, identity in [("rounds.csv", "id"), ("summary.csv", "variant")]:
+            with (destination / filename).open() as stream:
+                rows = list(csv.DictReader(stream))
+            affected = [row for row in rows if row["interrupted_attempt_count"] == "1"]
+            self.assertEqual(len(affected), 1)
+            self.assertIn(directory.name, json.loads(affected[0]["interrupted_attempt_ids"]))
+            self.assertIn("laravel-fpm", affected[0][identity])
+        for path in directory.iterdir():
+            path.unlink()
+        directory.rmdir()
+        empty = self.root / "empty-tables"
+        empty.mkdir()
+        result = render.load_results(self.source, allow_synthetic=True)
+        render.write_tables(empty, result, render.summarize(result))
+        with (empty / "interrupted_attempts.csv").open() as stream:
+            reader = csv.DictReader(stream)
+            self.assertIn("audit_valid", reader.fieldnames)
+            self.assertEqual(list(reader), [])
+
     def test_synthetic_and_pilot_cannot_be_presented_as_measurement(self):
         with self.assertRaisesRegex(ValueError, "synthetic"):
             render.load_results(self.source)
@@ -326,6 +551,46 @@ class RenderTests(unittest.TestCase):
             self.assertIn("log", axis.get_xlabel())
         self.assertEqual(summary, unchanged)
 
+    def test_wide_latency_axis_keeps_tick_labels_separate_at_export_resolution(self):
+        summary = render.summarize(render.load_results(self.source, allow_synthetic=True))
+        pyplot = render.plotting()
+        self.addCleanup(pyplot.close, "all")
+        minimum, median = 5, 10
+        # 覆盖真实慢轮所在的数量级以及更长尾部，直接检查文字边框而非格式化器类型。
+        for maximum in (50_000, 150_000):
+            for group in summary["groups"]:
+                group["metrics"]["p99_ms"] = {"median": median, "min": minimum, "max": maximum, "n": 3}
+            unchanged = copy.deepcopy(summary)
+            with mock.patch("render.save_figure") as saved:
+                render.draw_metric(summary, self.root, "p99_ms", "open", "open_p99",
+                                   "Latency", "P99 (ms)", "All repeats retained")
+            figure = saved.call_args.args[0]
+            for dpi in (figure.dpi, render.PNG_DPI):
+                with self.subTest(maximum=maximum, dpi=dpi):
+                    figure.set_dpi(dpi)
+                    figure.canvas.draw()
+                    renderer = figure.canvas.get_renderer()
+                    for axis in figure.axes[:-1]:
+                        lower, upper = axis.get_xlim()
+                        self.assertGreater(lower, 0)
+                        self.assertLessEqual(lower, minimum)
+                        self.assertGreaterEqual(upper, maximum)
+                        ticks = [(position, label) for position, label in
+                                 zip(axis.get_xticks(), axis.get_xticklabels())
+                                 if lower <= position <= upper and label.get_visible() and label.get_text()]
+                        self.assertGreaterEqual(len(ticks), 3)
+                        bounds = [label.get_window_extent(renderer) for _, label in ticks]
+                        for (left_value, _), left, (right_value, _), right in zip(ticks, bounds, ticks[1:], bounds[1:]):
+                            self.assertLess(left.x1, right.x0, f"刻度文字重叠: {left_value:g}, {right_value:g}")
+                        # 小值刻度仍有明确标签，常见延迟的两倍差异不能压缩到一个标签宽度以内。
+                        median_labels = [label for position, label in ticks if position == median]
+                        self.assertEqual(len(median_labels), 1)
+                        points = axis.transData.transform([(minimum, 0), (median, 0)])
+                        self.assertGreater(points[1][0] - points[0][0],
+                                           median_labels[0].get_window_extent(renderer).width)
+            self.assertEqual(summary, unchanged)
+            pyplot.close(figure)
+
     def test_log_latency_rejects_zero_and_preserves_missing_values(self):
         summary = render.summarize(render.load_results(self.source, allow_synthetic=True))
         selected = [group for group in summary["groups"] if group["model"] == "open"]
@@ -345,6 +610,7 @@ class RenderTests(unittest.TestCase):
             self.assertEqual([text.get_text() for text in axis.texts], ["N/A"] * len(summary["variants"]))
 
     def test_render_writes_shareable_graphs_and_machine_readable_tables(self):
+        self.interrupted_fixture()
         resource = resources_fixture(1, 0)
         resource["groups"]["application"].update(cpu_complete=False, pss_complete=False,
                                                 peak_pss_bytes=None, memory_metric="rss", errors=["synthetic read failure"])
@@ -360,6 +626,13 @@ class RenderTests(unittest.TestCase):
             content = path.read_text()
             self.assertIn("SYNTHETIC", content)
             self.assertNotIn("Confidence interval", content)
+            self.assertIn("1 interrupted measurement attempt", content)
+            self.assertIn("excluded from medians", content)
+            self.assertIn("Laravel · PHP-FPM / open / ticket / repeat 3", content)
+            self.assertIn("interrupted_attempts.csv", content)
+        self.assertIn("Laravel · PHP-FPM *", (destination / "open_p99.svg").read_text())
+        self.assertIn("Laravel · PHP-FPM *", (destination / "errors_open.svg").read_text())
+        self.assertNotIn("Laravel · PHP-FPM *", (destination / "closed_throughput.svg").read_text())
         with (destination / "rounds.csv").open() as stream:
             rows = list(csv.DictReader(stream))
         self.assertEqual(len(rows), 90)

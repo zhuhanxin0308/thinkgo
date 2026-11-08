@@ -11,8 +11,11 @@ import json
 import math
 import pathlib
 import statistics
+import textwrap
+import zlib
 
 from audit import assess
+from experiment import COUNTERS, NANOSECONDS_PER_SECOND
 
 
 SCENARIOS = ("catalog", "detail", "order", "ticket", "mixed")
@@ -31,6 +34,20 @@ AXIS_LIMIT_PADDING = 1.12
 EMPTY_LOG_LIMITS = (1.0, 10.0)
 VARIANT_COLORS = ("#175cd3", "#027a48", "#b54708", "#6941c6", "#026aa2", "#c11574",
                   "#4d7c0f", "#9e3c2f", "#475467")
+ATTEMPT_REPORT_FIELDS = ("window_seconds", "elapsed_seconds", "drain_seconds", "success_rps",
+                         "issued_success_rps", "elapsed_success_rps", "expected", "not_scheduled")
+ATTEMPT_RESOURCE_FIELDS = ("application_cpu_seconds", "peak_pss_mib", "peak_rss_mib")
+ATTEMPT_AUDIT_FIELDS = ("audit_valid", "unconfirmed_orders", "unconfirmed_comments")
+ATTEMPT_CSV_FIELDS = (
+    "attempt_id", "round_id", "variant", "framework", "label", "model", "scenario", "repeat", "rate",
+    "evidence_directory", "archive_timestamp_ns", "included_in_aggregates", "round_evidence_complete",
+    "termination_reason", "load_report_status", "resources_status", "queries_status", "audit_status",
+    "started_at", "finished_at", "canceled", "measurement_requests_started", *ATTEMPT_REPORT_FIELDS,
+    *COUNTERS, *LATENCY_FIELDS, "drop_reasons", *ATTEMPT_RESOURCE_FIELDS, *ATTEMPT_AUDIT_FIELDS,
+    "available_artifacts", "missing_artifacts", "artifacts_sha256", "validation_errors",
+)
+DISCLOSURE_WRAP_COLUMNS = 158
+DISCLOSURE_TOP = -0.015
 
 
 def require(condition, message):
@@ -148,6 +165,127 @@ def normalize_round(item, load, usage, integrity):
     return row
 
 
+def attempt_artifact(directory, name, validate, attempt):
+    """归档证据损坏也保留尝试；可读、完整和通过业务审计分别记录。"""
+    if not (directory / name).exists():
+        return None, "missing"
+    try:
+        value = read_json(directory / name)
+    except (OSError, EOFError, ValueError, zlib.error) as error:
+        attempt["validation_errors"][name] = type(error).__name__
+        return None, "unreadable"
+    try:
+        validate(value)
+    except (ValueError, KeyError, TypeError, OverflowError) as error:
+        attempt["validation_errors"][name] = str(error)
+        return value, "invalid"
+    return value, "validated"
+
+
+def observed_number(value, *, counter=False):
+    # 未验证报告只摘录合法的原始数字；没有观测值不能补零或按公式推算。
+    if counter and type(value) is not int:
+        return None
+    try:
+        return finite(value, "归档观测值")
+    except (ValueError, OverflowError):
+        return None
+
+
+def validate_attempt_identity(load, item, protocol):
+    if not isinstance(load, dict):
+        return False
+    require("model" not in load or load["model"] == item["model"], "归档负载模型身份不一致")
+    config = load.get("config")
+    if not isinstance(config, dict):
+        return False
+    expected = {"run_id": item["id"] + "-measured", "scenario": item["scenario"],
+                "rate_per_second": item["rate"], "concurrency": protocol["closed_concurrency"],
+                "max_inflight": protocol["open_max_inflight"],
+                "duration_ns": round(protocol["measurement_seconds"] * NANOSECONDS_PER_SECOND)}
+    for field, value in expected.items():
+        require(field not in config or config[field] == value, f"归档负载身份或协议不一致: {field}")
+    return "model" in load and expected.keys() <= config.keys()
+
+
+def interrupted_attempt(directory, item, protocol, base):
+    from experiment import check_load_report
+
+    attempt = dict.fromkeys(ATTEMPT_CSV_FIELDS)
+    attempt.update(base, included_in_aggregates=False, round_evidence_complete=False,
+                   validation_errors={})
+    # 身份冲突必须中止发布；普通损坏则记录为不可验证，不能悄悄丢弃该次尝试。
+    load, status = attempt_artifact(directory, "load.json.gz", lambda value: None, attempt)
+    bound = validate_attempt_identity(load, item, protocol)
+    if status == "validated":
+        def validate_report(value):
+            require(bound, "归档负载身份字段不完整")
+            check_load_report(value)
+
+        load, status = attempt_artifact(directory, "load.json.gz", validate_report, attempt)
+    attempt["load_report_status"] = status
+    if isinstance(load, dict):
+        counts = load.get("totals") if isinstance(load.get("totals"), dict) else {}
+        latency = load.get("latency") if isinstance(load.get("latency"), dict) else {}
+        for field in COUNTERS:
+            attempt[field] = observed_number(counts.get(field), counter=True)
+        for field in ATTEMPT_REPORT_FIELDS:
+            attempt[field] = observed_number(load.get(field), counter=field in {"expected", "not_scheduled"})
+        for field in LATENCY_FIELDS:
+            attempt[field] = observed_number(latency.get(field)) if attempt["completed"] else None
+        for field in ("started_at", "finished_at"):
+            value = load.get(field)
+            attempt[field] = value if isinstance(value, str) and value.isprintable() else None
+        attempt["canceled"] = load.get("canceled") if type(load.get("canceled")) is bool else None
+        attempt["measurement_requests_started"] = attempt["started"] > 0 if attempt["started"] is not None else None
+        reasons = load.get("drop_reasons")
+        if isinstance(reasons, dict):
+            attempt["drop_reasons"] = {key: observed_number(value, counter=True) for key, value in reasons.items()}
+    usage, attempt["resources_status"] = attempt_artifact(directory, "resources.json.gz", resource_metrics, attempt)
+    if attempt["resources_status"] == "validated":
+        metrics = resource_metrics(usage)
+        attempt.update({field: metrics[field] for field in ATTEMPT_RESOURCE_FIELDS})
+    integrity, attempt["audit_status"] = attempt_artifact(
+        directory, "audit.json", lambda value: validate_audit(value, item["id"]), attempt)
+    if attempt["audit_status"] == "validated":
+        attempt.update(audit_valid=True, unconfirmed_orders=integrity["unconfirmed_orders"],
+                       unconfirmed_comments=integrity["unconfirmed_comments"])
+    _, attempt["queries_status"] = attempt_artifact(
+        directory, "queries.json.gz", lambda value: require(isinstance(value, list), "SQL 查询证据必须是列表"), attempt)
+    return attempt
+
+
+def load_incomplete_attempts(source, items, protocol):
+    """只读恢复归档，区分计时前失败与正式测量尝试，不增加计划重复数。"""
+    archive = source / "incomplete"
+    interrupted, preparation = [], []
+    if not archive.exists() and not archive.is_symlink():
+        return interrupted, preparation
+    require(archive.is_dir() and not archive.is_symlink(), "归档目录必须为本实验内的真实目录")
+    by_id = {item["id"]: item for item in items}
+    variants = {variant["id"]: variant for variant in protocol["variants"]}
+    for directory in sorted(archive.iterdir()):
+        require(directory.is_dir() and not directory.is_symlink(), f"归档目录越界或不是目录: {directory.name}")
+        identifier, separator, stamp = directory.name.rpartition("-")
+        require(separator and stamp.isascii() and stamp.isdigit() and identifier in by_id,
+                f"未知计划轮次归档: {directory.name}")
+        item = by_id[identifier]
+        files = sorted(directory.iterdir())
+        require(all(path.is_file() and not path.is_symlink() for path in files), "归档证据不能包含目录或链接")
+        names = [path.name for path in files]
+        require("round.json" not in names, "归档包含已结束轮次，不能当成未完成尝试")
+        base = {key: item[key] for key in ("variant", "framework", "model", "scenario", "repeat", "rate")}
+        base.update(attempt_id=directory.name, round_id=identifier, label=label_variant(variants[item["variant"]]),
+                    evidence_directory=str(directory.relative_to(source)), archive_timestamp_ns=stamp,
+                    available_artifacts=names, missing_artifacts=sorted((REQUIRED_ARTIFACTS | {"round.json"}) - set(names)),
+                    artifacts_sha256={path.name: digest(path) for path in files})
+        if {"load.json.gz", "load.json.console.txt"} & set(names):
+            interrupted.append(interrupted_attempt(directory, item, protocol, base))
+        else:
+            preparation.append(dict(base, stage="pre_measurement"))
+    return interrupted, preparation
+
+
 def load_results(source, *, allow_synthetic=False):
     source = pathlib.Path(source).resolve()
     manifest, index = read_json(source / "manifest.json"), read_json(source / "index.json")
@@ -208,8 +346,13 @@ def load_results(source, *, allow_synthetic=False):
         require(all(row["rate"] == rates[scenario] for row in rows if row["model"] == "open" and
                     row["scenario"] == scenario), f"同场景未采用相同绝对到达率: {scenario}")
     require(all(row["rate"] == 0 for row in rows if row["model"] == "closed"), "闭环不能设定开放到达率")
+    interrupted, preparation = load_incomplete_attempts(source, index["rounds"], protocol)
+    for row in rows:
+        identifiers = [attempt["attempt_id"] for attempt in interrupted if attempt["round_id"] == row["id"]]
+        row.update(interrupted_attempt_count=len(identifiers), interrupted_attempt_ids=identifiers)
     return {"source": str(source), "mode": mode, "manifest": manifest, "protocol": protocol,
             "rounds": rows, "arrival_rates": rates,
+            "interrupted_attempts": interrupted, "pre_measurement_incomplete_attempts": preparation,
             "evidence_sha256": {name: digest(source / name) for name in ["manifest.json", "index.json", "arrival-rates.json"]}}
 
 
@@ -222,6 +365,7 @@ def range_summary(values):
 
 def summarize(result):
     rows, protocol = result["rounds"], result["protocol"]
+    interrupted = result["interrupted_attempts"]
     memory = "pss" if all(row["peak_pss_mib"] is not None for row in rows) else "rss"
     metrics = ["success_rps", "p99_ms", "p95_ms", "p50_ms", "cpu_ms_per_success", "peak_memory_mib",
                "peak_pss_mib", "peak_rss_mib", "application_cpu_seconds", "cache_hit_percent",
@@ -234,8 +378,17 @@ def summarize(result):
         groups.append({"model": model, "scenario": scenario, "variant": variant["id"],
                        "label": label_variant(variant), "rate": selected[0]["rate"],
                        "round_ids": [row["id"] for row in selected],
+                       "interrupted_attempt_count": sum(row["interrupted_attempt_count"] for row in selected),
+                       "interrupted_attempt_ids": [identifier for row in selected for identifier in row["interrupted_attempt_ids"]],
+                       "interrupted_repeats": sorted(row["repeat"] for row in selected if row["interrupted_attempt_count"]),
                        "metrics": {metric: range_summary([row[metric] for row in selected]) for metric in metrics}})
     summary = {"schema_version": 1, "mode": result["mode"], "source": result["source"],
+            "collection_git_commit": result["manifest"].get("git_commit"),
+            "attempt_accounting": {"planned_round_count": len(protocol["variants"]) * len(SCENARIOS) * len(MODELS) * protocol["repetitions"],
+                "completed_round_count": len(rows), "interrupted_measurement_attempt_count": len(interrupted),
+                "pre_measurement_incomplete_count": len(result["pre_measurement_incomplete_attempts"])},
+            "interrupted_attempts": interrupted,
+            "pre_measurement_incomplete_attempts": result["pre_measurement_incomplete_attempts"],
             "evidence_sha256": result["evidence_sha256"], "repetitions": protocol["repetitions"],
             "scenarios": protocol["scenarios"], "closed_concurrency": protocol["closed_concurrency"],
             "variants": [dict(variant, label=label_variant(variant)) for variant in protocol["variants"]],
@@ -246,6 +399,7 @@ def summarize(result):
             "memory_note": "All rounds use sampled process-tree PSS." if memory == "pss" else
                 "RSS fallback for every comparison: PSS is unavailable in at least one round; shared pages may be counted repeatedly.",
             "definitions": {"range": "Median and observed min/max of three independent repeats; no confidence interval.",
+                "interrupted_attempts": "Archived incomplete measurement invocations are excluded from every aggregate; all completed audited rounds, including unsuccessful requests, remain. Counts cover retained archives only. Missing observations and audits are null, not zero. Invalid reports expose unverified observed numbers only; a console alone does not prove requests started. Archive timestamps record recovery, not failure time.",
                 "success_rps": "Successful completions inside the measurement window / window seconds.",
                 "p99_ms": "Per-run P99 from scheduled time to complete response body; all completed requests; dropped requests have no latency sample.",
                 "cpu_ms_per_success": "Application process tree including Nginx CPU milliseconds during the full load invocation / successful completions including drain.",
@@ -260,12 +414,14 @@ def summarize(result):
     return summary
 
 
-def write_csv(path, rows):
-    fields = list(rows[0])
+def write_csv(path, rows, fields=None):
+    fields = list(rows[0]) if fields is None else fields
     with pathlib.Path(path).open("x", newline="", encoding="utf-8") as stream:
         writer = csv.DictWriter(stream, fieldnames=fields)
         writer.writeheader()
-        writer.writerows(rows)
+        # 列表和映射仍采用 JSON 编码，便于独立下载 CSV 后准确恢复关联证据。
+        writer.writerows({key: json.dumps(value, ensure_ascii=False, allow_nan=False) if isinstance(value, (dict, list)) else value
+                         for key, value in row.items()} for row in rows)
 
 
 def write_tables(destination, result, summary):
@@ -276,13 +432,15 @@ def write_tables(destination, result, summary):
               peak_memory_mib=row["peak_" + summary["memory_metric"] + "_mib"]) for row in result["rounds"]])
     flattened = []
     for group in summary["groups"]:
-        row = {key: group[key] for key in ["model", "scenario", "variant", "label", "rate"]}
+        row = {key: group[key] for key in ["model", "scenario", "variant", "label", "rate",
+               "interrupted_attempt_count", "interrupted_attempt_ids", "interrupted_repeats"]}
         row["memory_metric"] = summary["memory_metric"]
         for metric, values in group["metrics"].items():
             for statistic, value in values.items():
                 row[metric + "_" + statistic] = value
         flattened.append(row)
     write_csv(destination / "summary.csv", flattened)
+    write_csv(destination / "interrupted_attempts.csv", summary["interrupted_attempts"], ATTEMPT_CSV_FIELDS)
 
 
 def plotting():
@@ -307,6 +465,26 @@ def figure_header(figure, title, summary, subtitle):
     if summary["mode"] == "synthetic":
         figure.text(0.98, 0.012, "SYNTHETIC TEST DATA — NOT BENCHMARK RESULTS", ha="right",
                     color="#b42318", fontsize=12, fontweight="bold")
+    accounting = summary["attempt_accounting"]
+    attempts = summary["interrupted_attempts"]
+    lines = [f"Experiment disclosure: {len(attempts)} interrupted measurement attempt(s) excluded from medians; "
+             f"{accounting['completed_round_count']}/{accounting['planned_round_count']} completed audited rounds retained."]
+    if attempts:
+        affected = dict.fromkeys(f"{item['label']} / {item['model']} / {item['scenario']} / repeat {item['repeat']}"
+                                 for item in attempts)
+        lines.extend(textwrap.wrap("Affected: " + "; ".join(affected), DISCLOSURE_WRAP_COLUMNS))
+        missing = [f"{label}: {sum(item[field] != 'validated' for item in attempts)}"
+                   for field, label in [("audit_status", "DB audit"), ("resources_status", "resources"),
+                                        ("queries_status", "queries")]]
+        lines.append("Missing or unverified evidence (attempts) — " + "; ".join(missing) + ".")
+    lines.append("* marks an affected group. Observations, missing audits and all attempt records: interrupted_attempts.csv / summary.json.")
+    # 页脚放在画布外的独立区域；tight 边界把它完整纳入 SVG/PNG，避免挤压表格、原有说明和水印。
+    figure.text(0.055, DISCLOSURE_TOP, "\n".join(lines), ha="left", va="top", fontsize=9,
+                color="#694126" if attempts else "#667085", linespacing=1.5)
+
+
+def group_label(group):
+    return group["label"] + (" *" if group["interrupted_attempt_count"] else "")
 
 
 def save_figure(figure, destination, name, pyplot):
@@ -329,7 +507,7 @@ def note_panel(axis, summary, model, extra, axis_scale="linear"):
 
 
 def draw_metric(summary, destination, metric, model, name, title, unit, note):
-    from matplotlib.ticker import LogLocator, NullFormatter, ScalarFormatter
+    from matplotlib.ticker import EngFormatter, LogLocator, NullFormatter
 
     pyplot = plotting()
     # 尾延迟跨数量级时保留慢轮，同时让常见延迟之间的差异可读。
@@ -347,7 +525,7 @@ def draw_metric(summary, destination, metric, model, name, title, unit, note):
         maximum = 0
         for position, group in enumerate(selected):
             values = group["metrics"][metric]
-            labels.append(group["label"])
+            labels.append(group_label(group))
             color = VARIANT_COLORS[position % len(VARIANT_COLORS)]
             if values["median"] is None:
                 axis.text(0.02, position, "N/A", transform=axis.get_yaxis_transform(),
@@ -367,10 +545,8 @@ def draw_metric(summary, destination, metric, model, name, title, unit, note):
             axis.set_xlim((minimum / AXIS_LIMIT_PADDING, maximum * AXIS_LIMIT_PADDING)
                           if maximum > 0 else EMPTY_LOG_LIMITS)
             axis.xaxis.set_major_locator(LogLocator(base=10, subs=(1, 2, 5), numticks=9))
-            formatter = ScalarFormatter()
-            formatter.set_scientific(False)
-            formatter.set_useOffset(False)
-            axis.xaxis.set_major_formatter(formatter)
+            # 紧凑数量级标签避免长整数相接；刻度位置、毫秒单位和完整观测范围保持不变。
+            axis.xaxis.set_major_formatter(EngFormatter(sep="", useOffset=False))
             axis.xaxis.set_minor_formatter(NullFormatter())
         else:
             axis.set_xlim(0, max(maximum * AXIS_LIMIT_PADDING, 1))
@@ -383,7 +559,7 @@ def draw_metric(summary, destination, metric, model, name, title, unit, note):
             heading += f"  ·  {summary['arrival_rates'][scenario]:,} requests/s"
         axis.set_title(heading, fontsize=13, pad=12)
     note_panel(axes.flat[-1], summary, model, note, axis_scale)
-    figure.text(0.055, 0.04, "All protocol variants and all three repeats are retained. Missing metrics appear as N/A.",
+    figure.text(0.055, 0.04, "All completed, audited protocol rounds are retained. Missing metrics appear as N/A.",
                 fontsize=10, color="#667085")
     save_figure(figure, destination, name, pyplot)
 
@@ -412,7 +588,7 @@ def draw_errors(summary, destination, model):
         cells = [[compact_range(group["metrics"][field + "_percent"]) for field in ERROR_FIELDS] for group in selected]
         axis.axis("off")
         axis.set_title(SCENARIO_LABELS[scenario], fontsize=14, pad=14)
-        table = axis.table(cellText=cells, rowLabels=[group["label"] for group in selected],
+        table = axis.table(cellText=cells, rowLabels=[group_label(group) for group in selected],
                            colLabels=[label + " %" for label in ERROR_LABELS], loc="center",
                            cellLoc="center", bbox=[0, 0, 1, 0.95])
         table.auto_set_font_size(False)
@@ -459,7 +635,7 @@ def draw_cache(summary, destination, model):
                               fmt="o", color=VARIANT_COLORS[position % len(VARIANT_COLORS)], capsize=3)
             else:
                 axis.text(0, position, "N/A", va="center")
-        axis.set_yticks(range(count), [group["label"] for group in selected], fontsize=9)
+        axis.set_yticks(range(count), [group_label(group) for group in selected], fontsize=9)
         axis.set_ylim(count - 0.4, -0.6)
         axis.set_xlim(0, 100)
         axis.set_xlabel("Cache hits / cache-bearing responses (%)")

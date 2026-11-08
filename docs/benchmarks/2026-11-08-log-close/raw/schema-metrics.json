@@ -1,0 +1,150 @@
+{
+  "indexes": [
+    {
+      "bytes": 16384,
+      "indexdef": "CREATE UNIQUE INDEX bench_categories_pkey ON public.bench_categories USING btree (tenant_id, id)",
+      "indexname": "bench_categories_pkey",
+      "tablename": "bench_categories"
+    },
+    {
+      "bytes": 1359872,
+      "indexdef": "CREATE UNIQUE INDEX bench_comments_pkey ON public.bench_comments USING btree (id)",
+      "indexname": "bench_comments_pkey",
+      "tablename": "bench_comments"
+    },
+    {
+      "bytes": 2531328,
+      "indexdef": "CREATE INDEX bench_comments_timeline_idx ON public.bench_comments USING btree (ticket_id, id)",
+      "indexname": "bench_comments_timeline_idx",
+      "tablename": "bench_comments"
+    },
+    {
+      "bytes": 8192,
+      "indexdef": "CREATE UNIQUE INDEX bench_order_audit_pkey ON public.bench_order_audit USING btree (order_id)",
+      "indexname": "bench_order_audit_pkey",
+      "tablename": "bench_order_audit"
+    },
+    {
+      "bytes": 8192,
+      "indexdef": "CREATE UNIQUE INDEX bench_order_items_pkey ON public.bench_order_items USING btree (order_id, product_id)",
+      "indexname": "bench_order_items_pkey",
+      "tablename": "bench_order_items"
+    },
+    {
+      "bytes": 8192,
+      "indexdef": "CREATE UNIQUE INDEX bench_orders_pkey ON public.bench_orders USING btree (id)",
+      "indexname": "bench_orders_pkey",
+      "tablename": "bench_orders"
+    },
+    {
+      "bytes": 8192,
+      "indexdef": "CREATE UNIQUE INDEX bench_orders_tenant_id_user_id_idempotency_key_key ON public.bench_orders USING btree (tenant_id, user_id, idempotency_key)",
+      "indexname": "bench_orders_tenant_id_user_id_idempotency_key_key",
+      "tablename": "bench_orders"
+    },
+    {
+      "bytes": 4636672,
+      "indexdef": "CREATE INDEX bench_products_catalog_idx ON public.bench_products USING btree (tenant_id, category_id, price_cents, id) WHERE (active = true)",
+      "indexname": "bench_products_catalog_idx",
+      "tablename": "bench_products"
+    },
+    {
+      "bytes": 2260992,
+      "indexdef": "CREATE UNIQUE INDEX bench_products_pkey ON public.bench_products USING btree (id)",
+      "indexname": "bench_products_pkey",
+      "tablename": "bench_products"
+    },
+    {
+      "bytes": 12623872,
+      "indexdef": "CREATE UNIQUE INDEX bench_specifications_pkey ON public.bench_specifications USING btree (product_id, \"position\")",
+      "indexname": "bench_specifications_pkey",
+      "tablename": "bench_specifications"
+    },
+    {
+      "bytes": 16384,
+      "indexdef": "CREATE UNIQUE INDEX bench_tenants_pkey ON public.bench_tenants USING btree (id)",
+      "indexname": "bench_tenants_pkey",
+      "tablename": "bench_tenants"
+    },
+    {
+      "bytes": 466944,
+      "indexdef": "CREATE UNIQUE INDEX bench_tickets_pkey ON public.bench_tickets USING btree (id)",
+      "indexname": "bench_tickets_pkey",
+      "tablename": "bench_tickets"
+    },
+    {
+      "bytes": 106496,
+      "indexdef": "CREATE UNIQUE INDEX bench_users_pkey ON public.bench_users USING btree (id)",
+      "indexname": "bench_users_pkey",
+      "tablename": "bench_users"
+    },
+    {
+      "bytes": 147456,
+      "indexdef": "CREATE UNIQUE INDEX bench_users_tenant_id_id_key ON public.bench_users USING btree (tenant_id, id)",
+      "indexname": "bench_users_tenant_id_id_key",
+      "tablename": "bench_users"
+    }
+  ],
+  "tables": [
+    {
+      "indexes_bytes": 16384,
+      "n_live_tup": 0,
+      "relname": "bench_categories",
+      "table_bytes": 16384
+    },
+    {
+      "indexes_bytes": 3891200,
+      "n_live_tup": 0,
+      "relname": "bench_comments",
+      "table_bytes": 8511488
+    },
+    {
+      "indexes_bytes": 8192,
+      "n_live_tup": 0,
+      "relname": "bench_order_audit",
+      "table_bytes": 0
+    },
+    {
+      "indexes_bytes": 8192,
+      "n_live_tup": 0,
+      "relname": "bench_order_items",
+      "table_bytes": 0
+    },
+    {
+      "indexes_bytes": 16384,
+      "n_live_tup": 0,
+      "relname": "bench_orders",
+      "table_bytes": 8192
+    },
+    {
+      "indexes_bytes": 6897664,
+      "n_live_tup": 0,
+      "relname": "bench_products",
+      "table_bytes": 102457344
+    },
+    {
+      "indexes_bytes": 12623872,
+      "n_live_tup": 0,
+      "relname": "bench_specifications",
+      "table_bytes": 18104320
+    },
+    {
+      "indexes_bytes": 16384,
+      "n_live_tup": 0,
+      "relname": "bench_tenants",
+      "table_bytes": 16384
+    },
+    {
+      "indexes_bytes": 466944,
+      "n_live_tup": 0,
+      "relname": "bench_tickets",
+      "table_bytes": 2244608
+    },
+    {
+      "indexes_bytes": 253952,
+      "n_live_tup": 0,
+      "relname": "bench_users",
+      "table_bytes": 409600
+    }
+  ]
+}

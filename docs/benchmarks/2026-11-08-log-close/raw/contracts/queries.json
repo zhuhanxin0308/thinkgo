@@ -1,0 +1,16 @@
+{
+  "catalog": "SELECT p.id,p.name,p.price_cents,c.name,p.stock FROM bench_products p JOIN bench_categories c ON c.tenant_id=p.tenant_id AND c.id=p.category_id WHERE p.tenant_id=? AND p.category_id=? AND p.active=true AND p.price_cents>=? AND p.price_cents<=? AND (p.price_cents,p.id)>(?,?) ORDER BY p.price_cents,p.id LIMIT ?",
+  "product": "SELECT p.id,p.name,p.price_cents,p.stock,c.name,p.description FROM bench_products p JOIN bench_categories c ON c.tenant_id=p.tenant_id AND c.id=p.category_id WHERE p.tenant_id=? AND p.id=? AND p.active=true",
+  "specifications": "SELECT name,value FROM bench_specifications WHERE product_id=? ORDER BY position LIMIT ?",
+  "reserve_order": "INSERT INTO bench_orders(tenant_id,user_id,idempotency_key,total_cents,status) VALUES(?,?,?::uuid,0,'pending') ON CONFLICT(tenant_id,user_id,idempotency_key) DO NOTHING RETURNING id",
+  "existing_order": "SELECT id,total_cents,status FROM bench_orders WHERE tenant_id=? AND user_id=? AND idempotency_key=?::uuid",
+  "existing_order_items": "SELECT product_id,quantity,unit_price_cents FROM bench_order_items WHERE order_id=? ORDER BY product_id",
+  "lock_product": "SELECT price_cents,stock FROM bench_products WHERE tenant_id=? AND id=? AND active=true FOR UPDATE",
+  "deduct_stock": "UPDATE bench_products SET stock=stock-? WHERE tenant_id=? AND id=? AND stock>=?",
+  "insert_order_item": "INSERT INTO bench_order_items(order_id,product_id,quantity,unit_price_cents) VALUES(?,?,?,?)",
+  "finish_order": "UPDATE bench_orders SET total_cents=?,status='created' WHERE id=? AND status='pending'",
+  "order_audit": "INSERT INTO bench_order_audit(order_id,user_id,total_cents) VALUES(?,?,?)",
+  "lock_ticket": "SELECT owner_id,status,version FROM bench_tickets WHERE tenant_id=? AND id=? FOR UPDATE",
+  "insert_comment": "INSERT INTO bench_comments(ticket_id,user_id,body) VALUES(?,?,?) RETURNING id",
+  "update_ticket": "UPDATE bench_tickets SET version=version+1,updated_at=CURRENT_TIMESTAMP WHERE tenant_id=? AND id=? RETURNING version"
+}
