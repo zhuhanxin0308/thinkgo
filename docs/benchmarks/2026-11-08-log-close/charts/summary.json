@@ -2,6 +2,235 @@
   "schema_version": 1,
   "mode": "measure",
   "source": "/workspace/scratch/cb5a9e8903d1/thinkgo/docs/benchmarks/2026-11-08-log-close/raw",
+  "collection_git_commit": "1f7d2b5c4459149394ea6754556443264f9e3918",
+  "attempt_accounting": {
+    "planned_round_count": 300,
+    "completed_round_count": 300,
+    "interrupted_measurement_attempt_count": 1,
+    "pre_measurement_incomplete_count": 5
+  },
+  "interrupted_attempts": [
+    {
+      "attempt_id": "open-ticket-beego-3-1794153609264585434",
+      "round_id": "open-ticket-beego-3",
+      "variant": "beego",
+      "framework": "Beego",
+      "label": "Beego",
+      "model": "open",
+      "scenario": "ticket",
+      "repeat": 3,
+      "rate": 370,
+      "evidence_directory": "incomplete/open-ticket-beego-3-1794153609264585434",
+      "archive_timestamp_ns": "1794153609264585434",
+      "included_in_aggregates": false,
+      "round_evidence_complete": false,
+      "termination_reason": null,
+      "load_report_status": "validated",
+      "resources_status": "missing",
+      "queries_status": "missing",
+      "audit_status": "missing",
+      "started_at": "2026-11-08T15:34:45.175418803Z",
+      "finished_at": "2026-11-08T15:36:43.743547851Z",
+      "canceled": false,
+      "measurement_requests_started": true,
+      "window_seconds": 30,
+      "elapsed_seconds": 118.568129141,
+      "drain_seconds": 88.568129141,
+      "success_rps": 132.73333333333332,
+      "issued_success_rps": 132.73333333333332,
+      "elapsed_success_rps": 33.5840670578908,
+      "expected": 11100,
+      "not_scheduled": 0,
+      "planned": 11100,
+      "started": 4238,
+      "completed": 4238,
+      "success": 3982,
+      "success_within_window": 3982,
+      "status_errors": 0,
+      "transport_errors": 256,
+      "semantic_errors": 0,
+      "dropped": 6862,
+      "cache_hits": 0,
+      "cache_misses": 0,
+      "p50_ms": 36.383,
+      "p95_ms": 106102.783,
+      "p99_ms": 107741.183,
+      "max_ms": 108068.863,
+      "mean_ms": 6544.139332232185,
+      "drop_reasons": {
+        "inflight_limit": 799,
+        "schedule_window_elapsed": 6063
+      },
+      "application_cpu_seconds": null,
+      "peak_pss_mib": null,
+      "peak_rss_mib": null,
+      "audit_valid": null,
+      "unconfirmed_orders": null,
+      "unconfirmed_comments": null,
+      "available_artifacts": [
+        "load.json.console.txt",
+        "load.json.gz",
+        "warmup.json.console.txt",
+        "warmup.json.gz"
+      ],
+      "missing_artifacts": [
+        "audit.json",
+        "queries.json.gz",
+        "resources.json.gz",
+        "round.json"
+      ],
+      "artifacts_sha256": {
+        "load.json.console.txt": "99193e70b067c42719acb96d0c9fc2c4af7aaf39710c4e345a715aab61269843",
+        "load.json.gz": "35661eb72d052a3d61e157aca6c2426c219337b5b7f63cdbb279c549df60834c",
+        "warmup.json.console.txt": "a9126833258d2694afd81935d4bbfb47236294902b623b636ad603a68a6ac3f8",
+        "warmup.json.gz": "56db5046ae698f949762b2152198a01734e1938ffdf0646fc9921398bcfb26b4"
+      },
+      "validation_errors": {}
+    }
+  ],
+  "pre_measurement_incomplete_attempts": [
+    {
+      "variant": "iris",
+      "framework": "Iris",
+      "model": "closed",
+      "scenario": "detail",
+      "repeat": 1,
+      "rate": 0,
+      "attempt_id": "closed-detail-iris-1-1794137235675807613",
+      "round_id": "closed-detail-iris-1",
+      "label": "Iris",
+      "evidence_directory": "incomplete/closed-detail-iris-1-1794137235675807613",
+      "archive_timestamp_ns": "1794137235675807613",
+      "available_artifacts": [
+        "warmup.json.console.txt",
+        "warmup.json.gz"
+      ],
+      "missing_artifacts": [
+        "audit.json",
+        "load.json.gz",
+        "queries.json.gz",
+        "resources.json.gz",
+        "round.json"
+      ],
+      "artifacts_sha256": {
+        "warmup.json.console.txt": "bca72e8d07490dd3a4fd8152f29afa3bc8513067ecc314b44ff08450d79c77a8",
+        "warmup.json.gz": "06b762ef557d6a014704c64f87262ff06d1ca73937a923ef99b4e8de8e2c1bc8"
+      },
+      "stage": "pre_measurement"
+    },
+    {
+      "variant": "thinkgo-before",
+      "framework": "ThinkGo",
+      "model": "closed",
+      "scenario": "mixed",
+      "repeat": 1,
+      "rate": 0,
+      "attempt_id": "closed-mixed-thinkgo-before-1-1794138794559798047",
+      "round_id": "closed-mixed-thinkgo-before-1",
+      "label": "ThinkGo · before log.close fix",
+      "evidence_directory": "incomplete/closed-mixed-thinkgo-before-1-1794138794559798047",
+      "archive_timestamp_ns": "1794138794559798047",
+      "available_artifacts": [
+        "warmup.json.console.txt",
+        "warmup.json.gz"
+      ],
+      "missing_artifacts": [
+        "audit.json",
+        "load.json.gz",
+        "queries.json.gz",
+        "resources.json.gz",
+        "round.json"
+      ],
+      "artifacts_sha256": {
+        "warmup.json.console.txt": "124c133c547ebdfe3ae9c7ac340ca5a4b0c92c9368f2c2ba1e5dd6c75a84d854",
+        "warmup.json.gz": "923f4b2c44ebe4f82358a348a500c03f4cc3305227c2dd57c7c0442d3577a61e"
+      },
+      "stage": "pre_measurement"
+    },
+    {
+      "variant": "laravel-octane",
+      "framework": "Laravel",
+      "model": "open",
+      "scenario": "detail",
+      "repeat": 3,
+      "rate": 395,
+      "attempt_id": "open-detail-laravel-octane-3-1794150312958483282",
+      "round_id": "open-detail-laravel-octane-3",
+      "label": "Laravel · Octane/RoadRunner",
+      "evidence_directory": "incomplete/open-detail-laravel-octane-3-1794150312958483282",
+      "archive_timestamp_ns": "1794150312958483282",
+      "available_artifacts": [
+        "contract-snapshot.php"
+      ],
+      "missing_artifacts": [
+        "audit.json",
+        "load.json.gz",
+        "queries.json.gz",
+        "resources.json.gz",
+        "round.json"
+      ],
+      "artifacts_sha256": {
+        "contract-snapshot.php": "e7a75127a0add4fc9ac50d916bf35469417c638ea96fe72666d196e07bc9219b"
+      },
+      "stage": "pre_measurement"
+    },
+    {
+      "variant": "laravel-octane",
+      "framework": "Laravel",
+      "model": "open",
+      "scenario": "detail",
+      "repeat": 3,
+      "rate": 395,
+      "attempt_id": "open-detail-laravel-octane-3-1794151452857590070",
+      "round_id": "open-detail-laravel-octane-3",
+      "label": "Laravel · Octane/RoadRunner",
+      "evidence_directory": "incomplete/open-detail-laravel-octane-3-1794151452857590070",
+      "archive_timestamp_ns": "1794151452857590070",
+      "available_artifacts": [
+        "contract-snapshot.php"
+      ],
+      "missing_artifacts": [
+        "audit.json",
+        "load.json.gz",
+        "queries.json.gz",
+        "resources.json.gz",
+        "round.json"
+      ],
+      "artifacts_sha256": {
+        "contract-snapshot.php": "e7a75127a0add4fc9ac50d916bf35469417c638ea96fe72666d196e07bc9219b"
+      },
+      "stage": "pre_measurement"
+    },
+    {
+      "variant": "fiber",
+      "framework": "Fiber",
+      "model": "open",
+      "scenario": "order",
+      "repeat": 3,
+      "rate": 328,
+      "attempt_id": "open-order-fiber-3-1794152029198921587",
+      "round_id": "open-order-fiber-3",
+      "label": "Fiber",
+      "evidence_directory": "incomplete/open-order-fiber-3-1794152029198921587",
+      "archive_timestamp_ns": "1794152029198921587",
+      "available_artifacts": [
+        "warmup.json.console.txt",
+        "warmup.json.gz"
+      ],
+      "missing_artifacts": [
+        "audit.json",
+        "load.json.gz",
+        "queries.json.gz",
+        "resources.json.gz",
+        "round.json"
+      ],
+      "artifacts_sha256": {
+        "warmup.json.console.txt": "aa5e6761885c9c44981e234bf6ced383ad855f0a93f4b4287dae0346a22c6b1e",
+        "warmup.json.gz": "27293d392cbd6babd4008b65875e4ed034095d4864d9ecdb652cd776b8eee021"
+      },
+      "stage": "pre_measurement"
+    }
+  ],
   "evidence_sha256": {
     "manifest.json": "8200e6f4f22dda0920622effaa52542630e004bbaabe5ab14cc57d63912f2123",
     "index.json": "61da976e6d35f59873aa0d696b50d18d03159c33572cced1c4eba47875d7cc64",
@@ -263,6 +492,7 @@
   "memory_note": "RSS fallback for every comparison: PSS is unavailable in at least one round; shared pages may be counted repeatedly.",
   "definitions": {
     "range": "Median and observed min/max of three independent repeats; no confidence interval.",
+    "interrupted_attempts": "Archived incomplete measurement invocations are excluded from every aggregate; all completed audited rounds, including unsuccessful requests, remain. Counts cover retained archives only. Missing observations and audits are null, not zero. Invalid reports expose unverified observed numbers only; a console alone does not prove requests started. Archive timestamps record recovery, not failure time.",
     "success_rps": "Successful completions inside the measurement window / window seconds.",
     "p99_ms": "Per-run P99 from scheduled time to complete response body; all completed requests; dropped requests have no latency sample.",
     "cpu_ms_per_success": "Application process tree including Nginx CPU milliseconds during the full load invocation / successful completions including drain.",
@@ -282,6 +512,9 @@
         "closed-catalog-thinkgo-2",
         "closed-catalog-thinkgo-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 7127.1,
@@ -434,6 +667,9 @@
         "closed-catalog-thinkgo-before-2",
         "closed-catalog-thinkgo-before-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 6305.4,
@@ -586,6 +822,9 @@
         "closed-catalog-gin-2",
         "closed-catalog-gin-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 8126.333333333333,
@@ -738,6 +977,9 @@
         "closed-catalog-echo-2",
         "closed-catalog-echo-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 7618,
@@ -890,6 +1132,9 @@
         "closed-catalog-fiber-2",
         "closed-catalog-fiber-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 7763,
@@ -1042,6 +1287,9 @@
         "closed-catalog-beego-2",
         "closed-catalog-beego-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 7810,
@@ -1194,6 +1442,9 @@
         "closed-catalog-iris-2",
         "closed-catalog-iris-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 8031.6,
@@ -1346,6 +1597,9 @@
         "closed-catalog-thinkphp-fpm-2",
         "closed-catalog-thinkphp-fpm-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 2312.266666666667,
@@ -1498,6 +1752,9 @@
         "closed-catalog-laravel-fpm-2",
         "closed-catalog-laravel-fpm-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 782.3,
@@ -1650,6 +1907,9 @@
         "closed-catalog-laravel-octane-2",
         "closed-catalog-laravel-octane-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 1206.9,
@@ -1802,6 +2062,9 @@
         "closed-detail-thinkgo-2",
         "closed-detail-thinkgo-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 11987.233333333334,
@@ -1954,6 +2217,9 @@
         "closed-detail-thinkgo-before-2",
         "closed-detail-thinkgo-before-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 10177.233333333334,
@@ -2106,6 +2372,9 @@
         "closed-detail-gin-2",
         "closed-detail-gin-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 15037.1,
@@ -2258,6 +2527,9 @@
         "closed-detail-echo-2",
         "closed-detail-echo-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 15153.966666666667,
@@ -2410,6 +2682,9 @@
         "closed-detail-fiber-2",
         "closed-detail-fiber-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 16865.766666666666,
@@ -2562,6 +2837,9 @@
         "closed-detail-beego-2",
         "closed-detail-beego-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 14237.733333333334,
@@ -2714,6 +2992,9 @@
         "closed-detail-iris-2",
         "closed-detail-iris-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 15078.1,
@@ -2866,6 +3147,9 @@
         "closed-detail-thinkphp-fpm-2",
         "closed-detail-thinkphp-fpm-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 2363.0666666666666,
@@ -3018,6 +3302,9 @@
         "closed-detail-laravel-fpm-2",
         "closed-detail-laravel-fpm-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 790.0333333333333,
@@ -3170,6 +3457,9 @@
         "closed-detail-laravel-octane-2",
         "closed-detail-laravel-octane-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 1181.2333333333333,
@@ -3322,6 +3612,9 @@
         "closed-order-thinkgo-2",
         "closed-order-thinkgo-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 1420.7,
@@ -3474,6 +3767,9 @@
         "closed-order-thinkgo-before-2",
         "closed-order-thinkgo-before-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 1313.6666666666667,
@@ -3626,6 +3922,9 @@
         "closed-order-gin-2",
         "closed-order-gin-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 1473.3,
@@ -3778,6 +4077,9 @@
         "closed-order-echo-2",
         "closed-order-echo-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 1440.2333333333333,
@@ -3930,6 +4232,9 @@
         "closed-order-fiber-2",
         "closed-order-fiber-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 1480.9333333333334,
@@ -4082,6 +4387,9 @@
         "closed-order-beego-2",
         "closed-order-beego-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 1231.9333333333334,
@@ -4234,6 +4542,9 @@
         "closed-order-iris-2",
         "closed-order-iris-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 1323.0333333333333,
@@ -4386,6 +4697,9 @@
         "closed-order-thinkphp-fpm-2",
         "closed-order-thinkphp-fpm-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 1178.7,
@@ -4538,6 +4852,9 @@
         "closed-order-laravel-fpm-2",
         "closed-order-laravel-fpm-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 656.2,
@@ -4690,6 +5007,9 @@
         "closed-order-laravel-octane-2",
         "closed-order-laravel-octane-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 792.9666666666667,
@@ -4842,6 +5162,9 @@
         "closed-ticket-thinkgo-2",
         "closed-ticket-thinkgo-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 3235.3,
@@ -4994,6 +5317,9 @@
         "closed-ticket-thinkgo-before-2",
         "closed-ticket-thinkgo-before-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 3352.4666666666667,
@@ -5146,6 +5472,9 @@
         "closed-ticket-gin-2",
         "closed-ticket-gin-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 3596.233333333333,
@@ -5298,6 +5627,9 @@
         "closed-ticket-echo-2",
         "closed-ticket-echo-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 3499.1666666666665,
@@ -5450,6 +5782,9 @@
         "closed-ticket-fiber-2",
         "closed-ticket-fiber-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 3674.733333333333,
@@ -5602,6 +5937,9 @@
         "closed-ticket-beego-2",
         "closed-ticket-beego-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 3261.5,
@@ -5754,6 +6092,9 @@
         "closed-ticket-iris-2",
         "closed-ticket-iris-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 3598.8333333333335,
@@ -5906,6 +6247,9 @@
         "closed-ticket-thinkphp-fpm-2",
         "closed-ticket-thinkphp-fpm-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 1926.3,
@@ -6058,6 +6402,9 @@
         "closed-ticket-laravel-fpm-2",
         "closed-ticket-laravel-fpm-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 740.5333333333333,
@@ -6210,6 +6557,9 @@
         "closed-ticket-laravel-octane-2",
         "closed-ticket-laravel-octane-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 1065.5,
@@ -6362,6 +6712,9 @@
         "closed-mixed-thinkgo-2",
         "closed-mixed-thinkgo-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 3533.5666666666666,
@@ -6514,6 +6867,9 @@
         "closed-mixed-thinkgo-before-2",
         "closed-mixed-thinkgo-before-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 3620.3333333333335,
@@ -6666,6 +7022,9 @@
         "closed-mixed-gin-2",
         "closed-mixed-gin-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 3907.9333333333334,
@@ -6818,6 +7177,9 @@
         "closed-mixed-echo-2",
         "closed-mixed-echo-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 3757.8333333333335,
@@ -6970,6 +7332,9 @@
         "closed-mixed-fiber-2",
         "closed-mixed-fiber-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 3737.3,
@@ -7122,6 +7487,9 @@
         "closed-mixed-beego-2",
         "closed-mixed-beego-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 3734.3,
@@ -7274,6 +7642,9 @@
         "closed-mixed-iris-2",
         "closed-mixed-iris-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 3877.6,
@@ -7426,6 +7797,9 @@
         "closed-mixed-thinkphp-fpm-2",
         "closed-mixed-thinkphp-fpm-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 2097.3,
@@ -7578,6 +7952,9 @@
         "closed-mixed-laravel-fpm-2",
         "closed-mixed-laravel-fpm-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 730.6333333333333,
@@ -7730,6 +8107,9 @@
         "closed-mixed-laravel-octane-2",
         "closed-mixed-laravel-octane-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 1129.9333333333334,
@@ -7882,6 +8262,9 @@
         "open-catalog-thinkgo-2",
         "open-catalog-thinkgo-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 391,
@@ -8034,6 +8417,9 @@
         "open-catalog-thinkgo-before-2",
         "open-catalog-thinkgo-before-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 391,
@@ -8186,6 +8572,9 @@
         "open-catalog-gin-2",
         "open-catalog-gin-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 391,
@@ -8338,6 +8727,9 @@
         "open-catalog-echo-2",
         "open-catalog-echo-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 391,
@@ -8490,6 +8882,9 @@
         "open-catalog-fiber-2",
         "open-catalog-fiber-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 391,
@@ -8642,6 +9037,9 @@
         "open-catalog-beego-2",
         "open-catalog-beego-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 391,
@@ -8794,6 +9192,9 @@
         "open-catalog-iris-2",
         "open-catalog-iris-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 391,
@@ -8946,6 +9347,9 @@
         "open-catalog-thinkphp-fpm-2",
         "open-catalog-thinkphp-fpm-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 391,
@@ -9098,6 +9502,9 @@
         "open-catalog-laravel-fpm-2",
         "open-catalog-laravel-fpm-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 390.96666666666664,
@@ -9250,6 +9657,9 @@
         "open-catalog-laravel-octane-2",
         "open-catalog-laravel-octane-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 390.96666666666664,
@@ -9402,6 +9812,9 @@
         "open-detail-thinkgo-2",
         "open-detail-thinkgo-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 394.96666666666664,
@@ -9554,6 +9967,9 @@
         "open-detail-thinkgo-before-2",
         "open-detail-thinkgo-before-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 395,
@@ -9706,6 +10122,9 @@
         "open-detail-gin-2",
         "open-detail-gin-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 394.96666666666664,
@@ -9858,6 +10277,9 @@
         "open-detail-echo-2",
         "open-detail-echo-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 394.96666666666664,
@@ -10010,6 +10432,9 @@
         "open-detail-fiber-2",
         "open-detail-fiber-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 394.96666666666664,
@@ -10162,6 +10587,9 @@
         "open-detail-beego-2",
         "open-detail-beego-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 395,
@@ -10314,6 +10742,9 @@
         "open-detail-iris-2",
         "open-detail-iris-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 395,
@@ -10466,6 +10897,9 @@
         "open-detail-thinkphp-fpm-2",
         "open-detail-thinkphp-fpm-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 394.96666666666664,
@@ -10618,6 +11052,9 @@
         "open-detail-laravel-fpm-2",
         "open-detail-laravel-fpm-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 394.9,
@@ -10770,6 +11207,9 @@
         "open-detail-laravel-octane-2",
         "open-detail-laravel-octane-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 394.96666666666664,
@@ -10922,6 +11362,9 @@
         "open-order-thinkgo-2",
         "open-order-thinkgo-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 327.96666666666664,
@@ -11074,6 +11517,9 @@
         "open-order-thinkgo-before-2",
         "open-order-thinkgo-before-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 327.96666666666664,
@@ -11226,6 +11672,9 @@
         "open-order-gin-2",
         "open-order-gin-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 327.93333333333334,
@@ -11378,6 +11827,9 @@
         "open-order-echo-2",
         "open-order-echo-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 327.96666666666664,
@@ -11530,6 +11982,9 @@
         "open-order-fiber-2",
         "open-order-fiber-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 327.96666666666664,
@@ -11682,6 +12137,9 @@
         "open-order-beego-2",
         "open-order-beego-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 327.93333333333334,
@@ -11834,6 +12292,9 @@
         "open-order-iris-2",
         "open-order-iris-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 327.96666666666664,
@@ -11986,6 +12447,9 @@
         "open-order-thinkphp-fpm-2",
         "open-order-thinkphp-fpm-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 327.9,
@@ -12138,6 +12602,9 @@
         "open-order-laravel-fpm-2",
         "open-order-laravel-fpm-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 327.8333333333333,
@@ -12290,6 +12757,9 @@
         "open-order-laravel-octane-2",
         "open-order-laravel-octane-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 327.93333333333334,
@@ -12442,6 +12912,9 @@
         "open-ticket-thinkgo-2",
         "open-ticket-thinkgo-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 369.93333333333334,
@@ -12594,6 +13067,9 @@
         "open-ticket-thinkgo-before-2",
         "open-ticket-thinkgo-before-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 369.96666666666664,
@@ -12746,6 +13222,9 @@
         "open-ticket-gin-2",
         "open-ticket-gin-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 369.96666666666664,
@@ -12898,6 +13377,9 @@
         "open-ticket-echo-2",
         "open-ticket-echo-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 370,
@@ -13050,6 +13532,9 @@
         "open-ticket-fiber-2",
         "open-ticket-fiber-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 370,
@@ -13201,6 +13686,13 @@
         "open-ticket-beego-1",
         "open-ticket-beego-2",
         "open-ticket-beego-3"
+      ],
+      "interrupted_attempt_count": 1,
+      "interrupted_attempt_ids": [
+        "open-ticket-beego-3-1794153609264585434"
+      ],
+      "interrupted_repeats": [
+        3
       ],
       "metrics": {
         "success_rps": {
@@ -13354,6 +13846,9 @@
         "open-ticket-iris-2",
         "open-ticket-iris-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 369.96666666666664,
@@ -13506,6 +14001,9 @@
         "open-ticket-thinkphp-fpm-2",
         "open-ticket-thinkphp-fpm-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 369.96666666666664,
@@ -13658,6 +14156,9 @@
         "open-ticket-laravel-fpm-2",
         "open-ticket-laravel-fpm-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 369.9,
@@ -13810,6 +14311,9 @@
         "open-ticket-laravel-octane-2",
         "open-ticket-laravel-octane-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 369.96666666666664,
@@ -13962,6 +14466,9 @@
         "open-mixed-thinkgo-2",
         "open-mixed-thinkgo-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 365,
@@ -14114,6 +14621,9 @@
         "open-mixed-thinkgo-before-2",
         "open-mixed-thinkgo-before-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 365,
@@ -14266,6 +14776,9 @@
         "open-mixed-gin-2",
         "open-mixed-gin-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 365,
@@ -14418,6 +14931,9 @@
         "open-mixed-echo-2",
         "open-mixed-echo-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 365,
@@ -14570,6 +15086,9 @@
         "open-mixed-fiber-2",
         "open-mixed-fiber-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 365,
@@ -14722,6 +15241,9 @@
         "open-mixed-beego-2",
         "open-mixed-beego-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 365,
@@ -14874,6 +15396,9 @@
         "open-mixed-iris-2",
         "open-mixed-iris-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 365,
@@ -15026,6 +15551,9 @@
         "open-mixed-thinkphp-fpm-2",
         "open-mixed-thinkphp-fpm-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 365,
@@ -15178,6 +15706,9 @@
         "open-mixed-laravel-fpm-2",
         "open-mixed-laravel-fpm-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 364.93333333333334,
@@ -15330,6 +15861,9 @@
         "open-mixed-laravel-octane-2",
         "open-mixed-laravel-octane-3"
       ],
+      "interrupted_attempt_count": 0,
+      "interrupted_attempt_ids": [],
+      "interrupted_repeats": [],
       "metrics": {
         "success_rps": {
           "median": 364.93333333333334,
@@ -15554,7 +16088,7 @@
   "rendering": {
     "matplotlib_version": "3.11.2",
     "png_dpi": 180,
-    "renderer_sha256": "5f6ae205b66420fd532825a1097103e0604d3546bb2cb763091cb5199b29ca0d",
+    "renderer_sha256": "eee861f523a3658bc6d7bab4faf5487b296b3fa8a8261d7612c06f44b49a3c59",
     "svg_text": "editable text"
   }
 }

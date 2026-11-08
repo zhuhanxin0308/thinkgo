@@ -1,14 +1,14 @@
 <?xml version="1.0" encoding="utf-8" standalone="no"?>
 <!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"
   "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
-<svg xmlns:xlink="http://www.w3.org/1999/xlink" width="1364.6145pt" height="1024.38pt" viewBox="0 0 1364.6145 1024.38" xmlns="http://www.w3.org/2000/svg" version="1.1">
+<svg xmlns:xlink="http://www.w3.org/1999/xlink" width="1364.6145pt" height="1184.4pt" viewBox="0 0 1364.6145 1184.4" xmlns="http://www.w3.org/2000/svg" version="1.1">
  <title>errors_closed</title>
  <metadata>
   <rdf:RDF xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:cc="http://creativecommons.org/ns#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
    <cc:Work>
     <dc:type rdf:resource="http://purl.org/dc/dcmitype/StillImage"/>
     <dc:title>errors_closed</dc:title>
-    <dc:date>2026-11-08T16:09:39.606148</dc:date>
+    <dc:date>2026-11-08T16:31:39.891039</dc:date>
     <dc:description>Median and observed min/max; three independent repeats.</dc:description>
     <dc:format>image/svg+xml</dc:format>
     <dc:creator>
@@ -24,8 +24,8 @@
  </defs>
  <g id="figure_1">
   <g id="patch_1">
-   <path d="M 0 1024.38 
-L 1364.6145 1024.38 
+   <path d="M 0 1184.4 
+L 1364.6145 1184.4 
 L 1364.6145 0 
 L 0 0 
 z
@@ -3662,6 +3662,12 @@ z
   </g>
   <g id="text_333">
    <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #475467" x="39.8145" y="49.898437" transform="rotate(-0 39.8145 49.898437)">Each cell: median percent [min, max] across 3 repeats · categories stay separate · all-zero cells show 0</text>
+  </g>
+  <g id="text_334">
+   <text style="font-size: 9px; font-family: 'DejaVu Sans'; fill: #694126" transform="translate(39.8145 1132.433437)">Experiment disclosure: 1 interrupted measurement attempt(s) excluded from medians; 300/300 completed audited rounds retained.</text>
+   <text style="font-size: 9px; font-family: 'DejaVu Sans'; fill: #694126" transform="translate(39.8145 1145.933437)">Affected: Beego / open / ticket / repeat 3</text>
+   <text style="font-size: 9px; font-family: 'DejaVu Sans'; fill: #694126" transform="translate(39.8145 1159.433437)">Missing or unverified evidence (attempts) — DB audit: 1; resources: 1; queries: 1.</text>
+   <text style="font-size: 9px; font-family: 'DejaVu Sans'; fill: #694126" transform="translate(39.8145 1172.808281)">* marks an affected group. Observations, missing audits and all attempt records: interrupted_attempts.csv / summary.json.</text>
   </g>
  </g>
 </svg>
