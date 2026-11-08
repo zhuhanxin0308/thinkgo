@@ -55,6 +55,20 @@ def package_directories(raw_paths: str, module: Path) -> list[str]:
     return directories
 
 
+def module_package_patterns(directories: list[str], module: Path) -> list[str]:
+    """将已核验的绝对目录改为模块相对包模式，避免 go/packages 构造 command-line-arguments。"""
+    module = module.resolve()
+    # 中文注释：再次验证目录归属，禁止外部调用绕过前面的 go list 边界检查。
+    checked = package_directories("\n".join(directories), module)
+    if checked != directories or len(set(checked)) != len(checked):
+        raise ValueError("扫描目录未完整通过归属校验或存在重复")
+    patterns = []
+    for directory in checked:
+        relative = Path(directory).relative_to(module)
+        patterns.append("." if relative == Path(".") else f"./{relative.as_posix()}")
+    return patterns
+
+
 def validate_report(result: object) -> None:
     """缺字段、空覆盖、发现、加载错误及格式错误均不能通过门禁。"""
     if not isinstance(result, dict) or not {"Stats", "Issues", "Golang errors"}.issubset(result):
@@ -89,9 +103,10 @@ def scan_module(module: Path, report_path: Path, *, nested: bool = False) -> Non
         cwd=module, env=environment, check=True, stdout=subprocess.PIPE, text=True,
     )
     directories = package_directories(packages.stdout, module)
+    patterns = module_package_patterns(directories, module)
     report_path.unlink(missing_ok=True)
     scanned = subprocess.run(
-        ["go", "run", "-mod=readonly", GOSEC_TOOL, "-no-fail", "-fmt=json", f"-out={report_path}", *directories],
+        ["go", "run", "-mod=readonly", GOSEC_TOOL, "-no-fail", "-fmt=json", f"-out={report_path}", *patterns],
         cwd=module, env=environment, check=False,
     )
     with report_path.open(encoding="utf-8") as report:
