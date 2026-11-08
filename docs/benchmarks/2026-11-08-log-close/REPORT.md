@@ -24,6 +24,29 @@ ThinkGo 修复后，目录、详情、下单的闭环吞吐中位数分别提高
 
 六种 Go 框架复用共同 Go 业务层，PHP 配置复用共同 PHP 业务层，两种语言使用一致的 SQL、事务步骤、缓存算法和响应合同。框架保留原生路由、中间件、请求绑定、JSON 和生命周期。结果同时包含运行时、驱动、网关与连接行为，不能解释为纯路由器开销，也不代表各框架完整 ORM、模板、队列生态。[业务与适配源码](../../../benchmarks/business/)。
 
+## 日志关闭口径
+
+**修复前、修复后两组 ThinkGo 都配置 `log.close=true`、`channels={}`。** 两组均不输出普通访问日志，本次比较关注关闭状态下是否仍进行日志准备工作。[实际日志配置](../../../benchmarks/business/go/internal/adapters/thinkgo/project/config/log.json)。
+
+修复前的应用 Provider 安装无输出驱动的 `NewLog()`，其级别判断仍返回启用；HTTP 入口虽然已有级别判断，仍会继续构造访问日志字段，部分日志路径也继续脱敏、序列化和入队。修复后 Provider 安装 `NewDisabledLog()`，禁用实例在记录准备与异步入队前返回，并在 HTTP、异常、数据库、Session 等调用处跳过仅用于日志的字段构造；保留业务错误、回调与关闭生命周期。[Provider](../../../app_log_provider.go)、[日志实现](../../../log/log.go)、[HTTP 调用](../../../http/http.go)。
+
+专用[访问日志回归测试](../../../http/log_disabled_test.go)验证关闭日志时访问日志调用零分配；请求准备在该计量范围之外，不能将结果推广为整个 HTTP 请求零分配。正式业务测试仍使用真实 HTTP、数据库和缓存，不用该局部测试替代业务性能结果。
+
+所有配置均关闭普通逐请求访问日志输出，但错误路径保留的诊断能力不同：
+
+| 配置或组件 | 实际日志设置与边界 |
+|---|---|
+| Gin、Echo、Iris | 未安装普通访问日志中间件，适配器将相关 HTTP/应用 logger 输出丢弃；具体范围由各适配器定义 |
+| Fiber | 未安装访问日志中间件，fasthttp 日志禁用；Fiber 包级 logger 仍保留默认 stderr 输出路径 |
+| Beego | `AccessLogs=false`、`EnableStaticLogs=false`，初始化时 Reset 清空输出；后续日志写入可重建 console，不能等同永久禁用所有错误日志 |
+| ThinkPHP-FPM | 保留文件日志；`apart_level=error` 表示 error 单独分文件，并非只允许 error 级别 |
+| Laravel-FPM / Octane | Laravel 的 stderr Monolog 通道最低级别为 error；Octane 还存在独立 RoadRunner 日志路径 |
+| Octane / RoadRunner | 实际启动 CLI 使用 production/warn，覆盖 `.rr.yaml` 的 error；Octane 对输出再做过滤，`app.log` 不能代表完整 RoadRunner 原始日志 |
+| Nginx，全部配置 | `access_log off`；保留 warn 及以上级别错误日志 |
+| PHP 原生 / PHP-FPM | `log_errors=On`、`E_ALL`；FPM 保留错误日志并接收 worker 输出，没有开启 FPM 访问日志 |
+
+来源：[Go 适配器](../../../benchmarks/business/go/internal/adapters/)、[共享 HTTP 宿主](../../../benchmarks/business/go/internal/serve/serve.go)、[PHP 配置](../../../benchmarks/business/php/)和[原生启动控制器](../../../benchmarks/business/tools/native.py)。异常轮的日志开销不能视为完全一致，日志文件没有输出也不能单独证明没有发生错误。
+
 ## 300 个完整轮次的请求会计
 
 以下只合计具有完整证据和数据库审计的 300 轮，额外中断测量不在此表。累计请求用于核对完整性，不作为跨场景综合性能得分。[逐轮 CSV](charts/rounds.csv)、[原始轮次](raw/rounds/)。
@@ -171,6 +194,10 @@ ThinkGo 修复后，目录、详情、下单的闭环吞吐中位数分别提高
 
 这些观测属于准备或预热，不混入 30 秒正式结果。两次 Octane 的计数未知，不能补零。会话 02 控制台累积包含会话 01，重复日志不能重复计为尝试。[全部恢复归档](raw/incomplete/)。
 
+### 独立 Octane 诊断试跑
+
+排查 Octane 时另有[独立诊断归档](raw/octane-diagnostic-20261108.tar.gz)及[控制台](raw/octane-diagnostic-20261108-console.log)。其中下单试跑记录 **64 次传输错误、61 次未确认订单提交**；这些观测不属于正式 300 轮，也不计入上面的 301 份正式负载报告合计。诊断证据单独保留，不能据此确定进程替换或错误的根因。
+
 ### 最后一轮的归因边界
 
 Laravel-FPM 目录第三轮计划 11,730 次，发出 1,544 次、成功 1,500 次，其中窗口内成功 1,498 次；44 次传输错误和 10,186 次 dropped 合计 **10,230 次未成功**，不能将该合计写成 dropped。该轮调度滞后 P99 为 **47,382.527 ms**，HTTP duration P99 为 **47,742.975 ms**，并记录 91 个采样周期跳过、应用内存缺样 92 次、三个已观察进程消失、应用 CPU 不完整。[负载报告](raw/rounds/open-catalog-laravel-fpm-3/load.json.gz)、[资源证据](raw/rounds/open-catalog-laravel-fpm-3/resources.json.gz)。
@@ -197,7 +224,7 @@ CPU 成本定义为 **应用与 Nginx 进程树 CPU 秒 × 1,000 / 含排空期�
 
 300 个完整审计轮次中，**21 轮应用内存不完整，导致 19 组内存汇总为 N/A；1 轮应用 CPU 不完整，导致开放目录 Laravel-FPM 组 CPU 为 N/A**。一组任一重复缺失时，对应指标不使用另两轮重新计算，也不填零。数据库审计完整不等于资源遥测完整。
 
-内存图统一采用 **RSS**，因为并非所有比较轮都具有完整 PSS。逐进程 RSS 相加可能重复计算共享页，尤其是 PHP 多 worker 与 OPcache；不能直接解释为物理内存倍数。峰值是每 0.5 秒采样观察到的峰值，不保证捕获采样间的瞬时峰值，也不包含测量前启动峰值。
+内存图统一采用 **RSS**，因为并非所有比较轮都具有完整 PSS。逐进程 RSS 相加可能重复计算共享页，尤其是 PHP 多 worker 与 OPcache；不能直接解释为物理内存倍数。峰值是目标间隔 0.5 秒的采样所观察到的峰值，不保证实际严格等间隔或捕获采样间的瞬时峰值，也不包含测量前启动峰值。
 
 ![闭环应用与 Nginx 采样 RSS 峰值](charts/memory_closed.png)
 

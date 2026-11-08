@@ -85,6 +85,8 @@ ThinkGo 默认关闭自动路由、开启强制路由。`config/route.json` 中�
 
 最新批次完成 **300 个完整审计轮次**：8 个框架、10 种配置、5 个业务场景、闭环与开放两种负载、每组 3 次重复。十种配置包含 ThinkGo 日志关闭修复前和修复后两组，使用相同业务源码、SQL、数据和主机条件。
 
+两组 ThinkGo 都配置 `log.close=true`、空日志通道。修复解决了旧版关闭输出后仍准备字段、脱敏、序列化和入队的问题；其他配置也关闭普通访问日志，但错误日志策略不同。具体修复范围、各框架设置和 Octane 最终有效日志级别见报告的[日志关闭口径](docs/benchmarks/2026-11-08-log-close/REPORT.md#日志关闭口径)。
+
 [本批完整报告与复现](docs/benchmarks/2026-11-08-log-close/REPORT.md) · [原始证据](docs/benchmarks/2026-11-08-log-close/raw/) · [逐轮 CSV](docs/benchmarks/2026-11-08-log-close/charts/rounds.csv) · [汇总 CSV](docs/benchmarks/2026-11-08-log-close/charts/summary.csv)
 
 下表为 **64 并发、30 秒窗口、三次重复的窗口内成功请求/秒中位数**；变化只使用本批修复前后数据计算。
