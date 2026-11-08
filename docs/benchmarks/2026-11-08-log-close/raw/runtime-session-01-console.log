@@ -1,0 +1,57 @@
+{"time": "2026-11-08T11:14:08.450202+00:00", "event": "session_start", "mode": "measure"}
+{"time": "2026-11-08T11:14:16.961742+00:00", "event": "verification_start", "variant": "thinkgo"}
+{"time": "2026-11-08T11:14:17.912031+00:00", "event": "verification_pass", "variant": "thinkgo"}
+{"time": "2026-11-08T11:14:17.912192+00:00", "event": "verification_start", "variant": "thinkgo-before"}
+{"time": "2026-11-08T11:14:18.830208+00:00", "event": "verification_pass", "variant": "thinkgo-before"}
+{"time": "2026-11-08T11:14:18.830377+00:00", "event": "verification_start", "variant": "gin"}
+{"time": "2026-11-08T11:14:19.910028+00:00", "event": "verification_pass", "variant": "gin"}
+{"time": "2026-11-08T11:14:19.910300+00:00", "event": "verification_start", "variant": "echo"}
+{"time": "2026-11-08T11:14:20.849354+00:00", "event": "verification_pass", "variant": "echo"}
+{"time": "2026-11-08T11:14:20.849522+00:00", "event": "verification_start", "variant": "fiber"}
+{"time": "2026-11-08T11:14:21.713511+00:00", "event": "verification_pass", "variant": "fiber"}
+{"time": "2026-11-08T11:14:21.713719+00:00", "event": "verification_start", "variant": "beego"}
+{"time": "2026-11-08T11:14:22.558910+00:00", "event": "verification_pass", "variant": "beego"}
+{"time": "2026-11-08T11:14:22.559068+00:00", "event": "verification_start", "variant": "iris"}
+{"time": "2026-11-08T11:14:23.438585+00:00", "event": "verification_pass", "variant": "iris"}
+{"time": "2026-11-08T11:14:23.438772+00:00", "event": "verification_start", "variant": "thinkphp-fpm"}
+{"time": "2026-11-08T11:14:24.741714+00:00", "event": "verification_pass", "variant": "thinkphp-fpm"}
+{"time": "2026-11-08T11:14:24.741888+00:00", "event": "verification_start", "variant": "laravel-fpm"}
+{"time": "2026-11-08T11:14:27.218644+00:00", "event": "verification_pass", "variant": "laravel-fpm"}
+{"time": "2026-11-08T11:14:27.218820+00:00", "event": "verification_start", "variant": "laravel-octane"}
+{"time": "2026-11-08T11:14:37.486688+00:00", "event": "verification_pass", "variant": "laravel-octane"}
+{"time": "2026-11-08T11:14:37.487728+00:00", "event": "round_start", "id": "closed-mixed-gin-1", "number": 1, "total": 150}
+{"time": "2026-11-08T11:15:20.153851+00:00", "event": "round_complete", "id": "closed-mixed-gin-1", "success_rps": 3341.366666666667, "p99_ms": 80.191, "unsuccessful": 0}
+{"time": "2026-11-08T11:15:21.154437+00:00", "event": "round_start", "id": "closed-detail-beego-1", "number": 2, "total": 150}
+{"time": "2026-11-08T11:16:03.600522+00:00", "event": "round_complete", "id": "closed-detail-beego-1", "success_rps": 13537.1, "p99_ms": 17.055, "unsuccessful": 0}
+{"time": "2026-11-08T11:16:04.600889+00:00", "event": "round_start", "id": "closed-detail-gin-1", "number": 3, "total": 150}
+{"time": "2026-11-08T11:16:46.706650+00:00", "event": "round_complete", "id": "closed-detail-gin-1", "success_rps": 10982.533333333333, "p99_ms": 28.255, "unsuccessful": 0}
+{"time": "2026-11-08T11:16:47.706967+00:00", "event": "round_start", "id": "closed-order-fiber-1", "number": 4, "total": 150}
+{"time": "2026-11-08T11:17:29.855745+00:00", "event": "round_complete", "id": "closed-order-fiber-1", "success_rps": 1398.4, "p99_ms": 143.487, "unsuccessful": 0}
+{"time": "2026-11-08T11:17:30.856165+00:00", "event": "round_start", "id": "closed-detail-laravel-octane-1", "number": 5, "total": 150}
+{"time": "2026-11-08T11:18:21.229952+00:00", "event": "round_complete", "id": "closed-detail-laravel-octane-1", "success_rps": 1114.4333333333334, "p99_ms": 230.143, "unsuccessful": 0}
+{"time": "2026-11-08T11:18:22.231812+00:00", "event": "round_start", "id": "closed-detail-thinkgo-1", "number": 6, "total": 150}
+{"time": "2026-11-08T11:19:04.249661+00:00", "event": "round_complete", "id": "closed-detail-thinkgo-1", "success_rps": 11518.866666666667, "p99_ms": 19.247, "unsuccessful": 0}
+{"time": "2026-11-08T11:19:05.250017+00:00", "event": "round_start", "id": "closed-order-iris-1", "number": 7, "total": 150}
+{"time": "2026-11-08T11:19:47.374001+00:00", "event": "round_complete", "id": "closed-order-iris-1", "success_rps": 1000.8666666666667, "p99_ms": 276.223, "unsuccessful": 0}
+{"time": "2026-11-08T11:19:48.374362+00:00", "event": "round_start", "id": "closed-detail-laravel-fpm-1", "number": 8, "total": 150}
+{"time": "2026-11-08T11:20:33.185945+00:00", "event": "round_complete", "id": "closed-detail-laravel-fpm-1", "success_rps": 775.9666666666667, "p99_ms": 129.599, "unsuccessful": 0}
+{"time": "2026-11-08T11:20:34.186444+00:00", "event": "round_start", "id": "closed-order-gin-1", "number": 9, "total": 150}
+{"time": "2026-11-08T11:21:16.095406+00:00", "event": "round_complete", "id": "closed-order-gin-1", "success_rps": 1317.1, "p99_ms": 164.991, "unsuccessful": 0}
+{"time": "2026-11-08T11:21:17.095845+00:00", "event": "round_start", "id": "closed-ticket-thinkgo-before-1", "number": 10, "total": 150}
+{"time": "2026-11-08T11:21:58.948676+00:00", "event": "round_complete", "id": "closed-ticket-thinkgo-before-1", "success_rps": 3059.766666666667, "p99_ms": 68.415, "unsuccessful": 0}
+{"time": "2026-11-08T11:21:59.949440+00:00", "event": "round_start", "id": "closed-detail-thinkgo-before-1", "number": 11, "total": 150}
+{"time": "2026-11-08T11:22:41.679714+00:00", "event": "round_complete", "id": "closed-detail-thinkgo-before-1", "success_rps": 9943.433333333332, "p99_ms": 22.959, "unsuccessful": 0}
+{"time": "2026-11-08T11:22:42.680212+00:00", "event": "round_start", "id": "closed-order-laravel-octane-1", "number": 12, "total": 150}
+{"time": "2026-11-08T11:23:30.964973+00:00", "event": "round_complete", "id": "closed-order-laravel-octane-1", "success_rps": 792.9666666666667, "p99_ms": 145.023, "unsuccessful": 0}
+{"time": "2026-11-08T11:23:31.965453+00:00", "event": "round_start", "id": "closed-detail-iris-1", "number": 13, "total": 150}
+Traceback (most recent call last):
+  File "/workspace/scratch/c70258927917/thinkgo/benchmarks/business/tools/run.py", line 410, in <module>
+    main()
+  File "/workspace/scratch/c70258927917/thinkgo/benchmarks/business/tools/run.py", line 406, in main
+    execute(parser.parse_args())
+  File "/workspace/scratch/c70258927917/thinkgo/benchmarks/business/tools/run.py", line 382, in execute
+    result = run_round(environment, output, item, variants[item["variant"]], secret, rate, arguments.mode)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/c70258927917/thinkgo/benchmarks/business/tools/run.py", line 260, in run_round
+    raise RuntimeError(f"预热业务未全部成功，拒绝进入计时: {warmcheck}")
+RuntimeError: 预热业务未全部成功，拒绝进入计时: {'unsuccessful': 1, 'failure_fraction': 0.001}

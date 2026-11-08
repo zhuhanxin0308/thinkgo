@@ -1,0 +1,26 @@
+{"time": "2026-11-08T15:08:26.108495+00:00", "event": "session_start", "mode": "pilot"}
+{"time": "2026-11-08T15:08:35.137916+00:00", "event": "verification_start", "variant": "laravel-octane"}
+{"time": "2026-11-08T15:08:45.548464+00:00", "event": "verification_pass", "variant": "laravel-octane"}
+{"time": "2026-11-08T15:08:45.549070+00:00", "event": "round_start", "id": "closed-order-laravel-octane-1", "number": 1, "total": 5}
+{"time": "2026-11-08T15:09:04.628531+00:00", "event": "round_complete", "id": "closed-order-laravel-octane-1", "success_rps": 610.3333333333334, "p99_ms": 6541.311, "unsuccessful": 64}
+{"time": "2026-11-08T15:09:05.629367+00:00", "event": "round_start", "id": "closed-catalog-laravel-octane-1", "number": 2, "total": 5}
+{"time": "2026-11-08T15:09:19.711714+00:00", "event": "round_complete", "id": "closed-catalog-laravel-octane-1", "success_rps": 1069.6666666666667, "p99_ms": 131.967, "unsuccessful": 0}
+{"time": "2026-11-08T15:09:20.715081+00:00", "event": "round_start", "id": "closed-detail-laravel-octane-1", "number": 3, "total": 5}
+{"time": "2026-11-08T15:09:35.023279+00:00", "event": "round_complete", "id": "closed-detail-laravel-octane-1", "success_rps": 1064.3333333333333, "p99_ms": 120.127, "unsuccessful": 0}
+{"time": "2026-11-08T15:09:36.024650+00:00", "event": "round_start", "id": "closed-ticket-laravel-octane-1", "number": 4, "total": 5}
+Traceback (most recent call last):
+  File "/workspace/scratch/c70258927917/thinkgo/benchmarks/business/tools/run.py", line 410, in <module>
+    main()
+  File "/workspace/scratch/c70258927917/thinkgo/benchmarks/business/tools/run.py", line 406, in main
+    execute(parser.parse_args())
+  File "/workspace/scratch/c70258927917/thinkgo/benchmarks/business/tools/run.py", line 382, in execute
+    result = run_round(environment, output, item, variants[item["variant"]], secret, rate, arguments.mode)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/c70258927917/thinkgo/benchmarks/business/tools/run.py", line 249, in run_round
+    variables = environment.start_app(variant, namespace, secret)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/c70258927917/thinkgo/benchmarks/business/tools/native.py", line 474, in start_app
+    wait_for(self.healthy, nginx)
+  File "/workspace/scratch/c70258927917/thinkgo/benchmarks/business/tools/native.py", line 276, in wait_for
+    raise TimeoutError(f"服务启动超时: {process.command}; {last}")
+TimeoutError: 服务启动超时: ['/workspace/scratch/c70258927917/benchmark-runtime/nginx/sbin/nginx', '-p', '/workspace/scratch/c70258927917/benchmark-runtime/work/octane-preheat-diagnostic-20261108', '-c', '/workspace/scratch/c70258927917/benchmark-runtime/work/octane-preheat-diagnostic-20261108/config/nginx.conf']; timed out
