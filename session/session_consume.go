@@ -26,7 +26,7 @@ func (s *Session) ConsumeString(name, submitted string) (bool, error) {
 		return s.consumeStringLocked(name, submitted)
 	}()
 	if err != nil {
-		return false, s.reportError("消费一次性 Session 值失败", err, map[string]interface{}{"session_id": sessionID})
+		return false, s.reportIDError("消费一次性 Session 值失败", err, sessionID)
 	}
 	return accepted, nil
 }

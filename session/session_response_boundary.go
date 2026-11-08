@@ -27,7 +27,7 @@ func (s *Session) saveLocked() error {
 			continue
 		}
 		if err != nil {
-			return s.reportError("Session 原子持久化失败", err, map[string]interface{}{"session_id": snapshot.ID})
+			return s.reportIDError("Session 原子持久化失败", err, snapshot.ID)
 		}
 		s.reconcilePersistedSnapshot(snapshot, merged)
 		if err = s.flushCookie(snapshot.ID, false); err != nil {

@@ -448,10 +448,11 @@ func (app *App) initDatabaseConnections(dbConfigData map[string]interface{}, def
 					app.recordStartupError(fmt.Errorf("required default database connection %q failed: %w", spec.name, result.err))
 				}
 			}
-			if app.log != nil {
-				message := fmt.Sprintf("数据库连接 %q 失败（应用仍可启动，但 readiness 将失败，启动策略=%s）: %s", spec.name, app.databaseStartupPolicy, redactDatabaseConnectionError(result.err))
+			if app.log != nil && app.log.IsLevelEnabled(log.LevelWarning) {
+				connectionError := redactDatabaseConnectionError(result.err)
+				message := fmt.Sprintf("数据库连接 %q 失败（应用仍可启动，但 readiness 将失败，启动策略=%s）: %s", spec.name, app.databaseStartupPolicy, connectionError)
 				if app.databaseStartupPolicy == DatabaseStartupRequired && spec.name == defaultConn {
-					message = fmt.Sprintf("数据库连接 %q 失败（required 策略将阻断启动）: %s", spec.name, redactDatabaseConnectionError(result.err))
+					message = fmt.Sprintf("数据库连接 %q 失败（required 策略将阻断启动）: %s", spec.name, connectionError)
 				}
 				app.log.Warning(message)
 			}
@@ -471,7 +472,7 @@ func (app *App) initDatabaseConnections(dbConfigData map[string]interface{}, def
 				}
 			}
 			if app.log != nil {
-				app.log.Warning(fmt.Sprintf("数据库连接 %q 未返回可用连接（启动策略=%s）", spec.name, app.databaseStartupPolicy))
+				app.log.Warningf("数据库连接 %q 未返回可用连接（启动策略=%s）", spec.name, app.databaseStartupPolicy)
 			}
 			continue
 		}
@@ -578,8 +579,8 @@ func (app *App) registerDatabaseConnectionFactory(spec databaseConnectionSpec, d
 			if spec.name == defaultConn {
 				app.setDatabaseReadinessError(connectErr)
 			}
-			if app.log != nil {
-				app.log.Warning(fmt.Sprintf("数据库连接 %q 失败（%s 策略将在下次访问或就绪检查时重试）: %s", spec.name, app.databaseStartupPolicy, redactDatabaseConnectionError(connectErr)))
+			if app.log != nil && app.log.IsLevelEnabled(log.LevelWarning) {
+				app.log.Warningf("数据库连接 %q 失败（%s 策略将在下次访问或就绪检查时重试）: %s", spec.name, app.databaseStartupPolicy, redactDatabaseConnectionError(connectErr))
 			}
 			return nil, connectErr
 		}

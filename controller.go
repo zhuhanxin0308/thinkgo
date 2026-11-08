@@ -95,7 +95,9 @@ func (c *Controller) View(name string, data ...map[string]interface{}) string {
 	err := c.App.view.RenderWithOptions(options, &b, name, d)
 	if err != nil {
 		// 记录详细错误到日志，不将模板路径等敏感信息暴露给用户
-		c.App.log.Error("模板渲染失败 [" + name + "]: " + log.SanitizeErrorText(err.Error()))
+		if c.App.log != nil && c.App.log.IsLevelEnabled(log.LevelError) {
+			c.App.log.Error("模板渲染失败 [" + name + "]: " + log.SanitizeErrorText(err.Error()))
+		}
 		return "页面渲染出错，请稍后再试"
 	}
 	return b.String()

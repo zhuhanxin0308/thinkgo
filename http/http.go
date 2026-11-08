@@ -545,11 +545,14 @@ func (h *Http) finishRequest(state *requestServeState, recovered interface{}) {
 			}
 		} else {
 			state.abortResponse = true
-			panicErr := fmt.Errorf("%v", recovered)
-			if boundedEnd {
-				requestErr = errors.Join(requestErr, h.logHTTPErrorContext(endContext, "响应写出后发生异常", panicErr))
-			} else {
-				requestErr = errors.Join(requestErr, h.logHTTPErrorNonBlocking("响应写出后发生异常", panicErr))
+			// 生命周期错误已保留；只有开启 ERROR 时才额外格式化日志专用的 panic 文本。
+			if h != nil && h.log != nil && h.log.IsLevelEnabled(frameworkLog.LevelError) {
+				panicErr := fmt.Errorf("%v", recovered)
+				if boundedEnd {
+					requestErr = errors.Join(requestErr, h.logHTTPErrorContext(endContext, "响应写出后发生异常", panicErr))
+				} else {
+					requestErr = errors.Join(requestErr, h.logHTTPErrorNonBlocking("响应写出后发生异常", panicErr))
+				}
 			}
 		}
 	}
@@ -733,7 +736,7 @@ func requestLogPath(raw *http.Request) string {
 }
 
 func (h *Http) logHTTPError(message string, err error) {
-	if h != nil && h.log != nil && err != nil {
+	if h != nil && h.log != nil && err != nil && h.log.IsLevelEnabled(frameworkLog.LevelError) {
 		h.log.ErrorCtx(message, map[string]interface{}{"error": frameworkLog.SanitizeErrorText(err.Error())})
 	}
 }
@@ -749,7 +752,7 @@ func (h *Http) logHTTPErrorNonBlocking(message string, err error) error {
 }
 
 func (h *Http) logHTTPErrorRecord(ctx stdcontext.Context, message string, err error, nonBlocking bool) error {
-	if h == nil || h.log == nil || err == nil {
+	if h == nil || h.log == nil || err == nil || !h.log.IsLevelEnabled(frameworkLog.LevelError) {
 		return nil
 	}
 	fields := map[string]interface{}{"error": frameworkLog.SanitizeErrorText(err.Error())}

@@ -90,7 +90,7 @@ func (provider *appLogProvider) Initialize(app *App) error {
 		initializeErrors = append(initializeErrors, errors.New("日志配置 channels 必须是对象"))
 	} else if closeLogging {
 		previousLog := app.log
-		if err := app.installManagedService(serviceKeyLog, log.NewLog()); err != nil {
+		if err := app.installManagedService(serviceKeyLog, log.NewDisabledLog()); err != nil {
 			return err
 		}
 		if previousLog != nil && previousLog != app.log {

@@ -242,7 +242,11 @@ func TestServeHTTPBoundsPostResponseLifecycle(t *testing.T) {
 	registry := mustHTTPMetrics(t, app)
 	registry.Enable()
 	spanRecorder := tracetest.NewSpanRecorder()
-	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(spanRecorder))
+	// 本测试必须观察请求 Span 的结束，显式采样避免外部采样配置改变验证前提。
+	provider := sdktrace.NewTracerProvider(
+		sdktrace.WithSpanProcessor(spanRecorder),
+		sdktrace.WithSampler(sdktrace.AlwaysSample()),
+	)
 	t.Cleanup(func() { _ = provider.Shutdown(stdcontext.Background()) })
 	tracing, err := fwtelemetry.New(fwtelemetry.Config{
 		Enabled:             true,

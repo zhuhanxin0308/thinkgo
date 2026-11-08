@@ -46,6 +46,6 @@ func (app *App) loadDatabaseSchemaCache(spec databaseConnectionSpec, database *d
 	}
 	if err != nil && app.log != nil {
 		// 缓存损坏时回退数据库原有查询能力，也允许 optimize:schema 重新生成缓存。
-		app.log.Warning(fmt.Sprintf("连接 %q 结构缓存不可用: %v", spec.name, err))
+		app.log.Warningf("连接 %q 结构缓存不可用: %v", spec.name, err)
 	}
 }

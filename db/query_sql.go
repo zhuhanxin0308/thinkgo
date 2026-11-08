@@ -166,14 +166,40 @@ func (q *Query) reportError(operation string, err error, extra map[string]interf
 	if err == nil {
 		return nil
 	}
-	if q == nil || q.db == nil {
+	logger := q.errorLogger()
+	if logger == nil {
 		return err
 	}
 	ctx := q.logContext()
 	for key, value := range extra {
 		ctx[key] = value
 	}
-	return q.db.reportError(operation, err, ctx)
+	return reportDatabaseError(logger, operation, err, ctx)
+}
+
+// errorLogger 在构造查询形状前检查日志能力，缺少查询或数据库时保留错误返回。
+func (q *Query) errorLogger() Logger {
+	if q == nil || q.db == nil {
+		return nil
+	}
+	return q.db.errorLogger()
+}
+
+// reportWriteError 仅在需要记录时整理写入字段名，始终避免把字段值传给日志器。
+func (q *Query) reportWriteError(operation string, err error, data map[string]interface{}, expressions []setExpression) error {
+	if err == nil {
+		return nil
+	}
+	logger := q.errorLogger()
+	if logger == nil {
+		return err
+	}
+	ctx := q.logContext()
+	ctx["fields"] = sortedDatabaseKeys(data)
+	if expressions != nil {
+		ctx["setExprs"] = expressions
+	}
+	return reportDatabaseError(logger, operation, err, ctx)
 }
 
 // traceOperation 为 ORM 终端操作记录脱敏后的查询形状和耗时。

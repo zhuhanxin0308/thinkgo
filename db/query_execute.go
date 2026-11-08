@@ -221,7 +221,7 @@ func (q *Query) insertResult(data map[string]interface{}, wantID bool) (InsertRe
 	}
 	if err := validateDataKeys(data); err != nil {
 		wrappedErr := fmt.Errorf("unsafe insert fields: %w", err)
-		return InsertResult{}, q.reportError("insert", wrappedErr, redactDataKeys(data))
+		return InsertResult{}, q.reportWriteError("insert", wrappedErr, data, nil)
 	}
 	if len(q.setExprs) > 0 {
 		return InsertResult{}, q.reportError("insert", fmt.Errorf("%w: Insert 不支持 Inc/Dec 表达式", ErrInvalidQuery), nil)
@@ -234,10 +234,10 @@ func (q *Query) insertResult(data map[string]interface{}, wantID bool) (InsertRe
 	if q.autoTimestamp {
 		now := q.now()
 		if err := setAutoTimestamp(workingData, q.createTimeField, now, q.timestampValueType); err != nil {
-			return InsertResult{}, q.reportError("insert", err, redactDataKeys(data))
+			return InsertResult{}, q.reportWriteError("insert", err, data, nil)
 		}
 		if err := setAutoTimestamp(workingData, q.updateTimeField, now, q.timestampValueType); err != nil {
-			return InsertResult{}, q.reportError("insert", err, redactDataKeys(data))
+			return InsertResult{}, q.reportWriteError("insert", err, data, nil)
 		}
 	}
 	if err := q.validateQueryStatementArguments(len(workingData)); err != nil {
@@ -247,7 +247,7 @@ func (q *Query) insertResult(data map[string]interface{}, wantID bool) (InsertRe
 	if q.txExecutor != nil {
 		result, err := q.insertResultInTx(newInsertRequest(q.resolveTable(), workingData, q.insertPrimaryKey, wantID, q.modelPrimaryKey))
 		if err != nil {
-			return InsertResult{}, q.reportError("insert", err, redactDataKeys(workingData))
+			return InsertResult{}, q.reportWriteError("insert", err, workingData, nil)
 		}
 		result.Data = cloneDatabaseMap(workingData)
 		return result, nil
@@ -260,7 +260,7 @@ func (q *Query) insertResult(data map[string]interface{}, wantID bool) (InsertRe
 	defer release()
 	result, err := connection.Insert(q.context(), newInsertRequest(q.resolveTable(), workingData, q.insertPrimaryKey, wantID, q.modelPrimaryKey))
 	if err != nil {
-		return InsertResult{}, q.reportError("insert", err, redactDataKeys(workingData))
+		return InsertResult{}, q.reportWriteError("insert", err, workingData, nil)
 	}
 	if err := result.Validate(); err != nil {
 		return InsertResult{}, q.reportError("insert", err, nil)
@@ -347,7 +347,7 @@ func (q *Query) UpdateResult(data map[string]interface{}) (UpdateResult, error) 
 	}
 	if err := validateDataKeys(data); err != nil {
 		wrappedErr := fmt.Errorf("unsafe update fields: %w", err)
-		return UpdateResult{}, q.reportError("update", wrappedErr, redactDataKeys(data))
+		return UpdateResult{}, q.reportWriteError("update", wrappedErr, data, nil)
 	}
 	for _, expression := range q.setExprs {
 		if _, duplicated := data[expression.field]; duplicated {
@@ -364,7 +364,7 @@ func (q *Query) UpdateResult(data map[string]interface{}) (UpdateResult, error) 
 			workingData = make(map[string]interface{})
 		}
 		if err := setAutoTimestamp(workingData, q.updateTimeField, q.now(), q.timestampValueType); err != nil {
-			return UpdateResult{}, q.reportError("update", err, redactDataKeys(data))
+			return UpdateResult{}, q.reportWriteError("update", err, data, nil)
 		}
 	}
 	if err := q.validateQueryStatementArguments(len(workingData), len(q.setExprs), len(q.args)); err != nil {
@@ -387,7 +387,7 @@ func (q *Query) UpdateResult(data map[string]interface{}) (UpdateResult, error) 
 		values = append(values, q.args...)
 		result, err := q.txExecutor.ExecContext(q.context(), builder.Rebind(query), values...)
 		if err != nil {
-			return UpdateResult{}, q.reportError("update", err, redactDataKeys(workingData))
+			return UpdateResult{}, q.reportWriteError("update", err, workingData, nil)
 		}
 		affected, err := result.RowsAffected()
 		if err != nil {
@@ -407,7 +407,7 @@ func (q *Query) UpdateResult(data map[string]interface{}) (UpdateResult, error) 
 	}
 	result, err := connection.Update(q.context(), newUpdateRequest(q.resolveTable(), workingData, predicate, q.insertPrimaryKey, q.modelPrimaryKey))
 	if err != nil {
-		return UpdateResult{}, q.reportError("update", err, redactDataKeys(workingData))
+		return UpdateResult{}, q.reportWriteError("update", err, workingData, nil)
 	}
 	if err := result.Validate(); err != nil {
 		return UpdateResult{}, q.reportError("update", err, nil)
@@ -459,18 +459,14 @@ func (q *Query) updateWithSetExprs(data map[string]interface{}) (int64, error) {
 	if q.txExecutor != nil {
 		affected, err := q.executeSQLInTx(sqlBuilder.String(), allArgs...)
 		if err != nil {
-			ctx := redactDataKeys(data)
-			ctx["setExprs"] = q.setExprs
-			return 0, q.reportError("update", err, ctx)
+			return 0, q.reportWriteError("update", err, data, q.setExprs)
 		}
 		return affected, nil
 	}
 
 	affected, err := q.rawExecute(sqlBuilder.String(), allArgs...)
 	if err != nil {
-		ctx := redactDataKeys(data)
-		ctx["setExprs"] = q.setExprs
-		return 0, q.reportError("update", err, ctx)
+		return 0, q.reportWriteError("update", err, data, q.setExprs)
 	}
 	return affected, nil
 }

@@ -100,5 +100,5 @@ func (s *Session) SetAuthenticated(name string, value interface{}) error {
 		s.installRegeneratedDataLocked(newID, merged)
 		return nil
 	}()
-	return s.reportError("认证 Session 轮换失败", err, map[string]interface{}{"session_id": oldID})
+	return s.reportIDError("认证 Session 轮换失败", err, oldID)
 }

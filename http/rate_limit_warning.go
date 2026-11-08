@@ -30,7 +30,7 @@ func (state *productionRateLimitWarningState) claim(logger *frameworklog.Log) bo
 // change a limit, or record a startup error. Configuration alone cannot attest
 // to protection by a gateway, a route-specific limiter or a replaced pipeline.
 func (h *Http) warnProductionRateLimit() {
-	if h == nil || h.app == nil || h.log == nil || h.app.Config() == nil {
+	if h == nil || h.app == nil || h.log == nil || !h.log.IsLevelEnabled(frameworklog.LevelWarning) || h.app.Config() == nil {
 		return
 	}
 	switch strings.ToLower(strings.TrimSpace(h.app.Environment())) {

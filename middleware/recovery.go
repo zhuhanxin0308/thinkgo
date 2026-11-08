@@ -41,6 +41,10 @@ func (m *Recovery) Handle(req *context.Request, next func(*context.Request) *con
 			var err error
 			resp, err = exception.RenderResponse(handler, req.Raw(), recovered)
 			if err != nil && m.Log != nil {
+				// 只过滤日志专用字段；自定义 Handler 的报告和渲染已经独立完成。
+				if filter, ok := m.Log.(interface{ IsLevelEnabled(string) bool }); ok && !filter.IsLevelEnabled(frameworkLog.LevelError) {
+					return
+				}
 				m.Log.ErrorCtx("渲染恢复异常失败", map[string]interface{}{"error": frameworkLog.SanitizeErrorText(err.Error())})
 			}
 		}
