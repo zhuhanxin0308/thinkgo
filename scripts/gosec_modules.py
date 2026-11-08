@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 
-GOSEC_TOOL = "github.com/securego/gosec/v2/cmd/gosec@v2.25.0"
+GOSEC_TOOL = "github.com/securego/gosec/v2/cmd/gosec@v2.30.0"
 EXCLUDED_PARTS = frozenset({"vendor", "testdata", "tmp", "bin"})
 MAX_VISIBLE_FINDINGS = 20
 MAX_ERROR_TEXT_LENGTH = 4096
