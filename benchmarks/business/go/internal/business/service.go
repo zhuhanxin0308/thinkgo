@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -70,7 +69,7 @@ func (service *Service) cacheKey(principal Principal, productID int64) string {
 }
 
 func loadQueries(path string) (map[string]string, error) {
-	data, err := os.ReadFile(path)
+	data, err := readBoundedContractFile(path)
 	if err != nil {
 		return nil, err
 	}
