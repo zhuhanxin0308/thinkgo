@@ -55,7 +55,14 @@ type Report struct {
 // Failed 判断报告是否包含部署阻断项。
 func (report Report) Failed(strict bool) bool {
 	for _, result := range report.Results {
-		if result.Level == LevelFail || strict && result.Level == LevelWarn {
+		switch result.Level {
+		case LevelPass:
+		case LevelWarn:
+			if strict {
+				return true
+			}
+		default:
+			// 包括手工构造报告中的未知状态，避免未完成的检查被误判为通过。
 			return true
 		}
 	}
@@ -84,8 +91,12 @@ func NewCheck(name string, run func(context.Context, *framework.App) Result) (Ch
 
 func (check checkFunc) Name() string { return check.name }
 func (check checkFunc) Run(ctx context.Context, app *framework.App) Result {
-	result := check.run(ctx, app)
-	result.Name = check.name
+	return normalizeCheckResult(check.name, check.run(ctx, app))
+}
+
+// normalizeCheckResult 在统一边界校验扩展结果，保证名称可定位且非法状态阻断部署。
+func normalizeCheckResult(name string, result Result) Result {
+	result.Name = name
 	if result.Level != LevelPass && result.Level != LevelWarn && result.Level != LevelFail {
 		result.Level = LevelFail
 		result.Message = "检查器返回了非法状态"
@@ -195,7 +206,7 @@ func runCheckSafely(ctx context.Context, app *framework.App, check Check) (resul
 			result = Result{Name: check.Name(), Level: LevelFail, Message: fmt.Sprintf("检查 panic: %v", recovered)}
 		}
 	}()
-	return check.Run(ctx, app)
+	return normalizeCheckResult(check.Name(), check.Run(ctx, app))
 }
 
 func checkApplicationLifecycle(_ context.Context, app *framework.App) Result {
