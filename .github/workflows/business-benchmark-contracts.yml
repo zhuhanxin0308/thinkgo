@@ -239,3 +239,7 @@ jobs:
         working-directory: benchmarks/business/tools
         # 覆盖完整矩阵、实际构建来源和渲染契约；测试不会触发正式性能负载。
         run: python -m unittest -v test_native test_run test_render test_experiment test_provenance test_cohort
+      - name: 验证安装收据与协议输入
+        working-directory: benchmarks/business/tools
+        # 安装与字节码测试使用临时目录和模拟安装，不下载运行时、不启动正式实验。
+        run: python -m unittest -v test_bootstrap test_python_reuse test_protocol_preflight
