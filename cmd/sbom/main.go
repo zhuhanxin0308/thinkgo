@@ -415,6 +415,11 @@ func moduleComponent(module moduleInfo) (component, error) {
 }
 
 func writeJSON(output string, value interface{}) error {
+	return writeJSONWithPublisher(output, value, os.Link)
+}
+
+// writeJSONWithPublisher 先完成候选文件，再使用排他发布操作；可注入操作以验证发布交错与失败清理。
+func writeJSONWithPublisher(output string, value interface{}, publish func(string, string) error) (resultErr error) {
 	output = filepath.Clean(strings.TrimSpace(output))
 	if output == "." || output == "" {
 		return errors.New("输出路径无效")
@@ -429,11 +434,10 @@ func writeJSON(output string, value interface{}) error {
 		return fmt.Errorf("创建临时输出失败: %w", err)
 	}
 	temporaryName := temporary.Name()
-	removeTemporary := true
 	defer func() {
 		_ = temporary.Close()
-		if removeTemporary {
-			_ = os.Remove(temporaryName)
+		if err := os.Remove(temporaryName); err != nil && !errors.Is(err, os.ErrNotExist) {
+			resultErr = errors.Join(resultErr, fmt.Errorf("清理 SBOM 临时文件失败: %w", err))
 		}
 	}()
 	encoder := json.NewEncoder(temporary)
@@ -444,14 +448,12 @@ func writeJSON(output string, value interface{}) error {
 	if err := temporary.Close(); err != nil {
 		return fmt.Errorf("刷新 SBOM 失败: %w", err)
 	}
-	if _, err := os.Stat(output); err == nil {
-		return fmt.Errorf("输出文件已存在: %s", output)
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("检查输出文件失败: %w", err)
-	}
-	if err := os.Rename(temporaryName, output); err != nil {
+	// 同目录硬链接将完整候选原子发布，目标存在时失败，不采用可能覆盖目标的重命名回退。
+	if err := publish(temporaryName, output); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return fmt.Errorf("输出文件已存在: %w", err)
+		}
 		return fmt.Errorf("提交 SBOM 文件失败: %w", err)
 	}
-	removeTemporary = false
 	return nil
 }
