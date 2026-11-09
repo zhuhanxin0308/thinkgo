@@ -298,7 +298,11 @@ func (m *Model) WithSearch(fields []string, data map[string]interface{}) *ModelQ
 		searchers[field] = searcher
 	}
 	m.mu.RUnlock()
-	searchData := cloneDatabaseMap(data)
+	searchData, err := cloneDatabaseMap(data)
+	if err != nil {
+		mq.query = mq.query.setError(err)
+		return mq
+	}
 	for _, field := range fields {
 		searcher, ok := searchers[field]
 		if !ok {
@@ -308,7 +312,12 @@ func (m *Model) WithSearch(fields []string, data map[string]interface{}) *ModelQ
 		if !exists {
 			continue
 		}
-		derived := searcher(mq.query, value, cloneDatabaseMap(searchData))
+		payload, err := cloneDatabaseMap(searchData)
+		if err != nil {
+			mq.query = mq.query.setError(err)
+			return mq
+		}
+		derived := searcher(mq.query, value, payload)
 		if derived == nil {
 			mq.query = mq.query.setError(fmt.Errorf("%w: 搜索器 %q 返回空 Query", ErrInvalidModel, field))
 			continue

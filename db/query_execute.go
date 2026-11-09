@@ -229,7 +229,10 @@ func (q *Query) insertResult(data map[string]interface{}, wantID bool) (InsertRe
 	q, cancel := q.withOperationContext()
 	defer cancel()
 	defer q.traceOperation("insert")()
-	workingData := normalizeDatabaseWriteMap(data, q.location())
+	workingData, snapshotErr := normalizeDatabaseWriteMap(data, q.location())
+	if snapshotErr != nil {
+		return InsertResult{}, q.reportError("insert", snapshotErr, nil)
+	}
 
 	if q.autoTimestamp {
 		now := q.now()
@@ -249,7 +252,7 @@ func (q *Query) insertResult(data map[string]interface{}, wantID bool) (InsertRe
 		if err != nil {
 			return InsertResult{}, q.reportWriteError("insert", err, workingData, nil)
 		}
-		result.Data = cloneDatabaseMap(workingData)
+		result.Data = workingData
 		return result, nil
 	}
 
@@ -265,7 +268,7 @@ func (q *Query) insertResult(data map[string]interface{}, wantID bool) (InsertRe
 	if err := result.Validate(); err != nil {
 		return InsertResult{}, q.reportError("insert", err, nil)
 	}
-	result.Data = cloneDatabaseMap(workingData)
+	result.Data = workingData
 	return result, nil
 }
 
@@ -275,7 +278,10 @@ func (q *Query) insertResultInTx(request InsertRequest) (InsertResult, error) {
 		return InsertResult{}, err
 	}
 	builder := sqlConnection.Builder
-	data := request.Data()
+	data, snapshotErr := request.DataSnapshot()
+	if snapshotErr != nil {
+		return InsertResult{}, snapshotErr
+	}
 	if request.WantsID() && !builder.SupportsLastInsertId() {
 		query, values, ok := builder.InsertReturning(request.Table(), data, request.PrimaryKey())
 		if !ok {
@@ -357,7 +363,10 @@ func (q *Query) UpdateResult(data map[string]interface{}) (UpdateResult, error) 
 	q, cancel := q.withOperationContext()
 	defer cancel()
 	defer q.traceOperation("update")()
-	workingData := normalizeDatabaseWriteMap(data, q.location())
+	workingData, snapshotErr := normalizeDatabaseWriteMap(data, q.location())
+	if snapshotErr != nil {
+		return UpdateResult{}, q.reportError("update", snapshotErr, nil)
+	}
 
 	if q.autoTimestamp {
 		if workingData == nil {
@@ -374,7 +383,7 @@ func (q *Query) UpdateResult(data map[string]interface{}) (UpdateResult, error) 
 	// 当存在 Inc/Dec 产生的 SET 表达式时，需要构建完整 SQL 通过 RawQueryable 执行
 	if len(q.setExprs) > 0 {
 		affected, err := q.updateWithSetExprs(workingData)
-		return UpdateResult{Affected: affected, Data: cloneDatabaseMap(workingData)}, err
+		return UpdateResult{Affected: affected, Data: workingData}, err
 	}
 
 	if q.txExecutor != nil {
@@ -393,7 +402,7 @@ func (q *Query) UpdateResult(data map[string]interface{}) (UpdateResult, error) 
 		if err != nil {
 			return UpdateResult{}, q.reportError("update", err, nil)
 		}
-		return UpdateResult{Affected: affected, Data: cloneDatabaseMap(workingData)}, nil
+		return UpdateResult{Affected: affected, Data: workingData}, nil
 	}
 
 	connection, release, stateErr := q.db.acquireConnection()
@@ -412,7 +421,7 @@ func (q *Query) UpdateResult(data map[string]interface{}) (UpdateResult, error) 
 	if err := result.Validate(); err != nil {
 		return UpdateResult{}, q.reportError("update", err, nil)
 	}
-	result.Data = cloneDatabaseMap(workingData)
+	result.Data = workingData
 	return result, nil
 }
 

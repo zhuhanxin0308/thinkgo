@@ -69,7 +69,7 @@ func snapshotRecordValue(value reflect.Value, visiting map[recordSnapshotVisit]b
 			if !driver.IsValue(data) {
 				return nil, fmt.Errorf("取值器返回了非法数据库值 %T", data)
 			}
-			return cloneDatabaseValue(data), nil
+			return cloneDatabaseValue(data)
 		}
 		if value.Type() == reflect.TypeFor[time.Time]() {
 			return value.Interface(), nil

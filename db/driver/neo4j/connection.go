@@ -87,7 +87,10 @@ func (c *Neo4jConnection) Select(parent context.Context, request SelectRequest) 
 }
 
 func (c *Neo4jConnection) Insert(parent context.Context, request InsertRequest) (InsertResult, error) {
-	data := request.Data()
+	data, err := request.DataSnapshot()
+	if err != nil {
+		return InsertResult{}, err
+	}
 	var id interface{}
 	if request.WantsID() {
 		var exists bool
@@ -109,7 +112,11 @@ func (c *Neo4jConnection) Insert(parent context.Context, request InsertRequest) 
 }
 
 func (c *Neo4jConnection) Update(parent context.Context, request UpdateRequest) (UpdateResult, error) {
-	matched, err := c.updateNodes(parent, request.Table(), request.Data(), request.Predicate())
+	data, err := request.DataSnapshot()
+	if err != nil {
+		return UpdateResult{}, err
+	}
+	matched, err := c.updateNodes(parent, request.Table(), data, request.Predicate())
 	if err != nil {
 		return UpdateResult{}, err
 	}
@@ -117,7 +124,7 @@ func (c *Neo4jConnection) Update(parent context.Context, request UpdateRequest) 
 		Affected:     matched,
 		Matched:      matched,
 		MatchedKnown: true,
-		Data:         request.Data(),
+		Data:         data,
 	}
 	return operationResult, operationResult.Validate()
 }
@@ -370,7 +377,11 @@ func (c *Neo4jConnection) createNode(parent context.Context, table string, data 
 	if err != nil {
 		return 0, err
 	}
-	record, err := c.operationExecutor().Single(ctx, neo4j.AccessModeWrite, fmt.Sprintf("CREATE (n:%s $props) RETURN count(n)", label), map[string]interface{}{"props": cloneDatabaseMap(data)})
+	props, err := cloneDatabaseMapChecked(data)
+	if err != nil {
+		return 0, err
+	}
+	record, err := c.operationExecutor().Single(ctx, neo4j.AccessModeWrite, fmt.Sprintf("CREATE (n:%s $props) RETURN count(n)", label), map[string]interface{}{"props": props})
 	if err != nil {
 		return 0, err
 	}
@@ -400,7 +411,11 @@ func (c *Neo4jConnection) updateNodes(parent context.Context, table string, data
 	if err != nil {
 		return 0, err
 	}
-	params["props"] = cloneDatabaseMap(data)
+	props, err := cloneDatabaseMapChecked(data)
+	if err != nil {
+		return 0, err
+	}
+	params["props"] = props
 	cypher := fmt.Sprintf("MATCH (n:%s) WHERE %s SET n += $props RETURN count(n)", label, whereClause)
 	record, err := c.operationExecutor().Single(ctx, neo4j.AccessModeWrite, cypher, params)
 	if err != nil {

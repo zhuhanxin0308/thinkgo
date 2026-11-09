@@ -59,7 +59,11 @@ func convertModelScanValue(destination reflect.Value, source any) error {
 		return nil
 	}
 	if scanner, ok := destination.Addr().Interface().(sql.Scanner); ok {
-		return scanner.Scan(cloneDatabaseValue(source))
+		cloned, err := cloneDatabaseValue(source)
+		if err != nil {
+			return err
+		}
+		return scanner.Scan(cloned)
 	}
 	if source == nil {
 		switch destination.Kind() {
@@ -80,7 +84,11 @@ func convertModelScanValue(destination reflect.Value, source any) error {
 		return nil
 	}
 	if destination.Kind() == reflect.Interface {
-		cloned := reflect.ValueOf(cloneDatabaseValue(source))
+		snapshot, err := cloneDatabaseValue(source)
+		if err != nil {
+			return err
+		}
+		cloned := reflect.ValueOf(snapshot)
 		if !cloned.Type().AssignableTo(destination.Type()) {
 			return fmt.Errorf("类型 %T 不实现目标接口 %s", source, destination.Type())
 		}
@@ -160,7 +168,11 @@ func convertModelScanValue(destination reflect.Value, source any) error {
 		}
 	}
 	if value.Type().AssignableTo(destination.Type()) {
-		destination.Set(reflect.ValueOf(cloneDatabaseValue(source)))
+		cloned, err := cloneDatabaseValue(source)
+		if err != nil {
+			return err
+		}
+		destination.Set(reflect.ValueOf(cloned))
 		return nil
 	}
 	return fmt.Errorf("不支持从 %T 映射到 %s", source, destination.Type())

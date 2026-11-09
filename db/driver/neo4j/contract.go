@@ -47,6 +47,7 @@ var (
 	validateIdentifier         = db.ValidateDriverIdentifier
 	validateOrderClause        = db.ValidateDriverOrder
 	cloneDatabaseMap           = db.CloneDriverData
+	cloneDatabaseMapChecked    = db.CloneDriverDataChecked
 )
 
 func NewConnectionID(namespace string) ConnectionID { return db.NewConnectionID(namespace) }

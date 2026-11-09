@@ -102,7 +102,7 @@ func (q *Query) validateQueryArgumentAppend(additional int) error {
 	return validateArgumentBudget(len(q.args)+len(q.havingArgs), additional, limit)
 }
 
-// appendQueryArguments 在写入查询参数前执行统一预算检查。
+// appendQueryArguments 接收条件编译器已经隔离的参数，在追加前执行统一预算检查。
 func (q *Query) appendQueryArguments(target *[]interface{}, values []interface{}) bool {
 	if err := q.validateQueryArgumentAppend(len(values)); err != nil {
 		q.setError(err)
@@ -118,7 +118,12 @@ func (q *Query) appendQueryArgument(target *[]interface{}, value interface{}) bo
 		q.setError(err)
 		return false
 	}
-	*target = append(*target, value)
+	cloned, err := cloneDatabaseValue(value)
+	if err != nil {
+		q.setError(err)
+		return false
+	}
+	*target = append(*target, cloned)
 	return true
 }
 
@@ -128,7 +133,12 @@ func (q *Query) appendTwoQueryArguments(target *[]interface{}, first, second int
 		q.setError(err)
 		return false
 	}
-	*target = append(*target, first, second)
+	cloned, err := cloneDatabaseValues([]interface{}{first, second})
+	if err != nil {
+		q.setError(err)
+		return false
+	}
+	*target = append(*target, cloned...)
 	return true
 }
 
@@ -142,6 +152,11 @@ func (q *Query) replaceHavingArguments(values []interface{}) bool {
 		q.setError(err)
 		return false
 	}
-	q.havingArgs = append(q.havingArgs[:0], values...)
+	cloned, err := cloneDatabaseValues(values)
+	if err != nil {
+		q.setError(err)
+		return false
+	}
+	q.havingArgs = cloned
 	return true
 }

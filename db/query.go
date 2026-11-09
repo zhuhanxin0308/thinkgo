@@ -434,7 +434,11 @@ func (q *Query) WhereRaw(rawSQL string, args ...interface{}) *Query {
 	if err := validateRawClause(rawSQL, len(args), "where", sqlBuilderDialect(q.builder())); err != nil {
 		return q.setError(err)
 	}
-	return q.appendQueryNode("AND", PredicateNode{Kind: PredicateRaw, SQL: rawSQL, Values: cloneDatabaseValues(args)}, q.builder())
+	values, err := cloneDatabaseValues(args)
+	if err != nil {
+		return q.setError(err)
+	}
+	return q.appendQueryNode("AND", PredicateNode{Kind: PredicateRaw, SQL: rawSQL, Values: values}, q.builder())
 }
 
 // Limit 设置查询数量限制。

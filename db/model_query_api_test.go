@@ -36,7 +36,7 @@ func (connection *modelBusinessConnection) sourceRows(table string) []map[string
 	return connection.rows
 }
 
-func (connection *modelBusinessConnection) selectedRows(table, fields string, where []string, args []interface{}, limit, offset int) []map[string]interface{} {
+func (connection *modelBusinessConnection) selectedRows(table, fields string, where []string, args []interface{}, limit, offset int) ([]map[string]interface{}, error) {
 	connection.lastTable = table
 	if connection.lastFieldsByTable == nil {
 		connection.lastFieldsByTable = make(map[string]string)
@@ -45,11 +45,14 @@ func (connection *modelBusinessConnection) selectedRows(table, fields string, wh
 	connection.lastWhere = append([]string(nil), where...)
 	connection.lastWhereArgs = append([]interface{}(nil), args...)
 	if strings.Contains(fields, " AS tp_aggregate") {
-		return []map[string]interface{}{{"tp_aggregate": connection.aggregate}}
+		return []map[string]interface{}{{"tp_aggregate": connection.aggregate}}, nil
 	}
-	rows := cloneDatabaseRows(connection.sourceRows(table))
+	rows, err := cloneDatabaseRows(connection.sourceRows(table))
+	if err != nil {
+		return nil, err
+	}
 	if offset >= len(rows) {
-		return []map[string]interface{}{}
+		return []map[string]interface{}{}, nil
 	}
 	if offset > 0 {
 		rows = rows[offset:]
@@ -58,7 +61,7 @@ func (connection *modelBusinessConnection) selectedRows(table, fields string, wh
 		rows = rows[:limit]
 	}
 	if fields == "" || fields == "*" {
-		return rows
+		return rows, nil
 	}
 	projected := make([]map[string]interface{}, len(rows))
 	fieldNames := strings.Split(fields, ",")
@@ -71,7 +74,7 @@ func (connection *modelBusinessConnection) selectedRows(table, fields string, wh
 			}
 		}
 	}
-	return projected
+	return projected, nil
 }
 
 func (connection *modelBusinessConnection) Select(ctx context.Context, request SelectRequest) ([]map[string]interface{}, error) {
@@ -86,7 +89,7 @@ func (connection *modelBusinessConnection) Select(ctx context.Context, request S
 		connection.lastWhereArgs = append([]interface{}(nil), args...)
 		return []map[string]interface{}{{"tp_aggregate": connection.aggregate}}, nil
 	}
-	return connection.selectedRows(request.Table(), request.Fields(), where, args, request.Limit(), request.Offset()), nil
+	return connection.selectedRows(request.Table(), request.Fields(), where, args, request.Limit(), request.Offset())
 }
 
 func (connection *modelBusinessConnection) Insert(ctx context.Context, request InsertRequest) (InsertResult, error) {
@@ -129,7 +132,7 @@ func (connection *modelBusinessConnection) Query(sqlText string, args ...interfa
 	if strings.Contains(sqlText, "SELECT COUNT(*) AS tg_count") {
 		return []map[string]interface{}{{"tg_count": connection.count}}, nil
 	}
-	return cloneDatabaseRows(connection.rows), nil
+	return cloneDatabaseRows(connection.rows)
 }
 
 func (connection *modelBusinessConnection) QueryContext(ctx context.Context, sqlText string, args ...interface{}) ([]map[string]interface{}, error) {

@@ -20,7 +20,9 @@ type Predicate struct {
 func newPredicate() Predicate { return Predicate{} }
 
 func (p Predicate) clone() Predicate {
-	p.nodes = clonePredicateNodes(p.nodes)
+	if p.err == nil {
+		p.nodes, p.err = clonePredicateNodes(p.nodes)
+	}
 	return p
 }
 
@@ -39,7 +41,9 @@ func (p Predicate) appendWithConnector(connector, sql string, args []interface{}
 	}
 	var node PredicateNode
 	if unsafeRaw {
-		node = PredicateNode{Kind: PredicateRaw, SQL: sql, Values: cloneDatabaseValues(args)}
+		values, err := cloneDatabaseValues(args)
+		node = PredicateNode{Kind: PredicateRaw, SQL: sql, Values: values}
+		p.err = err
 	} else {
 		node, p.err = parsePredicateText(sql, args)
 	}
@@ -54,7 +58,7 @@ func (p Predicate) Nodes() ([]PredicateNode, error) {
 	if p.err != nil {
 		return nil, p.err
 	}
-	return clonePredicateNodes(p.nodes), nil
+	return clonePredicateNodes(p.nodes)
 }
 
 // PortableNodes 拒绝显式 Raw，避免由 SQL 文本伪装成可移植条件。

@@ -41,7 +41,10 @@ func TestDatabaseImplicitTimezoneDefaultsToUTC(t *testing.T) {
 	if normalized := native.(time.Time); normalized.Location() != time.UTC || !normalized.Equal(instant) {
 		t.Fatalf("原生时间未规范化到 UTC: %#v", native)
 	}
-	written := normalizeDatabaseWriteMap(map[string]interface{}{"created_at": instant}, nil)
+	written, err := normalizeDatabaseWriteMap(map[string]interface{}{"created_at": instant}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if normalized := written["created_at"].(time.Time); normalized.Location() != time.UTC || !normalized.Equal(instant) {
 		t.Fatalf("数据库写入时间未规范化到 UTC: %#v", written)
 	}
@@ -295,7 +298,10 @@ func TestNormalizeDatabaseWriteTimeUsesConfiguredLocation(t *testing.T) {
 		"time":  instant,
 		"items": []interface{}{instant},
 	}
-	data := normalizeDatabaseWriteMap(map[string]interface{}{"happened_at": instant, "nested": nested}, location)
+	data, err := normalizeDatabaseWriteMap(map[string]interface{}{"happened_at": instant, "nested": nested}, location)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	actual, ok := data["happened_at"].(time.Time)
 	if !ok || !actual.Equal(instant) || actual.Location() != location {

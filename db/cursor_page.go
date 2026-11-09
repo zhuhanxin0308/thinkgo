@@ -71,7 +71,7 @@ func (q *Query) SeekPageWithCodec(pageSize int, pkField string, codec CursorCode
 
 	query := q.clone()
 	if hasAfter {
-		query = query.appendWhereField(pkField, ">", cloneDatabaseValue(after))
+		query = query.appendWhereField(pkField, ">", after)
 		if query.err != nil {
 			return nil, q.reportError("seek_page", query.err, nil)
 		}
@@ -91,7 +91,10 @@ func (q *Query) SeekPageWithCodec(pageSize int, pkField string, codec CursorCode
 	hasMore := len(rows) > pageSize
 	if hasMore {
 		visible := rows[:pageSize]
-		nextCursor := cloneDatabaseValue(visible[len(visible)-1][pkField])
+		nextCursor, err := cloneDatabaseValue(visible[len(visible)-1][pkField])
+		if err != nil {
+			return nil, q.reportError("seek_page", err, nil)
+		}
 		return &CursorPage[map[string]any]{
 			List:       visible,
 			NextCursor: nextCursor,
@@ -141,7 +144,11 @@ func validateCursorRows(rows []map[string]interface{}, pkField string, previous 
 		if !ok || current == nil || isNilDatabaseDependency(current) {
 			return fmt.Errorf("%w: 第 %d 行缺少游标字段 %q", ErrInvalidDatabaseRow, index, pkField)
 		}
-		current = cloneDatabaseValue(current)
+		var err error
+		current, err = cloneDatabaseValue(current)
+		if err != nil {
+			return err
+		}
 		if index == 0 {
 			if previous == nil {
 				if err := validateCursorBoundary(current, codec); err != nil {
@@ -178,5 +185,5 @@ func cursorPageLastCursor(rows []map[string]interface{}, pkField string, previou
 	if len(rows) == 0 {
 		return nil, nil
 	}
-	return cloneDatabaseValue(rows[len(rows)-1][pkField]), nil
+	return cloneDatabaseValue(rows[len(rows)-1][pkField])
 }

@@ -173,6 +173,7 @@ func (r SelectRequest) Aggregate() *AggregateExpression {
 }
 
 type InsertRequest struct {
+	err        error
 	table      string
 	data       map[string]interface{}
 	primaryKey string
@@ -181,18 +182,30 @@ type InsertRequest struct {
 }
 
 func newInsertRequest(table string, data map[string]interface{}, primaryKey string, wantID bool, modelKey ...string) InsertRequest {
-	return InsertRequest{table: table, data: cloneDatabaseMap(data), primaryKey: primaryKey, modelKey: resolveRequestModelKey(primaryKey, modelKey), wantID: wantID}
+	cloned, err := cloneDatabaseMap(data)
+	return InsertRequest{table: table, data: cloned, err: err, primaryKey: primaryKey, modelKey: resolveRequestModelKey(primaryKey, modelKey), wantID: wantID}
 }
 
-func (r InsertRequest) Table() string                { return r.table }
-func (r InsertRequest) Data() map[string]interface{} { return cloneDatabaseMap(r.data) }
-func (r InsertRequest) PrimaryKey() string           { return r.primaryKey }
+func (r InsertRequest) Table() string { return r.table }
+
+// Data 保留兼容接口；非法请求返回 nil，驱动必须使用 DataSnapshot 获取可判定错误。
+func (r InsertRequest) Data() map[string]interface{} { data, _ := r.DataSnapshot(); return data }
+
+// DataSnapshot 在执行写入前返回独立数据或构造阶段的参数错误。
+func (r InsertRequest) DataSnapshot() (map[string]interface{}, error) {
+	if r.err != nil {
+		return nil, r.err
+	}
+	return cloneDatabaseMap(r.data)
+}
+func (r InsertRequest) PrimaryKey() string { return r.primaryKey }
 func (r InsertRequest) ModelPrimaryKey() string {
 	return resolvedRequestModelKey(r.primaryKey, r.modelKey)
 }
 func (r InsertRequest) WantsID() bool { return r.wantID }
 
 type UpdateRequest struct {
+	err        error
 	table      string
 	data       map[string]interface{}
 	predicate  Predicate
@@ -201,11 +214,22 @@ type UpdateRequest struct {
 }
 
 func newUpdateRequest(table string, data map[string]interface{}, predicate Predicate, primaryKey string, modelKey ...string) UpdateRequest {
-	return UpdateRequest{table: table, data: cloneDatabaseMap(data), predicate: predicate.clone(), primaryKey: primaryKey, modelKey: resolveRequestModelKey(primaryKey, modelKey)}
+	cloned, err := cloneDatabaseMap(data)
+	return UpdateRequest{table: table, data: cloned, err: err, predicate: predicate.clone(), primaryKey: primaryKey, modelKey: resolveRequestModelKey(primaryKey, modelKey)}
 }
 
-func (r UpdateRequest) Table() string                { return r.table }
-func (r UpdateRequest) Data() map[string]interface{} { return cloneDatabaseMap(r.data) }
+func (r UpdateRequest) Table() string { return r.table }
+
+// Data 保留兼容接口；非法请求返回 nil，驱动必须使用 DataSnapshot 获取可判定错误。
+func (r UpdateRequest) Data() map[string]interface{} { data, _ := r.DataSnapshot(); return data }
+
+// DataSnapshot 在执行写入前返回独立数据或构造阶段的参数错误。
+func (r UpdateRequest) DataSnapshot() (map[string]interface{}, error) {
+	if r.err != nil {
+		return nil, r.err
+	}
+	return cloneDatabaseMap(r.data)
+}
 func (r UpdateRequest) Predicate() Predicate {
 	return r.predicate.clone()
 }

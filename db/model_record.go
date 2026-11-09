@@ -58,9 +58,15 @@ func (mq *ModelQuery) bindScannedRecord(candidate, destination reflect.Value, ra
 	for key := range raw {
 		record.loaded[key] = true
 	}
-	record.identity = cloneDatabaseValue(raw[record.primaryKey])
+	record.identity, err = cloneDatabaseValue(raw[record.primaryKey])
+	if err != nil {
+		return err
+	}
 	if record.identity == nil && mq.query.insertPrimaryKey != record.primaryKey {
-		record.identity = cloneDatabaseValue(raw[mq.query.insertPrimaryKey])
+		record.identity, err = cloneDatabaseValue(raw[mq.query.insertPrimaryKey])
+		if err != nil {
+			return err
+		}
 		record.loaded[record.primaryKey] = record.identity != nil
 	}
 	if bound.softDelete {
@@ -296,7 +302,11 @@ func (m *Model) insertOwnedRecord(r *modelRecord) error {
 		}
 	}
 	r.original = before
-	r.identity = cloneDatabaseValue(binding.field.Interface())
+	r.identity, err = cloneDatabaseValue(binding.field.Interface())
+	if err != nil {
+		r.uncertain = true
+		return &PartialWriteError{Result: result, Cause: err}
+	}
 	r.loaded = make(map[string]bool, len(result.Data)+1)
 	for column := range result.Data {
 		r.loaded[column] = true
