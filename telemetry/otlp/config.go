@@ -178,6 +178,10 @@ func strictHeaders(raw interface{}) (map[string]string, error) {
 	}
 	result := make(map[string]string, len(values))
 	for name, rawValue := range values {
+		// 编码声明必须与导出器实际生成的正文一致，不能由自定义请求头覆盖。
+		if strings.EqualFold(name, "Content-Encoding") {
+			return nil, fmt.Errorf("telemetry.headers 中的 %q 由 OTLP 导出器管理，不能自定义", name)
+		}
 		value, ok := rawValue.(string)
 		if !ok || !headerNamePattern.MatchString(name) || len(value) > maximumHeaderValueBytes || strings.ContainsAny(value, "\r\n\x00") {
 			return nil, fmt.Errorf("telemetry.headers 中的 %q 非法", name)
