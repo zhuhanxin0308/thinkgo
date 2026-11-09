@@ -694,7 +694,7 @@ func (h *Http) resolveDispatchPlan(handlerName, actionName string, controllerTyp
 		h.dispatchPlanMu.RLock()
 		cached := h.dispatchPlans[handlerName]
 		h.dispatchPlanMu.RUnlock()
-		if cached != nil && cached.controllerType == controllerType {
+		if cached != nil && cached.controllerType == controllerType && cached.actionMethod.Name == actionName {
 			return cached, nil
 		}
 	}
@@ -720,7 +720,8 @@ func (h *Http) resolveDispatchPlan(handlerName, actionName string, controllerTyp
 
 	if cacheable {
 		h.dispatchPlanMu.Lock()
-		if existing := h.dispatchPlans[handlerName]; existing != nil && existing.controllerType == controllerType {
+		// 缓存条目可以替换，但计划本身保持不可变，进行中的请求继续持有自己的动作和参数计划。
+		if existing := h.dispatchPlans[handlerName]; existing != nil && existing.controllerType == controllerType && existing.actionMethod.Name == actionName {
 			plan = existing
 		} else {
 			h.dispatchPlans[handlerName] = plan
