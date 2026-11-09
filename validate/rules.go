@@ -15,7 +15,11 @@ import (
 	"unicode/utf8"
 )
 
-const maxNumericValueBytes = 1024
+const (
+	maxNumericValueBytes = 1024
+	// maxValidationIndirectionDepth 统一限制所有规则的指针和接口解引用深度。
+	maxValidationIndirectionDepth = 32
+)
 
 var (
 	alphaRegex       = regexp.MustCompile(`^[a-zA-Z]+$`)
@@ -186,7 +190,7 @@ func scalarText(value interface{}) (string, bool) {
 }
 
 func indirectValidationValue(value reflect.Value) (reflect.Value, bool) {
-	for depth := 0; depth < 32; depth++ {
+	for depth := 0; depth < maxValidationIndirectionDepth; depth++ {
 		if !value.IsValid() {
 			return reflect.Value{}, false
 		}
@@ -330,17 +334,9 @@ func valueLength(value interface{}) (int, bool) {
 }
 
 func isEmptyValue(value interface{}) bool {
-	if value == nil {
-		return true
-	}
-	reflected := reflect.ValueOf(value)
-	for reflected.IsValid() && (reflected.Kind() == reflect.Interface || reflected.Kind() == reflect.Pointer) {
-		if reflected.IsNil() {
-			return true
-		}
-		reflected = reflected.Elem()
-	}
-	if !reflected.IsValid() {
+	reflected, valid := indirectValidationValue(reflect.ValueOf(value))
+	if !valid {
+		// nil、循环或过深的值均不能满足必填要求。
 		return true
 	}
 	switch reflected.Kind() {
