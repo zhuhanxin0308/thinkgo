@@ -445,50 +445,10 @@ func (s *Session) Regenerate() error {
 	return s.regenerateLocked()
 }
 
-// regenerateLocked requires saveMu, keeping rotation and authenticated publication
-// indivisible with respect to Save and the response commit boundary.
+// regenerateLocked 要求持有 saveMu，预检、撤销和发布使用统一轮换边界。
 func (s *Session) regenerateLocked() error {
-	s.mu.RLock()
-	committed := s.responseSealing || s.responseCommitted
-	s.mu.RUnlock()
-	if committed {
-		return ErrSessionCommitted
-	}
-	newID, err := newSessionID()
-	if err != nil {
-		return s.reportError("生成 Session ID 失败", err, nil)
-	}
-	snapshot := s.snapshotForSave()
-	if snapshot.Destroyed {
-		return ErrSessionDestroyed
-	}
-	merged := s.snapshotData()
-	if snapshot.Persisted {
-		err = s.updateDriver(snapshot.ID, func(current string, found bool) (string, bool, error) {
-			base := make(map[string]json.RawMessage)
-			if found {
-				envelope, decodeErr := decodeSessionEnvelope(current, s.config.MaxDataBytes)
-				if decodeErr != nil {
-					return "", false, decodeErr
-				}
-				if envelope.Revoked || sessionEnvelopeExpired(envelope, s.nowTime()) {
-					return "", false, ErrSessionRevoked
-				}
-				base = cloneSessionData(envelope.Data)
-			}
-			base = applySessionSnapshot(base, snapshot)
-			merged = base
-			return encodeRevokedEnvelope(s.config, s.nowTime())
-		})
-		if err != nil {
-			return s.reportIDError("撤销旧 Session ID 失败", err, snapshot.ID)
-		}
-	}
-	s.mu.Lock()
-	merged = s.applyMutationsAfterVersionLocked(merged, snapshot.Version)
-	s.installRegeneratedDataLocked(newID, merged)
-	s.mu.Unlock()
-	return nil
+	oldID, err := s.rotateSessionLocked(nil)
+	return s.reportIDError("Session 轮换失败", err, oldID)
 }
 
 // installRegeneratedDataLocked requires mu and publishes only a prepared rotation.
