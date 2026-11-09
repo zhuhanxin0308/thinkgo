@@ -147,13 +147,15 @@ func (q *Query) Column(field string, key ...string) (interface{}, error) {
 	}
 
 	cloned := q.clone()
+	cloned.fields = field
 	if len(key) > 0 && key[0] != "" {
 		if err := validateIdentifier(key[0]); err != nil {
 			return nil, q.reportError("column", fmt.Errorf("unsafe key field name: %w", err), nil)
 		}
-		cloned.fields = field + ", " + key[0]
-	} else {
-		cloned.fields = field
+		// 值和键使用同一字段时共享结果列，避免制造扫描器拒绝的重复投影。
+		if key[0] != field {
+			cloned.fields += ", " + key[0]
+		}
 	}
 	if cloned.canUseDirectSQLColumn() {
 		keyField := ""
