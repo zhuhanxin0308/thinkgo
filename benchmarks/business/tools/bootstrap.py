@@ -404,43 +404,55 @@ opcache.jit_buffer_size = 0
 
     def python_environment(self):
         environment = dict(os.environ)
-        environment["PYTHONPATH"] = os.pathsep.join(filter(None, [str(self.runtime / "python-packages"), environment.get("PYTHONPATH", "")]))
+        for name in ("PYTHONHOME", "PYTHONUSERBASE"):
+            environment.pop(name, None)
+        environment["PYTHONPATH"] = str(self.runtime / "python-packages")
+        environment["PYTHONNOUSERSITE"] = "1"
+        environment["PYTHONDONTWRITEBYTECODE"] = "1"
         return environment
 
-    def python_versions(self):
-        # 子进程读取当前解析路径，避免当前进程已经导入的旧版本污染核验。
-        source = """import importlib.metadata,json,sys
-versions={}
-for name in json.loads(sys.argv[1]):
- try: versions[name]=importlib.metadata.version(name)
- except importlib.metadata.PackageNotFoundError: continue
-print(json.dumps(versions))
-"""
-        result = subprocess.run([sys.executable, "-c", source, json.dumps(list(python_requirements()))],
-                                env=self.python_environment(), text=True, capture_output=True, check=True)
+    def python_snapshot(self, prefix):
+        # 隔离模式和禁用 site 排除宿主包、继承路径及启动钩子，检查器只读取指定目录。
+        inspector = pathlib.Path(__file__).with_name("python_packages.py")
+        result = subprocess.run([sys.executable, "-I", "-S", str(inspector), str(prefix)],
+                                env=self.python_environment(), text=True, capture_output=True, timeout=30)
+        if result.returncode:
+            raise ValueError("受控 Python 依赖自检失败: " + result.stderr.strip())
         return json.loads(result.stdout)
 
     def python_install(self):
         if sys.version_info[:2] != (3, 12):
             raise ValueError("固定 Python wheel 摘要要求 Python 3.12；本次测量使用 3.12.14")
         expected = python_requirements()
-        if self.python_versions() == expected:
-            return {"state": "reused", "pythonpath": self.python_environment()["PYTHONPATH"], "versions": expected}
         prefix = self.runtime / "python-packages"
+        receipt = self.runtime / "receipts/python-packages.json"
+        requirements_hash = digest(PYTHON_REQUIREMENTS)
+        if receipt.is_symlink():
+            raise ValueError("Python 安装收据不允许符号链接")
+        if receipt.exists():
+            saved = json.loads(receipt.read_text())
+            current = self.python_snapshot(prefix)
+            if saved != {"requirements_sha256": requirements_hash, "snapshot": current} or current["versions"] != expected:
+                raise ValueError("Python 安装收据、锁文件、解释器或依赖文件不匹配，保留目录并拒绝复用")
+            return {"state": "reused", "pythonpath": self.python_environment()["PYTHONPATH"], "versions": expected}
         self.claim_prefix({"prefix": "python-packages"})
         if any(prefix.iterdir()):
-            raise ValueError("已有 Python 用户目录版本不匹配，保留原目录并拒绝覆盖")
+            raise ValueError("已有 Python 用户目录缺少匹配收据，保留原目录并拒绝覆盖")
         # wheel 先在隔离目录按固定摘要安装，成功后再发布到用户前缀。
         with tempfile.TemporaryDirectory(prefix=".python-stage-", dir=self.runtime) as directory:
             stage = pathlib.Path(directory) / "packages"
             stage.mkdir()
-            self.command([sys.executable, "-m", "pip", "install", "--require-hashes", "--only-binary=:all:",
-                          "--no-deps", "--target", stage, "-r", PYTHON_REQUIREMENTS], label="python-packages")
+            self.command([sys.executable, "-I", "-m", "pip", "--isolated", "install", "--require-hashes", "--only-binary=:all:",
+                          "--no-deps", "--no-compile", "--target", stage, "-r", PYTHON_REQUIREMENTS],
+                         environment=self.python_environment(), label="python-packages")
+            if self.python_snapshot(stage)["versions"] != expected:
+                raise RuntimeError("Python 暂存安装的精确版本自检失败")
             prefix.rmdir()
             stage.rename(prefix)
-        if self.python_versions() != expected:
+        current = self.python_snapshot(prefix)
+        if current["versions"] != expected:
             raise RuntimeError("Python 用户目录安装后的精确版本自检失败")
-        write_json(self.runtime / "receipts/python-packages.json", {"requirements_sha256": digest(PYTHON_REQUIREMENTS), "versions": expected})
+        write_json(receipt, {"requirements_sha256": requirements_hash, "snapshot": current})
         return {"state": "installed", "pythonpath": self.python_environment()["PYTHONPATH"], "versions": expected}
 
 

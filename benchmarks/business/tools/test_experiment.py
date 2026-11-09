@@ -17,7 +17,7 @@ def protocol_fixture():
         "repetitions": 3, "warmup_seconds": 10, "warmup_rate": 100,
         "measurement_seconds": 30, "closed_concurrency": 64,
         "open_max_inflight": 256, "open_rate_ratio": 0.5,
-        "sample_interval_seconds": 0.5,
+        "sample_interval_seconds": 0.5, "cooldown_seconds": 1,
         "variants": [
             {"id": "thinkgo", "framework": "ThinkGo", "version": "test", "engine": "Go", "kind": "go"},
             {"id": "php", "framework": "Laravel", "version": "test", "engine": "FPM", "kind": "fpm", "app": "laravel"},

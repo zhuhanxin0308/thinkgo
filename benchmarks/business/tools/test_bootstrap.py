@@ -202,20 +202,27 @@ class BootstrapTest(unittest.TestCase):
         self.assertEqual(len(requirements), 13)
 
     def test_matching_python_environment_is_not_reinstalled(self):
+        from test_python_reuse import populate_packages
         self.installer.prepare()
-        with mock.patch.object(self.installer, "python_versions", return_value=bootstrap.python_requirements()), \
-             mock.patch.object(self.installer, "command", side_effect=AssertionError("不应重装")):
+        self.installer.claim_prefix({"prefix": "python-packages"})
+        prefix = self.installer.runtime / "python-packages"
+        populate_packages(prefix)
+        bootstrap.write_json(self.installer.runtime / "receipts/python-packages.json",
+                             {"requirements_sha256": bootstrap.digest(bootstrap.PYTHON_REQUIREMENTS),
+                              "snapshot": self.installer.python_snapshot(prefix)})
+        with mock.patch.object(self.installer, "command", side_effect=AssertionError("不应重装")):
             result = self.installer.python_install()
         self.assertEqual(result["state"], "reused")
 
     def test_python_install_is_user_scoped_hashed_and_reports_pythonpath(self):
+        from test_python_reuse import populate_packages
         self.installer.prepare()
         commands = []
         def capture(command, **kwargs):
             commands.append(list(map(str, command)))
+            populate_packages(pathlib.Path(command[command.index("--target") + 1]))
             return ""
-        with mock.patch.object(self.installer, "python_versions", side_effect=[{}, bootstrap.python_requirements()]), \
-             mock.patch.object(self.installer, "command", side_effect=capture):
+        with mock.patch.object(self.installer, "command", side_effect=capture):
             result = self.installer.python_install()
         self.assertEqual(result["state"], "installed")
         self.assertIn(str(self.installer.runtime / "python-packages"), result["pythonpath"])

@@ -64,6 +64,7 @@ def load_protocol(path):
 
     protocol = json.loads(encoded, object_pairs_hook=_unique_object, parse_constant=reject_constant)
     validate_protocol(protocol)
+    _number(protocol.get("cooldown_seconds"), "cooldown_seconds")
     return protocol
 
 
@@ -139,6 +140,42 @@ def validate_protocol(protocol):
             _integer(protocol[field], field, 1)
     if "cooldown_seconds" in protocol:
         _number(protocol["cooldown_seconds"], "cooldown_seconds")
+
+
+def validate_execution_protocol(protocol):
+    """在任何运行副作用前检查执行器和基础设施直接读取的全部配置。"""
+    validate_protocol(protocol)
+    _number(protocol.get("cooldown_seconds"), "cooldown_seconds")
+    for field in ("request_timeout_seconds", "gateway_workers", "gateway_connections", "gateway_upstream_keepalive"):
+        _integer(protocol.get(field), field, 1)
+    affinity = _mapping(protocol.get("cpu_affinity"), "cpu_affinity")
+    for group in ("application", "postgres", "load", "redis", "controller"):
+        cpus = affinity.get(group)
+        _require(isinstance(cpus, list) and bool(cpus), f"cpu_affinity.{group} 不能为空")
+    ports = _mapping(protocol.get("ports"), "ports")
+    required_ports = {"postgres", "redis", "application", "gateway"}
+    for variant in protocol["variants"]:
+        kind = variant["kind"]
+        _require(kind in {"go", "fpm", "octane"}, "variant.kind 不受支持")
+        if kind != "go":
+            _require(isinstance(variant.get("app"), str) and IDENTIFIER.fullmatch(variant["app"]) is not None,
+                     "variant.app 必须指定合法应用名称")
+        if kind == "fpm":
+            required_ports.add("fpm")
+        if kind == "octane":
+            required_ports.add("rpc")
+    for name in sorted(required_ports):
+        _integer(ports.get(name), f"ports.{name}", 1)
+    postgres = _mapping(protocol.get("postgres"), "postgres")
+    _integer(postgres.get("max_connections"), "postgres.max_connections", 1)
+    for field in ("shared_buffers", "work_mem", "checkpoint_timeout", "max_wal_size"):
+        _configuration_text(postgres.get(field), f"postgres.{field}")
+    _configuration_text(protocol.get("redis_maxmemory"), "redis_maxmemory")
+
+
+def _configuration_text(value, label):
+    _require(isinstance(value, str) and bool(value.strip()) and value.isprintable() and
+             not any(character in value for character in "'\";"), f"{label} 必须为非空的单行配置值")
 
 
 def build_schedule(protocol, model):

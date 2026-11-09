@@ -312,10 +312,11 @@ def verify_all(environment, output, protocol, secret):
 
 
 def execute(arguments):
-    from experiment import build_schedule, choose_rates, load_protocol
+    from experiment import build_schedule, choose_rates, load_protocol, validate_execution_protocol
 
     protocol_path = pathlib.Path(getattr(arguments, "protocol", None) or ROOT / "contracts/protocol.json")
     protocol = load_protocol(protocol_path)
+    validate_execution_protocol(protocol)
     if arguments.mode == "measure":
         changed = subprocess.check_output(["git", "status", "--porcelain", "--", "benchmarks/business"],
                                           cwd=ROOT.parents[1], text=True)
