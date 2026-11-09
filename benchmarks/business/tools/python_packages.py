@@ -27,8 +27,8 @@ def snapshot(prefix):
         if path.is_symlink():
             raise ValueError("受控 Python 依赖不允许符号链接")
         relative = path.relative_to(root)
-        # 运行时可生成字节码缓存；源码、顶层字节码、元数据和所有其他文件仍逐一核验。
-        if "__pycache__" in relative.parts or path.is_dir():
+        # 字节码缓存也可能被解释器执行，必须与源码、元数据一起纳入安装身份。
+        if path.is_dir():
             continue
         if not path.is_file() or not path.resolve().is_relative_to(root):
             raise ValueError("Python 依赖包含非法文件")
