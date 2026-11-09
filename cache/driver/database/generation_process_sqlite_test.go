@@ -8,6 +8,8 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -44,7 +46,12 @@ func TestSQLiteClearAcrossProcesses(t *testing.T) {
 	if err := reader.conn.(*db.SQLConnection).DB.QueryRow("PRAGMA database_list").Scan(&sequence, &name, &path); err != nil {
 		t.Fatal(err)
 	}
-	dsn := (&url.URL{Scheme: "file", Path: path}).String() + "?_busy_timeout=10000&_journal_mode=WAL"
+	// file URI 的盘符必须放在绝对路径中，不能被解释成主机名；反斜杠先按平台转换。
+	databasePath := filepath.ToSlash(path)
+	if !strings.HasPrefix(databasePath, "/") {
+		databasePath = "/" + databasePath
+	}
+	dsn := (&url.URL{Scheme: "file", Path: databasePath}).String() + "?_busy_timeout=10000&_journal_mode=WAL"
 	barrier.armed.Store(true)
 	finished := make(chan error, 1)
 	var once sync.Once

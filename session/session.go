@@ -807,12 +807,6 @@ func (s *Session) hasDirtyState() bool {
 	return s.dirty
 }
 
-func (s *Session) snapshotData() map[string]json.RawMessage {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return cloneSessionData(s.data)
-}
-
 func (s *Session) isRequestSession() bool {
 	return s != nil && s.requestState && s.cookie != nil && !isNilSessionDependency(s.driver)
 }
