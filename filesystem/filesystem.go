@@ -139,16 +139,19 @@ func (manager *Filesystem) Disk(name ...string) (Driver, error) {
 	}
 
 	manager.mu.Lock()
-	defer manager.mu.Unlock()
 	if manager.closed {
+		manager.mu.Unlock()
+		// 自定义关闭回调可能重新访问管理器，必须在释放管理器锁后调用。
 		_ = driver.Close()
 		return nil, ErrFilesystemClosed
 	}
 	if existing, exists := manager.drivers[diskName]; exists {
+		manager.mu.Unlock()
 		_ = driver.Close()
 		return existing, nil
 	}
 	manager.drivers[diskName] = driver
+	manager.mu.Unlock()
 	return driver, nil
 }
 
