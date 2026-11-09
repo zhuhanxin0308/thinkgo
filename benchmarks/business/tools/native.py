@@ -286,6 +286,8 @@ def tcp_ready(port, *, timeout=READINESS_PROBE_SECONDS):
 
 class Environment:
     def __init__(self, root, runtime, work, protocol):
+        from experiment import validate_execution_protocol
+        validate_execution_protocol(protocol)
         self.root = pathlib.Path(root).resolve()
         self.runtime = pathlib.Path(runtime).resolve()
         self.work = pathlib.Path(work).resolve()
