@@ -592,6 +592,7 @@ func (l *Lang) Get(name string, variables map[string]interface{}, language strin
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
+	replacements := make([]string, 0, len(keys)*2)
 	for _, variable := range keys {
 		if !isValidLanguageVariable(variable) {
 			continue
@@ -600,9 +601,10 @@ func (l *Lang) Get(name string, variables map[string]interface{}, language strin
 		if !ok {
 			continue
 		}
-		value = strings.ReplaceAll(value, "{:"+variable+"}", formatted)
+		replacements = append(replacements, "{:"+variable+"}", formatted)
 	}
-	return value
+	// 一次替换只扫描原模板，变量值中的占位符必须作为普通文本保留。
+	return strings.NewReplacer(replacements...).Replace(value)
 }
 
 // LoadAll 严格解析目录内全部 JSON 文件，并在所有文件成功后一次性提交。
