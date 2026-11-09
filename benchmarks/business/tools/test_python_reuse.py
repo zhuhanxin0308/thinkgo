@@ -3,6 +3,9 @@
 import json
 import os
 import pathlib
+import py_compile
+import subprocess
+import sys
 import tempfile
 import unittest
 from types import SimpleNamespace
@@ -83,9 +86,49 @@ class PythonReuseTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.installer.python_install()
 
+    def test_unrecorded_bytecode_cache_is_not_reused(self):
+        self.install()
+        cache = self.installer.runtime / "python-packages/__pycache__"
+        cache.mkdir()
+        (cache / "psutil.cpython-312.pyc").write_bytes(b"unrecorded executable cache")
+        with self.assertRaises(ValueError):
+            self.installer.python_install()
+
+    def test_changed_executable_cache_cannot_reuse_unchanged_source_and_receipt(self):
+        def capture(command, **kwargs):
+            prefix = pathlib.Path(command[command.index("--target") + 1])
+            populate_packages(prefix)
+            source = prefix / "psutil.py"
+            source.write_text("value = 1\n")
+            py_compile.compile(str(source), doraise=True)
+        with mock.patch.object(self.installer, "command", side_effect=capture):
+            self.installer.python_install()
+        prefix = self.installer.runtime / "python-packages"
+        source = prefix / "psutil.py"
+        original = source.read_bytes()
+        original_stat = source.stat()
+        receipt = self.installer.runtime / "receipts/python-packages.json"
+        original_receipt = receipt.read_bytes()
+        command = [sys.executable, "-I", "-S", "-B", "-c",
+                   "import sys; sys.path.insert(0, sys.argv[1]); import psutil; print(psutil.value)", str(prefix)]
+        self.assertEqual(subprocess.check_output(command, text=True).strip(), "1")
+        with mock.patch.object(self.installer, "command", side_effect=AssertionError("不应重装")):
+            self.assertEqual(self.installer.python_install()["state"], "reused")
+            # 两份源码长度和时间戳相同，仅让有效缓存携带另一段无害逻辑，再恢复原源码。
+            source.write_text("value = 2\n")
+            os.utime(source, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+            py_compile.compile(str(source), doraise=True)
+            source.write_bytes(original)
+            os.utime(source, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+            self.assertEqual(subprocess.check_output(command, text=True).strip(), "2")
+            self.assertEqual(source.read_bytes(), original)
+            self.assertEqual(receipt.read_bytes(), original_receipt)
+            with self.assertRaises(ValueError):
+                self.installer.python_install()
+
 
 class PythonPackageSnapshotTests(unittest.TestCase):
-    def test_snapshot_tracks_sources_and_ignores_only_runtime_bytecode_cache(self):
+    def test_snapshot_tracks_sources_and_bytecode_cache(self):
         with tempfile.TemporaryDirectory() as directory:
             prefix = pathlib.Path(directory) / "packages"
             populate_packages(prefix)
@@ -95,7 +138,11 @@ class PythonPackageSnapshotTests(unittest.TestCase):
             cache = prefix / "__pycache__"
             cache.mkdir()
             (cache / "psutil.pyc").write_bytes(b"runtime cache")
-            self.assertEqual(python_packages.snapshot(prefix), original)
+            with_cache = python_packages.snapshot(prefix)
+            self.assertNotEqual(with_cache, original)
+            self.assertIn("__pycache__/psutil.pyc", with_cache["files_sha256"])
+            (cache / "psutil.pyc").write_bytes(b"modified executable cache")
+            self.assertNotEqual(python_packages.snapshot(prefix), with_cache)
             (prefix / "psutil.py").write_text("# 已修改\n")
             self.assertNotEqual(python_packages.snapshot(prefix), original)
 
