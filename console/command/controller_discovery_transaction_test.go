@@ -250,7 +250,7 @@ func assertNoControllerDiscoveryAuxiliaryFiles(t *testing.T, basePath string) {
 			return walkErr
 		}
 		name := entry.Name()
-		if strings.Contains(name, ".discovery-tmp-") || strings.Contains(name, ".discovery-backup-") {
+		if strings.Contains(name, ".discovery-tmp-") || strings.Contains(name, ".discovery-backup-") || strings.Contains(name, ".discovery-rollback-") {
 			t.Errorf("发现事务残留辅助文件 %q", path)
 		}
 		return nil
