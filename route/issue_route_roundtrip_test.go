@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"unicode"
 
 	fwcontext "github.com/zhuhanxin0308/thinkgo/v3/context"
 )
@@ -58,6 +59,49 @@ func TestDynamicRouteUnicodeFold(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// TestDynamicIndexAllUnicodeFoldClasses 检查所有非平凡折叠类，避免仅为几个示例修补索引。
+func TestDynamicIndexAllUnicodeFoldClasses(t *testing.T) {
+	router := NewRouter()
+	for value := rune(0); value <= unicode.MaxRune; value++ {
+		next := unicode.SimpleFold(value)
+		if next == value {
+			continue
+		}
+		literal := string(value)
+		item := &Route{router: router, pathParts: []routePart{{literal: literal}, {param: "id"}}}
+		index := buildRouteIndex(map[string][]*Route{http.MethodGet: {item}})
+		candidates := index.candidates(http.MethodGet, "", []string{string(next), "42"}, false)
+		if len(candidates) != 1 || candidates[0] != item {
+			t.Fatalf("简单折叠类 U+%04X -> U+%04X 被动态索引遗漏", value, next)
+		}
+	}
+}
+
+// TestNameCacheInvalidExtensionPreservesSnapshot 确保放宽空后缀不会放行损坏缓存或污染已加载快照。
+func TestNameCacheInvalidExtensionPreservesSnapshot(t *testing.T) {
+	router := NewRouter()
+	valid := []byte(`{"version":1,"default_pattern":"[0-9]+","entries":[{"name":"kept","path":"/kept"}]}`)
+	if err := router.LoadNameCache(valid); err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{`"extension":"../json"`, `"extension":"."`, `"extension_required":true`} {
+		content := []byte(`{"version":1,"default_pattern":"[0-9]+","entries":[{"name":"bad","path":"/bad",` + field + `}]}`)
+		if err := router.LoadNameCache(content); err == nil {
+			t.Fatalf("非法后缀元数据未被拒绝: %s", content)
+		}
+		if got, err := router.URL("kept", nil); err != nil || got != "/kept" {
+			t.Fatalf("错误加载污染已有快照: %q, %v", got, err)
+		}
+	}
+	item, err := router.Get("/explicit", "Explicit@Show")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := item.WithExtension(""); err == nil {
+		t.Fatal("显式空后缀仍应拒绝")
 	}
 }
 
