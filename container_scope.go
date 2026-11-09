@@ -5,8 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"reflect"
 	"sync"
+
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/resourceidentity"
 )
 
 // ErrInvalidContainerScopeContext 表示作用域关闭没有收到有效上下文。
@@ -196,17 +197,18 @@ func (s *ContainerScope) close(ctx context.Context, done chan struct{}) {
 	state.closed = true
 	state.lock.Unlock()
 
-	closed := make(map[string]struct{}, len(instances))
+	closed := make(map[resourceidentity.Identity]struct{}, len(instances))
 	for _, instance := range instances {
 		closer, ok := instance.(io.Closer)
 		if !ok || isNilServiceInstance(closer) {
 			continue
 		}
-		identity := scopedCloserIdentity(closer)
-		if _, exists := closed[identity]; exists {
-			continue
+		if identity, identifiable := resourceidentity.Key(closer); identifiable {
+			if _, exists := closed[identity]; exists {
+				continue
+			}
+			closed[identity] = struct{}{}
 		}
-		closed[identity] = struct{}{}
 		closeErr = errors.Join(closeErr, closeScopedServiceContext(ctx, closer))
 	}
 }
@@ -333,19 +335,6 @@ func hasScopeWaitPathLocked(state *containerScopeState, current, target string, 
 		}
 	}
 	return false
-}
-
-func scopedCloserIdentity(closer io.Closer) string {
-	value := reflect.ValueOf(closer)
-	if value.IsValid() {
-		switch value.Kind() {
-		case reflect.Chan, reflect.Func, reflect.Map, reflect.Pointer, reflect.Slice:
-			if !value.IsNil() {
-				return fmt.Sprintf("%T:%x", closer, value.Pointer())
-			}
-		}
-	}
-	return fmt.Sprintf("%T:%v", closer, closer)
 }
 
 func closeScopedServiceContext(ctx context.Context, closer io.Closer) (err error) {

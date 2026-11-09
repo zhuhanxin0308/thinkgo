@@ -5,6 +5,8 @@ import (
 	"errors"
 	"io"
 	"reflect"
+
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/resourceidentity"
 )
 
 var (
@@ -106,15 +108,9 @@ func (r *Request) Make(abstract string, params ...interface{}) (interface{}, err
 }
 
 func sameServiceScopeDependency(left, right interface{}) bool {
-	if isNilServiceScopeDependency(left) || isNilServiceScopeDependency(right) {
-		return false
-	}
-	leftValue := reflect.ValueOf(left)
-	rightValue := reflect.ValueOf(right)
-	if leftValue.Type() != rightValue.Type() || !leftValue.Type().Comparable() {
-		return false
-	}
-	return leftValue.Interface() == rightValue.Interface()
+	leftKey, leftIdentifiable := resourceidentity.Key(left)
+	rightKey, rightIdentifiable := resourceidentity.Key(right)
+	return leftIdentifiable && rightIdentifiable && leftKey == rightKey
 }
 
 func isNilServiceScopeDependency(value interface{}) bool {
