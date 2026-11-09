@@ -103,7 +103,7 @@ func insertDynamicRoute(root *routeTrieNode, registered *Route, caseSensitive bo
 		}
 		literal := part.literal
 		if !caseSensitive {
-			literal = strings.ToLower(literal)
+			literal = routeLiteralFoldKey(literal)
 		}
 		child := node.literals[literal]
 		if child == nil {
@@ -174,13 +174,13 @@ func (index *routeIndex) candidates(method, host string, parts []string, exactDo
 	if !index.caseSensitive {
 		normalized := make([]string, len(parts))
 		for partIndex, part := range parts {
-			normalized[partIndex] = strings.ToLower(part)
+			normalized[partIndex] = routeLiteralFoldKey(part)
 		}
 		parts = normalized
 		if hasRegisteredExtension {
 			normalizedStripped := make([]string, len(stripped))
 			for partIndex, part := range stripped {
-				normalizedStripped[partIndex] = strings.ToLower(part)
+				normalizedStripped[partIndex] = routeLiteralFoldKey(part)
 			}
 			stripped = normalizedStripped
 		}

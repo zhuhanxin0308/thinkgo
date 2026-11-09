@@ -57,7 +57,7 @@ func (r *Router) URL(name string, params map[string]interface{}) (string, error)
 		pathParts = append(pathParts, url.PathEscape(text))
 	}
 
-	if registered.ext != "" && len(pathParts) > 0 {
+	if registered.ext != "" && (len(pathParts) > 0 || registered.extensionRequired) {
 		if len(pathParts) == 0 {
 			pathParts = append(pathParts, "."+registered.ext)
 		} else {

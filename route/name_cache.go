@@ -24,10 +24,11 @@ type namedRouteCache struct {
 }
 
 type namedRouteEntry struct {
-	Name      string            `json:"name"`
-	Path      string            `json:"path"`
-	Extension string            `json:"extension,omitempty"`
-	Patterns  map[string]string `json:"patterns,omitempty"`
+	Name              string            `json:"name"`
+	Path              string            `json:"path"`
+	Extension         string            `json:"extension,omitempty"`
+	ExtensionRequired bool              `json:"extension_required,omitempty"`
+	Patterns          map[string]string `json:"patterns,omitempty"`
 }
 
 // ExportNameCache 导出命名路由的 URL 生成信息，对应 ThinkPHP optimize:route 的命名路由缓存。
@@ -47,7 +48,7 @@ func (router *Router) ExportNameCache() ([]byte, error) {
 		for name, pattern := range registered.patterns {
 			patterns[name] = pattern
 		}
-		cache.Entries = append(cache.Entries, namedRouteEntry{Name: name, Path: registered.path, Extension: registered.ext, Patterns: patterns})
+		cache.Entries = append(cache.Entries, namedRouteEntry{Name: name, Path: registered.path, Extension: registered.ext, ExtensionRequired: registered.extensionRequired, Patterns: patterns})
 	}
 	sort.Slice(cache.Entries, func(left, right int) bool { return cache.Entries[left].Name < cache.Entries[right].Name })
 	content, err := json.MarshalIndent(cache, "", "    ")
@@ -97,11 +98,14 @@ func (router *Router) LoadNameCache(content []byte) error {
 		if err != nil || optional > maxOptionalRouteSegments {
 			return fmt.Errorf("命名路由缓存路径非法: %q", entry.Path)
 		}
-		extension, err := normalizeRouteExtension(entry.Extension)
+		extension, err := normalizeOptionalRouteExtension(entry.Extension)
 		if err != nil {
 			return err
 		}
-		registered := &Route{router: metadataRouter, path: path, pathParts: parts, ext: extension, patterns: make(map[string]string), compiled: make(map[string]*regexp.Regexp)}
+		if entry.ExtensionRequired && extension == "" {
+			return fmt.Errorf("命名路由缓存的强制后缀不能为空: %q", entry.Name)
+		}
+		registered := &Route{router: metadataRouter, path: path, pathParts: parts, ext: extension, extensionRequired: entry.ExtensionRequired, patterns: make(map[string]string), compiled: make(map[string]*regexp.Regexp)}
 		for name, pattern := range entry.Patterns {
 			if err := registered.WithPattern(name, pattern); err != nil {
 				return err

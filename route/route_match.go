@@ -469,7 +469,7 @@ func routePartsWithExtension(parts []routePart, extension string) []string {
 		return result
 	}
 	if len(result) == 0 {
-		return result
+		return []string{"." + extension}
 	}
 	result[len(result)-1] += "." + extension
 	return result
@@ -513,22 +513,26 @@ func (r *Router) pathPartsKey(parts []string) string {
 	}
 	normalized := make([]string, len(parts))
 	for index, part := range parts {
-		// EqualFold uses Unicode simple folding, whose classes are wider
-		// than ToLower (for example s/S/ſ). Choose one key per entire class.
-		normalized[index] = strings.Map(func(value rune) rune {
-			canonical := value
-			for next := unicode.SimpleFold(value); next != value; next = unicode.SimpleFold(next) {
-				if next < canonical {
-					canonical = next
-				}
-			}
-			if canonical >= 'A' && canonical <= 'Z' {
-				canonical += 'a' - 'A'
-			}
-			return canonical
-		}, part)
+		normalized[index] = routeLiteralFoldKey(part)
 	}
 	return pathPartsKey(normalized)
+}
+
+// routeLiteralFoldKey 为完整的 Unicode 简单折叠等价类选择同一索引键。
+// 静态和动态索引共用此规则，确保预筛选不会遗漏 EqualFold 可匹配的路由。
+func routeLiteralFoldKey(part string) string {
+	return strings.Map(func(value rune) rune {
+		canonical := value
+		for next := unicode.SimpleFold(value); next != value; next = unicode.SimpleFold(next) {
+			if next < canonical {
+				canonical = next
+			}
+		}
+		if canonical >= 'A' && canonical <= 'Z' {
+			canonical += 'a' - 'A'
+		}
+		return canonical
+	}, part)
 }
 
 // routeLiteralEqual 按路由器大小写配置比较静态路径段。
