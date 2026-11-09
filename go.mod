@@ -4,7 +4,7 @@ go 1.26.10
 
 require (
 	github.com/alicebob/miniredis/v2 v2.40.0
-	github.com/andybalholm/brotli v1.2.6
+	github.com/andybalholm/brotli v1.2.8
 	github.com/getkin/kin-openapi v0.151.0
 	github.com/go-sql-driver/mysql v1.10.1
 	github.com/godror/godror v0.51.5
