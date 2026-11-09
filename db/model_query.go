@@ -403,7 +403,7 @@ func (mq *ModelQuery) Column(field string, key ...string) (interface{}, error) {
 	case map[string]interface{}:
 		for k, v := range val {
 			var mockRow map[string]interface{}
-			if len(key) > 0 && key[0] != "" {
+			if len(key) > 0 && key[0] != "" && key[0] != field {
 				mockRow = map[string]interface{}{field: v, key[0]: k}
 			} else {
 				mockRow = map[string]interface{}{field: v}
