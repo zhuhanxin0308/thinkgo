@@ -100,6 +100,10 @@ func TestIssue145PostgresArraysReachEveryRawExecutor(t *testing.T) {
 			args []interface{}
 		}{
 			{"constructor", `SELECT ARRAY[?, ?], ?`, `SELECT ARRAY[$1, $2], $3`, []interface{}{1, 2, 3}},
+			{"普通反斜杠字符串", `SELECT '\', ?`, `SELECT '\', $1`, []interface{}{1}},
+			{"数组内普通字符串", `SELECT ARRAY['\', ?], ?`, `SELECT ARRAY['\', $1], $2`, []interface{}{1, 2}},
+			{"转义字符串", `SELECT E'it\'s ?', ?`, `SELECT E'it\'s ?', $1`, []interface{}{1}},
+			{"跨行转义续接", "SELECT E'first'\n'it\\'s ?', ?", "SELECT E'first'\n'it\\'s ?', $1", []interface{}{1}},
 			{"subscript", `SELECT numbers[?] FROM records WHERE id = ?`, `SELECT numbers[$1] FROM records WHERE id = $2`, []interface{}{1, 2}},
 			{"slice", `SELECT numbers[?:?], ? FROM records`, `SELECT numbers[$1:$2], $3 FROM records`, []interface{}{1, 2, 3}},
 			{"nested", `SELECT ARRAY[ARRAY[?, ?], ARRAY[?, ?]], ?`, `SELECT ARRAY[ARRAY[$1, $2], ARRAY[$3, $4]], $5`, []interface{}{1, 2, 3, 4, 5}},

@@ -36,7 +36,11 @@ func TestIssue125SQLiteQuoteBoundaries(t *testing.T) {
 		}
 	}
 	for _, dialect := range []string{"", "mysql", "postgres", "sqlserver", "oracle"} {
-		const sqlText = `SELECT 'left\'AUDIT_CANARY', ? AS bound`
+		sqlText := `SELECT 'left\'AUDIT_CANARY', ? AS bound`
+		if dialect == "postgres" {
+			// PostgreSQL 的反斜杠转义必须显式使用 E 前缀。
+			sqlText = `SELECT E'left\'AUDIT_CANARY', ? AS bound`
+		}
 		if count, err := countSQLPlaceholders(sqlText, dialect); err != nil || count != 1 {
 			t.Fatalf("existing %q escape policy changed: %d %v", dialect, count, err)
 		}
