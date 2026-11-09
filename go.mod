@@ -11,7 +11,7 @@ require (
 	github.com/hibiken/asynq v0.26.0
 	github.com/klauspost/compress v1.20.3
 	github.com/lib/pq v1.12.3
-	github.com/mattn/go-sqlite3 v1.14.52
+	github.com/mattn/go-sqlite3 v1.14.53
 	github.com/microsoft/go-mssqldb v1.11.2
 	github.com/neo4j/neo4j-go-driver/v5 v5.28.6
 	github.com/quic-go/quic-go v0.63.0
