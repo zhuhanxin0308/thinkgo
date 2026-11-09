@@ -5,8 +5,10 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"fmt"
 	"math"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 )
@@ -195,8 +197,23 @@ func (value modelScanValue) Value() (driver.Value, error) {
 
 type modelScanCancelScanner struct{}
 
+var modelScanCancelCallbacks sync.Map
+
+// modelScanCancelValue 用合法数据库标量定位测试回调，避免把函数伪装成驱动字段值。
+func modelScanCancelValue(t *testing.T, cancel context.CancelFunc) string {
+	t.Helper()
+	key := t.Name()
+	modelScanCancelCallbacks.Store(key, cancel)
+	t.Cleanup(func() { modelScanCancelCallbacks.Delete(key) })
+	return key
+}
+
 func (*modelScanCancelScanner) Scan(source any) error {
-	source.(context.CancelFunc)()
+	callback, exists := modelScanCancelCallbacks.Load(source.(string))
+	if !exists {
+		return fmt.Errorf("取消测试回调不存在")
+	}
+	callback.(context.CancelFunc)()
 	return nil
 }
 
@@ -242,7 +259,7 @@ func TestModelScanScannerCancellationAndBufferOwnership(t *testing.T) {
 		ID      int64
 		Scanner modelScanCancelScanner
 	}{ID: 91}
-	query := newModelScanQuery(map[string]any{"id": int64(1), "scanner": context.CancelFunc(cancel)}).WithContext(ctx)
+	query := newModelScanQuery(map[string]any{"id": int64(1), "scanner": modelScanCancelValue(t, cancel)}).WithContext(ctx)
 	if _, err := query.Find(&target); !errors.Is(err, context.Canceled) || target.ID != 91 {
 		t.Fatalf("扫描器期间取消仍发布了记录: target=%#v err=%v", target, err)
 	}

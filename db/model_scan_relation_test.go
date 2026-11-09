@@ -158,7 +158,7 @@ func TestModelScanReadonlyCancellation(t *testing.T) {
 		ID     int64
 		Detail *struct{ Value modelScanCancelScanner } `thinkgo:"detail,readonly"`
 	}{ID: 9}
-	_, err := newModelScanQuery(map[string]any{"id": int64(1), "detail": map[string]any{"value": context.CancelFunc(cancel)}}).WithContext(ctx).Find(&target)
+	_, err := newModelScanQuery(map[string]any{"id": int64(1), "detail": map[string]any{"value": modelScanCancelValue(t, cancel)}}).WithContext(ctx).Find(&target)
 	if !errors.Is(err, context.Canceled) || target.ID != 9 || target.Detail != nil {
 		t.Fatalf("关联取消没有保持原子性: target=%#v err=%v", target, err)
 	}

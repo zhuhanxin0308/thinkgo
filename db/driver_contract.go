@@ -3,14 +3,26 @@ package db
 // ValidateDriverIdentifier 供独立驱动复用框架的标识符安全规则。
 func ValidateDriverIdentifier(name string) error { return validateIdentifier(name) }
 
-// ValidateDriverData 校验驱动写入数据的字段名，不改变字段值。
-func ValidateDriverData(data map[string]interface{}) error { return validateDataKeys(data) }
+// ValidateDriverData 校验驱动写入数据的字段名和可安全快照性，不改变字段值。
+func ValidateDriverData(data map[string]interface{}) error {
+	if err := validateDataKeys(data); err != nil {
+		return err
+	}
+	_, err := cloneDatabaseMap(data)
+	return err
+}
 
 // ValidateDriverOrder 校验可移植的字段排序规则。
 func ValidateDriverOrder(order string) error { return validateOrderClause(order) }
 
-// CloneDriverData 供驱动在重试和异步执行前隔离可变输入。
+// CloneDriverData 保留旧接口，非法输入返回 nil；新驱动应使用 CloneDriverDataChecked 处理错误。
 func CloneDriverData(data map[string]interface{}) map[string]interface{} {
+	cloned, _ := cloneDatabaseMap(data)
+	return cloned
+}
+
+// CloneDriverDataChecked 供驱动在重试和异步执行前隔离输入，并拒绝循环或无法复制的值。
+func CloneDriverDataChecked(data map[string]interface{}) (map[string]interface{}, error) {
 	return cloneDatabaseMap(data)
 }
 

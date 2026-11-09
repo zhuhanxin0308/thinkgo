@@ -323,7 +323,11 @@ func (q *Query) BuildSelectSQL() (string, []interface{}, error) {
 		if data, ok := value.([]byte); ok {
 			allArgs[index] = bytes.Clone(data)
 		} else {
-			allArgs[index] = cloneDatabaseValue(value)
+			cloned, err := cloneDatabaseValue(value)
+			if err != nil {
+				return "", nil, err
+			}
+			allArgs[index] = cloned
 		}
 	}
 	return sqlBuilder.String(), allArgs, nil
@@ -360,9 +364,16 @@ func (q *Query) cloneWithCapacity(whereExtra, argsExtra int) *Query {
 		cloned.where = make([]string, len(q.where), whereCapacity)
 		copy(cloned.where, q.where)
 	}
-	cloned.args = cloneDatabaseValuesWithExtraCapacity(q.args, argsExtra)
+	var err error
+	cloned.args, err = cloneDatabaseValuesWithExtraCapacity(q.args, argsExtra)
+	if err != nil {
+		cloned.setError(err)
+	}
 	cloned.joins = append([]joinClause(nil), q.joins...)
-	cloned.havingArgs = cloneDatabaseValues(q.havingArgs)
+	cloned.havingArgs, err = cloneDatabaseValues(q.havingArgs)
+	if err != nil {
+		cloned.setError(err)
+	}
 	cloned.setExprs = append([]setExpression(nil), q.setExprs...)
 	if q.aggregateExpression != nil {
 		aggregate := *q.aggregateExpression
@@ -375,11 +386,16 @@ func (q *Query) operationPredicate() (Predicate, error) {
 	if q == nil {
 		return newPredicate(), nil
 	}
-	return q.predicate.clone(), q.predicate.err
+	predicate := q.predicate.clone()
+	return predicate, predicate.err
 }
 
 // appendQueryNode 以条件树为来源，同步生成 SQL 执行路径使用的派生缓存。
 func (q *Query) appendQueryNode(connector string, node PredicateNode, builder Builder) *Query {
+	node, err := clonePredicateNode(node)
+	if err != nil {
+		return q.setError(err)
+	}
 	clause, args, err := predicateNodeSQL(node, builder)
 	if err != nil {
 		return q.setError(err)

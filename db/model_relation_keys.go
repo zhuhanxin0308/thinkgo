@@ -36,9 +36,16 @@ func makeRelationRows(rows []map[string]interface{}, keyFields []string, model *
 			if !exists {
 				return nil, fmt.Errorf("%w: 第 %d 行缺少关联字段 %q", ErrInvalidRelation, index, field)
 			}
-			rawKeys[field] = cloneDatabaseValue(value)
+			cloned, err := cloneDatabaseValue(value)
+			if err != nil {
+				return nil, err
+			}
+			rawKeys[field] = cloned
 		}
-		data := cloneDatabaseMap(row)
+		data, err := cloneDatabaseMap(row)
+		if err != nil {
+			return nil, err
+		}
 		if model != nil {
 			data = model.applyGetters(data)
 		}

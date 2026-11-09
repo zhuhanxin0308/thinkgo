@@ -126,6 +126,11 @@ func (g *ConditionGroup) append(connector string, condition interface{}, args ..
 		g.err = err
 		return g
 	}
+	node, err = clonePredicateNode(node)
+	if err != nil {
+		g.err = err
+		return g
+	}
 	g.nodes = appendPredicateNode(g.nodes, connector, node)
 	g.arguments += count
 	return g
@@ -146,10 +151,14 @@ func (g *ConditionGroup) node() (PredicateNode, error) {
 	if len(g.nodes) == 0 {
 		return PredicateNode{}, fmt.Errorf("condition group is empty")
 	}
-	if len(g.nodes) == 1 {
-		return clonePredicateNodes(g.nodes)[0], nil
+	nodes, err := clonePredicateNodes(g.nodes)
+	if err != nil {
+		return PredicateNode{}, err
 	}
-	return PredicateNode{Kind: PredicateBoolean, Operator: "AND", Children: clonePredicateNodes(g.nodes)}, nil
+	if len(nodes) == 1 {
+		return nodes[0], nil
+	}
+	return PredicateNode{Kind: PredicateBoolean, Operator: "AND", Children: nodes}, nil
 }
 
 func compileWhereNode(condition interface{}, args []interface{}) (PredicateNode, int, error) {

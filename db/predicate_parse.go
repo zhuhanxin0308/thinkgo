@@ -83,9 +83,9 @@ func parsePredicateBranch(expression string, args []interface{}, index *int, dep
 		if count < 0 || count > len(args)-*index {
 			return nil, fmt.Errorf("条件参数不足")
 		}
-		values := cloneDatabaseValues(args[*index : *index+count])
+		values, err := cloneDatabaseValues(args[*index : *index+count])
 		*index += count
-		return values, nil
+		return values, err
 	}
 	makeComparison := func(field, op string, count int) (PredicateNode, error) {
 		if err := validateIdentifier(field); err != nil {

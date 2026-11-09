@@ -74,9 +74,15 @@ func (mq *ModelQuery) updateResult(data map[string]any) (UpdateResult, error) {
 	if len(mq.query.where) == 0 {
 		return UpdateResult{}, ErrUnsafeFullTableMutation
 	}
-	workingData := cloneDatabaseMap(data)
+	workingData, err := cloneDatabaseMap(data)
+	if err != nil {
+		return UpdateResult{}, err
+	}
 	mq.model.applySetters(workingData)
-	workingData, allowed := mq.model.dispatchBeforeEvent(ModelBeforeUpdate, workingData)
+	workingData, allowed, err := mq.model.dispatchBeforeEvent(ModelBeforeUpdate, workingData)
+	if err != nil {
+		return UpdateResult{}, err
+	}
 	if !allowed {
 		return UpdateResult{}, fmt.Errorf("before_update 事件回调阻止了更新操作")
 	}
@@ -84,6 +90,8 @@ func (mq *ModelQuery) updateResult(data map[string]any) (UpdateResult, error) {
 	if err != nil {
 		return result, err
 	}
-	mq.model.dispatchAfterEvent(ModelAfterUpdate, result.Data)
+	if err := mq.model.dispatchAfterEvent(ModelAfterUpdate, result.Data); err != nil {
+		return result, fmt.Errorf("%w: %w", ErrPartialWrite, err)
+	}
 	return result, nil
 }

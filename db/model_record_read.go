@@ -55,7 +55,10 @@ func (mq *ModelQuery) findRecordRow() (map[string]any, map[string]any, error) {
 	if err != nil || row == nil {
 		return nil, nil, err
 	}
-	raw := cloneDatabaseMap(row)
+	raw, err := cloneDatabaseMap(row)
+	if err != nil {
+		return nil, nil, err
+	}
 	if len(mq.relations) > 0 {
 		if err := mq.loadRelations([]map[string]any{row}); err != nil {
 			return nil, nil, err
@@ -76,7 +79,11 @@ func (mq *ModelQuery) selectRecordRows() ([]map[string]any, []map[string]any, er
 func (mq *ModelQuery) prepareRecordRows(rows []map[string]any) ([]map[string]any, []map[string]any, error) {
 	raw := make([]map[string]any, len(rows))
 	for i, row := range rows {
-		raw[i] = cloneDatabaseMap(row)
+		var err error
+		raw[i], err = cloneDatabaseMap(row)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 	if len(mq.relations) > 0 {
 		if err := mq.loadRelations(rows); err != nil {

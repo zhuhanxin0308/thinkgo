@@ -65,7 +65,11 @@ func (executor *neo4jDriverExecutor) Collect(ctx context.Context, mode neo4j.Acc
 	}
 	defer func() { resultErr = errors.Join(resultErr, closeNeo4jSession(ctx, session)) }()
 	value, err := runNeoManaged(ctx, session, mode, func(transaction neo4j.ManagedTransaction) (interface{}, error) {
-		result, err := transaction.Run(ctx, cypher, cloneDatabaseMap(params))
+		snapshot, err := cloneDatabaseMapChecked(params)
+		if err != nil {
+			return nil, err
+		}
+		result, err := transaction.Run(ctx, cypher, snapshot)
 		if err != nil {
 			return nil, err
 		}
@@ -91,7 +95,11 @@ func (executor *neo4jDriverExecutor) Single(ctx context.Context, mode neo4j.Acce
 	}
 	defer func() { resultErr = errors.Join(resultErr, closeNeo4jSession(ctx, session)) }()
 	value, err := runNeoManaged(ctx, session, mode, func(transaction neo4j.ManagedTransaction) (interface{}, error) {
-		result, err := transaction.Run(ctx, cypher, cloneDatabaseMap(params))
+		snapshot, err := cloneDatabaseMapChecked(params)
+		if err != nil {
+			return nil, err
+		}
+		result, err := transaction.Run(ctx, cypher, snapshot)
 		if err != nil {
 			return nil, err
 		}
@@ -117,7 +125,11 @@ func (executor *neo4jDriverExecutor) Execute(ctx context.Context, mode neo4j.Acc
 	}
 	defer func() { resultErr = errors.Join(resultErr, closeNeo4jSession(ctx, session)) }()
 	value, err := runNeoManaged(ctx, session, mode, func(transaction neo4j.ManagedTransaction) (interface{}, error) {
-		result, err := transaction.Run(ctx, cypher, cloneDatabaseMap(params))
+		snapshot, err := cloneDatabaseMapChecked(params)
+		if err != nil {
+			return nil, err
+		}
+		result, err := transaction.Run(ctx, cypher, snapshot)
 		if err != nil {
 			return nil, err
 		}

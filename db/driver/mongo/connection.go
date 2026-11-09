@@ -119,6 +119,10 @@ func (c *MongoConnection) SelectEach(parent context.Context, request SelectReque
 }
 
 func (c *MongoConnection) Insert(parent context.Context, request InsertRequest) (InsertResult, error) {
+	data, err := request.DataSnapshot()
+	if err != nil {
+		return InsertResult{}, err
+	}
 	ctx, cancel, err := c.operationContext(parent)
 	if err != nil {
 		return InsertResult{}, err
@@ -128,7 +132,6 @@ func (c *MongoConnection) Insert(parent context.Context, request InsertRequest) 
 	if err != nil {
 		return InsertResult{}, err
 	}
-	data := request.Data()
 	if len(data) == 0 {
 		return InsertResult{}, fmt.Errorf("%w: MongoDB insert data cannot be empty", ErrInvalidQuery)
 	}
@@ -162,6 +165,10 @@ func (c *MongoConnection) Insert(parent context.Context, request InsertRequest) 
 }
 
 func (c *MongoConnection) Update(parent context.Context, request UpdateRequest) (UpdateResult, error) {
+	data, err := request.DataSnapshot()
+	if err != nil {
+		return UpdateResult{}, err
+	}
 	filter, err := c.compilePredicate(request.Predicate(), request.PrimaryKey(), request.ModelPrimaryKey())
 	if err != nil {
 		return UpdateResult{}, err
@@ -178,7 +185,6 @@ func (c *MongoConnection) Update(parent context.Context, request UpdateRequest) 
 	if err != nil {
 		return UpdateResult{}, err
 	}
-	data := request.Data()
 	if len(data) == 0 {
 		return UpdateResult{}, fmt.Errorf("%w: MongoDB update data cannot be empty", ErrInvalidQuery)
 	}

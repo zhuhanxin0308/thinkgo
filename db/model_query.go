@@ -197,10 +197,16 @@ func (mq *ModelQuery) insertResult(data map[string]interface{}, wantID bool) (In
 	if err := mq.validationError(); err != nil {
 		return InsertResult{}, err
 	}
-	workingData := cloneDatabaseMap(data)
+	workingData, err := cloneDatabaseMap(data)
+	if err != nil {
+		return InsertResult{}, err
+	}
 	mq.model.applySetters(workingData)
 	var allowed bool
-	workingData, allowed = mq.model.dispatchBeforeEvent(ModelBeforeInsert, workingData)
+	workingData, allowed, err = mq.model.dispatchBeforeEvent(ModelBeforeInsert, workingData)
+	if err != nil {
+		return InsertResult{}, err
+	}
 	if !allowed {
 		return InsertResult{}, fmt.Errorf("before_insert 事件回调阻止了插入操作")
 	}
@@ -211,9 +217,12 @@ func (mq *ModelQuery) insertResult(data map[string]interface{}, wantID bool) (In
 	}
 	persistedData := result.Data
 	if persistedData == nil {
-		persistedData = cloneDatabaseMap(workingData)
+		persistedData, err = cloneDatabaseMap(workingData)
 	} else {
-		persistedData = cloneDatabaseMap(persistedData)
+		persistedData, err = cloneDatabaseMap(persistedData)
+	}
+	if err != nil {
+		return result, &PartialWriteError{Result: result, Cause: err}
 	}
 	if wantID {
 		id, idErr := result.InsertedID()
@@ -223,7 +232,9 @@ func (mq *ModelQuery) insertResult(data map[string]interface{}, wantID bool) (In
 		persistedData[mq.model.primaryKeyField()] = id
 	}
 	result.Data = persistedData
-	mq.model.dispatchAfterEvent(ModelAfterInsert, persistedData)
+	if err := mq.model.dispatchAfterEvent(ModelAfterInsert, persistedData); err != nil {
+		return result, &PartialWriteError{Result: result, Cause: err}
+	}
 	return result, nil
 }
 
@@ -249,7 +260,10 @@ func (mq *ModelQuery) deleteResult() (int64, map[string]any, error) {
 	if len(mq.query.where) == 0 {
 		return 0, nil, ErrUnsafeFullTableMutation
 	}
-	beforeData, allowed := mq.model.dispatchBeforeEvent(ModelBeforeDelete, map[string]interface{}{})
+	beforeData, allowed, err := mq.model.dispatchBeforeEvent(ModelBeforeDelete, map[string]interface{}{})
+	if err != nil {
+		return 0, nil, err
+	}
 	if !allowed {
 		return 0, nil, fmt.Errorf("before_delete 事件回调阻止了删除操作")
 	}
@@ -257,7 +271,6 @@ func (mq *ModelQuery) deleteResult() (int64, map[string]any, error) {
 	var affected int64
 	var afterData map[string]interface{}
 	var persistedData map[string]any
-	var err error
 	mq.model.mu.RLock()
 	softDelete := mq.model.softDelete
 	deleteTimeField := mq.model.deleteTimeField
@@ -271,21 +284,29 @@ func (mq *ModelQuery) deleteResult() (int64, map[string]any, error) {
 		result, err = q.UpdateResult(data)
 		if err == nil {
 			affected = result.Count()
-			afterData = updateEventResultData(result)
+			afterData, err = updateEventResultData(result)
 			persistedData = result.Data
+			if err != nil {
+				return affected, persistedData, fmt.Errorf("%w: %w", ErrPartialWrite, err)
+			}
 		}
 	} else {
 		var result DeleteResult
 		result, err = q.DeleteResult()
 		if err == nil {
 			affected = result.Deleted
-			afterData = deleteEventResultData(beforeData, result)
+			afterData, err = deleteEventResultData(beforeData, result)
+			if err != nil {
+				return affected, nil, fmt.Errorf("%w: %w", ErrPartialWrite, err)
+			}
 		}
 	}
 	if err != nil {
 		return 0, nil, err
 	}
-	mq.model.dispatchAfterEvent(ModelAfterDelete, afterData)
+	if err := mq.model.dispatchAfterEvent(ModelAfterDelete, afterData); err != nil {
+		return affected, persistedData, fmt.Errorf("%w: %w", ErrPartialWrite, err)
+	}
 	return affected, persistedData, nil
 }
 
@@ -297,7 +318,10 @@ func (mq *ModelQuery) ForceDelete() (int64, error) {
 	if len(mq.query.where) == 0 {
 		return 0, ErrUnsafeFullTableMutation
 	}
-	beforeData, allowed := mq.model.dispatchBeforeEvent(ModelBeforeDelete, map[string]interface{}{})
+	beforeData, allowed, err := mq.model.dispatchBeforeEvent(ModelBeforeDelete, map[string]interface{}{})
+	if err != nil {
+		return 0, err
+	}
 	if !allowed {
 		return 0, fmt.Errorf("before_delete 事件回调阻止了物理删除操作")
 	}
@@ -309,7 +333,13 @@ func (mq *ModelQuery) ForceDelete() (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	mq.model.dispatchAfterEvent(ModelAfterDelete, deleteEventResultData(beforeData, result))
+	afterData, err := deleteEventResultData(beforeData, result)
+	if err == nil {
+		err = mq.model.dispatchAfterEvent(ModelAfterDelete, afterData)
+	}
+	if err != nil {
+		return result.Deleted, fmt.Errorf("%w: %w", ErrPartialWrite, err)
+	}
 	return result.Deleted, nil
 }
 
@@ -417,9 +447,16 @@ func (mq *ModelQuery) Column(field string, key ...string) (interface{}, error) {
 
 // InsertAll 批量插入多条记录。
 func (mq *ModelQuery) InsertAll(dataList []map[string]interface{}) (int64, error) {
+	if err := mq.validationError(); err != nil {
+		return 0, err
+	}
 	workingList := make([]map[string]interface{}, len(dataList))
 	for index, data := range dataList {
-		workingList[index] = cloneDatabaseMap(data)
+		var err error
+		workingList[index], err = cloneDatabaseMap(data)
+		if err != nil {
+			return 0, err
+		}
 	}
 	for _, data := range workingList {
 		mq.model.applySetters(data)

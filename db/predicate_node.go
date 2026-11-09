@@ -31,21 +31,34 @@ type PredicateNode struct {
 	SQL        string
 }
 
-func clonePredicateNodes(nodes []PredicateNode) []PredicateNode {
+func clonePredicateNodes(nodes []PredicateNode) ([]PredicateNode, error) {
 	if nodes == nil {
-		return nil
+		return nil, nil
 	}
 	cloned := make([]PredicateNode, len(nodes))
 	for index, node := range nodes {
-		cloned[index] = node
-		cloned[index].Values = cloneDatabaseValues(node.Values)
-		cloned[index].Children = clonePredicateNodes(node.Children)
+		var err error
+		cloned[index], err = clonePredicateNode(node)
+		if err != nil {
+			return nil, err
+		}
 	}
-	return cloned
+	return cloned, nil
 }
 
+func clonePredicateNode(node PredicateNode) (PredicateNode, error) {
+	var err error
+	node.Values, err = cloneDatabaseValues(node.Values)
+	if err != nil {
+		return PredicateNode{}, err
+	}
+	node.Children, err = clonePredicateNodes(node.Children)
+	return node, err
+}
+
+// comparisonNode 只组装临时节点，查询和条件组在保存节点时统一创建受控快照。
 func comparisonNode(field, operator string, values ...interface{}) PredicateNode {
-	return PredicateNode{Kind: PredicateComparison, Field: field, Operator: operator, Values: cloneDatabaseValues(values)}
+	return PredicateNode{Kind: PredicateComparison, Field: field, Operator: operator, Values: values}
 }
 
 // appendPredicateNode 保持 WhereOr 与前一项组合的既有规则，嵌套节点始终保留分组边界。
@@ -59,6 +72,10 @@ func appendPredicateNode(nodes []PredicateNode, connector string, node Predicate
 }
 
 func predicateNodeSQL(node PredicateNode, builder Builder, dialects ...string) (string, []interface{}, error) {
+	cloned, err := cloneDatabaseValues(node.Values)
+	if err != nil {
+		return "", nil, err
+	}
 	var quote func(string) string
 	if builder != nil {
 		quote = builder.QuoteIdentifier
@@ -99,13 +116,13 @@ func predicateNodeSQL(node PredicateNode, builder Builder, dialects ...string) (
 		if err := validateRawClause(node.SQL, len(node.Values), "where", dialect); err != nil {
 			return "", nil, err
 		}
-		return node.SQL, cloneDatabaseValues(node.Values), nil
+		return node.SQL, cloned, nil
 	case PredicateExpression:
 		expression := node.SQL
 		if quote != nil {
 			expression = quoteConditionIdentifiers(expression, quote)
 		}
-		return field + " " + node.Operator + " " + expression, cloneDatabaseValues(node.Values), nil
+		return field + " " + node.Operator + " " + expression, cloned, nil
 	case PredicateLikeLiteral:
 		return literalLikeSQL(node, field, builder)
 	case PredicateComparison:
@@ -113,15 +130,15 @@ func predicateNodeSQL(node PredicateNode, builder Builder, dialects ...string) (
 		case "IS NULL", "IS NOT NULL":
 			return field + " " + node.Operator, nil, nil
 		case "BETWEEN":
-			return field + " BETWEEN ? AND ?", cloneDatabaseValues(node.Values), nil
+			return field + " BETWEEN ? AND ?", cloned, nil
 		case "IN", "NOT IN":
 			marks := make([]string, len(node.Values))
 			for index := range marks {
 				marks[index] = "?"
 			}
-			return field + " " + node.Operator + " (" + strings.Join(marks, ", ") + ")", cloneDatabaseValues(node.Values), nil
+			return field + " " + node.Operator + " (" + strings.Join(marks, ", ") + ")", cloned, nil
 		default:
-			return field + " " + node.Operator + " ?", cloneDatabaseValues(node.Values), nil
+			return field + " " + node.Operator + " ?", cloned, nil
 		}
 	default:
 		return "", nil, fmt.Errorf("%w: 未知条件节点", ErrInvalidQuery)

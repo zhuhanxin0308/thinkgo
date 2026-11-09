@@ -170,7 +170,14 @@ func (c *SQLConnection) Insert(ctx context.Context, request InsertRequest) (Inse
 	if err := c.validateContext(ctx); err != nil {
 		return InsertResult{}, err
 	}
-	data := normalizeDatabaseWriteMap(request.Data(), c.Location())
+	data, err := request.DataSnapshot()
+	if err != nil {
+		return InsertResult{}, err
+	}
+	data, err = normalizeDatabaseWriteMap(data, c.Location())
+	if err != nil {
+		return InsertResult{}, err
+	}
 	if err := validateWriteArguments(request.Table(), data); err != nil {
 		return InsertResult{}, err
 	}
@@ -250,7 +257,14 @@ func (c *SQLConnection) Update(ctx context.Context, request UpdateRequest) (Upda
 	if err := c.validateContext(ctx); err != nil {
 		return UpdateResult{}, err
 	}
-	data := normalizeDatabaseWriteMap(request.Data(), c.Location())
+	data, err := request.DataSnapshot()
+	if err != nil {
+		return UpdateResult{}, err
+	}
+	data, err = normalizeDatabaseWriteMap(data, c.Location())
+	if err != nil {
+		return UpdateResult{}, err
+	}
 	if err := validateWriteArguments(request.Table(), data); err != nil {
 		return UpdateResult{}, err
 	}

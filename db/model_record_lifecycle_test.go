@@ -30,7 +30,11 @@ type recordLifecycleConnection struct {
 func (c *recordLifecycleConnection) Select(context.Context, SelectRequest) ([]map[string]any, error) {
 	result := make([]map[string]any, len(c.rows))
 	for i, row := range c.rows {
-		result[i] = cloneDatabaseMap(row)
+		var err error
+		result[i], err = cloneDatabaseMap(row)
+		if err != nil {
+			return nil, err
+		}
 	}
 	return result, nil
 }

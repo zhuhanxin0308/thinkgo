@@ -38,7 +38,11 @@ func (q *Query) InsertAll(dataList []map[string]interface{}) (int64, error) {
 		if len(data) == 0 {
 			return 0, q.reportError("insert_all", fmt.Errorf("第 %d 行数据不能为空，批量插入要求每行至少包含一个字段", index), nil)
 		}
-		workingList[index] = normalizeDatabaseWriteMap(data, q.location())
+		var err error
+		workingList[index], err = normalizeDatabaseWriteMap(data, q.location())
+		if err != nil {
+			return 0, q.reportError("insert_all", err, nil)
+		}
 	}
 
 	var sqlConn *SQLConnection

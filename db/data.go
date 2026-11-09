@@ -3,142 +3,46 @@ package db
 import (
 	"fmt"
 	"math/big"
-	"reflect"
 	"sort"
 	"time"
 )
 
 // cloneDatabaseMap 复制数据库行的字段映射，避免框架追加字段时污染调用方所有权。
-func cloneDatabaseMap(source map[string]interface{}) map[string]interface{} {
+func cloneDatabaseMap(source map[string]interface{}) (map[string]interface{}, error) {
 	if source == nil {
-		return nil
+		return nil, nil
 	}
-	cloned := make(map[string]interface{}, len(source))
-	for key, value := range source {
-		cloned[key] = cloneDatabaseValue(value)
+	cloned, err := cloneDatabaseValue(source)
+	if err != nil {
+		return nil, err
 	}
-	return cloned
+	return cloned.(map[string]interface{}), nil
 }
 
 // normalizeDatabaseWriteMap 将写入边界的 time.Time 统一转换到应用时区，保持绝对时刻不变。
-func normalizeDatabaseWriteMap(source map[string]interface{}, location *time.Location) map[string]interface{} {
+func normalizeDatabaseWriteMap(source map[string]interface{}, location *time.Location) (map[string]interface{}, error) {
 	if source == nil {
-		return nil
+		return nil, nil
 	}
 	if location == nil {
 		location = time.UTC
 	}
-	normalized := cloneDatabaseMap(source)
-	for key, value := range normalized {
-		normalized[key] = normalizeDatabaseWriteValue(value, location)
+	normalized, err := snapshotDatabaseValue(source, location)
+	if err != nil {
+		return nil, err
 	}
-	return normalized
+	return normalized.(map[string]interface{}), nil
 }
 
-func normalizeDatabaseWriteValue(value interface{}, location *time.Location) interface{} {
-	switch typed := value.(type) {
-	case time.Time:
-		return typed.In(location)
-	case *time.Time:
-		if typed == nil {
-			return (*time.Time)(nil)
-		}
-		converted := typed.In(location)
-		return &converted
-	case map[string]interface{}:
-		normalized := make(map[string]interface{}, len(typed))
-		for key, nested := range typed {
-			normalized[key] = normalizeDatabaseWriteValue(nested, location)
-		}
-		return normalized
-	case []interface{}:
-		normalized := make([]interface{}, len(typed))
-		for index, nested := range typed {
-			normalized[index] = normalizeDatabaseWriteValue(nested, location)
-		}
-		return normalized
-	default:
-		reflected := reflect.ValueOf(value)
-		if !reflected.IsValid() {
-			return value
-		}
-		switch reflected.Kind() {
-		case reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice, reflect.Array:
-			return normalizeDatabaseWriteReflectValue(reflected, location).Interface()
-		}
-		return value
-	}
-}
-
-// normalizeDatabaseWriteReflectValue 递归处理命名 map/slice，覆盖 bson.M、bson.A 等容器。
-func normalizeDatabaseWriteReflectValue(value reflect.Value, location *time.Location) reflect.Value {
-	if !value.IsValid() {
-		return value
-	}
-	if value.Type() == reflect.TypeOf(time.Time{}) {
-		return reflect.ValueOf(value.Interface().(time.Time).In(location))
-	}
-	if value.Type() == reflect.TypeOf((*time.Time)(nil)) {
-		if value.IsNil() {
-			return reflect.Zero(value.Type())
-		}
-		converted := value.Interface().(*time.Time).In(location)
-		return reflect.ValueOf(&converted)
-	}
-	switch value.Kind() {
-	case reflect.Interface:
-		if value.IsNil() {
-			return reflect.Zero(value.Type())
-		}
-		result := reflect.New(value.Type()).Elem()
-		result.Set(normalizeDatabaseWriteReflectValue(value.Elem(), location))
-		return result
-	case reflect.Pointer:
-		if value.IsNil() {
-			return reflect.Zero(value.Type())
-		}
-		result := reflect.New(value.Type().Elem())
-		result.Elem().Set(normalizeDatabaseWriteReflectValue(value.Elem(), location))
-		return result
-	case reflect.Map:
-		if value.IsNil() {
-			return reflect.Zero(value.Type())
-		}
-		result := reflect.MakeMapWithSize(value.Type(), value.Len())
-		iterator := value.MapRange()
-		for iterator.Next() {
-			result.SetMapIndex(iterator.Key(), normalizeDatabaseWriteReflectValue(iterator.Value(), location))
-		}
-		return result
-	case reflect.Slice:
-		if value.IsNil() {
-			return reflect.Zero(value.Type())
-		}
-		result := reflect.MakeSlice(value.Type(), value.Len(), value.Len())
-		for index := 0; index < value.Len(); index++ {
-			result.Index(index).Set(normalizeDatabaseWriteReflectValue(value.Index(index), location))
-		}
-		return result
-	case reflect.Array:
-		result := reflect.New(value.Type()).Elem()
-		for index := 0; index < value.Len(); index++ {
-			result.Index(index).Set(normalizeDatabaseWriteReflectValue(value.Index(index), location))
-		}
-		return result
-	default:
-		return value
-	}
-}
-
-func cloneDatabaseValues(source []interface{}) []interface{} {
+func cloneDatabaseValues(source []interface{}) ([]interface{}, error) {
 	return cloneDatabaseValuesWithExtraCapacity(source, 0)
 }
 
 // cloneDatabaseValuesWithExtraCapacity 深拷贝参数并为批量追加预留容量。
-func cloneDatabaseValuesWithExtraCapacity(source []interface{}, extraCapacity int) []interface{} {
+func cloneDatabaseValuesWithExtraCapacity(source []interface{}, extraCapacity int) ([]interface{}, error) {
 	if source == nil {
 		if extraCapacity <= 0 {
-			return nil
+			return nil, nil
 		}
 	}
 	if extraCapacity < 0 {
@@ -148,81 +52,40 @@ func cloneDatabaseValuesWithExtraCapacity(source []interface{}, extraCapacity in
 	if capacity < len(source) {
 		capacity = len(source)
 	}
-	cloned := make([]interface{}, len(source), capacity)
-	for index, value := range source {
-		cloned[index] = cloneDatabaseValue(value)
+	if len(source) > maxDatabaseValueNodes {
+		return nil, fmt.Errorf("%w: 参数列表超过节点预算", ErrInvalidQuery)
 	}
-	return cloned
+	cloned := make([]interface{}, len(source), capacity)
+	state := databaseValueSnapshot{remaining: maxDatabaseValueNodes}
+	for index, value := range source {
+		var err error
+		cloned[index], err = state.snapshot(value)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return cloned, nil
 }
 
 // cloneDatabaseValue 复制数据库请求/结果中常见的可变容器，避免调用方在请求
 // 构造后通过共享的 map、slice、array、pointer 或 []byte 修改内部状态。
-func cloneDatabaseValue(value interface{}) interface{} {
-	if value == nil {
-		return nil
-	}
-	return cloneDatabaseReflectValue(reflect.ValueOf(value)).Interface()
+func cloneDatabaseValue(value interface{}) (interface{}, error) {
+	return snapshotDatabaseValue(value, nil)
 }
 
-func cloneDatabaseReflectValue(value reflect.Value) reflect.Value {
-	if !value.IsValid() {
-		return value
-	}
-	switch value.Kind() {
-	case reflect.Interface:
-		if value.IsNil() {
-			return reflect.Zero(value.Type())
-		}
-		cloned := cloneDatabaseReflectValue(value.Elem())
-		result := reflect.New(value.Type()).Elem()
-		result.Set(cloned)
-		return result
-	case reflect.Pointer:
-		if value.IsNil() {
-			return reflect.Zero(value.Type())
-		}
-		result := reflect.New(value.Type().Elem())
-		result.Elem().Set(cloneDatabaseReflectValue(value.Elem()))
-		return result
-	case reflect.Map:
-		if value.IsNil() {
-			return reflect.Zero(value.Type())
-		}
-		result := reflect.MakeMapWithSize(value.Type(), value.Len())
-		iterator := value.MapRange()
-		for iterator.Next() {
-			result.SetMapIndex(iterator.Key(), cloneDatabaseReflectValue(iterator.Value()))
-		}
-		return result
-	case reflect.Slice:
-		if value.IsNil() {
-			return reflect.Zero(value.Type())
-		}
-		result := reflect.MakeSlice(value.Type(), value.Len(), value.Len())
-		for index := 0; index < value.Len(); index++ {
-			result.Index(index).Set(cloneDatabaseReflectValue(value.Index(index)))
-		}
-		return result
-	case reflect.Array:
-		result := reflect.New(value.Type()).Elem()
-		for index := 0; index < value.Len(); index++ {
-			result.Index(index).Set(cloneDatabaseReflectValue(value.Index(index)))
-		}
-		return result
-	default:
-		return value
-	}
-}
-
-func cloneDatabaseRows(rows []map[string]interface{}) []map[string]interface{} {
+func cloneDatabaseRows(rows []map[string]interface{}) ([]map[string]interface{}, error) {
 	if rows == nil {
-		return nil
+		return nil, nil
 	}
 	cloned := make([]map[string]interface{}, len(rows))
 	for index, row := range rows {
-		cloned[index] = cloneDatabaseMap(row)
+		var err error
+		cloned[index], err = cloneDatabaseMap(row)
+		if err != nil {
+			return nil, err
+		}
 	}
-	return cloned
+	return cloned, nil
 }
 
 func sortedDatabaseKeys(data map[string]interface{}) []string {
