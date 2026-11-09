@@ -39,7 +39,8 @@ func schemaCatalogQuery(dialect, table string) (string, []interface{}, error) {
 		if namespace == "" {
 			namespace = "main"
 		}
-		return `SELECT name, type AS data_type, "notnull" AS not_null, dflt_value AS default_value, pk AS primary_key FROM pragma_table_info(?, ?) ORDER BY cid`, []interface{}{name, namespace}, nil
+		query, args := sqliteSchemaCatalogQuery(namespace, name)
+		return query, args, nil
 	case "sqlserver":
 		return "SELECT c.name AS name, t.name AS data_type, c.is_nullable AS nullable, OBJECT_DEFINITION(c.default_object_id) AS default_value, c.is_identity AS auto_increment, CASE WHEN EXISTS (SELECT 1 FROM sys.index_columns ic JOIN sys.indexes i ON i.object_id = ic.object_id AND i.index_id = ic.index_id WHERE ic.object_id = c.object_id AND ic.column_id = c.column_id AND i.is_primary_key = 1) THEN 1 ELSE 0 END AS primary_key FROM sys.columns c JOIN sys.types t ON t.user_type_id = c.user_type_id WHERE c.object_id = OBJECT_ID(?) ORDER BY c.column_id", []interface{}{table}, nil
 	case "oracle":

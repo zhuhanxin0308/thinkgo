@@ -113,6 +113,11 @@ func (connection *SQLConnection) getSchemaInfo(ctx context.Context, table string
 		}
 		result.Columns = append(result.Columns, column)
 	}
+	if connection.Builder.DialectName() == "sqlite" && len(rows) > 0 {
+		if err := applySQLiteAutoIncrement(&result, schemaValueText(rows[0]["create_sql"])); err != nil {
+			return TableSchema{}, err
+		}
+	}
 	if err := validateTableSchema(result); err != nil {
 		return TableSchema{}, err
 	}
