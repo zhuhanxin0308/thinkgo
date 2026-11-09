@@ -703,6 +703,7 @@ func (mq *ModelQuery) loadRelation(rows []map[string]interface{}, relation Relat
 			return err
 		}
 		if len(keys) == 0 {
+			initializeEmptyRelation(rows, relation)
 			return nil
 		}
 		relatedRows, err := selectRelationRows(mq.relationModelQuery(relation.Related).WhereIn(relation.ForeignKey, keys), relation.ForeignKey)
@@ -746,6 +747,7 @@ func (mq *ModelQuery) loadRelation(rows []map[string]interface{}, relation Relat
 			return err
 		}
 		if len(keys) == 0 {
+			initializeEmptyRelation(rows, relation)
 			return nil
 		}
 		relatedRows, err := selectRelationRows(mq.relationModelQuery(relation.Related).WhereIn(relation.OwnerKey, keys), relation.OwnerKey)
@@ -777,6 +779,7 @@ func (mq *ModelQuery) loadRelation(rows []map[string]interface{}, relation Relat
 			return err
 		}
 		if len(keys) == 0 {
+			initializeEmptyRelation(rows, relation)
 			return nil
 		}
 		mq.model.mu.RLock()

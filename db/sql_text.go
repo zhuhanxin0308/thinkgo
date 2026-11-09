@@ -53,12 +53,7 @@ func redactSQLLiteralsAndComments(sqlText string, dialect string) string {
 				result.WriteString("/*")
 				result.WriteString(sqlRedactionMarker)
 				result.WriteString("*/")
-				index += 2
-				if closing := strings.Index(sqlText[index:], "*/"); closing >= 0 {
-					index += closing + 2
-				} else {
-					index = len(sqlText)
-				}
+				index, _ = skipSQLBlockComment(sqlText, index, dialect)
 				continue
 			}
 			result.WriteByte(sqlText[index])
@@ -195,7 +190,11 @@ func validatePlaceholderCount(sqlText string, argsCount int, dialects ...string)
 // countSQLPlaceholders 忽略字符串、标识符引用和注释中的问号，只统计真实绑定占位符。
 func countSQLPlaceholders(sqlText string, dialects ...string) (int, error) {
 	backslashEscapes := sqlBackslashEscapes(dialects...)
-	postgres := len(dialects) > 0 && strings.EqualFold(strings.TrimSpace(dialects[0]), "postgres")
+	dialect := ""
+	if len(dialects) > 0 {
+		dialect = dialects[0]
+	}
+	postgres := strings.EqualFold(strings.TrimSpace(dialect), "postgres")
 	const (
 		stateNormal = iota
 		stateSingleQuote
@@ -203,7 +202,6 @@ func countSQLPlaceholders(sqlText string, dialects ...string) (int, error) {
 		stateBacktick
 		stateBracket
 		stateLineComment
-		stateBlockComment
 		stateDollarQuote
 	)
 	state := stateNormal
@@ -244,8 +242,11 @@ func countSQLPlaceholders(sqlText string, dialects ...string) (int, error) {
 				}
 			case '/':
 				if index+1 < len(sqlText) && sqlText[index+1] == '*' {
-					state = stateBlockComment
-					index++
+					next, closed := skipSQLBlockComment(sqlText, index, dialect)
+					if !closed {
+						return 0, fmt.Errorf("SQL 引用或注释未闭合")
+					}
+					index = next - 1
 				}
 			case '$':
 				if delimiter := readDollarQuoteDelimiter(sqlText[index:]); delimiter != "" {
@@ -283,11 +284,6 @@ func countSQLPlaceholders(sqlText string, dialects ...string) (int, error) {
 		case stateLineComment:
 			if current == '\n' || current == '\r' {
 				state = stateNormal
-			}
-		case stateBlockComment:
-			if current == '*' && index+1 < len(sqlText) && sqlText[index+1] == '/' {
-				state = stateNormal
-				index++
 			}
 		case stateDollarQuote:
 			if strings.HasPrefix(sqlText[index:], dollarDelimiter) {

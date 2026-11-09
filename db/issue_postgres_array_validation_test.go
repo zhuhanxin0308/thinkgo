@@ -105,6 +105,7 @@ func TestIssue145PostgresArraysReachEveryRawExecutor(t *testing.T) {
 			{"nested", `SELECT ARRAY[ARRAY[?, ?], ARRAY[?, ?]], ?`, `SELECT ARRAY[ARRAY[$1, $2], ARRAY[$3, $4]], $5`, []interface{}{1, 2, 3, 4, 5}},
 			{"quotes", `SELECT ARRAY['[?]', ?, 'it''s ?'], "odd[?]"[?], ?`, `SELECT ARRAY['[?]', $1, 'it''s ?'], "odd[?]"[$2], $3`, []interface{}{1, 2, 3}},
 			{"comments", "SELECT ARRAY[? /* ] ? */, ? -- [?]\n], ?", "SELECT ARRAY[$1 /* ] ? */, $2 -- [?]\n], $3", []interface{}{1, 2, 3}},
+			{"嵌套块注释", `SELECT ARRAY[? /* outer /* inner ? */ still ? */ , ?], ?`, `SELECT ARRAY[$1 /* outer /* inner ? */ still ? */ , $2], $3`, []interface{}{1, 2, 3}},
 			{"dollar quotes", `SELECT ARRAY[$tag$[?]$tag$, ?], ?`, `SELECT ARRAY[$tag$[?]$tag$, $1], $2`, []interface{}{1, 2}},
 			{"operators", `SELECT data ?| ARRAY[?, ?], data ?& ARRAY[?], data ?? ?, data @? ?`, `SELECT data ?| ARRAY[$1, $2], data ?& ARRAY[$3], data ? $4, data @? $5`, []interface{}{"a", "b", "a", "a", "$.a"}},
 		} {
