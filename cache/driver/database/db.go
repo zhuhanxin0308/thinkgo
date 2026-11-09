@@ -117,7 +117,10 @@ func (c *DB) Set(key string, value interface{}, ttl time.Duration) error {
 	if err != nil {
 		return err
 	}
-	return c.writeStored(physicalKey, value, expiry)
+	if err := c.writeStored(physicalKey, value, expiry); err != nil {
+		return err
+	}
+	return c.reclaimObsoleteWrite(physicalKey)
 }
 
 func (c *DB) Has(key string) (bool, error) {
@@ -282,7 +285,7 @@ func (c *DB) changeCounter(key string, step int64, subtract bool) (int64, error)
 		if row == nil {
 			_, insertErr := db.NewDB(c.conn).Table(c.table).Insert(map[string]interface{}{"key": physicalKey, "value": encoded, "expiry": expiry})
 			if insertErr == nil {
-				return value, nil
+				return value, c.reclaimObsoleteWrite(physicalKey)
 			}
 			// 仅在另一写入已经创建同一行时重试，真实后端错误继续传播。
 			existing, _, readErr := c.readStoredRecord(physicalKey)
@@ -296,7 +299,7 @@ func (c *DB) changeCounter(key string, step int64, subtract bool) (int64, error)
 			return 0, updateErr
 		}
 		if updated > 0 {
-			return value, nil
+			return value, c.reclaimObsoleteWrite(physicalKey)
 		}
 	}
 	return 0, ErrCacheLockBusy

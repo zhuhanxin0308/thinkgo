@@ -272,17 +272,34 @@ func (driver *NamespaceDriver) GetMany(keys []string) (map[string]interface{}, e
 }
 
 func (driver *NamespaceDriver) GetManyContext(ctx context.Context, keys []string) (map[string]interface{}, error) {
-	physical := make([]string, len(keys))
-	reverse := make(map[string]string, len(keys))
-	for index, key := range keys {
-		physical[index] = driver.key(key)
-		reverse[physical[index]] = key
+	if ctx == nil {
+		return nil, ErrInvalidCacheContext
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	if batch, ok := driver.driver.(ContextualBatchGetter); ok {
+		physical := make([]string, len(keys))
+		reverse := make(map[string]string, len(keys))
+		for index, key := range keys {
+			physical[index] = driver.key(key)
+			reverse[physical[index]] = key
+		}
 		values, err := batch.GetManyContext(ctx, physical)
 		return restoreNamespaceKeys(values, reverse), err
 	}
-	return driver.GetMany(keys)
+	result := make(map[string]interface{}, len(keys))
+	for _, key := range keys {
+		// 同步 Batch 无法表达逐项取消，回退时复用单键 Context 能力与取消检查。
+		value, found, err := getCacheValueContext(ctx, driver.driver, driver.key(key))
+		if err != nil {
+			return nil, err
+		}
+		if found {
+			result[key] = value
+		}
+	}
+	return result, nil
 }
 
 func (driver *NamespaceDriver) SetMany(values map[string]interface{}, ttl time.Duration) error {
@@ -299,10 +316,21 @@ func (driver *NamespaceDriver) SetMany(values map[string]interface{}, ttl time.D
 }
 
 func (driver *NamespaceDriver) SetManyContext(ctx context.Context, values map[string]interface{}, ttl time.Duration) error {
+	if ctx == nil {
+		return ErrInvalidCacheContext
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if batch, ok := driver.driver.(ContextualBatchSetter); ok {
 		return batch.SetManyContext(ctx, namespaceValues(driver, values), ttl)
 	}
-	return driver.SetMany(values, ttl)
+	for key, value := range values {
+		if err := setCacheValueContext(ctx, driver.driver, driver.key(key), value, ttl); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (driver *NamespaceDriver) AcquireLock(key string, owner string, ttl time.Duration) (bool, error) {

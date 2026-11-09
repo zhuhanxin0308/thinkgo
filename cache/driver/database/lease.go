@@ -63,7 +63,11 @@ func (c *DB) UpdateIfLockOwnerContext(ctx context.Context, key string, ttl time.
 	if errors.Is(err, errDatabaseLeaseChanged) {
 		return false, nil
 	}
-	return err == nil, err
+	if err != nil {
+		return false, err
+	}
+	// 数据已经提交，保留真实提交结果；回收失败仍必须通过 error 明确上报。
+	return true, c.reclaimObsoleteWrite(physicalKey)
 }
 
 func (c *DB) updateLeasedRecord(transaction *db.Tx, key string, ttl time.Duration, update func(interface{}, bool) (interface{}, bool, error)) error {
