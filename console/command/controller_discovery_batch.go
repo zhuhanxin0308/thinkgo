@@ -27,13 +27,15 @@ var renameControllerDiscoveryPath = func(root *os.Root, oldPath, newPath string)
 }
 
 type stagedControllerDiscoverySource struct {
-	relativePath  string
-	temporaryPath string
-	backupPath    string
-	original      []byte
-	existed       bool
-	backupMoved   bool
-	published     bool
+	relativePath     string
+	temporaryPath    string
+	backupPath       string
+	original         []byte
+	existed          bool
+	backupMoved      bool
+	published        bool
+	publishedInfo    os.FileInfo
+	publishedContent []byte
 }
 
 // replaceGeneratedSourceBatch 先完成全部文件的临时写入，再按批次发布；
@@ -101,10 +103,15 @@ func stageControllerDiscoverySources(root *os.Root, sources []generatedApplicati
 		if err != nil {
 			return staged, err
 		}
-		if err = writeControllerDiscoveryStagedSource(root, current.temporaryPath, generated.source, permission); err != nil {
+		current.publishedContent = append([]byte(nil), generated.source...)
+		if err = writeControllerDiscoveryStagedSource(root, current.temporaryPath, current.publishedContent, permission); err != nil {
 			return staged, fmt.Errorf("暂存控制器发现文件 %q 失败: %w", relativePath, err)
 		}
+		current.publishedInfo, err = root.Lstat(current.temporaryPath)
 		staged = append(staged, current)
+		if err != nil {
+			return staged, fmt.Errorf("记录控制器发现暂存文件身份失败: %w", err)
+		}
 	}
 	return staged, nil
 }
@@ -160,29 +167,6 @@ func verifyControllerDiscoveryTarget(root *os.Root, staged *stagedControllerDisc
 		return fmt.Errorf("控制器发现目标 %q 在批次发布期间已变化", staged.relativePath)
 	}
 	return nil
-}
-
-func rollbackControllerDiscoverySources(root *os.Root, staged []stagedControllerDiscoverySource) error {
-	var rollbackErr error
-	for index := len(staged) - 1; index >= 0; index-- {
-		current := &staged[index]
-		if current.published {
-			if err := root.Remove(current.relativePath); err != nil && !errors.Is(err, os.ErrNotExist) {
-				rollbackErr = errors.Join(rollbackErr, fmt.Errorf("删除新控制器发现文件 %q 失败: %w", current.relativePath, err))
-				continue
-			}
-			current.published = false
-		}
-		if current.backupMoved {
-			if err := renameControllerDiscoveryPath(root, current.backupPath, current.relativePath); err != nil {
-				rollbackErr = errors.Join(rollbackErr, fmt.Errorf("恢复旧控制器发现文件 %q 失败，备份保留在 %q: %w", current.relativePath, current.backupPath, err))
-				continue
-			}
-			current.backupMoved = false
-			current.backupPath = ""
-		}
-	}
-	return rollbackErr
 }
 
 func cleanupControllerDiscoveryTemporaryFiles(root *os.Root, staged []stagedControllerDiscoverySource) error {
