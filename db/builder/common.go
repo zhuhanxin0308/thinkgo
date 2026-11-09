@@ -5,6 +5,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/zhuhanxin0308/thinkgo/v3/db/internal/sqllex"
 )
 
 var (
@@ -127,9 +129,6 @@ func rebindNumbered(query, prefix string, postgresSyntax ...bool) string {
 	dollarDelimiter := ""
 	parameter := 0
 	blockDepth := 0
-	stringEscapes := false
-	stringContinuation := false
-	continuationNewline := false
 	postgres := len(postgresSyntax) > 0 && postgresSyntax[0]
 	var output strings.Builder
 	output.Grow(len(query) + 8)
@@ -137,16 +136,6 @@ func rebindNumbered(query, prefix string, postgresSyntax ...bool) string {
 		current := query[index]
 		switch state {
 		case stateNormal:
-			if postgres && stringContinuation {
-				if current == '\n' || current == '\r' {
-					continuationNewline = true
-				}
-				startsComment := index+1 < len(query) &&
-					(current == '-' && query[index+1] == '-' || current == '/' && query[index+1] == '*')
-				if current != '\'' && !builderRebindWhitespace(current) && !startsComment {
-					stringContinuation = false
-				}
-			}
 			switch current {
 			case '?':
 				if postgres {
@@ -165,9 +154,12 @@ func rebindNumbered(query, prefix string, postgresSyntax ...bool) string {
 				output.WriteString(strconv.Itoa(parameter))
 				continue
 			case '\'':
-				stringEscapes = !postgres || builderRebindEscapeString(query, index) ||
-					stringContinuation && continuationNewline && stringEscapes
-				stringContinuation = false
+				if postgres {
+					end, _ := sqllex.PostgresStringEnd(query, index)
+					output.WriteString(query[index:end])
+					index = end - 1
+					continue
+				}
 				state = stateSingle
 			case '"':
 				state = stateDouble
@@ -213,7 +205,7 @@ func rebindNumbered(query, prefix string, postgresSyntax ...bool) string {
 			} else if state == stateBacktick {
 				closing = '`'
 			}
-			if current == '\\' && index+1 < len(query) && (!postgres || state == stateSingle && stringEscapes) {
+			if current == '\\' && index+1 < len(query) && !postgres {
 				output.WriteByte(current)
 				index++
 				output.WriteByte(query[index])
@@ -226,8 +218,6 @@ func rebindNumbered(query, prefix string, postgresSyntax ...bool) string {
 					output.WriteByte(query[index])
 					continue
 				}
-				stringContinuation = postgres && state == stateSingle
-				continuationNewline = false
 				state = stateNormal
 			}
 		case stateBracket:
@@ -242,13 +232,9 @@ func rebindNumbered(query, prefix string, postgresSyntax ...bool) string {
 			}
 		case stateLineComment:
 			if current == '\n' || current == '\r' {
-				continuationNewline = true
 				state = stateNormal
 			}
 		case stateBlockComment:
-			if current == '\n' || current == '\r' {
-				continuationNewline = true
-			}
 			if postgres && current == '/' && index+1 < len(query) && query[index+1] == '*' {
 				blockDepth++
 				output.WriteString("/*")
@@ -312,11 +298,6 @@ func builderDollarDelimiter(text string) string {
 	return ""
 }
 
-func builderRebindEscapeString(query string, quote int) bool {
-	return quote > 0 && (query[quote-1] == 'E' || query[quote-1] == 'e') &&
-		(quote == 1 || !builderRebindIdentifierByte(query[quote-2]))
-}
-
 // PostgreSQL 允许非 ASCII 字节组成标识符；$ 可出现在标识符中，但不能出现在 dollar quote 标签中。
 func builderRebindIdentifierStart(character byte) bool {
 	return character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' ||
@@ -325,13 +306,4 @@ func builderRebindIdentifierStart(character byte) bool {
 
 func builderRebindIdentifierByte(character byte) bool {
 	return builderRebindIdentifierStart(character) || character >= '0' && character <= '9' || character == '$'
-}
-
-func builderRebindWhitespace(character byte) bool {
-	switch character {
-	case ' ', '\t', '\n', '\r', '\f', '\v':
-		return true
-	default:
-		return false
-	}
 }

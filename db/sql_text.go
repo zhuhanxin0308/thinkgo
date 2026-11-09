@@ -3,6 +3,8 @@ package db
 import (
 	"fmt"
 	"strings"
+
+	"github.com/zhuhanxin0308/thinkgo/v3/db/internal/sqllex"
 )
 
 const sqlRedactionMarker = "[REDACTED]"
@@ -17,6 +19,16 @@ func redactSQLLiteralsAndComments(sqlText string, dialect string) string {
 	for index := 0; index < len(sqlText); {
 		switch sqlText[index] {
 		case '\'':
+			if dialect == "postgres" {
+				end, closed := sqllex.PostgresStringEnd(sqlText, index)
+				result.WriteByte('\'')
+				result.WriteString(sqlRedactionMarker)
+				if closed {
+					result.WriteByte('\'')
+				}
+				index = end
+				continue
+			}
 			index = redactSQLQuotedToken(&result, sqlText, index, '\'', backslashEscapes)
 		case '"':
 			if doubleQuoteIsIdentifier(dialect) {
@@ -138,10 +150,13 @@ func copySQLQuotedToken(result *strings.Builder, sqlText string, index int, clos
 	return index
 }
 
-// SQLite quotes are escaped by doubling the quote, never by a backslash.
-// Keep the existing scanner policy for other and unknown dialects.
+// SQLite 与 PostgreSQL 普通引用不使用反斜杠转义；PostgreSQL E 字符串由共享扫描器处理。
 func sqlBackslashEscapes(dialects ...string) bool {
-	return len(dialects) == 0 || !strings.EqualFold(strings.TrimSpace(dialects[0]), "sqlite")
+	if len(dialects) == 0 {
+		return true
+	}
+	dialect := strings.ToLower(strings.TrimSpace(dialects[0]))
+	return dialect != "sqlite" && dialect != "postgres"
 }
 
 func sqlBuilderDialect(builder Builder) string {
@@ -224,6 +239,14 @@ func countSQLPlaceholders(sqlText string, dialects ...string) (int, error) {
 				}
 				count++
 			case '\'':
+				if postgres {
+					end, closed := sqllex.PostgresStringEnd(sqlText, index)
+					if !closed {
+						return 0, fmt.Errorf("SQL 引用或注释未闭合")
+					}
+					index = end - 1
+					continue
+				}
 				state = stateSingleQuote
 			case '"':
 				state = stateDoubleQuote
