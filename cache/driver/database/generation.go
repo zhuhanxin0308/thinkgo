@@ -70,6 +70,24 @@ func (c *DB) storageKey(key string) (string, error) {
 	return generationPrefix(generation) + hex.EncodeToString(digest[:]), nil
 }
 
+// reclaimObsoleteWrite 在成功提交后确认代际，回收 Clear 完成后才落盘的旧代数据。
+// 若 Clear 晚于本次检查，它必然能删除已提交行；若早于检查，则由本写入精确回收。
+// 只点查共享代号并按主键删除本次物理键，不扫描数据表，也不触及租约或新代行。
+func (c *DB) reclaimObsoleteWrite(physicalKey string) error {
+	generation, err := c.currentGeneration()
+	if err != nil {
+		return fmt.Errorf("确认缓存写入代际失败: %w", err)
+	}
+	if physicalKey >= generationPrefix(generation) {
+		return nil
+	}
+	_, err = db.NewDB(c.conn).Table(c.table).Where("key", physicalKey).Delete()
+	if err != nil {
+		return fmt.Errorf("回收缓存旧代写入失败: %w", err)
+	}
+	return nil
+}
+
 // compareValue 使用读取到的值进行原子比较更新，Oracle 的 CLOB 使用其明确的比较能力。
 func (c *DB) compareValue(key string, encoded string) *db.Query {
 	query := db.NewDB(c.conn).Table(c.table).Where("key", key)
