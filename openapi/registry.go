@@ -266,7 +266,7 @@ func (registry *Registry) Handler(ctx context.Context) (http.Handler, error) {
 			writer.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
-		if request.Header.Get("If-None-Match") == etag {
+		if matchesIfNoneMatch(request.Header.Values("If-None-Match"), etag) {
 			writer.Header().Del("Content-Length")
 			writer.WriteHeader(http.StatusNotModified)
 			return
