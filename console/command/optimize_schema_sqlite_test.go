@@ -35,7 +35,7 @@ func TestOptimizeSchemaSQLiteConsumedOnRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = database.Close() })
-	if _, err := database.Execute("CREATE TABLE tg_items (id INTEGER PRIMARY KEY, title TEXT NOT NULL)"); err != nil {
+	if _, err := database.Execute("CREATE TABLE tg_items (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL)"); err != nil {
 		t.Fatal(err)
 	}
 	content, err := json.Marshal(map[string]interface{}{
@@ -89,7 +89,7 @@ func TestOptimizeSchemaSQLiteConsumedOnRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	schema, err := reopened.GetSchemaInfo(context.Background(), "tg_items", false)
-	if err != nil || len(schema.Columns) != 2 {
+	if err != nil || len(schema.Columns) != 2 || !schema.Columns[0].AutoIncrement {
 		t.Fatalf("新应用没有消费结构缓存: %+v %v", schema, err)
 	}
 	if _, err := reopened.GetSchemaInfo(context.Background(), "tg_items", true); err == nil {
