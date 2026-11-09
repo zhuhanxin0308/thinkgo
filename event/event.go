@@ -180,14 +180,17 @@ func (d *Dispatcher) listenEvents(events map[string][]Listener, application bool
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	for _, name := range names {
-		for _, listener := range events[name] {
-			if _, err := d.listen(name, listener, 0, false, application); err != nil {
-				return err
+	// 复用订阅事务的隔离与发布边界，失败批次不能留下监听器或消耗正式序号。
+	return d.RegisterTransaction(func(staged *Dispatcher) error {
+		for _, name := range names {
+			for _, listener := range events[name] {
+				if _, err := staged.listen(name, listener, 0, false, application); err != nil {
+					return err
+				}
 			}
 		}
-	}
-	return nil
+		return nil
+	})
 }
 
 // Listen 注册监听器；first 为 true 时把监听器放到同一事件的首位。
