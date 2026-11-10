@@ -17,6 +17,8 @@ var (
 	ErrConfigEnvironmentType = errors.New("config environment value has invalid type")
 	// ErrConfigEnvironmentCollision 表示多个配置路径映射到了同一个环境变量名。
 	ErrConfigEnvironmentCollision = errors.New("config environment path collision")
+	// ErrConfigEnvironmentConflict 表示查询外部来源期间配置发生变化，调用方可重新应用。
+	ErrConfigEnvironmentConflict = errors.New("config changed during environment lookup")
 )
 
 // ConfigEnvironmentValueError 描述环境变量与已声明配置类型不兼容的结构化上下文。
@@ -61,16 +63,17 @@ type configEnvironmentBinding struct {
 }
 
 // ApplyEnvironment 按“完整配置点路径转大写下划线”的规则原子覆盖已声明配置。
+// 查询期间若配置被其他写入修改，返回 ErrConfigEnvironmentConflict，且不提交任何覆盖。
 func (c *Config) ApplyEnvironment(source EnvironmentSource) error {
 	if c == nil || isNilEnvironmentSource(source) {
 		return nil
 	}
 
-	c.lock.Lock()
-	defer c.lock.Unlock()
-	c.ensureInitializedLocked()
-
+	c.lock.RLock()
 	working := deepCopyMap(c.config)
+	revision := c.revision
+	c.lock.RUnlock()
+	// 来源可能回读或修改本配置，不能在持有内部锁时调用，也不能自动重放有副作用的回调。
 	bindings := make(map[string][]configEnvironmentBinding)
 	collectConfigEnvironmentBindings(working, nil, bindings)
 
@@ -106,6 +109,11 @@ func (c *Config) ApplyEnvironment(source EnvironmentSource) error {
 	}
 
 	if changed {
+		c.lock.Lock()
+		defer c.lock.Unlock()
+		if c.revision != revision {
+			return ErrConfigEnvironmentConflict
+		}
 		c.config = working
 		c.invalidateLookupCacheLocked()
 	}
