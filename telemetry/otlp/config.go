@@ -177,6 +177,7 @@ func strictHeaders(raw interface{}) (map[string]string, error) {
 		return nil, fmt.Errorf("telemetry.headers 不能超过 %d 个", maximumHeaderCount)
 	}
 	result := make(map[string]string, len(values))
+	seen := make(map[string]struct{}, len(values))
 	for name, rawValue := range values {
 		// 编码声明必须与导出器实际生成的正文一致，不能由自定义请求头覆盖。
 		if strings.EqualFold(name, "Content-Encoding") {
@@ -186,6 +187,12 @@ func strictHeaders(raw interface{}) (map[string]string, error) {
 		if !ok || !headerNamePattern.MatchString(name) || len(value) > maximumHeaderValueBytes || strings.ContainsAny(value, "\r\n\x00") {
 			return nil, fmt.Errorf("telemetry.headers 中的 %q 非法", name)
 		}
+		// HTTP 字段名不区分 ASCII 大小写，不能让 map 遍历顺序决定最终凭据。
+		canonical := strings.ToLower(name)
+		if _, duplicate := seen[canonical]; duplicate {
+			return nil, fmt.Errorf("telemetry.headers 包含大小写重复字段 %q", canonical)
+		}
+		seen[canonical] = struct{}{}
 		result[name] = value
 	}
 	return result, nil

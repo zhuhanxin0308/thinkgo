@@ -79,6 +79,9 @@ func TestOTLPExportPreservesBusinessHeaders(t *testing.T) {
 		if result.header.Get("Authorization") != "Bearer synthetic-test" || result.header.Get("X-Tenant") != "tenant-test" {
 			t.Fatal("认证或业务请求头未被保留")
 		}
+		if len(result.header.Values("Authorization")) != 1 || len(result.header.Values("X-Tenant")) != 1 {
+			t.Fatal("实际导出请求应只有唯一认证和租户字段")
+		}
 		var request collectortrace.ExportTraceServiceRequest
 		if err := proto.Unmarshal(result.data, &request); err != nil || len(request.ResourceSpans) == 0 {
 			t.Fatalf("实际正文不是有效的非空 OTLP protobuf: %v", err)
