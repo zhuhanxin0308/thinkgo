@@ -176,7 +176,8 @@ func TestTraceConsoleTypeInjectsBrowserConsoleScript(t *testing.T) {
 		return fwcontext.NewResponse().ContentType("text/html", "utf-8").Content("<html><body>ok</body></html>")
 	})
 	body := string(response.GetBody())
-	if !strings.Contains(body, "console.group") || strings.Contains(body, "tg-debug-bar") {
+	if !strings.Contains(body, `id="tg-trace-data"`) || !strings.Contains(body, `src="/__thinkgo_debug__/trace.js"`) ||
+		strings.Contains(body, "console.group") || strings.Contains(body, "tg-debug-bar") {
 		t.Fatalf("Console Trace 输出错误: %s", body)
 	}
 }
