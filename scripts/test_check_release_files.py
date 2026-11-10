@@ -2,12 +2,24 @@
 
 import contextlib
 import io
+import os
 import pathlib
 import subprocess
 import tempfile
 import unittest
 
 from check_release_files import credential_paths, main, tracked_credential_paths
+
+
+@contextlib.contextmanager
+def working_directory(path):
+    """临时切换测试工作目录，同时兼容 CI 使用的 Python 3.10。"""
+    previous = os.getcwd()
+    try:
+        os.chdir(path)
+        yield
+    finally:
+        os.chdir(previous)
 
 
 class ReleaseCredentialPathTests(unittest.TestCase):
@@ -79,7 +91,7 @@ class ReleaseCredentialPathTests(unittest.TestCase):
 
     def test_gate_exit_status_and_safe_diagnostics(self):
         # 使用临时索引和哑数据，验证真实门禁结果与控制字符路径日志。
-        with tempfile.TemporaryDirectory() as directory, contextlib.chdir(directory):
+        with tempfile.TemporaryDirectory() as directory, working_directory(directory):
             errors = io.StringIO()
             with contextlib.redirect_stderr(errors):
                 self.assertEqual(main(), 1)
