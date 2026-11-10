@@ -20,6 +20,9 @@ import (
 
 const maxIdleCompressionWritersPerPool = 64
 
+// ErrContentEncodingNotAcceptable 表示无法在保留响应语义的前提下提供客户端接受的表示。
+var ErrContentEncodingNotAcceptable = errors.New("no acceptable response content encoding")
+
 const (
 	maxAcceptEncodingBytes   = 8192
 	maxAcceptEncodingEntries = 64
@@ -132,6 +135,7 @@ type CompressionResponseWriter struct {
 	pooledWriter   *pooledCompressionWriter
 	compressionErr error
 	bodyPolicy     *statusTrackingResponseWriter
+	identityDenied bool
 }
 
 // NewCompressionResponseWriter 创建新的压缩响应写入器。
@@ -146,8 +150,9 @@ func newConfiguredCompressionResponseWriter(w http.ResponseWriter, r *http.Reque
 
 func newCompressionResponseWriter(w http.ResponseWriter, r *http.Request, minSize int, levels map[string]int, cloneLevels bool) *CompressionResponseWriter {
 	encoding := ""
+	identityDenied := false
 	if r != nil && r.Method != http.MethodHead {
-		encoding = negotiateContentEncodingFields(r.Header.Values("Accept-Encoding"))
+		encoding, identityDenied = negotiateCompressionFields(r.Header.Values("Accept-Encoding"))
 	}
 
 	if minSize < 0 {
@@ -179,6 +184,7 @@ func newCompressionResponseWriter(w http.ResponseWriter, r *http.Request, minSiz
 	writer := &CompressionResponseWriter{
 		ResponseWriter: w,
 		encoding:       encoding,
+		identityDenied: identityDenied,
 		minSize:        minSize,
 		levels:         copiedLevels,
 		statusCode:     http.StatusOK,
@@ -214,6 +220,9 @@ func (w *CompressionResponseWriter) Write(b []byte) (int, error) {
 	}
 	w.ensureContentType(b)
 	if w.wroteHeader {
+		if w.identityDenied && w.compressionErr != nil {
+			return 0, w.compressionErr
+		}
 		return w.Writer.Write(b)
 	}
 
@@ -224,6 +233,9 @@ func (w *CompressionResponseWriter) Write(b []byte) (int, error) {
 
 	if w.shouldBypassCompression() {
 		w.startPlainWriter()
+		if w.identityDenied && w.compressionErr != nil {
+			return 0, w.compressionErr
+		}
 		if err := w.flushBufferedBody(); err != nil {
 			return 0, err
 		}
@@ -270,7 +282,7 @@ func (w *CompressionResponseWriter) Close() error {
 	w.closed = true
 	var closeErr error
 	if !w.wroteHeader {
-		if w.shouldBypassCompression() || w.buffer.Len() == 0 || (w.minSize > 0 && w.buffer.Len() < w.minSize) {
+		if w.shouldBypassCompression() || w.allowSmallPlainResponse() {
 			w.startPlainWriter()
 		} else {
 			if err := w.startCompressedWriter(); err != nil {
@@ -333,7 +345,7 @@ func (w *CompressionResponseWriter) flushResponse() error {
 		return errors.Join(io.ErrClosedPipe, w.compressionErr)
 	}
 	if !w.wroteHeader {
-		if w.shouldBypassCompression() || w.buffer.Len() == 0 || (w.minSize > 0 && w.buffer.Len() < w.minSize) {
+		if w.shouldBypassCompression() || w.allowSmallPlainResponse() {
 			w.startPlainWriter()
 			if err := w.flushBufferedBody(); err != nil {
 				w.compressionErr = errors.Join(w.compressionErr, err)
@@ -403,10 +415,32 @@ func (w *CompressionResponseWriter) startPlainWriter() {
 	if w.wroteHeader {
 		return
 	}
+	contentEncoding := strings.TrimSpace(w.Header().Get("Content-Encoding"))
+	if w.identityDenied && (contentEncoding == "" || strings.EqualFold(contentEncoding, "identity")) &&
+		w.statusCode >= http.StatusOK && w.statusCode != http.StatusNoContent && w.statusCode != http.StatusNotModified &&
+		(w.bodyPolicy == nil || !w.bodyPolicy.bodySuppressed()) {
+		// 无法转换的原表示也不能违反协商：发送无实体 406，丢弃原正文及其验证信息。
+		for _, name := range []string{"Content-Type", "Content-Length", "Content-Encoding", "Content-Range", "ETag", "Last-Modified", "Trailer"} {
+			w.Header().Del(name)
+		}
+		w.Header().Set("Content-Length", "0")
+		w.statusCode = http.StatusNotAcceptable
+		w.compressionErr = errors.Join(w.compressionErr, ErrContentEncodingNotAcceptable)
+		w.Writer = io.Discard
+		w.buffer.Reset()
+		w.ResponseWriter.WriteHeader(w.statusCode)
+		w.wroteHeader = true
+		return
+	}
 
 	w.ResponseWriter.WriteHeader(w.statusCode)
 	w.Writer = w.ResponseWriter
 	w.wroteHeader = true
+}
+
+// allowSmallPlainResponse 仅在客户端接受 identity 时应用尺寸优化，包含空 Flush 后续写入。
+func (w *CompressionResponseWriter) allowSmallPlainResponse() bool {
+	return !w.identityDenied && (w.buffer.Len() == 0 || (w.minSize > 0 && w.buffer.Len() < w.minSize))
 }
 
 // startCompressedWriter 初始化压缩器并写入压缩响应头。
@@ -616,29 +650,39 @@ func (w *CompressionResponseWriter) pushResponse(target string, options *http.Pu
 
 // negotiateContentEncodingFields 在分配合并缓冲前校验所有字段及分隔逗号的总大小。
 func negotiateContentEncodingFields(values []string) string {
+	encoding, _ := negotiateCompressionFields(values)
+	return encoding
+}
+
+func negotiateCompressionFields(values []string) (string, bool) {
 	if len(values) == 0 || len(values) > maxAcceptEncodingEntries {
-		return ""
+		return "", false
 	}
 	if len(values) == 1 {
-		return negotiateContentEncoding(values[0])
+		return negotiateCompression(values[0])
 	}
 	total := len(values) - 1
 	for _, value := range values {
 		if len(value) > maxAcceptEncodingBytes-total {
-			return ""
+			return "", false
 		}
 		total += len(value)
 	}
-	return negotiateContentEncoding(strings.Join(values, ","))
+	return negotiateCompression(strings.Join(values, ","))
 }
 
 func negotiateContentEncoding(header string) string {
+	encoding, _ := negotiateCompression(header)
+	return encoding
+}
+
+func negotiateCompression(header string) (string, bool) {
 	if len(header) > maxAcceptEncodingBytes {
-		return ""
+		return "", false
 	}
 	items := strings.Split(header, ",")
 	if len(items) > maxAcceptEncodingEntries {
-		return ""
+		return "", false
 	}
 	qualities := make(map[string]float64)
 	wildcardQuality := -1.0
@@ -692,7 +736,9 @@ func negotiateContentEncoding(header string) string {
 			selectedQuality = quality
 		}
 	}
-	return selected
+	identityQuality, explicitIdentity := qualities["identity"]
+	identityDenied := (explicitIdentity && identityQuality == 0) || (!explicitIdentity && wildcardQuality == 0)
+	return selected, identityDenied
 }
 
 func headerTokenContains(value, target string) bool {
