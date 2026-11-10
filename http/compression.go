@@ -648,12 +648,7 @@ func (w *CompressionResponseWriter) pushResponse(target string, options *http.Pu
 	return pushThroughResponseWriter(w.ResponseWriter, target, options)
 }
 
-// negotiateContentEncodingFields 在分配合并缓冲前校验所有字段及分隔逗号的总大小。
-func negotiateContentEncodingFields(values []string) string {
-	encoding, _ := negotiateCompressionFields(values)
-	return encoding
-}
-
+// negotiateCompressionFields 在分配合并缓冲前校验所有字段及分隔逗号的总大小。
 func negotiateCompressionFields(values []string) (string, bool) {
 	if len(values) == 0 || len(values) > maxAcceptEncodingEntries {
 		return "", false
