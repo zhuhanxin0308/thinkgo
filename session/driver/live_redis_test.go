@@ -50,6 +50,9 @@ func TestLiveRedisSessionDriver(t *testing.T) {
 	t.Run("commit_boundaries", func(t *testing.T) {
 		assertRedisSessionCommitBoundaries(t, driver)
 	})
+	t.Run("clear_generation", func(t *testing.T) {
+		assertRedisClearFencesPendingUpdates(t, driver)
+	})
 
 	const (
 		workers          = 8
