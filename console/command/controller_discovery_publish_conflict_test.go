@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// TestDiscoveryPublicationPreservesConcurrentUpdates 覆盖最终核验之后的三个确定性交错。
+// TestDiscoveryPublicationPreservesConcurrentUpdates 覆盖最终核验之后的外部保存与替换。
 func TestDiscoveryPublicationPreservesConcurrentUpdates(t *testing.T) {
 	for _, timing := range []string{"捕获之前", "同内容替换", "捕获之后", "首次创建"} {
 		t.Run(timing, func(t *testing.T) {
@@ -79,6 +79,30 @@ func TestDiscoveryPublicationPreservesConcurrentUpdates(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestDiscoveryPublicationUnsupportedLinkPreservesLiveBatch 模拟后续目录不支持硬链接，整批旧目标必须留在原位。
+func TestDiscoveryPublicationUnsupportedLinkPreservesLiveBatch(t *testing.T) {
+	application, paths := prepareControllerDiscoveryTransactionFixture(t, true)
+	originals := readControllerDiscoverySnapshots(t, paths)
+	addControllerDiscoveryTransactionTypes(t, application.BasePath)
+	original := linkControllerDiscoveryPath
+	t.Cleanup(func() { linkControllerDiscoveryPath = original })
+	injected := errors.New("文件系统不支持硬链接")
+	calls := 0
+	linkControllerDiscoveryPath = func(root *os.Root, source, target string) error {
+		calls++
+		if calls >= 2 {
+			return injected
+		}
+		return original(root, source, target)
+	}
+	err := RefreshControllerDiscovery(application)
+	if !errors.Is(err, injected) {
+		t.Fatalf("缺少文件系统能力时未失败: %v", err)
+	}
+	assertControllerDiscoverySnapshots(t, paths, originals)
+	assertNoControllerDiscoveryAuxiliaryFiles(t, application.BasePath)
 }
 
 // TestDiscoveryPublicationRetainsChangedBackup 验证发布过程中被外部句柄改写的备份不会静默清理。

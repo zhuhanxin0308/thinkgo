@@ -27,6 +27,10 @@ var renameControllerDiscoveryPath = func(root *os.Root, oldPath, newPath string)
 }
 
 var linkControllerDiscoveryPublication = func(root *os.Root, source, target string) error {
+	return linkControllerDiscoveryPath(root, source, target)
+}
+
+var linkControllerDiscoveryPath = func(root *os.Root, source, target string) error {
 	return root.Link(source, target)
 }
 
@@ -126,6 +130,16 @@ func stageControllerDiscoverySources(root *os.Root, sources []generatedApplicati
 }
 
 func publishControllerDiscoverySources(root *os.Root, staged []stagedControllerDiscoverySource) error {
+	// 整批预检在任何旧目标被移动之前完成，避免不支持硬链接时连恢复也无法执行。
+	for _, current := range staged {
+		probe := current.temporaryPath + ".link-check"
+		if err := linkControllerDiscoveryPath(root, current.temporaryPath, probe); err != nil {
+			return fmt.Errorf("控制器发现目标 %q 不支持原子不覆盖发布，旧文件保持原位: %w", current.relativePath, err)
+		}
+		if err := root.Remove(probe); err != nil {
+			return fmt.Errorf("清理控制器发现发布检查文件 %q 失败，旧文件保持原位: %w", probe, err)
+		}
+	}
 	for index := range staged {
 		current := &staged[index]
 		if err := verifyControllerDiscoveryTarget(root, current); err != nil {

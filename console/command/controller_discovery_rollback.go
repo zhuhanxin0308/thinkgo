@@ -55,7 +55,7 @@ func rollbackControllerDiscoverySource(root *os.Root, current *stagedControllerD
 // restoreControllerDiscoveryPathWithoutReplace 通过创建硬链接原子拒绝已存在的目标。
 // 链接失败时源版本仍在；不支持该能力的文件系统保留备份并返回错误，不退化为覆盖。
 func restoreControllerDiscoveryPathWithoutReplace(root *os.Root, source, target string) error {
-	if err := root.Link(source, target); err != nil {
+	if err := linkControllerDiscoveryPath(root, source, target); err != nil {
 		return err
 	}
 	return root.Remove(source)
