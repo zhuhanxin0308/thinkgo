@@ -65,6 +65,7 @@ type Filesystem struct {
 }
 
 // New 创建文件系统管理器；磁盘配置在首次使用前不会触发目录或驱动初始化。
+// map、slice、array 配置递归隔离；结构体及对象句柄沿用原值，不复制驱动资源或锁。
 func New(configuration map[string]interface{}) *Filesystem {
 	manager := &Filesystem{
 		config:    cloneMap(configuration),
@@ -331,27 +332,4 @@ func lookupConfiguration(configuration map[string]interface{}, name string) (int
 		}
 	}
 	return current, true
-}
-
-func cloneMap(source map[string]interface{}) map[string]interface{} {
-	cloned := make(map[string]interface{}, len(source))
-	for key, value := range source {
-		cloned[key] = cloneValue(value)
-	}
-	return cloned
-}
-
-func cloneValue(value interface{}) interface{} {
-	switch current := value.(type) {
-	case map[string]interface{}:
-		return cloneMap(current)
-	case []interface{}:
-		cloned := make([]interface{}, len(current))
-		for index, item := range current {
-			cloned[index] = cloneValue(item)
-		}
-		return cloned
-	default:
-		return current
-	}
 }
