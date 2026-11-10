@@ -130,3 +130,17 @@ func TestFilesystemConfigConcurrentSnapshots(t *testing.T) {
 	}
 	workers.Wait()
 }
+
+// TestFilesystemConfigNilCompatibility 保留旧动态容器可写空副本与强类型 nil 的区别。
+func TestFilesystemConfigNilCompatibility(t *testing.T) {
+	var dynamicMap map[string]interface{}
+	var dynamicSlice []interface{}
+	manager := New(map[string]interface{}{"map": dynamicMap, "slice": dynamicSlice})
+	if manager.GetConfig("map").(map[string]interface{}) == nil || manager.GetConfig("slice").([]interface{}) == nil {
+		t.Fatal("既有动态容器的可写空副本变成了 nil")
+	}
+	manager.GetConfig("map").(map[string]interface{})["added"] = "snapshot"
+	if len(manager.GetConfig("map").(map[string]interface{})) != 0 {
+		t.Fatal("空映射快照与内部配置共享")
+	}
+}

@@ -15,7 +15,7 @@ func cloneMap(source map[string]interface{}) map[string]interface{} {
 	return cloneValue(source).(map[string]interface{})
 }
 
-// cloneValue 隔离强类型集合并保持类型、nil 和循环引用；对象句柄沿用既有借用语义。
+// cloneValue 隔离强类型集合并保持类型、既有空值语义和循环引用；对象句柄沿用借用语义。
 func cloneValue(value interface{}) interface{} {
 	if value == nil {
 		return nil
@@ -34,6 +34,13 @@ func cloneConfigCollection(value reflect.Value, seen map[configCloneVisit]reflec
 		return result
 	case reflect.Map, reflect.Slice:
 		if value.IsNil() {
+			// 旧版动态容器返回可写空副本，其余强类型容器保留 nil。
+			switch value.Type() {
+			case reflect.TypeFor[map[string]interface{}]():
+				return reflect.MakeMap(value.Type())
+			case reflect.TypeFor[[]interface{}]():
+				return reflect.MakeSlice(value.Type(), 0, 0)
+			}
 			return value
 		}
 		visit := configCloneVisit{value.Type(), value.Pointer(), value.Len()}
