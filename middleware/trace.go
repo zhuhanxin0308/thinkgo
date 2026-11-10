@@ -72,9 +72,11 @@ window.TgDebug = window.TgDebug || {
 		if (container.style.display === 'flex') {
 			container.style.display = 'none';
 			toggle.style.display = 'block';
+			toggle.setAttribute('aria-expanded', 'false');
 		} else {
 			container.style.display = 'flex';
 			toggle.style.display = 'none';
+			toggle.setAttribute('aria-expanded', 'true');
 		}
 	},
 	tab: function(el, name) {
@@ -95,6 +97,37 @@ window.TgDebug = window.TgDebug || {
 		}
 	}
 };
+(function() {
+	var bar = document.getElementById('tg-debug-bar');
+	function bindAction(element, action) {
+		element.addEventListener('click', action);
+		element.addEventListener('keydown', function(event) {
+			if (event.key === 'Enter' || event.key === ' ') {
+				event.preventDefault();
+				action();
+			}
+		});
+	}
+	if (bar) {
+		bar.querySelectorAll('[data-tg-action="toggle"]').forEach(function(element) {
+			bindAction(element, function() { window.TgDebug.toggle(); });
+		});
+		bar.querySelectorAll('[data-tg-panel]').forEach(function(element) {
+			bindAction(element, function() { window.TgDebug.tab(element, element.getAttribute('data-tg-panel')); });
+		});
+	}
+	var data = document.getElementById('tg-trace-data');
+	if (data) {
+		try {
+			var info = JSON.parse(data.textContent);
+			console.group('ThinkGo Trace');
+			console.log(info);
+			console.groupEnd();
+		} catch (error) {
+			console.warn('ThinkGo Trace data could not be decoded');
+		}
+	}
+})();
 `
 
 // Handle 处理请求并在 HTML 响应中注入调试面板。
@@ -113,7 +146,7 @@ func (t *Trace) Handle(req *context.Request, next func(*context.Request) *contex
 		return next(req)
 	}
 	traceType := t.traceType()
-	if traceType == "html" {
+	if traceType == "html" || traceType == "console" {
 		if assetResp := t.serveTraceAsset(req); assetResp != nil {
 			return assetResp
 		}
@@ -210,11 +243,9 @@ func buildConsoleTrace(info map[string]interface{}) string {
 	if err != nil {
 		encoded = []byte(`{"error":"trace encode failed"}`)
 	}
-	return "\n<script type='text/javascript'>\n" +
-		"console.group('ThinkGo Trace');\n" +
-		"console.log(" + string(encoded) + ");\n" +
-		"console.groupEnd();\n" +
-		"</script>\n"
+	// JSON 编码默认转义 HTML 字符，数据块不能提前闭合；执行逻辑只由同源外部脚本提供。
+	return "\n<script type=\"application/json\" id=\"tg-trace-data\">" + string(encoded) +
+		"</script>\n<script src=\"" + traceScriptPath + "\"></script>\n"
 }
 
 // isHTMLResponse 仅对明确声明为 HTML 的响应注入内容，不改变纯文本/API 响应。
@@ -256,17 +287,17 @@ func buildDebugBar(info map[string]interface{}) string {
 	return fmt.Sprintf(`
 <link rel="stylesheet" href="%s">
 <div id="tg-debug-bar">
-	<div id="tg-bar-toggle" onclick="TgDebug.toggle()">ThinkGo Debug</div>
+	<div id="tg-bar-toggle" role="button" tabindex="0" aria-controls="tg-bar-container" aria-expanded="false" data-tg-action="toggle">ThinkGo Debug</div>
 	<div id="tg-bar-container">
 		<div id="tg-bar-header">
 			<div class="tg-tab tg-tab-logo">ThinkGo</div>
-			<div class="tg-tab active" onclick="TgDebug.tab(this, 'base')">General</div>
-			<div class="tg-tab" onclick="TgDebug.tab(this, 'sql')">SQL (%s)</div>
-			<div class="tg-tab" onclick="TgDebug.tab(this, 'cache')">Cache (%s)</div>
-			<div class="tg-tab" onclick="TgDebug.tab(this, 'log')">Logs (%s)</div>
-			<div class="tg-tab" onclick="TgDebug.tab(this, 'file')">Files (%s)</div>
-			<div class="tg-tab" onclick="TgDebug.tab(this, 'debug')">Debug (%s)</div>
-			<div class="tg-tab tg-tab-close" onclick="TgDebug.toggle()">&times;</div>
+			<div class="tg-tab active" role="button" tabindex="0" data-tg-panel="base">General</div>
+			<div class="tg-tab" role="button" tabindex="0" data-tg-panel="sql">SQL (%s)</div>
+			<div class="tg-tab" role="button" tabindex="0" data-tg-panel="cache">Cache (%s)</div>
+			<div class="tg-tab" role="button" tabindex="0" data-tg-panel="log">Logs (%s)</div>
+			<div class="tg-tab" role="button" tabindex="0" data-tg-panel="file">Files (%s)</div>
+			<div class="tg-tab" role="button" tabindex="0" data-tg-panel="debug">Debug (%s)</div>
+			<div class="tg-tab tg-tab-close" role="button" tabindex="0" aria-label="关闭调试面板" data-tg-action="toggle">&times;</div>
 		</div>
 		<div id="tg-bar-content">
 			<div id="tg-panel-base" class="tg-panel active">%s</div>
