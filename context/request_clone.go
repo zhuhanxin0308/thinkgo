@@ -59,17 +59,39 @@ func cloneRequestReflectValue(value reflect.Value, seen map[requestCloneVisit]re
 		}
 		result := reflect.MakeSlice(value.Type(), value.Len(), value.Len())
 		seen[visit] = result
+		if filter == nil && !requestSequenceNeedsTraversal(value.Type().Elem()) {
+			// 标量或不透明对象元素没有需要遍历的集合边，批量复制避免每个字节反射调用。
+			reflect.Copy(result, value)
+			return result
+		}
 		for index := range value.Len() {
 			result.Index(index).Set(cloneRequestReflectValue(value.Index(index), seen, filter))
 		}
 		return result
 	case reflect.Array:
 		result := reflect.New(value.Type()).Elem()
+		if !requestSequenceNeedsTraversal(value.Type().Elem()) {
+			result.Set(value)
+			return result
+		}
 		for index := range value.Len() {
 			result.Index(index).Set(cloneRequestReflectValue(value.Index(index), seen, nil))
 		}
 		return result
 	default:
 		return value
+	}
+}
+
+// requestSequenceNeedsTraversal 只对可能包含集合引用的元素递归，保持不透明对象的既有身份契约。
+func requestSequenceNeedsTraversal(element reflect.Type) bool {
+	for element.Kind() == reflect.Array {
+		element = element.Elem()
+	}
+	switch element.Kind() {
+	case reflect.Map, reflect.Slice, reflect.Interface:
+		return true
+	default:
+		return false
 	}
 }
