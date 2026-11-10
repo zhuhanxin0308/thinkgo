@@ -24,15 +24,15 @@ func TestVendorPublishPreservesFileCreatedAfterPrecheck(t *testing.T) {
 	original := publishVendorFile
 	t.Cleanup(func() { publishVendorFile = original })
 	var publishedInfo os.FileInfo
-	publishVendorFile = func(app *framework.App, target string, content []byte, force bool) error {
+	publishVendorFile = func(app *framework.App, target string, content []byte, force bool) (bool, error) {
 		// 首次不存在检查已经完成，另一个合法写入者在实际发布前抢先创建。
 		if err := os.WriteFile(target, []byte("external-editor"), 0644); err != nil {
-			return err
+			return false, err
 		}
 		var err error
 		publishedInfo, err = os.Stat(target)
 		if err != nil {
-			return err
+			return false, err
 		}
 		return original(app, target, content, force)
 	}
