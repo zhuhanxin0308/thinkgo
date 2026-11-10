@@ -63,6 +63,7 @@ var (
 // Config 管理应用配置，并为读取方提供隔离的快照。
 type Config struct {
 	config      map[string]interface{}
+	revision    uint64
 	lookupCache map[string]configLookupCacheEntry
 	lookupKeys  []string
 	pathCache   map[string][]string
@@ -936,6 +937,7 @@ func (c *Config) resolvePathLocked(parts []string) (interface{}, bool) {
 
 // invalidateLookupCacheLocked 在配置发生变化后清空旧查询缓存。
 func (c *Config) invalidateLookupCacheLocked() {
+	c.revision++
 	c.lookupCache = make(map[string]configLookupCacheEntry)
 	c.lookupKeys = nil
 }

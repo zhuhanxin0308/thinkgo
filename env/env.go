@@ -306,9 +306,13 @@ func cloneEnvironmentValues(values map[string]string) map[string]string {
 func currentProcessEnvironment() map[string]string {
 	values := make(map[string]string)
 	for _, entry := range os.Environ() {
-		key, value, found := strings.Cut(entry, "=")
+		key, _, found := strings.Cut(entry, "=")
 		if found {
-			values[normalizeEnvName(key)] = value
+			// 仅收集 Lookup 可读取的规范键；Windows 继续遵循系统的大小写不敏感语义。
+			normalized := normalizeEnvName(key)
+			if value, exists := os.LookupEnv(normalized); exists {
+				values[normalized] = value
+			}
 		}
 	}
 	return values
@@ -333,6 +337,7 @@ func (e *Env) GetBool(key string, def ...bool) (bool, error) {
 }
 
 // Lookup 查找环境变量并区分“未设置”和“显式设置为空”。
+// 进程环境仅按规范大写键查询；文件键会归一化，Windows 保留系统大小写不敏感行为。
 func (e *Env) Lookup(key string) (string, bool) {
 	key = normalizeEnvName(key)
 	e.mu.RLock()
