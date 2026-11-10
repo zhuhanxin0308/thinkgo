@@ -13,6 +13,8 @@ const (
 	DefaultChunkSize = 100
 	// TimestampValueTypeUnix 表示自动时间戳写入 Unix 秒级时间戳（对应 ThinkPHP 的 int 类型）。
 	TimestampValueTypeUnix = "unix"
+	// TimestampValueTypeUnixMilli 表示自动时间戳写入 Unix 毫秒整数，适用于 BIGINT 列。
+	TimestampValueTypeUnixMilli = "unix_milli"
 	// TimestampValueTypeTimestamp 表示自动时间戳写入 MySQL TIMESTAMP 格式（实际与 datetime 相同）。
 	TimestampValueTypeTimestamp = "timestamp"
 	// TimestampValueTypeDateTime 表示自动时间戳写入 datetime 格式字符串。

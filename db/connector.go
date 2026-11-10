@@ -33,7 +33,7 @@ type Config struct {
 	AutoTimestamp          bool              // 是否自动维护时间戳
 	CreateTimeField        string            // 创建时间字段名
 	UpdateTimeField        string            // 更新时间字段名
-	TimestampValueType     string            // 自动时间戳落库值类型（unix/datetime/timestamp/date/native）
+	TimestampValueType     string            // 自动时间戳落库值类型（unix/unix_milli/datetime/timestamp/date/native）
 }
 
 // Validate 在连接器接触配置前校验跨驱动通用约束。

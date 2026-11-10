@@ -413,6 +413,8 @@ func normalizeTimeValueInStorage(value interface{}, location *time.Location, val
 		switch valueType {
 		case TimestampValueTypeUnix:
 			return converted.Unix(), nil
+		case TimestampValueTypeUnixMilli:
+			return converted.UnixMilli(), nil
 		case TimestampValueTypeDate:
 			return converted.Format(DefaultDateFormat), nil
 		case TimestampValueTypeNative:

@@ -174,11 +174,13 @@ func Connect(config Config) (*DB, error) {
 }
 
 // normalizeTimestampValueType 统一收敛自动时间戳的值类型，避免非法配置扩散到执行阶段。
-// 支持 unix/timestamp/datetime/date/native 五种时间戳类型。
+// 支持 unix/unix_milli/timestamp/datetime/date/native 六种时间戳类型。
 func normalizeTimestampValueType(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case TimestampValueTypeUnix, "int":
 		return TimestampValueTypeUnix
+	case TimestampValueTypeUnixMilli:
+		return TimestampValueTypeUnixMilli
 	case TimestampValueTypeDateTime:
 		return TimestampValueTypeDateTime
 	case TimestampValueTypeTimestamp:
@@ -194,7 +196,7 @@ func normalizeTimestampValueType(value string) string {
 
 func isSupportedTimestampValueType(value string) bool {
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case TimestampValueTypeUnix, "int", TimestampValueTypeDateTime, TimestampValueTypeTimestamp, TimestampValueTypeDate, TimestampValueTypeNative:
+	case TimestampValueTypeUnix, "int", TimestampValueTypeUnixMilli, TimestampValueTypeDateTime, TimestampValueTypeTimestamp, TimestampValueTypeDate, TimestampValueTypeNative:
 		return true
 	default:
 		return false
@@ -202,9 +204,11 @@ func isSupportedTimestampValueType(value string) bool {
 }
 
 // defaultTimestampValue 根据框架配置生成字段缺失时应补齐的时间值。
-// unix → int64 秒级时间戳；datetime/timestamp → "2006-01-02 15:04:05"；date → "2006-01-02"；native → time.Time。
+// unix/unix_milli → int64 秒/毫秒；datetime/timestamp → 日期时间文本；date → 日期文本；native → time.Time。
 func defaultTimestampValue(now time.Time, valueType string) interface{} {
 	switch normalizeTimestampValueType(valueType) {
+	case TimestampValueTypeUnixMilli:
+		return now.UnixMilli()
 	case TimestampValueTypeDateTime, TimestampValueTypeTimestamp:
 		return now.Format(DefaultTimeFormat)
 	case TimestampValueTypeDate:
@@ -219,6 +223,8 @@ func defaultTimestampValue(now time.Time, valueType string) interface{} {
 // defaultTimestampString 根据框架配置生成字符串类型字段应写入的时间值。
 func defaultTimestampString(now time.Time, valueType string) string {
 	switch normalizeTimestampValueType(valueType) {
+	case TimestampValueTypeUnixMilli:
+		return strconv.FormatInt(now.UnixMilli(), 10)
 	case TimestampValueTypeDateTime, TimestampValueTypeTimestamp:
 		return now.Format(DefaultTimeFormat)
 	case TimestampValueTypeDate:
@@ -236,6 +242,9 @@ func setAutoTimestamp(data map[string]interface{}, field string, now time.Time, 
 		return fmt.Errorf("%w: 时间戳字段为空", ErrInvalidDatabaseConfig)
 	}
 	unix := now.Unix()
+	if normalizeTimestampValueType(valueType) == TimestampValueTypeUnixMilli {
+		unix = now.UnixMilli()
+	}
 	if value, ok := data[field]; ok {
 		switch typed := value.(type) {
 		case int:
