@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"go/format"
-	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -51,16 +50,16 @@ func (command *MakeApp) Execute(input *console.Input, output *console.Output) er
 	return nil
 }
 
-type buildGeneratedSnapshot struct {
+type applicationBuildDirectory struct {
 	relativePath string
-	content      []byte
-	existed      bool
+	information  os.FileInfo
 }
 
 type applicationBuildTransaction struct {
 	root               *os.Root
-	createdFiles       []string
-	createdDirectories []string
+	createdFiles       []stagedControllerDiscoverySource
+	generatedSources   []stagedControllerDiscoverySource
+	createdDirectories []applicationBuildDirectory
 }
 
 func buildNativeApplication(app *framework.App, name string) (returnErr error) {
@@ -80,15 +79,8 @@ func buildNativeApplication(app *framework.App, name string) (returnErr error) {
 	}()
 
 	targetDirectory := filepath.Join("app", name)
-	snapshots, err := transaction.captureGeneratedSnapshots(
-		filepath.Join("app", applicationDiscoveryFilename),
-		filepath.Join(targetDirectory, applicationDiscoveryFilename),
-	)
-	if err != nil {
-		return err
-	}
 	if err := transaction.createApplicationDirectories(targetDirectory); err != nil {
-		return errors.Join(err, transaction.rollback(snapshots))
+		return errors.Join(err, transaction.rollback())
 	}
 	sources := nativeApplicationBuildSources(name)
 	sourcePaths := make([]string, 0, len(sources))
@@ -98,29 +90,20 @@ func buildNativeApplication(app *framework.App, name string) (returnErr error) {
 	sort.Strings(sourcePaths)
 	for _, relativePath := range sourcePaths {
 		source := sources[relativePath]
-		created, err := transaction.createFile(relativePath, []byte(source), true)
+		_, err := transaction.createFile(relativePath, []byte(source), true)
 		if err != nil {
-			return errors.Join(err, transaction.rollback(snapshots))
-		}
-		if created {
-			transaction.createdFiles = append(transaction.createdFiles, relativePath)
+			return errors.Join(err, transaction.rollback())
 		}
 	}
 	viewPath := filepath.Join(targetDirectory, "view", "index.html")
-	created, err := transaction.createFile(viewPath, []byte(nativeApplicationWelcomeView(name)), false)
+	_, err = transaction.createFile(viewPath, []byte(nativeApplicationWelcomeView(name)), false)
 	if err != nil {
-		return errors.Join(err, transaction.rollback(snapshots))
+		return errors.Join(err, transaction.rollback())
 	}
-	if created {
-		transaction.createdFiles = append(transaction.createdFiles, viewPath)
+	if err := transaction.refreshDiscovery(app); err != nil {
+		return errors.Join(err, transaction.rollback())
 	}
-	if err := RefreshControllerDiscovery(app); err != nil {
-		return errors.Join(err, transaction.rollback(snapshots))
-	}
-	if err := CheckControllerDiscovery(app); err != nil {
-		return errors.Join(err, transaction.rollback(snapshots))
-	}
-	return nil
+	return cleanupControllerDiscoveryBackups(root, transaction.generatedSources)
 }
 
 func (transaction *applicationBuildTransaction) createApplicationDirectories(targetDirectory string) error {
@@ -142,7 +125,11 @@ func (transaction *applicationBuildTransaction) createApplicationDirectories(tar
 			return err
 		}
 		if created {
-			transaction.createdDirectories = append(transaction.createdDirectories, directory)
+			information, err := transaction.root.Lstat(directory)
+			if err != nil {
+				return err
+			}
+			transaction.createdDirectories = append(transaction.createdDirectories, applicationBuildDirectory{directory, information})
 		}
 	}
 	return nil
@@ -168,7 +155,7 @@ func (transaction *applicationBuildTransaction) ensureDirectory(relativePath str
 	return true, nil
 }
 
-func (transaction *applicationBuildTransaction) createFile(relativePath string, content []byte, goSource bool) (bool, error) {
+func (transaction *applicationBuildTransaction) createFile(relativePath string, content []byte, goSource bool) (created bool, returnErr error) {
 	if transaction == nil || transaction.root == nil {
 		return false, fmt.Errorf("应用构建事务未初始化")
 	}
@@ -187,78 +174,26 @@ func (transaction *applicationBuildTransaction) createFile(relativePath string, 
 		}
 		content = formatted
 	}
-	file, err := transaction.root.OpenFile(relativePath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	temporary, err := newControllerDiscoveryAuxiliaryPath(relativePath, "tmp")
 	if err != nil {
-		return false, fmt.Errorf("创建应用文件 %q 失败: %w", relativePath, err)
+		return false, err
 	}
-	written, writeErr := file.Write(content)
-	if writeErr == nil && written != len(content) {
-		writeErr = io.ErrShortWrite
+	if err := writeControllerDiscoveryStagedSourceFile(transaction.root, temporary, content, 0o644); err != nil {
+		return false, fmt.Errorf("暂存应用文件 %q 失败: %w", relativePath, err)
 	}
-	if writeErr != nil {
-		return false, errors.Join(fmt.Errorf("写入应用文件 %q 失败: %w", relativePath, writeErr), file.Close(), transaction.root.Remove(relativePath))
+	defer func() { returnErr = errors.Join(returnErr, transaction.root.Remove(temporary)) }()
+	information, err := transaction.root.Lstat(temporary)
+	if err != nil {
+		return false, err
 	}
-	if err := file.Sync(); err != nil {
-		return false, errors.Join(fmt.Errorf("同步应用文件 %q 失败: %w", relativePath, err), file.Close(), transaction.root.Remove(relativePath))
+	if err := transaction.root.Link(temporary, relativePath); err != nil {
+		return false, fmt.Errorf("排他发布应用文件 %q 失败: %w", relativePath, err)
 	}
-	if err := file.Close(); err != nil {
-		return false, errors.Join(fmt.Errorf("关闭应用文件 %q 失败: %w", relativePath, err), transaction.root.Remove(relativePath))
-	}
+	transaction.createdFiles = append(transaction.createdFiles, stagedControllerDiscoverySource{
+		relativePath: relativePath, published: true, publishedInfo: information,
+		publishedContent: append([]byte(nil), content...),
+	})
 	return true, nil
-}
-
-func (transaction *applicationBuildTransaction) captureGeneratedSnapshots(relativePaths ...string) ([]buildGeneratedSnapshot, error) {
-	snapshots := make([]buildGeneratedSnapshot, 0, len(relativePaths))
-	for _, relativePath := range relativePaths {
-		information, err := transaction.root.Lstat(relativePath)
-		if errors.Is(err, os.ErrNotExist) {
-			snapshots = append(snapshots, buildGeneratedSnapshot{relativePath: relativePath})
-			continue
-		}
-		if err != nil {
-			return nil, fmt.Errorf("读取生成文件 %q 失败: %w", relativePath, err)
-		}
-		if !information.Mode().IsRegular() || information.Mode()&os.ModeSymlink != 0 {
-			return nil, fmt.Errorf("生成文件 %q 必须是普通文件", relativePath)
-		}
-		content, err := transaction.root.ReadFile(relativePath)
-		if err != nil {
-			return nil, fmt.Errorf("备份生成文件 %q 失败: %w", relativePath, err)
-		}
-		snapshots = append(snapshots, buildGeneratedSnapshot{
-			relativePath: relativePath,
-			content:      content,
-			existed:      true,
-		})
-	}
-	return snapshots, nil
-}
-
-func (transaction *applicationBuildTransaction) rollback(snapshots []buildGeneratedSnapshot) error {
-	if transaction == nil || transaction.root == nil {
-		return nil
-	}
-	var rollbackErr error
-	for _, snapshot := range snapshots {
-		if snapshot.existed {
-			rollbackErr = errors.Join(rollbackErr, replaceGeneratedSource(transaction.root.Name(), snapshot.relativePath, snapshot.content))
-			continue
-		}
-		if err := transaction.root.Remove(snapshot.relativePath); err != nil && !errors.Is(err, os.ErrNotExist) {
-			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("回滚生成文件 %q 失败: %w", snapshot.relativePath, err))
-		}
-	}
-	for index := len(transaction.createdFiles) - 1; index >= 0; index-- {
-		if err := transaction.root.Remove(transaction.createdFiles[index]); err != nil && !errors.Is(err, os.ErrNotExist) {
-			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("回滚应用文件 %q 失败: %w", transaction.createdFiles[index], err))
-		}
-	}
-	for index := len(transaction.createdDirectories) - 1; index >= 0; index-- {
-		if err := transaction.root.Remove(transaction.createdDirectories[index]); err != nil && !errors.Is(err, os.ErrNotExist) {
-			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("回滚应用目录 %q 失败: %w", transaction.createdDirectories[index], err))
-		}
-	}
-	return rollbackErr
 }
 
 func nativeApplicationBuildSources(name string) map[string]string {
