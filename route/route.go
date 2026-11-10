@@ -104,6 +104,8 @@ type RouteInfo struct {
 	ExtensionRequired bool
 	Auto              bool
 	MiddlewareCount   int
+	// Patterns 仅包含显式参数约束，不含路由器默认约束，且与内部映射完全隔离。
+	Patterns map[string]string
 }
 
 // Router 管理注册期路由，并在 Freeze 后提供只读匹配索引。
@@ -572,6 +574,10 @@ func (r *Router) Routes() ([]RouteInfo, error) {
 	defer r.mu.RUnlock()
 	result := make([]RouteInfo, 0, len(r.routes))
 	for _, registered := range r.routes {
+		patterns := make(map[string]string, len(registered.patterns))
+		for name, pattern := range registered.patterns {
+			patterns[name] = pattern
+		}
 		result = append(result, RouteInfo{
 			Method:            registered.method,
 			Path:              registered.path,
@@ -582,6 +588,7 @@ func (r *Router) Routes() ([]RouteInfo, error) {
 			ExtensionRequired: registered.extensionRequired,
 			Auto:              registered.auto,
 			MiddlewareCount:   len(registered.middlewares),
+			Patterns:          patterns,
 		})
 	}
 	return result, nil

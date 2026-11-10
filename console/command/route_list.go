@@ -94,6 +94,12 @@ func newRouteListRow(registered route.RouteInfo) routeListRow {
 		"extension":        registered.Extension,
 		"middleware_count": registered.MiddlewareCount,
 	})
+	patterns := registered.Patterns
+	if patterns == nil {
+		patterns = map[string]string{}
+	}
+	// encoding/json 对字符串键排序，保证多参数约束的展示稳定。
+	encodedPatterns, _ := json.Marshal(patterns)
 	return routeListRow{
 		rule:    registered.Path,
 		handler: handler,
@@ -101,7 +107,7 @@ func newRouteListRow(registered route.RouteInfo) routeListRow {
 		name:    registered.Name,
 		domain:  registered.Domain,
 		option:  string(options),
-		pattern: "{}",
+		pattern: string(encodedPatterns),
 	}
 }
 
