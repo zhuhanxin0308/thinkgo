@@ -157,11 +157,11 @@ func (l *Log) SetLocation(location *time.Location) {
 
 	for _, driver := range drivers {
 		if locationAware, ok := driver.(LocationAwareDriver); ok {
-			locationAware.SetLocation(location)
+			l.publishLocation(locationAware.SetLocation)
 		}
 	}
 	for _, channel := range channels {
-		channel.SetLocation(location)
+		l.publishLocation(channel.SetLocation)
 	}
 }
 
@@ -190,10 +190,9 @@ func (l *Log) AddDriver(driver Driver) error {
 		return ErrLogClosed
 	}
 	l.drivers = append(l.drivers, driver)
-	location := l.location
 	l.stateMu.Unlock()
 	if locationAware, ok := driver.(LocationAwareDriver); ok {
-		locationAware.SetLocation(location)
+		l.publishLocation(locationAware.SetLocation)
 	}
 	return nil
 }
@@ -317,7 +316,15 @@ func (l *Log) RegisterChannel(name string, channel *Log) error {
 	if name == "" || channel == nil {
 		return ErrInvalidLogChannel
 	}
+	if err := l.registerChannel(name, channel); err != nil {
+		return err
+	}
+	// 扩展驱动可能在通知中再次注册通道，不能持有全局图锁调用外部代码。
+	l.publishLocation(channel.SetLocation)
+	return nil
+}
 
+func (l *Log) registerChannel(name string, channel *Log) error {
 	channelRegistryMu.Lock()
 	defer channelRegistryMu.Unlock()
 	if channel == l || logChannelReaches(channel, l) {
@@ -351,10 +358,8 @@ func (l *Log) RegisterChannel(name string, channel *Log) error {
 	}
 	l.channels[name] = channel
 	channel.parent = l
-	location := l.location
 	channel.stateMu.Unlock()
 	l.stateMu.Unlock()
-	channel.SetLocation(location)
 	return nil
 }
 
