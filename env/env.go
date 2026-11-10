@@ -312,7 +312,7 @@ func currentProcessEnvironment() map[string]string {
 		}
 		normalized := normalizeEnvName(key)
 		// 仅筛选本次捕获的条目，不逐键重读进程环境，避免冻结跨时刻拼接的配置。
-		if key == normalized || (runtime.GOOS == "windows" && strings.EqualFold(key, normalized)) {
+		if processEnvironmentKeyMatches(key, normalized) {
 			values[normalized] = value
 		}
 	}
