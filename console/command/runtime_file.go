@@ -20,6 +20,21 @@ func writeProjectFileAtomically(app *framework.App, target string, content []byt
 
 // writeProjectFileAtomicallyWithMode 的非零 mode 也应用于已有文件，避免保留历史宽松权限。
 func writeProjectFileAtomicallyWithMode(app *framework.App, target string, content []byte, mode os.FileMode) (returnErr error) {
+	return writeProjectFileWithPublication(app, target, content, mode, func(root *os.Root, temporary, relative string) (bool, error) {
+		err := root.Rename(temporary, relative)
+		return err == nil, err
+	})
+}
+
+// writeProjectFileExclusively 用同目录硬链接原子发布完整文件，已有目标时绝不替换。
+func writeProjectFileExclusively(app *framework.App, target string, content []byte) error {
+	return writeProjectFileWithPublication(app, target, content, 0, func(root *os.Root, temporary, relative string) (bool, error) {
+		return false, root.Link(temporary, relative)
+	})
+}
+
+func writeProjectFileWithPublication(app *framework.App, target string, content []byte, mode os.FileMode,
+	publish func(*os.Root, string, string) (bool, error)) (returnErr error) {
 	if app == nil {
 		return framework.ErrNilApplication
 	}
@@ -79,10 +94,12 @@ func writeProjectFileAtomicallyWithMode(app *framework.App, target string, conte
 	if err := file.Close(); err != nil {
 		return fmt.Errorf("关闭临时文件失败: %w", err)
 	}
-	if err := root.Rename(temporary, relative); err != nil {
-		return fmt.Errorf("原子替换目标文件失败: %w", err)
+	moved, err := publish(root, temporary, relative)
+	if err != nil {
+		return fmt.Errorf("原子发布目标文件失败: %w", err)
 	}
-	removeTemporary = false
+	// Rename 后不再拥有临时路径；Link 只清理本次暂存名称，不接触目标。
+	removeTemporary = !moved
 	return nil
 }
 
