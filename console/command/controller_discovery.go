@@ -2,13 +2,10 @@ package command
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/zhuhanxin0308/thinkgo/v3"
 	"github.com/zhuhanxin0308/thinkgo/v3/console"
@@ -145,53 +142,4 @@ func readApplicationModulePath(basePath string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("go.mod 缺少合法 module 声明")
-}
-
-func replaceGeneratedSource(basePath, relativePath string, source []byte) (returnErr error) {
-	root, err := os.OpenRoot(basePath)
-	if err != nil {
-		return fmt.Errorf("打开项目根目录失败: %w", err)
-	}
-	defer func() {
-		returnErr = errors.Join(returnErr, root.Close())
-	}()
-	if current, readErr := root.ReadFile(relativePath); readErr == nil && bytes.Equal(current, source) {
-		return nil
-	}
-	if err := root.MkdirAll(filepath.Dir(relativePath), 0o755); err != nil {
-		return fmt.Errorf("创建控制器发现目录失败: %w", err)
-	}
-	permission := os.FileMode(0o644)
-	if information, statErr := root.Stat(relativePath); statErr == nil {
-		permission = information.Mode().Perm()
-	}
-	temporaryPath := fmt.Sprintf("%s.tmp-%d", relativePath, time.Now().UnixNano())
-	file, err := root.OpenFile(temporaryPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, permission)
-	if err != nil {
-		return fmt.Errorf("创建控制器发现临时文件失败: %w", err)
-	}
-	removeTemporary := true
-	defer func() {
-		if removeTemporary {
-			returnErr = errors.Join(returnErr, root.Remove(temporaryPath))
-		}
-	}()
-	written, writeErr := file.Write(source)
-	if writeErr == nil && written != len(source) {
-		writeErr = io.ErrShortWrite
-	}
-	if writeErr != nil {
-		return errors.Join(fmt.Errorf("写入控制器发现临时文件失败: %w", writeErr), file.Close())
-	}
-	if err := file.Sync(); err != nil {
-		return errors.Join(fmt.Errorf("同步控制器发现临时文件失败: %w", err), file.Close())
-	}
-	if err := file.Close(); err != nil {
-		return fmt.Errorf("关闭控制器发现临时文件失败: %w", err)
-	}
-	if err := root.Rename(temporaryPath, relativePath); err != nil {
-		return fmt.Errorf("替换控制器发现文件失败: %w", err)
-	}
-	removeTemporary = false
-	return nil
 }
