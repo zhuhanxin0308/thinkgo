@@ -145,11 +145,15 @@ func (h *Handle) Render(w http.ResponseWriter, r *http.Request, recovered interf
 		return h.renderHttpException(w, r, httpException, exposeDetails)
 	}
 
-	if h.isJSONRequest(r) {
+	media := exceptionResponseMedia(r)
+	if media == exceptionMediaJSON {
 		return h.renderJSONError(w, http.StatusInternalServerError, recovered, exposeDetails)
 	}
-	if exposeDetails {
+	if exposeDetails && media == exceptionMediaHTML {
 		return h.renderDebugPage(w, r, recovered)
+	}
+	if exposeDetails {
+		return writeTextResponse(w, http.StatusInternalServerError, safeExceptionTextWith(recovered, sanitizeExceptionText))
 	}
 	return writeTextResponse(w, http.StatusInternalServerError, internalServerErrorText)
 }
@@ -608,34 +612,7 @@ type mediaPreference struct {
 
 // isJSONRequest 按 Accept 权重优先协商，并兼容 API、XHR 和 JSON 请求体来源。
 func (h *Handle) isJSONRequest(r *http.Request) bool {
-	if r == nil {
-		return false
-	}
-	accept := strings.TrimSpace(r.Header.Get("Accept"))
-	if accept != "" {
-		jsonPreference, htmlPreference, plainPreference, recognized := negotiateExceptionMedia(accept)
-		if !recognized {
-			return false
-		}
-		if preferExceptionMedia(plainPreference, jsonPreference) {
-			return false
-		}
-		// 只有可接受的全通配范围不表达格式偏好；明确类型、权重和拒绝仍优先。
-		wildcardOnly := jsonPreference.set && htmlPreference.set &&
-			jsonPreference.specificity == 0 && htmlPreference.specificity == 0 &&
-			jsonPreference.quality > 0 && jsonPreference.quality == htmlPreference.quality
-		if !wildcardOnly {
-			return preferExceptionMedia(jsonPreference, htmlPreference)
-		}
-	}
-	if strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Requested-With")), "XMLHttpRequest") {
-		return true
-	}
-	if r.URL != nil && (r.URL.Path == "/api" || strings.HasPrefix(r.URL.Path, "/api/")) {
-		return true
-	}
-	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
-	return err == nil && isJSONMediaType(mediaType)
+	return exceptionResponseMedia(r) == exceptionMediaJSON
 }
 
 func negotiateExceptionMedia(header string) (mediaPreference, mediaPreference, mediaPreference, bool) {
