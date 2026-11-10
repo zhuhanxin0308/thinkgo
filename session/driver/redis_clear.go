@@ -3,31 +3,47 @@ package driver
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
-
-	"github.com/redis/go-redis/v9"
 )
 
 const (
-	redisSessionGenerationChanged  = -2
-	redisSessionClearBatchSize     = 256
-	redisSessionClearTimeoutFactor = 5
-	redisSessionClearingPrefix     = "clearing:"
-	redisSessionReadyPrefix        = "ready:"
-	redisSessionClearDeleteScript  = `
-if redis.call("GET", KEYS[1]) ~= ARGV[1] then
+	redisSessionGenerationChanged    = -2
+	redisSessionClearBatchSize       = 256
+	redisSessionClearTimeoutFactor   = 5
+	redisSessionClearingPrefix       = "clearing:"
+	redisSessionReadyPrefix          = "ready:"
+	redisSessionReadGenerationScript = `
+local generation = redis.call("GET", KEYS[1]) or ""
+if redis.call("GET", KEYS[2]) == generation then
 	return -2
 end
-for i = 2, #KEYS do
+if string.sub(generation, 1, string.len(ARGV[1])) == ARGV[1] then
+	generation = ARGV[2] .. string.sub(generation, string.len(ARGV[1]) + 1)
+	redis.call("SET", KEYS[1], generation)
+end
+return generation
+`
+	redisSessionClearStartScript = `
+redis.call("SET", KEYS[1], ARGV[1])
+redis.call("SET", KEYS[2], ARGV[1], "PX", ARGV[2])
+return 1
+`
+	redisSessionClearDeleteScript = `
+if redis.call("GET", KEYS[1]) ~= ARGV[1] or redis.call("GET", KEYS[2]) ~= ARGV[1] then
+	return -2
+end
+for i = 3, #KEYS do
 	redis.call("DEL", KEYS[i])
 end
 return 1
 `
 	redisSessionClearFinishScript = `
-if redis.call("GET", KEYS[1]) ~= ARGV[1] then
+if redis.call("GET", KEYS[1]) ~= ARGV[1] or redis.call("GET", KEYS[2]) ~= ARGV[1] then
 	return -2
 end
 redis.call("SET", KEYS[1], ARGV[2])
+redis.call("DEL", KEYS[2])
 return 1
 `
 )
@@ -35,18 +51,23 @@ return 1
 // generationKey 使用包含分隔符的元数据后缀，不能被嵌套前缀的合法 Session ID 清理匹配。
 func (r *Redis) generationKey() string { return r.prefix + "meta:generation" }
 
+func (r *Redis) clearLeaseKey() string { return r.prefix + "meta:clearing" }
+
 func (r *Redis) readGeneration(parent context.Context) (string, error) {
 	ctx, cancel := r.contextWithParent(parent)
 	defer cancel()
-	generation, err := r.client.Get(ctx, r.generationKey()).Result()
-	if errors.Is(err, redis.Nil) {
-		return "", nil
-	}
+	// 活动租约有期限，代际始终持久；租约失效时原子结束遗留状态，绝不回到旧代际。
+	result, err := r.client.Eval(ctx, redisSessionReadGenerationScript,
+		[]string{r.generationKey(), r.clearLeaseKey()}, redisSessionClearingPrefix, redisSessionReadyPrefix).Result()
 	if err != nil {
 		return "", err
 	}
-	if strings.HasPrefix(generation, redisSessionClearingPrefix) {
+	if result == int64(redisSessionGenerationChanged) {
 		return "", ErrSessionCleared
+	}
+	generation, ok := result.(string)
+	if !ok {
+		return "", fmt.Errorf("Redis Session 清理代际返回类型错误: %T", result)
 	}
 	return generation, nil
 }
@@ -62,16 +83,18 @@ func (r *Redis) Clear() (returnErr error) {
 		return err
 	}
 	clearing, ready := redisSessionClearingPrefix+owner, redisSessionReadyPrefix+owner
-	ctx, cancel := context.WithTimeout(context.Background(), r.timeout*redisSessionClearTimeoutFactor)
+	clearBudget := r.timeout * redisSessionClearTimeoutFactor
+	ctx, cancel := context.WithTimeout(context.Background(), clearBudget)
 	defer cancel()
-	if err := r.client.Set(ctx, r.generationKey(), clearing, 0).Err(); err != nil {
+	if err := r.client.Eval(ctx, redisSessionClearStartScript,
+		[]string{r.generationKey(), r.clearLeaseKey()}, clearing, clearBudget.Milliseconds()).Err(); err != nil {
 		return err
 	}
 	defer func() {
-		// 使用独立有界上下文结束本代际，原扫描超时也不会永久锁住新会话。
+		// 正常结束立即解除租约；进程退出或网络故障时，由到期后的首次操作原子恢复。
 		finish, stop := r.context()
 		defer stop()
-		result, err := r.client.Eval(finish, redisSessionClearFinishScript, []string{r.generationKey()}, clearing, ready).Result()
+		result, err := r.client.Eval(finish, redisSessionClearFinishScript, []string{r.generationKey(), r.clearLeaseKey()}, clearing, ready).Result()
 		if err == nil && result != int64(1) {
 			err = ErrSessionCleared
 		}
@@ -83,7 +106,7 @@ func (r *Redis) Clear() (returnErr error) {
 		if err != nil {
 			return err
 		}
-		owned := []string{r.generationKey()}
+		owned := []string{r.generationKey(), r.clearLeaseKey()}
 		for _, key := range keys {
 			id, matches := strings.CutPrefix(key, r.prefix+redisSessionDataPrefix)
 			if matches && validateSessionID(id) == nil {
