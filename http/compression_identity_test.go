@@ -92,8 +92,11 @@ func TestCompressionForbiddenPlainBypass(t *testing.T) {
 			}
 		}
 		_, _ = writer.Write([]byte("ok"))
-		if err := writer.Close(); !errors.Is(err, ErrContentEncodingNotAcceptable) {
-			t.Error("无可接受表示应返回明确错误")
+		if err := writer.Close(); err != nil {
+			t.Fatalf("已完成的 406 不应被视为传输失败: %v", err)
+		}
+		if !errors.Is(writer.NegotiationError(), ErrContentEncodingNotAcceptable) {
+			t.Error("无可接受表示应保留明确协商原因")
 		}
 		if recorder.Code != http.StatusNotAcceptable || recorder.Body.Len() != 0 {
 			t.Fatalf("应返回无正文 406，实际 %d %q", recorder.Code, recorder.Body.String())
@@ -112,6 +115,7 @@ func TestCompressionIdentityExclusionPreservesBodylessAndEncodedResponses(t *tes
 	}{
 		{http.MethodHead, http.StatusOK, ""},
 		{http.MethodGet, http.StatusNoContent, ""},
+		{http.MethodGet, http.StatusResetContent, ""},
 		{http.MethodGet, http.StatusNotModified, ""},
 		{http.MethodGet, http.StatusOK, "gzip"},
 	} {
