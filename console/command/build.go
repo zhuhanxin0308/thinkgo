@@ -122,6 +122,12 @@ func (writer buildOutputWriter) Write(content []byte) (int, error) {
 }
 
 func compileDistribution(ctx context.Context, base, executable string, target buildTarget, output *console.Output) (returnErr error) {
+	return compileDistributionWithRunner(ctx, base, executable, target, output, runBuildProcess)
+}
+
+type distributionProcessRunner func(context.Context, string, []string, io.Writer, string, ...string) error
+
+func compileDistributionWithRunner(ctx context.Context, base, executable string, target buildTarget, output *console.Output, run distributionProcessRunner) (returnErr error) {
 	directory, err := os.MkdirTemp("", "thinkgo-build-*")
 	if err != nil {
 		return err
@@ -130,14 +136,16 @@ func compileDistribution(ctx context.Context, base, executable string, target bu
 	host := buildTarget{os: runtime.GOOS, arch: runtime.GOARCH}
 	generator := filepath.Join(directory, host.binary())
 	writer := buildOutputWriter{output: output}
+	overlayDirectory := filepath.Join(directory, "overlay")
 	// 生成器始终按宿主编译，然后在目标环境中扫描带平台约束的业务源码。
-	if err := runBuildProcess(ctx, base, host.environment(), writer, "go", "build", "-mod=readonly", "-o", generator, "./cmd/think"); err != nil {
+	if err := run(ctx, base, host.environment(), writer, "go", "build", "-mod=readonly", "-o", generator, "./cmd/think"); err != nil {
 		return fmt.Errorf("编译源码生成器失败: %w", err)
 	}
-	if err := runBuildProcess(ctx, base, target.environment(), writer, generator, "service:discover"); err != nil {
+	if err := run(ctx, base, target.environment(), writer, generator, "service:discover", "--overlay-dir", overlayDirectory); err != nil {
 		return fmt.Errorf("刷新目标平台业务清单失败: %w", err)
 	}
-	if err := runBuildProcess(ctx, base, target.environment(), writer, "go", "build", "-mod=readonly", "-trimpath", "-buildvcs=false", "-o", executable, "."); err != nil {
+	// 目标平台清单只在本次编译中覆盖，宿主源码及其文件身份始终保持不变。
+	if err := run(ctx, base, target.environment(), writer, "go", "build", "-overlay="+filepath.Join(overlayDirectory, discoveryOverlayFilename), "-mod=readonly", "-trimpath", "-buildvcs=false", "-o", executable, "."); err != nil {
 		return fmt.Errorf("编译 %s 失败: %w", target.directory(), err)
 	}
 	return nil

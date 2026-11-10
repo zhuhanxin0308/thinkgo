@@ -26,6 +26,7 @@ type ServiceDiscover struct {
 func (command *ServiceDiscover) Configure() {
 	command.Signature = "service:discover"
 	command.Description = "Discover Services for ThinkGo"
+	command.AddOption("overlay-dir", "", "Write isolated Go build overlay without changing project sources", "")
 }
 
 // Execute 扫描全部原生应用目录并生成稳定注册代码。
@@ -36,7 +37,12 @@ func (command *ServiceDiscover) Execute(input *console.Input, output *console.Ou
 	if output == nil {
 		return console.ErrInvalidOutput
 	}
-	err := RefreshControllerDiscovery(command.App)
+	var err error
+	if input != nil && input.GetOption("overlay-dir") != "" {
+		err = writeControllerDiscoveryOverlay(command.App, input.GetOption("overlay-dir"))
+	} else {
+		err = RefreshControllerDiscovery(command.App)
+	}
 	if err != nil {
 		return fmt.Errorf("刷新控制器发现信息失败: %w", err)
 	}
