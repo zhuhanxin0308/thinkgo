@@ -1,11 +1,13 @@
 """Regression fixtures for the release credential filename gate."""
 
+import contextlib
+import io
 import pathlib
 import subprocess
 import tempfile
 import unittest
 
-from check_release_files import credential_paths, tracked_credential_paths
+from check_release_files import credential_paths, main, tracked_credential_paths
 
 
 class ReleaseCredentialPathTests(unittest.TestCase):
@@ -19,8 +21,21 @@ class ReleaseCredentialPathTests(unittest.TestCase):
             b'server".key',
             b"cert\nname.pem",
             b"bad-utf8-\xff/server.key",
+            b"deploy/.env.production",
+            b".env.local",
+            b".ENV.TEST",
+            b".env.example.backup",
+            b"CERT.PEM",
+            b"server.KeY",
+            b"client.P12",
+            b"client.PfX",
+            b"bad-utf8-\xff/.env.local",
         ]
-        allowed = [b"README.md", b"server.key.example", b".env.example", b"keys.go"]
+        allowed = [
+            b"README.md", b"server.key.example", b".env.example", b"keys.go",
+            b".env.production.example", b".ENV.LOCAL.EXAMPLE", b".environment",
+            b".env.directory/config.json", b"certificate.PEM.example",
+        ]
         raw = b"\0".join(forbidden + allowed) + b"\0"
         self.assertEqual(credential_paths(raw), forbidden)
 
@@ -40,8 +55,15 @@ class ReleaseCredentialPathTests(unittest.TestCase):
                 "new\nline/server.p12",
                 'server".key',
                 "cert\nname.pem",
+                "deploy/.env.production",
+                ".env.local",
+                ".ENV.TEST",
+                "server.KeY",
+                "server.PEM",
+                "client.P12",
+                "client.PFX",
             ]
-            for name in names + [".env.example", "README.md"]:
+            for name in names + [".env.example", ".env.production.example", ".ENV.TEST.EXAMPLE", "README.md"]:
                 path = pathlib.Path(directory, name)
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text("dummy fixture\n", encoding="utf-8")
@@ -54,6 +76,23 @@ class ReleaseCredentialPathTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaises(subprocess.CalledProcessError):
                 tracked_credential_paths(directory)
+
+    def test_gate_exit_status_and_safe_diagnostics(self):
+        # 使用临时索引和哑数据，验证真实门禁结果与控制字符路径日志。
+        with tempfile.TemporaryDirectory() as directory, contextlib.chdir(directory):
+            errors = io.StringIO()
+            with contextlib.redirect_stderr(errors):
+                self.assertEqual(main(), 1)
+            subprocess.run(["git", "init", "-q"], check=True)
+            self.assertEqual(main(), 0)
+            name = "test\ncredential.KEY"
+            pathlib.Path(name).write_text("synthetic fixture", encoding="utf-8")
+            subprocess.run(["git", "add", "-f", "--", name], check=True)
+            errors = io.StringIO()
+            with contextlib.redirect_stderr(errors):
+                self.assertEqual(main(), 1)
+            self.assertIn(repr(name), errors.getvalue())
+            self.assertEqual(len(errors.getvalue().splitlines()), 2)
 
 
 if __name__ == "__main__":

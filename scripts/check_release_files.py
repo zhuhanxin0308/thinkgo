@@ -16,8 +16,13 @@ def credential_paths(raw_paths):
     for path in raw_paths.split(b"\0"):
         if not path:
             continue
-        name = path.rsplit(b"/", 1)[-1]
-        if name == b".env" or name.endswith(CREDENTIAL_SUFFIXES):
+        # 字节级 ASCII 归一化不依赖文件系统大小写，也不损失非 UTF-8 路径。
+        name = path.rsplit(b"/", 1)[-1].lower()
+        environment_file = name == b".env" or name.startswith(b".env.")
+        environment_example = name == b".env.example" or (
+            name.startswith(b".env.") and name.endswith(b".example")
+        )
+        if (environment_file and not environment_example) or name.endswith(CREDENTIAL_SUFFIXES):
             forbidden.append(path)
     return forbidden
 
