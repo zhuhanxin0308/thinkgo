@@ -47,6 +47,9 @@ return 0
 if redis.call("GET", KEYS[1]) ~= ARGV[1] then
 	return 0
 end
+if (redis.call("GET", KEYS[3]) or "") ~= (string.match(ARGV[1], "^[^|]*|(.*)$") or "") then
+	return -2
+end
 if ARGV[3] == "0" then
 	redis.call("SET", KEYS[2], ARGV[2])
 else
@@ -57,6 +60,9 @@ return 1
 	redisSessionDeleteLuaScript = `
 if redis.call("GET", KEYS[1]) ~= ARGV[1] then
 	return -1
+end
+if (redis.call("GET", KEYS[3]) or "") ~= (string.match(ARGV[1], "^[^|]*|(.*)$") or "") then
+	return -2
 end
 return redis.call("DEL", KEYS[2])
 `
@@ -71,6 +77,8 @@ var (
 	ErrSessionLockLost = errors.New("Redis Session 锁租约丢失")
 	// ErrInvalidRedisSessionContext 表示 Redis Session 操作上下文为空。
 	ErrInvalidRedisSessionContext = errors.New("Redis Session 上下文无效")
+	// ErrSessionCleared 表示操作跨越了命名空间清理边界，必须重新读取后再操作。
+	ErrSessionCleared = errors.New("Redis Session 命名空间正在清理或已改变")
 )
 
 type redisSessionEnvelope struct {
@@ -239,50 +247,18 @@ func (r *Redis) Delete(id string) error {
 	return r.withSessionLock(id, func(owner string) error {
 		ctx, cancel := r.context()
 		defer cancel()
-		result, err := r.client.Eval(ctx, redisSessionDeleteLuaScript, []string{r.lockKey(id), r.dataKey(id)}, owner).Result()
+		result, err := r.client.Eval(ctx, redisSessionDeleteLuaScript, []string{r.lockKey(id), r.dataKey(id), r.generationKey()}, owner).Result()
 		if err != nil {
 			return err
+		}
+		if result == int64(redisSessionGenerationChanged) {
+			return ErrSessionCleared
 		}
 		if deleted, ok := result.(int64); !ok || deleted < 0 {
 			return ErrSessionLockLost
 		}
 		return nil
 	})
-}
-
-// Clear 只扫描并删除当前 Session 命名空间，不执行 Redis 整库清理。
-func (r *Redis) Clear() error {
-	if err := r.validateClient(); err != nil {
-		return err
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), r.timeout*5)
-	defer cancel()
-	var cursor uint64
-	pattern := r.prefix + redisSessionDataPrefix + "*"
-	for {
-		keys, next, err := r.client.Scan(ctx, cursor, pattern, 256).Result()
-		if err != nil {
-			return err
-		}
-		// MATCH 只筛选候选键；嵌套前缀的数据或锁也可能匹配。
-		// 只有当前 data: 前缀后紧跟合法 Session ID 才能证明归属。
-		owned := keys[:0]
-		for _, key := range keys {
-			id, matches := strings.CutPrefix(key, r.prefix+redisSessionDataPrefix)
-			if matches && validateSessionID(id) == nil {
-				owned = append(owned, key)
-			}
-		}
-		if len(owned) > 0 {
-			if err = r.client.Del(ctx, owned...).Err(); err != nil {
-				return err
-			}
-		}
-		cursor = next
-		if cursor == 0 {
-			return nil
-		}
-	}
 }
 
 // Update 在 Redis 分布式锁内执行一次读改写，保证并发请求不会覆盖字段增量。
@@ -319,9 +295,12 @@ func (r *Redis) UpdateContext(parent context.Context, id string, update func(dat
 		if remove {
 			ctx, cancel = r.contextWithParent(parent)
 			defer cancel()
-			result, deleteErr := r.client.Eval(ctx, redisSessionDeleteLuaScript, []string{r.lockKey(id), r.dataKey(id)}, owner).Result()
+			result, deleteErr := r.client.Eval(ctx, redisSessionDeleteLuaScript, []string{r.lockKey(id), r.dataKey(id), r.generationKey()}, owner).Result()
 			if deleteErr != nil {
 				return deleteErr
+			}
+			if result == int64(redisSessionGenerationChanged) {
+				return ErrSessionCleared
 			}
 			if deleted, ok := result.(int64); !ok || deleted < 0 {
 				return ErrSessionLockLost
@@ -369,9 +348,12 @@ func (r *Redis) writeUnlockedContext(parent context.Context, owner, id string, d
 			ttlMilliseconds = 1
 		}
 	}
-	result, err := r.client.Eval(ctx, redisSessionWriteLuaScript, []string{r.lockKey(id), r.dataKey(id)}, owner, data, ttlMilliseconds).Result()
+	result, err := r.client.Eval(ctx, redisSessionWriteLuaScript, []string{r.lockKey(id), r.dataKey(id), r.generationKey()}, owner, data, ttlMilliseconds).Result()
 	if err != nil {
 		return err
+	}
+	if result == int64(redisSessionGenerationChanged) {
+		return ErrSessionCleared
 	}
 	if written, ok := result.(int64); !ok || written != 1 {
 		return ErrSessionLockLost
@@ -391,6 +373,12 @@ func (r *Redis) withSessionLockContext(parent context.Context, id string, callba
 	if err != nil {
 		return err
 	}
+	generation, err := r.readGeneration(parent)
+	if err != nil {
+		return err
+	}
+	// 把清理代际绑定到锁 owner，所有提交都在 Lua 中同时核对租约与代际。
+	owner += "|" + generation
 	deadline := time.Now().Add(redisSessionLockWait)
 	lockKey := r.lockKey(id)
 	for {
