@@ -20,6 +20,16 @@ import (
 
 const maxVendorPublishFileBytes int64 = 8 * 1024 * 1024
 
+var publishVendorFile = publishVendorFileWithPolicy
+
+// publishVendorFileWithPolicy 集中处理供应商文件的发布策略。
+func publishVendorFileWithPolicy(app *framework.App, target string, content []byte, force bool) error {
+	if force {
+		return writeProjectFileAtomically(app, target, content)
+	}
+	return writeProjectFileExclusively(app, target, content)
+}
+
 // VendorPublish 按 Composer installed.json 发布供应商包配置，
 // 元数据约定与 ThinkPHP vendor:publish 保持一致。
 type VendorPublish struct {
@@ -205,7 +215,11 @@ func publishPackageConfigFile(app *framework.App, packageName, name, sourceName 
 		output.Info(fmt.Sprintf("File %s not exist!", source))
 		return output.Err()
 	}
-	if err := writeProjectFileAtomically(app, target, content); err != nil {
+	if err := publishVendorFile(app, target, content, force); err != nil {
+		if !force && errors.Is(err, os.ErrExist) {
+			output.Info(fmt.Sprintf("File %s exist!", target))
+			return output.Err()
+		}
 		return fmt.Errorf("发布供应商配置 %s 失败: %w", target, err)
 	}
 	return nil
