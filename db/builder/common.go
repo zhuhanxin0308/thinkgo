@@ -186,10 +186,11 @@ func rebindNumbered(query, prefix string, postgresSyntax ...bool) string {
 					continue
 				}
 			case '$':
-				if postgres && index > 0 && builderRebindIdentifierByte(query[index-1]) {
-					break
+				delimiter := builderDollarDelimiter(query[index:])
+				if postgres {
+					delimiter = sqllex.PostgresDollarDelimiter(query, index)
 				}
-				if delimiter := builderDollarDelimiter(query[index:]); delimiter != "" {
+				if delimiter != "" {
 					state = stateDollarQuote
 					dollarDelimiter = delimiter
 					// 起始分隔符不能同时成为结束分隔符的一部分（例如 $$$?$$）。
@@ -277,33 +278,5 @@ func isPostgresQuestionOperator(query string, index int) bool {
 }
 
 func builderDollarDelimiter(text string) string {
-	if len(text) < 2 || text[0] != '$' {
-		return ""
-	}
-	if text[1] == '$' {
-		return "$$"
-	}
-	if !builderRebindIdentifierStart(text[1]) {
-		return ""
-	}
-	for index := 2; index < len(text); index++ {
-		current := text[index]
-		if current == '$' {
-			return text[:index+1]
-		}
-		if !builderRebindIdentifierStart(current) && !(current >= '0' && current <= '9') {
-			return ""
-		}
-	}
-	return ""
-}
-
-// PostgreSQL 允许非 ASCII 字节组成标识符；$ 可出现在标识符中，但不能出现在 dollar quote 标签中。
-func builderRebindIdentifierStart(character byte) bool {
-	return character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' ||
-		character == '_' || character >= 0x80
-}
-
-func builderRebindIdentifierByte(character byte) bool {
-	return builderRebindIdentifierStart(character) || character >= '0' && character <= '9' || character == '$'
+	return sqllex.PostgresDollarDelimiter(text, 0)
 }

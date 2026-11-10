@@ -111,6 +111,8 @@ func TestIssue145PostgresArraysReachEveryRawExecutor(t *testing.T) {
 			{"comments", "SELECT ARRAY[? /* ] ? */, ? -- [?]\n], ?", "SELECT ARRAY[$1 /* ] ? */, $2 -- [?]\n], $3", []interface{}{1, 2, 3}},
 			{"嵌套块注释", `SELECT ARRAY[? /* outer /* inner ? */ still ? */ , ?], ?`, `SELECT ARRAY[$1 /* outer /* inner ? */ still ? */ , $2], $3`, []interface{}{1, 2, 3}},
 			{"dollar quotes", `SELECT ARRAY[$tag$[?]$tag$, ?], ?`, `SELECT ARRAY[$tag$[?]$tag$, $1], $2`, []interface{}{1, 2}},
+			{"Unicode 美元标签", `SELECT ARRAY[$文本$[?]$文本$, ?], ?`, `SELECT ARRAY[$文本$[?]$文本$, $1], $2`, []interface{}{1, 2}},
+			{"标识符内美元符号", `SELECT ARRAY[price$tag$, '$tag$?', '$tag$', price$tag$], ?`, `SELECT ARRAY[price$tag$, '$tag$?', '$tag$', price$tag$], $1`, []interface{}{1}},
 			{"operators", `SELECT data ?| ARRAY[?, ?], data ?& ARRAY[?], data ?? ?, data @? ?`, `SELECT data ?| ARRAY[$1, $2], data ?& ARRAY[$3], data ? $4, data @? $5`, []interface{}{"a", "b", "a", "a", "$.a"}},
 		} {
 			t.Run(test.name, func(t *testing.T) {

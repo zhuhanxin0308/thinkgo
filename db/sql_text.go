@@ -76,6 +76,9 @@ func redactSQLLiteralsAndComments(sqlText string, dialect string) string {
 			index++
 		case '$':
 			delimiter := readDollarQuoteDelimiter(sqlText[index:])
+			if dialect == "postgres" {
+				delimiter = sqllex.PostgresDollarDelimiter(sqlText, index)
+			}
 			if delimiter == "" {
 				result.WriteByte(sqlText[index])
 				index++
@@ -276,7 +279,11 @@ func countSQLPlaceholders(sqlText string, dialects ...string) (int, error) {
 					index = next - 1
 				}
 			case '$':
-				if delimiter := readDollarQuoteDelimiter(sqlText[index:]); delimiter != "" {
+				delimiter := readDollarQuoteDelimiter(sqlText[index:])
+				if postgres {
+					delimiter = sqllex.PostgresDollarDelimiter(sqlText, index)
+				}
+				if delimiter != "" {
 					dollarDelimiter = delimiter
 					state = stateDollarQuote
 					index += len(delimiter) - 1
