@@ -614,10 +614,16 @@ func (h *Handle) isJSONRequest(r *http.Request) bool {
 	accept := strings.TrimSpace(r.Header.Get("Accept"))
 	if accept != "" {
 		jsonPreference, htmlPreference, recognized := negotiateExceptionMedia(accept)
-		if recognized {
+		if !recognized {
+			return false
+		}
+		// 只有可接受的全通配范围不表达格式偏好；明确类型、权重和拒绝仍优先。
+		wildcardOnly := jsonPreference.set && htmlPreference.set &&
+			jsonPreference.specificity == 0 && htmlPreference.specificity == 0 &&
+			jsonPreference.quality > 0 && jsonPreference.quality == htmlPreference.quality
+		if !wildcardOnly {
 			return preferJSON(jsonPreference, htmlPreference)
 		}
-		return false
 	}
 	if strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Requested-With")), "XMLHttpRequest") {
 		return true
