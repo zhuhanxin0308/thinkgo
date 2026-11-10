@@ -44,6 +44,8 @@ var (
 	ErrCookieRequestUnavailable = errors.New("Cookie 请求不可用")
 	// ErrCookieWriterUnavailable 表示写入操作没有绑定响应 writer。
 	ErrCookieWriterUnavailable = errors.New("Cookie 响应 writer 不可用")
+	// ErrCookieDisabled 表示配置禁止发送 Cookie，调用方不得将写入视为成功。
+	ErrCookieDisabled = errors.New("Cookie 发送已禁用")
 	// ErrDuplicateCookie 表示请求携带多个同名 Cookie，存在解析歧义。
 	ErrDuplicateCookie = errors.New("请求包含重复 Cookie")
 	// ErrInvalidCookieSignature 表示签名格式、名称绑定、时间或 HMAC 校验失败。
@@ -299,9 +301,13 @@ func isNilResponseWriter(writer http.ResponseWriter) bool {
 }
 
 // BuildHeader 构建经过完整配置、签名和长度校验的 Set-Cookie 头值，不要求绑定 writer。
+// setcookie=false 时返回 ErrCookieDisabled，阻止直接使用头值的调用方绕过禁发策略。
 func (c *Cookie) BuildHeader(name, value string, options ...CookieOptions) (string, error) {
 	if c == nil {
 		return "", ErrInvalidCookieConfig
+	}
+	if !c.config.SetCookie {
+		return "", ErrCookieDisabled
 	}
 	if len(options) > 1 {
 		return "", ErrInvalidCookieOptions
