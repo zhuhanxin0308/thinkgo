@@ -246,26 +246,7 @@ func normalizeStringSliceValue(values []string) interface{} {
 }
 
 func deepCloneRequestValue(value interface{}) interface{} {
-	switch typed := value.(type) {
-	case map[string]interface{}:
-		result := make(map[string]interface{}, len(typed))
-		for key, item := range typed {
-			result[key] = deepCloneRequestValue(item)
-		}
-		return result
-	case []interface{}:
-		result := make([]interface{}, len(typed))
-		for index, item := range typed {
-			result[index] = deepCloneRequestValue(item)
-		}
-		return result
-	case []string:
-		return append([]string(nil), typed...)
-	case []byte:
-		return append([]byte(nil), typed...)
-	default:
-		return value
-	}
+	return cloneRequestValueGraph(value, nil)
 }
 
 func firstDefault(defaults []string) string {
