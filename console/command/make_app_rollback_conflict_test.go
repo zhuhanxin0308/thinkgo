@@ -80,9 +80,9 @@ func TestMakeAppRollbackPreservesEditedPublishedDiscovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	original := renameControllerDiscoveryPath
-	t.Cleanup(func() { renameControllerDiscoveryPath = original })
-	renameControllerDiscoveryPath = func(root *os.Root, oldPath, newPath string) error {
+	original := linkControllerDiscoveryPublication
+	t.Cleanup(func() { linkControllerDiscoveryPublication = original })
+	linkControllerDiscoveryPublication = func(root *os.Root, oldPath, newPath string) error {
 		if err := original(root, oldPath, newPath); err != nil {
 			return err
 		}

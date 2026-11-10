@@ -28,9 +28,9 @@ func TestDiscoveryRollbackPreservesExternalVersions(t *testing.T) {
 					t.Fatal(err)
 				}
 				injected := errors.New("注入后续文件发布失败")
-				originalRename := renameControllerDiscoveryPath
+				originalLink := linkControllerDiscoveryPublication
 				external := []byte("// 外部进程新修改\n")
-				renameControllerDiscoveryPath = func(root *os.Root, oldPath, newPath string) error {
+				linkControllerDiscoveryPublication = func(root *os.Root, oldPath, newPath string) error {
 					if strings.Contains(oldPath, ".discovery-tmp-") && newPath == second {
 						switch change {
 						case "写入":
@@ -56,9 +56,9 @@ func TestDiscoveryRollbackPreservesExternalVersions(t *testing.T) {
 						}
 						return injected
 					}
-					return originalRename(root, oldPath, newPath)
+					return originalLink(root, oldPath, newPath)
 				}
-				t.Cleanup(func() { renameControllerDiscoveryPath = originalRename })
+				t.Cleanup(func() { linkControllerDiscoveryPublication = originalLink })
 				err = RefreshControllerDiscovery(application)
 				if !errors.Is(err, injected) {
 					t.Fatalf("未传播原始发布错误: %v", err)
@@ -100,13 +100,14 @@ func TestDiscoveryRollbackDoesNotOverwriteNewTarget(t *testing.T) {
 			t.Fatal(err)
 		}
 		originalRename := renameControllerDiscoveryPath
+		originalLink := linkControllerDiscoveryPublication
 		injected := errors.New("注入目标发布失败")
 		external := []byte("// 回滚恢复前创建的新目标\n")
 		target := paths[1]
 		if afterCapture {
 			target = paths[0]
 		}
-		renameControllerDiscoveryPath = func(root *os.Root, oldPath, newPath string) error {
+		linkControllerDiscoveryPublication = func(root *os.Root, oldPath, newPath string) error {
 			if strings.Contains(oldPath, ".discovery-tmp-") && newPath == second {
 				if !afterCapture {
 					if err := os.WriteFile(target, external, 0o644); err != nil {
@@ -115,6 +116,9 @@ func TestDiscoveryRollbackDoesNotOverwriteNewTarget(t *testing.T) {
 				}
 				return injected
 			}
+			return originalLink(root, oldPath, newPath)
+		}
+		renameControllerDiscoveryPath = func(root *os.Root, oldPath, newPath string) error {
 			if err := originalRename(root, oldPath, newPath); err != nil {
 				return err
 			}
@@ -125,6 +129,7 @@ func TestDiscoveryRollbackDoesNotOverwriteNewTarget(t *testing.T) {
 		}
 		err = RefreshControllerDiscovery(application)
 		renameControllerDiscoveryPath = originalRename
+		linkControllerDiscoveryPublication = originalLink
 		if !errors.Is(err, injected) || !errors.Is(err, ErrControllerDiscoveryRollbackConflict) {
 			t.Fatalf("新目标应阻止覆盖恢复: %v", err)
 		}
@@ -196,13 +201,17 @@ func TestDiscoveryRollbackPreservesCaptureWindowChange(t *testing.T) {
 		t.Fatal(err)
 	}
 	originalRename := renameControllerDiscoveryPath
+	originalLink := linkControllerDiscoveryPublication
 	injected := errors.New("发布失败后进入回滚")
 	external := []byte("// 核验后写入的外部内容\n")
 	captured := false
-	renameControllerDiscoveryPath = func(root *os.Root, oldPath, newPath string) error {
+	linkControllerDiscoveryPublication = func(root *os.Root, oldPath, newPath string) error {
 		if strings.Contains(oldPath, ".discovery-tmp-") && newPath == second {
 			return injected
 		}
+		return originalLink(root, oldPath, newPath)
+	}
+	renameControllerDiscoveryPath = func(root *os.Root, oldPath, newPath string) error {
 		if strings.Contains(newPath, ".discovery-rollback-") {
 			captured = true
 			if err := os.WriteFile(paths[0], external, 0o644); err != nil {
@@ -211,7 +220,10 @@ func TestDiscoveryRollbackPreservesCaptureWindowChange(t *testing.T) {
 		}
 		return originalRename(root, oldPath, newPath)
 	}
-	t.Cleanup(func() { renameControllerDiscoveryPath = originalRename })
+	t.Cleanup(func() {
+		renameControllerDiscoveryPath = originalRename
+		linkControllerDiscoveryPublication = originalLink
+	})
 	err = RefreshControllerDiscovery(application)
 	if !captured || !errors.Is(err, injected) || !strings.Contains(err.Error(), "回滚冲突") {
 		t.Fatalf("未覆盖捕获窗口冲突: captured=%t, err=%v", captured, err)

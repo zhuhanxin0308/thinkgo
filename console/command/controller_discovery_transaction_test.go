@@ -45,16 +45,16 @@ func TestControllerDiscoveryBatchRollsBackPublishedFiles(t *testing.T) {
 	addControllerDiscoveryTransactionTypes(t, application.BasePath)
 
 	injected := errors.New("注入第二个目标替换失败")
-	originalRename := renameControllerDiscoveryPath
-	renames := 0
-	renameControllerDiscoveryPath = func(root *os.Root, oldPath, newPath string) error {
-		renames++
-		if renames == 4 {
+	originalLink := linkControllerDiscoveryPublication
+	publications := 0
+	linkControllerDiscoveryPublication = func(root *os.Root, oldPath, newPath string) error {
+		publications++
+		if publications == 2 {
 			return injected
 		}
-		return originalRename(root, oldPath, newPath)
+		return originalLink(root, oldPath, newPath)
 	}
-	t.Cleanup(func() { renameControllerDiscoveryPath = originalRename })
+	t.Cleanup(func() { linkControllerDiscoveryPublication = originalLink })
 
 	if err := RefreshControllerDiscovery(application); !errors.Is(err, injected) {
 		t.Fatalf("发布失败应原样传播，实际为 %v", err)
@@ -68,16 +68,16 @@ func TestControllerDiscoveryBatchRollsBackPublishedFiles(t *testing.T) {
 func TestControllerDiscoveryBatchRemovesNewFilesOnPublishFailure(t *testing.T) {
 	application, generatedPaths := prepareControllerDiscoveryTransactionFixture(t, false)
 	injected := errors.New("注入首次生成第二个目标发布失败")
-	originalRename := renameControllerDiscoveryPath
-	renames := 0
-	renameControllerDiscoveryPath = func(root *os.Root, oldPath, newPath string) error {
-		renames++
-		if renames == 2 {
+	originalLink := linkControllerDiscoveryPublication
+	publications := 0
+	linkControllerDiscoveryPublication = func(root *os.Root, oldPath, newPath string) error {
+		publications++
+		if publications == 2 {
 			return injected
 		}
-		return originalRename(root, oldPath, newPath)
+		return originalLink(root, oldPath, newPath)
 	}
-	t.Cleanup(func() { renameControllerDiscoveryPath = originalRename })
+	t.Cleanup(func() { linkControllerDiscoveryPublication = originalLink })
 
 	if err := RefreshControllerDiscovery(application); !errors.Is(err, injected) {
 		t.Fatalf("首次发布失败应原样传播，实际为 %v", err)
