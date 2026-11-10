@@ -244,9 +244,10 @@ func (r *Request) WithRoute(values map[string]interface{}) *Request {
 }
 
 // WithMiddleware 合并中间件传递的数据。
+// 集合按值保存；Session 等对象句柄仍保留身份语义。
 func (r *Request) WithMiddleware(values map[string]interface{}) *Request {
 	for key, value := range values {
-		r.Set(key, value)
+		r.Set(key, deepCloneRequestValue(value))
 	}
 	return r
 }
@@ -679,30 +680,7 @@ func (r *Request) postSnapshot() (map[string]interface{}, bool) {
 }
 
 func (r *Request) filteredRequestValue(value interface{}) interface{} {
-	switch typed := value.(type) {
-	case string:
-		return r.applyRequestFilters(typed)
-	case []string:
-		result := make([]string, len(typed))
-		for index, item := range typed {
-			result[index] = r.applyRequestFilters(item)
-		}
-		return result
-	case []interface{}:
-		result := make([]interface{}, len(typed))
-		for index, item := range typed {
-			result[index] = r.filteredRequestValue(item)
-		}
-		return result
-	case map[string]interface{}:
-		result := make(map[string]interface{}, len(typed))
-		for key, item := range typed {
-			result[key] = r.filteredRequestValue(item)
-		}
-		return result
-	default:
-		return deepCloneRequestValue(value)
-	}
+	return cloneRequestValueGraph(value, r.applyRequestFilters)
 }
 
 func (r *Request) filteredRequestMap(values map[string]interface{}) map[string]interface{} {
