@@ -13,8 +13,6 @@ import (
 
 const maximumScheduleEntries = 10_000
 
-const schedulerTimezoneName = "UTC"
-
 // Scheduler 使用 Asynq 的 Redis 持久化队列执行 Cron 计划。
 type Scheduler struct {
 	mu           sync.Mutex
@@ -27,6 +25,7 @@ type Scheduler struct {
 }
 
 // NewScheduler 创建拥有独立 Redis 连接池的调度器。
+// 时区只接受标准 time.UTC，名称相同的自定义时区也会被拒绝。
 func NewScheduler(config RedisConfig, location *time.Location) (*Scheduler, error) {
 	options, err := redisOptions(config)
 	if err != nil {
@@ -43,6 +42,7 @@ func NewScheduler(config RedisConfig, location *time.Location) (*Scheduler, erro
 }
 
 // NewSchedulerFromRedisClient 复用调用方管理生命周期的 Redis 客户端。
+// 时区只接受标准 time.UTC，time.LoadLocation("UTC") 返回的实例同样有效。
 func NewSchedulerFromRedisClient(client redis.UniversalClient, location *time.Location) (*Scheduler, error) {
 	if err := validateRedisClient(client); err != nil {
 		return nil, err
@@ -57,8 +57,9 @@ func validateSchedulerLocation(location *time.Location) error {
 	if location == nil {
 		return fmt.Errorf("%w: Scheduler 时区不能为空", queue.ErrBackendUnavailable)
 	}
-	if location.String() != schedulerTimezoneName {
-		return fmt.Errorf("%w: Scheduler 时区只能为 UTC", queue.ErrInvalidOptions)
+	// 名称和单个时刻的偏移均不能证明全年 UTC，必须使用标准实例。
+	if location != time.UTC {
+		return fmt.Errorf("%w: Scheduler 时区必须使用标准 time.UTC，不接受自定义同名时区", queue.ErrInvalidOptions)
 	}
 	return nil
 }
