@@ -60,6 +60,11 @@ func RefreshControllerDiscovery(app *framework.App) error {
 func CheckControllerDiscovery(app *framework.App) error {
 	controllerDiscoveryTransactionMu.Lock()
 	defer controllerDiscoveryTransactionMu.Unlock()
+	return checkControllerDiscovery(app)
+}
+
+// checkControllerDiscovery 供已持有发现事务锁的调用方复用一致性校验。
+func checkControllerDiscovery(app *framework.App) error {
 	sources, err := nativeApplicationDiscoverySources(app)
 	if err != nil {
 		return err
