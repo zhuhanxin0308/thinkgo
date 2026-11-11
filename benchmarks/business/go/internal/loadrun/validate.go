@@ -12,7 +12,7 @@ import (
 )
 
 // responseValidatorVersion 标识未来结果采用的响应语义门禁，历史结果保持原样。
-const responseValidatorVersion = 2
+const responseValidatorVersion = 3
 
 const catalogCategoryPrefix = "分类-"
 
@@ -138,8 +138,14 @@ func validateCatalog(configuration Config, request requestSpec, body []byte) err
 	if err := decodeStrict(body, &response); err != nil {
 		return err
 	}
-	if len(response.Items) == 0 || len(response.Items) > catalogPageSize || response.NextCursor == nil {
+	if response.Items == nil || len(response.Items) > catalogPageSize || response.NextCursor == nil {
 		return errResponseData
+	}
+	if len(response.Items) == 0 {
+		if catalogHasActiveProducts(configuration, request.CategoryID) || !bytes.Equal(bytes.TrimSpace(response.NextCursor), []byte("null")) {
+			return errResponseData
+		}
+		return nil
 	}
 	expectedCategory := catalogCategoryPrefix + strconv.Itoa(request.CategoryID)
 	productOffset := int64(request.Tenant-1) * int64(configuration.ProductsPerTenant)
@@ -170,6 +176,19 @@ func validateCatalog(configuration Config, request requestSpec, body []byte) err
 		}
 	}
 	return nil
+}
+
+// catalogHasActiveProducts 按种子中的等差商品编号判断分类是否为空。
+// 首项下架且步长是下架模数的倍数时整类下架；否则下一项存在即为活动商品。
+// 负载器的价格上限高于种子最大价格，因此此处无需枚举价格或扫描整个数据集。
+func catalogHasActiveProducts(configuration Config, category int) bool {
+	if category > configuration.ProductsPerTenant {
+		return false
+	}
+	if category%inactiveProductEvery != 0 {
+		return true
+	}
+	return configuration.Categories%inactiveProductEvery != 0 && configuration.Categories <= configuration.ProductsPerTenant-category
 }
 
 func validateDetail(configuration Config, request requestSpec, body []byte) error {
