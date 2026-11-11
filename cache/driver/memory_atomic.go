@@ -73,7 +73,11 @@ func (c *Memory) updateAtomicLocked(key string, ttl time.Duration, update func(i
 				return err
 			}
 		} else {
-			current = cloneMemoryValue(stored.value)
+			var err error
+			current, err = cloneMemoryValue(stored.value)
+			if err != nil {
+				return err
+			}
 		}
 	}
 	next, remove, preserveTTL, err := update(current, found)
@@ -88,7 +92,10 @@ func (c *Memory) updateAtomicLocked(key string, ttl time.Duration, update func(i
 	}
 	cloned := next
 	if c.budget == nil {
-		cloned = cloneMemoryValue(next)
+		cloned, err = cloneMemoryValue(next)
+		if err != nil {
+			return err
+		}
 	}
 	expiry := stored.expiry
 	if !preserveTTL {
