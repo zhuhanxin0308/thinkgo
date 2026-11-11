@@ -70,6 +70,13 @@ func (state *databaseValueSnapshot) copy(value reflect.Value, depth int) (copied
 		}
 		return value, nil
 	}
+	// 原生时间别名沿用 time.Time 的不可变值语义；保留具体类型与日历/时区组成。
+	if value.Kind() == reflect.Struct && value.Type().ConvertibleTo(reflect.TypeFor[time.Time]()) {
+		return value, nil
+	}
+	if native, handled := snapshotNativeDatabaseValue(value); handled {
+		return native, nil
+	}
 	switch value.Kind() {
 	case reflect.Pointer, reflect.Map, reflect.Slice:
 		if value.IsNil() {
@@ -191,7 +198,7 @@ func (state *databaseValueSnapshot) immutable(value reflect.Value, depth int) bo
 		return false
 	}
 	state.remaining--
-	if value.Type() == reflect.TypeFor[time.Time]() {
+	if value.Kind() == reflect.Struct && value.Type().ConvertibleTo(reflect.TypeFor[time.Time]()) {
 		return true
 	}
 	switch value.Kind() {
