@@ -306,13 +306,14 @@ func cloneEnvironmentValues(values map[string]string) map[string]string {
 func currentProcessEnvironment() map[string]string {
 	values := make(map[string]string)
 	for _, entry := range os.Environ() {
-		key, _, found := strings.Cut(entry, "=")
-		if found {
-			// 仅收集 Lookup 可读取的规范键；Windows 继续遵循系统的大小写不敏感语义。
-			normalized := normalizeEnvName(key)
-			if value, exists := os.LookupEnv(normalized); exists {
-				values[normalized] = value
-			}
+		key, value, found := strings.Cut(entry, "=")
+		if !found || key == "" {
+			continue
+		}
+		normalized := normalizeEnvName(key)
+		// 仅筛选本次捕获的条目，不逐键重读进程环境，避免冻结跨时刻拼接的配置。
+		if processEnvironmentKeyMatches(key, normalized) {
+			values[normalized] = value
 		}
 	}
 	return values
