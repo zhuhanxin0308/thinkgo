@@ -382,6 +382,10 @@ func configLanguageAliases(raw interface{}) (map[string]string, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%w: accept_language.%s: %v", ErrInvalidLangConfig, source, err)
 		}
+		// 同目标重复项保持兼容合并；不同目标必须在发布配置前拒绝。
+		if existing, found := aliases[normalizedSource]; found && existing != normalizedTarget {
+			return nil, fmt.Errorf("%w: accept_language 别名 %q 的目标冲突", ErrInvalidLangConfig, normalizedSource)
+		}
 		aliases[normalizedSource] = normalizedTarget
 	}
 	return aliases, nil
