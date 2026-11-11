@@ -43,7 +43,11 @@ func redactSQLLiteralsAndComments(sqlText string, dialect string) string {
 				index = redactSQLQuotedToken(&result, sqlText, index, '`', backslashEscapes)
 			}
 		case '[':
-			if dialect == "sqlserver" {
+			if dialect == "postgres" {
+				// PostgreSQL 方括号是数组/下标语法，内部字符串必须继续走各自的词法扫描。
+				result.WriteByte('[')
+				index++
+			} else if dialect == "sqlserver" {
 				index = copySQLQuotedToken(&result, sqlText, index, ']', backslashEscapes)
 			} else {
 				index = redactSQLQuotedToken(&result, sqlText, index, ']', backslashEscapes)
@@ -72,6 +76,9 @@ func redactSQLLiteralsAndComments(sqlText string, dialect string) string {
 			index++
 		case '$':
 			delimiter := readDollarQuoteDelimiter(sqlText[index:])
+			if dialect == "postgres" {
+				delimiter = sqllex.PostgresDollarDelimiter(sqlText, index)
+			}
 			if delimiter == "" {
 				result.WriteByte(sqlText[index])
 				index++
@@ -272,7 +279,11 @@ func countSQLPlaceholders(sqlText string, dialects ...string) (int, error) {
 					index = next - 1
 				}
 			case '$':
-				if delimiter := readDollarQuoteDelimiter(sqlText[index:]); delimiter != "" {
+				delimiter := readDollarQuoteDelimiter(sqlText[index:])
+				if postgres {
+					delimiter = sqllex.PostgresDollarDelimiter(sqlText, index)
+				}
+				if delimiter != "" {
 					dollarDelimiter = delimiter
 					state = stateDollarQuote
 					index += len(delimiter) - 1
