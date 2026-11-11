@@ -145,11 +145,15 @@ func (h *Handle) Render(w http.ResponseWriter, r *http.Request, recovered interf
 		return h.renderHttpException(w, r, httpException, exposeDetails)
 	}
 
-	if h.isJSONRequest(r) {
+	media := exceptionResponseMedia(r)
+	if media == exceptionMediaJSON {
 		return h.renderJSONError(w, http.StatusInternalServerError, recovered, exposeDetails)
 	}
-	if exposeDetails {
+	if exposeDetails && media == exceptionMediaHTML {
 		return h.renderDebugPage(w, r, recovered)
+	}
+	if exposeDetails {
+		return writeTextResponse(w, http.StatusInternalServerError, safeExceptionTextWith(recovered, sanitizeExceptionText))
 	}
 	return writeTextResponse(w, http.StatusInternalServerError, internalServerErrorText)
 }
@@ -608,42 +612,19 @@ type mediaPreference struct {
 
 // isJSONRequest 按 Accept 权重优先协商，并兼容 API、XHR 和 JSON 请求体来源。
 func (h *Handle) isJSONRequest(r *http.Request) bool {
-	if r == nil {
-		return false
-	}
-	accept := strings.TrimSpace(r.Header.Get("Accept"))
-	if accept != "" {
-		jsonPreference, htmlPreference, recognized := negotiateExceptionMedia(accept)
-		if !recognized {
-			return false
-		}
-		// 只有可接受的全通配范围不表达格式偏好；明确类型、权重和拒绝仍优先。
-		wildcardOnly := jsonPreference.set && htmlPreference.set &&
-			jsonPreference.specificity == 0 && htmlPreference.specificity == 0 &&
-			jsonPreference.quality > 0 && jsonPreference.quality == htmlPreference.quality
-		if !wildcardOnly {
-			return preferJSON(jsonPreference, htmlPreference)
-		}
-	}
-	if strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Requested-With")), "XMLHttpRequest") {
-		return true
-	}
-	if r.URL != nil && (r.URL.Path == "/api" || strings.HasPrefix(r.URL.Path, "/api/")) {
-		return true
-	}
-	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
-	return err == nil && isJSONMediaType(mediaType)
+	return exceptionResponseMedia(r) == exceptionMediaJSON
 }
 
-func negotiateExceptionMedia(header string) (mediaPreference, mediaPreference, bool) {
+func negotiateExceptionMedia(header string) (mediaPreference, mediaPreference, mediaPreference, bool) {
 	var jsonPreference mediaPreference
 	var htmlPreference mediaPreference
+	var plainPreference mediaPreference
 	if len(header) > maxAcceptHeaderBytes {
-		return jsonPreference, htmlPreference, false
+		return jsonPreference, htmlPreference, plainPreference, false
 	}
 	parts := strings.Split(header, ",")
 	if len(parts) > maxAcceptMediaRangeCount {
-		return jsonPreference, htmlPreference, false
+		return jsonPreference, htmlPreference, plainPreference, false
 	}
 	for order, part := range parts {
 		mediaType, parameters, err := mime.ParseMediaType(strings.TrimSpace(part))
@@ -664,8 +645,11 @@ func negotiateExceptionMedia(header string) (mediaPreference, mediaPreference, b
 		if specificity, matches := htmlMediaSpecificity(mediaType); matches {
 			updateMediaPreference(&htmlPreference, quality, specificity, order)
 		}
+		if specificity, matches := plainMediaSpecificity(mediaType); matches {
+			updateMediaPreference(&plainPreference, quality, specificity, order)
+		}
 	}
-	return jsonPreference, htmlPreference, jsonPreference.set || htmlPreference.set
+	return jsonPreference, htmlPreference, plainPreference, jsonPreference.set || htmlPreference.set || plainPreference.set
 }
 
 func updateMediaPreference(preference *mediaPreference, quality float64, specificity, order int) {
@@ -675,23 +659,33 @@ func updateMediaPreference(preference *mediaPreference, quality float64, specifi
 	}
 }
 
-func preferJSON(jsonPreference, htmlPreference mediaPreference) bool {
-	if !jsonPreference.set || jsonPreference.quality <= 0 {
+func preferExceptionMedia(candidate, other mediaPreference) bool {
+	if !candidate.set || candidate.quality <= 0 {
 		return false
 	}
-	if !htmlPreference.set || htmlPreference.quality <= 0 {
+	if !other.set || other.quality <= 0 {
 		return true
 	}
-	if jsonPreference.quality != htmlPreference.quality {
-		return jsonPreference.quality > htmlPreference.quality
+	if candidate.quality != other.quality {
+		return candidate.quality > other.quality
 	}
-	if jsonPreference.specificity != htmlPreference.specificity {
-		return jsonPreference.specificity > htmlPreference.specificity
+	if candidate.specificity != other.specificity {
+		return candidate.specificity > other.specificity
 	}
-	if jsonPreference.order != htmlPreference.order {
-		return jsonPreference.order < htmlPreference.order
+	if candidate.order != other.order {
+		return candidate.order < other.order
 	}
 	return false
+}
+
+func plainMediaSpecificity(mediaType string) (int, bool) {
+	if mediaType == "text/plain" {
+		return 2, true
+	}
+	if mediaType == "text/*" {
+		return 1, true
+	}
+	return 0, mediaType == "*/*"
 }
 
 func jsonMediaSpecificity(mediaType string) (int, bool) {

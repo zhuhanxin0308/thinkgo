@@ -25,6 +25,12 @@ func TestWildcardAcceptUsesRequestIntent(t *testing.T) {
 			{"text/html,application/json", -1}, {"application/json,text/html", 1},
 			{"*/*;q=0", -1}, {"image/png", -1}, {"*/*;q=NaN", -1},
 			{"application/json;q=0.5,*/*;q=1", -1},
+			{"text/plain;q=1,*/*;q=0.1", -1},
+			{"text/plain;q=0.5,*/*;q=0.5", -1},
+			{"text/plain;q=0.1,*/*;q=0.9", 0},
+			{"text/plain;q=0,*/*;q=0.5", 0},
+			{"text/plain;q=0.9,application/json;q=0.5", -1},
+			{"text/plain;q=0.5,application/json;q=0.9", 1},
 		} {
 			t.Run(intent.name+"/"+accept.value, func(t *testing.T) {
 				req := httptest.NewRequest(http.MethodGet, "http://example.com"+intent.path, nil)
