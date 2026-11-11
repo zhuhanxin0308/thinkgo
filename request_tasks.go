@@ -34,13 +34,14 @@ type requestTaskRegistry struct {
 	snapshot RequestTasksSnapshot
 	closed   bool
 	idle     chan struct{}
-	timeout  time.Duration
+	budgets  map[time.Duration]int
 }
 
 // RequestTask 绑定请求执行和真实收尾的同一租约；Release 可以安全重复调用。
 type RequestTask struct {
 	registry    *requestTaskRegistry
 	operational bool
+	timeout     time.Duration
 	once        sync.Once
 }
 
@@ -79,12 +80,15 @@ func (app *App) acquireRequestTask(capacity int, timeout time.Duration, operatio
 		registry.snapshot.Rejected++
 		return nil, ErrRequestTaskCapacity
 	}
-	registry.timeout = timeout
+	if registry.budgets == nil {
+		registry.budgets = make(map[time.Duration]int)
+	}
+	registry.budgets[timeout]++
 	registry.snapshot.Active++
 	if operational {
 		registry.snapshot.Operational++
 	}
-	return &RequestTask{registry: registry, operational: operational}, nil
+	return &RequestTask{registry: registry, operational: operational, timeout: timeout}, nil
 }
 
 // Release 只在业务执行和全部后台清理实际返回之后归还容量。
@@ -97,6 +101,10 @@ func (task *RequestTask) Release() {
 		registry.mu.Lock()
 		defer registry.mu.Unlock()
 		registry.snapshot.Active--
+		registry.budgets[task.timeout]--
+		if registry.budgets[task.timeout] == 0 {
+			delete(registry.budgets, task.timeout)
+		}
 		if task.operational {
 			registry.snapshot.Operational--
 		}
@@ -170,8 +178,11 @@ func (app *App) drainRequestTasksForClose() error {
 		registry := &candidate.lifecycle.tasks
 		registry.mu.Lock()
 		registry.closed = true
-		if registry.timeout > timeout {
-			timeout = registry.timeout
+		// 只采集仍在途的租约预算，避免最后接纳或历史任务支配关闭窗口。
+		for budget := range registry.budgets {
+			if budget > timeout {
+				timeout = budget
+			}
 		}
 		registry.mu.Unlock()
 	}
