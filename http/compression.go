@@ -136,6 +136,7 @@ type CompressionResponseWriter struct {
 	compressionErr error
 	bodyPolicy     *statusTrackingResponseWriter
 	identityDenied bool
+	rejected       bool
 }
 
 // NewCompressionResponseWriter 创建新的压缩响应写入器。
@@ -220,9 +221,6 @@ func (w *CompressionResponseWriter) Write(b []byte) (int, error) {
 	}
 	w.ensureContentType(b)
 	if w.wroteHeader {
-		if w.identityDenied && w.compressionErr != nil {
-			return 0, w.compressionErr
-		}
 		return w.Writer.Write(b)
 	}
 
@@ -233,9 +231,6 @@ func (w *CompressionResponseWriter) Write(b []byte) (int, error) {
 
 	if w.shouldBypassCompression() {
 		w.startPlainWriter()
-		if w.identityDenied && w.compressionErr != nil {
-			return 0, w.compressionErr
-		}
 		if err := w.flushBufferedBody(); err != nil {
 			return 0, err
 		}
@@ -326,6 +321,7 @@ func (w *CompressionResponseWriter) ResetUncommitted() bool {
 	w.statusCode = http.StatusOK
 	w.Writer = nil
 	w.compressionErr = nil
+	w.rejected = false
 	for key := range w.Header() {
 		w.Header().Del(key)
 	}
@@ -379,7 +375,7 @@ func (w *CompressionResponseWriter) shouldBypassCompression() bool {
 	if w.encoding == "" || w.Header().Get("Content-Encoding") != "" {
 		return true
 	}
-	if w.statusCode < http.StatusOK || w.statusCode == http.StatusNoContent || w.statusCode == http.StatusNotModified || w.statusCode == http.StatusPartialContent {
+	if w.statusCode < http.StatusOK || w.statusCode == http.StatusNoContent || w.statusCode == http.StatusResetContent || w.statusCode == http.StatusNotModified || w.statusCode == http.StatusPartialContent {
 		return true
 	}
 	if w.Header().Get("Content-Range") != "" {
@@ -417,7 +413,7 @@ func (w *CompressionResponseWriter) startPlainWriter() {
 	}
 	contentEncoding := strings.TrimSpace(w.Header().Get("Content-Encoding"))
 	if w.identityDenied && (contentEncoding == "" || strings.EqualFold(contentEncoding, "identity")) &&
-		w.statusCode >= http.StatusOK && w.statusCode != http.StatusNoContent && w.statusCode != http.StatusNotModified &&
+		w.statusCode >= http.StatusOK && w.statusCode != http.StatusNoContent && w.statusCode != http.StatusResetContent && w.statusCode != http.StatusNotModified &&
 		(w.bodyPolicy == nil || !w.bodyPolicy.bodySuppressed()) {
 		// 无法转换的原表示也不能违反协商：发送无实体 406，丢弃原正文及其验证信息。
 		for _, name := range []string{"Content-Type", "Content-Length", "Content-Encoding", "Content-Range", "ETag", "Last-Modified", "Trailer"} {
@@ -425,7 +421,7 @@ func (w *CompressionResponseWriter) startPlainWriter() {
 		}
 		w.Header().Set("Content-Length", "0")
 		w.statusCode = http.StatusNotAcceptable
-		w.compressionErr = errors.Join(w.compressionErr, ErrContentEncodingNotAcceptable)
+		w.rejected = true
 		w.Writer = io.Discard
 		w.buffer.Reset()
 		w.ResponseWriter.WriteHeader(w.statusCode)
@@ -436,6 +432,14 @@ func (w *CompressionResponseWriter) startPlainWriter() {
 	w.ResponseWriter.WriteHeader(w.statusCode)
 	w.Writer = w.ResponseWriter
 	w.wroteHeader = true
+}
+
+// NegotiationError 返回已完成的 406 拒绝原因；它不属于 Write/Flush/Close 的传输错误。
+func (w *CompressionResponseWriter) NegotiationError() error {
+	if w != nil && w.rejected {
+		return ErrContentEncodingNotAcceptable
+	}
+	return nil
 }
 
 // allowSmallPlainResponse 仅在客户端接受 identity 时应用尺寸优化，包含空 Flush 后续写入。
