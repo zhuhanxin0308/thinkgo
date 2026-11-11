@@ -1,15 +1,15 @@
 {
   "schema_version": 1,
-  "verified_at_utc": "2026-11-07",
+  "verified_at_utc": "2026-11-11",
   "platform": {"system": "Linux", "machine": "x86_64"},
   "jobs": 2,
   "components": [
     {
-      "name": "go", "version": "1.27.3", "kind": "archive", "prefix": "go-1.27.3",
-      "url": "https://go.dev/dl/go1.27.3.linux-amd64.tar.gz",
-      "sha256": "65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40",
+      "name": "go", "version": "1.27.4", "kind": "archive", "prefix": "go-1.27.4",
+      "url": "https://go.dev/dl/go1.27.4.linux-amd64.tar.gz",
+      "sha256": "7226736c2339719cda28fbf3a54d71aa63bcefe376e98cef00034268dab24840",
       "archive_root": "go", "dependencies": [],
-      "outputs": ["go-1.27.3/bin/*", "go-1.27.3/pkg/tool/linux_amd64/*", "go-1.27.3/VERSION"],
+      "outputs": ["go-1.27.4/bin/*", "go-1.27.4/pkg/tool/linux_amd64/*", "go-1.27.4/VERSION"],
       "probe": ["{prefix}/bin/go", "version"]
     },
     {

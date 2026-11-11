@@ -1,6 +1,6 @@
 module github.com/zhuhanxin0308/thinkgo/benchmarks/business
 
-go 1.27.3
+go 1.27.4
 
 require (
 	github.com/HdrHistogram/hdrhistogram-go v1.4.0

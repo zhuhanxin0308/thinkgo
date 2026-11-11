@@ -56,6 +56,17 @@ class BootstrapTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             bootstrap.select(self.manifest, ["missing"], False)
 
+    def test_environment_uses_manifest_go_prefix(self):
+        # 升级清单时构建必须使用同一工具链，不能退回宿主机或旧安装目录。
+        component = next(item for item in self.manifest["components"] if item["name"] == "go")
+        component["prefix"] = "go-test-selected"
+        environment = self.installer.environment(component)
+        paths = environment["PATH"].split(bootstrap.os.pathsep)
+        self.assertIn(str(self.installer.runtime / component["prefix"] / "bin"), paths)
+        self.assertFalse(any(path.startswith(str(self.installer.runtime / "go-")) and
+                             path != str(self.installer.runtime / component["prefix"] / "bin")
+                             for path in paths))
+
     def test_unknown_runtime_and_unknown_prefix_are_not_overwritten(self):
         self.installer.runtime.mkdir()
         (self.installer.runtime / "keep.txt").write_text("保留")
