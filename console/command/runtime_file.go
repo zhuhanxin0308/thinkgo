@@ -26,11 +26,18 @@ func writeProjectFileAtomicallyWithMode(app *framework.App, target string, conte
 	})
 }
 
-// writeProjectFileExclusively 用同目录硬链接原子发布完整文件，已有目标时绝不替换。
-func writeProjectFileExclusively(app *framework.App, target string, content []byte) error {
-	return writeProjectFileWithPublication(app, target, content, 0, func(root *os.Root, temporary, relative string) (bool, error) {
-		return false, root.Link(temporary, relative)
+// writeProjectFileExclusively 用同目录硬链接原子发布；只有最终目标碰撞才返回 false,nil。
+func writeProjectFileExclusively(app *framework.App, target string, content []byte) (bool, error) {
+	created := false
+	err := writeProjectFileWithPublication(app, target, content, 0, func(root *os.Root, temporary, relative string) (bool, error) {
+		linkErr := root.Link(temporary, relative)
+		if errors.Is(linkErr, os.ErrExist) {
+			return false, nil
+		}
+		created = linkErr == nil
+		return false, linkErr
 	})
+	return created, err
 }
 
 func writeProjectFileWithPublication(app *framework.App, target string, content []byte, mode os.FileMode,
