@@ -64,6 +64,7 @@ type ErrorSample struct {
 // Report 显式区分测量窗口内完成吞吐、所发请求排空吞吐和整个运行耗时吞吐。
 type Report struct {
 	SchemaVersion        int                       `json:"schema_version"`
+	ValidatorVersion     int                       `json:"validator_version"`
 	Config               Config                    `json:"config"`
 	Model                string                    `json:"model"`
 	StartedAt            time.Time                 `json:"started_at"`
@@ -269,7 +270,8 @@ func (statistics *statistics) finish(finished time.Time, window time.Duration, c
 	all := statistics.total.report()
 	report := Report{
 		SchemaVersion: 1, Config: statistics.configuration, Model: "closed", StartedAt: statistics.start.UTC(), FinishedAt: finished.UTC(),
-		WindowSeconds: window.Seconds(), ElapsedSeconds: finished.Sub(statistics.start).Seconds(), Canceled: canceled, Expected: expected,
+		ValidatorVersion: responseValidatorVersion,
+		WindowSeconds:    window.Seconds(), ElapsedSeconds: finished.Sub(statistics.start).Seconds(), Canceled: canceled, Expected: expected,
 		Totals: all.Totals, Statuses: all.Statuses, DropReasons: statistics.dropReasons, Latency: all.Latency,
 		SuccessLatency: all.SuccessLatency, HTTPDuration: all.HTTPDuration, SchedulerLag: all.SchedulerLag,
 		Scenarios: make(map[string]ScenarioReport), Seconds: make([]SecondReport, 0, len(statistics.seconds)), Errors: statistics.errors,

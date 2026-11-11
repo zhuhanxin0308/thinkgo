@@ -19,9 +19,9 @@ func TestResponseRejectsZeroProductPrices(t *testing.T) {
 	}{
 		{
 			name:    "目录零价格",
-			request: requestSpec{Scenario: "catalog", Tenant: 1},
+			request: requestSpec{Scenario: "catalog", Tenant: 1, CategoryID: 1},
 			status:  http.StatusOK,
-			body:    `{"items":[{"id":1,"name":"商品","price_cents":0,"category":"分类","stock":100}],"next_cursor":null}`,
+			body:    `{"items":[{"id":1,"name":"商品","price_cents":0,"category":"分类-1","stock":100}],"next_cursor":null}`,
 		},
 		{
 			name:    "详情零价格",

@@ -27,6 +27,7 @@ type requestSpec struct {
 	Token          string
 	IdempotencyKey string
 	Tenant         int
+	CategoryID     int
 	ResourceID     int64
 	OrderItems     []orderItem
 }
@@ -93,6 +94,7 @@ func (workload *workload) request(sequence uint64) requestSpec {
 	switch scenario {
 	case "catalog":
 		category := random.IntN(configuration.Categories) + 1
+		request.CategoryID = category
 		request.Path = fmt.Sprintf("/api/catalog?category_id=%d&min_price=0&max_price=%d&cursor_price=0&cursor_id=0&limit=%d", category, catalogMaximumPrice, catalogPageSize)
 	case "detail":
 		var activeIndex int

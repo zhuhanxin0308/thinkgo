@@ -8,7 +8,13 @@ import (
 	"math"
 	"mime"
 	"net/http"
+	"strconv"
 )
+
+// responseValidatorVersion 标识未来结果采用的响应语义门禁，历史结果保持原样。
+const responseValidatorVersion = 2
+
+const catalogCategoryPrefix = "分类-"
 
 var (
 	errResponseStatus  = errors.New("response_status")
@@ -125,6 +131,9 @@ func validateCard(configuration Config, tenant int, card productCard) bool {
 }
 
 func validateCatalog(configuration Config, request requestSpec, body []byte) error {
+	if request.CategoryID < 1 || request.CategoryID > configuration.Categories || request.Tenant < 1 || request.Tenant > configuration.TenantCount {
+		return errResponseData
+	}
 	var response catalogResponse
 	if err := decodeStrict(body, &response); err != nil {
 		return err
@@ -132,8 +141,15 @@ func validateCatalog(configuration Config, request requestSpec, body []byte) err
 	if len(response.Items) == 0 || len(response.Items) > catalogPageSize || response.NextCursor == nil {
 		return errResponseData
 	}
+	expectedCategory := catalogCategoryPrefix + strconv.Itoa(request.CategoryID)
+	productOffset := int64(request.Tenant-1) * int64(configuration.ProductsPerTenant)
 	for index, card := range response.Items {
 		if !validateCard(configuration, request.Tenant, card) || *card.PriceCents > catalogMaximumPrice {
+			return errResponseData
+		}
+		// 与冻结种子合同一致：分类由租户内商品编号计算，不能只相信响应文案。
+		category := (*card.ID-productOffset-1)%int64(configuration.Categories) + 1
+		if category != int64(request.CategoryID) || *card.Category != expectedCategory {
 			return errResponseData
 		}
 		if index > 0 {

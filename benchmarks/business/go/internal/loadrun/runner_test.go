@@ -16,7 +16,16 @@ import (
 // respondCatalog 仅作为本地测试端点，不替代正式业务应用。
 func respondCatalog(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("Content-Type", "application/json")
-	fmt.Fprint(writer, `{"items":[{"id":1,"name":"商品","price_cents":100,"stock":10,"category":"分类"}],"next_cursor":null}`)
+	category, err := strconv.Atoi(request.URL.Query().Get("category_id"))
+	if err != nil {
+		writer.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	product := category
+	for product%inactiveProductEvery == 0 {
+		product += defaultCategories
+	}
+	fmt.Fprintf(writer, `{"items":[{"id":%d,"name":"商品","price_cents":100,"stock":10,"category":"分类-%d"}],"next_cursor":null}`, product, category)
 }
 
 func assertConservation(t *testing.T, report Report) {

@@ -32,7 +32,7 @@ func TestSaveReportPlainAndGzip(t *testing.T) {
 			decoder = json.NewDecoder(compressed)
 		}
 		var restored Report
-		if err := decoder.Decode(&restored); err != nil || restored.SchemaVersion != report.SchemaVersion || restored.Config.Secret != "" {
+		if err := decoder.Decode(&restored); err != nil || restored.SchemaVersion != report.SchemaVersion || restored.ValidatorVersion != 2 || restored.Config.Secret != "" {
 			t.Fatalf("结果文件不可恢复或泄露密钥: %v", err)
 		}
 		file.Close()

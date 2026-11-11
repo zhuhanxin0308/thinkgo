@@ -15,7 +15,7 @@ func TestResponseSemanticContracts(t *testing.T) {
 		cache   string
 		body    string
 	}{
-		{"catalog", requestSpec{Scenario: "catalog", Tenant: 1}, 200, "", `{"items":[{"id":1,"name":"商品","price_cents":100,"category":"分类","stock":30},{"id":2,"name":"商品2","price_cents":100,"category":"分类","stock":30}],"next_cursor":{"price_cents":100,"id":2}}`},
+		{"catalog", requestSpec{Scenario: "catalog", Tenant: 1, CategoryID: 1}, 200, "", `{"items":[{"id":1,"name":"商品","price_cents":100,"category":"分类-1","stock":30},{"id":33,"name":"商品2","price_cents":100,"category":"分类-1","stock":30}],"next_cursor":{"price_cents":100,"id":33}}`},
 		{"detail", requestSpec{Scenario: "detail", Tenant: 1, ResourceID: 1}, 200, "hit", `{"id":1,"name":"商品","price_cents":100,"stock":30,"category":"分类","description":"商品说明","specs":[{"name":"颜色","value":"黑色"}]}`},
 		{"order", requestSpec{Scenario: "order", Tenant: 1, OrderItems: []orderItem{{1, 2}, {2, 1}}}, 201, "", `{"order_id":1,"total_cents":400,"status":"created","items":[{"product_id":1,"quantity":2,"unit_price_cents":100},{"product_id":2,"quantity":1,"unit_price_cents":200}]}`},
 		{"ticket", requestSpec{Scenario: "ticket", Tenant: 1, ResourceID: 7}, 201, "", `{"comment_id":1,"ticket_id":7,"version":2,"status":"open"}`},
@@ -53,9 +53,9 @@ func TestResponseRejectsWrongBusinessValues(t *testing.T) {
 		status  int
 		body    string
 	}{
-		{requestSpec{Scenario: "catalog", Tenant: 1}, 200, `{"items":[],"next_cursor":null}`},
-		{requestSpec{Scenario: "catalog", Tenant: 1}, 200, `{"items":[{"id":2,"name":"x","price_cents":200,"category":"c","stock":1},{"id":1,"name":"x","price_cents":100,"category":"c","stock":1}],"next_cursor":null}`},
-		{requestSpec{Scenario: "catalog", Tenant: 1}, 200, `{"items":[{"id":1,"name":"x","price_cents":100,"category":"c","stock":1}],"next_cursor":{"price_cents":100,"id":2}}`},
+		{requestSpec{Scenario: "catalog", Tenant: 1, CategoryID: 1}, 200, `{"items":[],"next_cursor":null}`},
+		{requestSpec{Scenario: "catalog", Tenant: 1, CategoryID: 1}, 200, `{"items":[{"id":33,"name":"x","price_cents":200,"category":"分类-1","stock":1},{"id":1,"name":"x","price_cents":100,"category":"分类-1","stock":1}],"next_cursor":null}`},
+		{requestSpec{Scenario: "catalog", Tenant: 1, CategoryID: 1}, 200, `{"items":[{"id":1,"name":"x","price_cents":100,"category":"分类-1","stock":1}],"next_cursor":{"price_cents":100,"id":2}}`},
 		{requestSpec{Scenario: "detail", Tenant: 1, ResourceID: 1}, 200, `{"id":2,"name":"x","price_cents":100,"stock":1,"category":"c","description":"d","specs":[]}`},
 		{requestSpec{Scenario: "order", Tenant: 1, OrderItems: []orderItem{{1, 2}, {2, 1}}}, 201, `{"order_id":1,"total_cents":301,"status":"created","items":[{"product_id":1,"quantity":2,"unit_price_cents":100},{"product_id":2,"quantity":1,"unit_price_cents":100}]}`},
 		{requestSpec{Scenario: "order", Tenant: 1, OrderItems: []orderItem{{1, 2}, {2, 1}}}, 200, `{"order_id":1,"total_cents":300,"status":"created","items":[{"product_id":1,"quantity":2,"unit_price_cents":100},{"product_id":2,"quantity":1,"unit_price_cents":100}]}`},
