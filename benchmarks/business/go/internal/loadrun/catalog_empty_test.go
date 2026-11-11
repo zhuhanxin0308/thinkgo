@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -43,6 +44,10 @@ func TestCatalogEmptyMatchesSeed(t *testing.T) {
 
 // TestEmptyCatalogCountsAsSuccess 验证合法空目录通过实际请求链计入成功吞吐。
 func TestEmptyCatalogCountsAsSuccess(t *testing.T) {
+	synctest.Test(t, testEmptyCatalogCountsAsSuccess)
+}
+
+func testEmptyCatalogCountsAsSuccess(t *testing.T) {
 	configuration := testConfig()
 	configuration.Scenario = "catalog"
 	configuration.Categories = inactiveProductEvery
