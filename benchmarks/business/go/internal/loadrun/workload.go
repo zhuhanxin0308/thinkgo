@@ -56,13 +56,16 @@ func newWorkload(configuration Config, now time.Time) *workload {
 	}
 	for index, scenario := range []string{"catalog", "detail", "order", "ticket"} {
 		count := weights[index] / divisor
+		// #nosec G115 -- Config.Validate 限定各权重为1..100；正最大公约数约分后的 count 仍为1..100。
 		result.weights[scenario] = uint64(count)
 		for range count {
 			result.mix = append(result.mix, scenario)
 		}
 	}
 	hotDivisor := weightGCD(configuration.CacheHitWeight, percentageTotal)
+	// #nosec G115 -- 热点权重已验证为0..100，与100的最大公约数为1..100，循环长度为1..100。
 	result.detailCycle = uint64(percentageTotal / hotDivisor)
+	// #nosec G115 -- 已验证的非负热点权重经正除数约分后仍为0..100，不会溢出 uint64。
 	result.detailHot = uint64(configuration.CacheHitWeight / hotDivisor)
 	expiry := now.Add(configuration.Duration + configuration.Timeout + tokenExpiryGrace).Unix()
 	for tenant := 1; tenant <= configuration.TenantCount; tenant++ {
