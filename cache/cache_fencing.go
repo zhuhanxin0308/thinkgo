@@ -374,20 +374,42 @@ func (c *Cache) writeFencedCacheValuesContext(ctx context.Context, driver Driver
 	if len(keys) == 0 {
 		return nil
 	}
+	updater, ok := driver.(ExpiryAtomicUpdater)
+	if !ok {
+		return ErrCacheAtomicUpdateUnsupported
+	}
 	generation, err := c.nextFenceGenerationContext(ctx, driver)
 	if err != nil {
 		return err
 	}
-	committed := make([]string, 0, len(keys))
+	committed := make([]cacheBatchSnapshot, 0, len(keys))
 	for _, key := range keys {
-		if err = c.commitFencedValueContext(ctx, driver, key, values[key], ttl, generation); err != nil {
+		snapshot := cacheBatchSnapshot{key: key}
+		err = updater.UpdateWithExpiryContext(ctx, key, ttl, func(raw interface{}, found bool, expiry time.Time) (interface{}, bool, *time.Time, error) {
+			snapshot = cacheBatchSnapshot{key: key}
+			if found {
+				_, current, enveloped, decodeErr := decodeCacheValueEnvelope(raw)
+				if decodeErr != nil {
+					return nil, false, nil, decodeErr
+				}
+				if enveloped && current > generation {
+					return nil, false, nil, ErrCacheLockLost
+				}
+			}
+			snapshot = cacheBatchSnapshot{key: key, value: raw, found: found, expiry: expiry, captured: true}
+			return newCacheValueEnvelope(generation, values[key]), false, nil, nil
+		})
+		// 即使响应丢失，回调已执行的键也可能实际提交；条件回滚会核验真正的代际。
+		if snapshot.captured {
+			committed = append(committed, snapshot)
+		}
+		if err != nil {
 			break
 		}
-		committed = append(committed, key)
 	}
 	if err == nil {
-		for _, key := range committed {
-			latestInvalidation, fenceErr := c.invalidationForKey(ctx, driver, key)
+		for _, snapshot := range committed {
+			latestInvalidation, fenceErr := c.invalidationForKey(ctx, driver, snapshot.key)
 			if fenceErr != nil {
 				err = fenceErr
 				break
@@ -401,8 +423,8 @@ func (c *Cache) writeFencedCacheValuesContext(ctx context.Context, driver Driver
 	if err == nil {
 		return nil
 	}
-	for _, key := range committed {
-		err = errors.Join(err, c.deleteExactGenerationContext(context.WithoutCancel(ctx), driver, key, generation))
+	for index := len(committed) - 1; index >= 0; index-- {
+		err = errors.Join(err, rollbackCacheBatchSnapshot(context.WithoutCancel(ctx), updater, committed[index], generation))
 	}
 	return err
 }

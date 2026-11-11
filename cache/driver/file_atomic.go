@@ -76,17 +76,30 @@ func (c *File) updateAtomicTTLPolicyContext(ctx context.Context, key string, ttl
 }
 
 func (c *File) updateItemLocked(key string, ttl time.Duration, update func(interface{}, bool) (interface{}, bool, bool, error)) error {
+	return c.updateItemWithExpiryLocked(key, ttl, func(value interface{}, found bool, expiry time.Time) (interface{}, bool, *time.Time, error) {
+		next, remove, preserve, err := update(value, found)
+		var override *time.Time
+		if preserve && found {
+			override = &expiry
+		}
+		return next, remove, override, err
+	})
+}
+
+func (c *File) updateItemWithExpiryLocked(key string, ttl time.Duration, update func(interface{}, bool, time.Time) (interface{}, bool, *time.Time, error)) error {
 	item, found, err := c.readItemLocked(key, time.Now())
 	if err != nil {
 		return err
 	}
 	var current interface{}
+	var originalExpiry time.Time
 	if found {
+		originalExpiry = item.Expiry
 		if err = json.Unmarshal(item.Value, &current); err != nil {
 			return fmt.Errorf("%w: %v", ErrCorruptCacheEntry, err)
 		}
 	}
-	next, remove, preserveTTL, err := update(current, found)
+	next, remove, expiryOverride, err := update(current, found, originalExpiry)
 	if err != nil {
 		return err
 	}
@@ -94,11 +107,13 @@ func (c *File) updateItemLocked(key string, ttl time.Duration, update func(inter
 		return c.deleteItemLocked(key)
 	}
 	expiry := time.Time{}
-	if preserveTTL && found {
-		expiry = item.Expiry
-	}
-	if !preserveTTL && ttl > 0 {
+	if expiryOverride != nil {
+		expiry = *expiryOverride
+	} else if ttl > 0 {
 		expiry = time.Now().Add(ttl)
+	}
+	if !expiry.IsZero() && !expiry.After(time.Now()) {
+		return c.deleteItemLocked(key)
 	}
 	return c.writeItemLocked(key, next, expiry)
 }

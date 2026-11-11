@@ -238,6 +238,15 @@ func (driver *NamespaceDriver) UpdatePreserveTTL(key string, update func(interfa
 	return updater.UpdatePreserveTTL(driver.key(key), update)
 }
 
+// UpdateWithExpiryContext 映射逻辑键，并保留底层值与绝对过期时间的共同原子边界。
+func (driver *NamespaceDriver) UpdateWithExpiryContext(ctx context.Context, key string, ttl time.Duration, update func(interface{}, bool, time.Time) (interface{}, bool, *time.Time, error)) error {
+	updater, ok := driver.driver.(ExpiryAtomicUpdater)
+	if !ok {
+		return ErrCacheAtomicUpdateUnsupported
+	}
+	return updater.UpdateWithExpiryContext(ctx, driver.key(key), ttl, update)
+}
+
 // UpdatePreserveTTLConditionally 转发同一原子提交的 TTL 决策；旧驱动无法原子重置现存 TTL 时明确拒绝。
 func (driver *NamespaceDriver) UpdatePreserveTTLConditionally(key string, update func(interface{}, bool) (interface{}, bool, bool, error)) error {
 	if update == nil {

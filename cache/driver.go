@@ -111,6 +111,13 @@ type ConditionalTTLAtomicUpdater interface {
 	UpdatePreserveTTLConditionally(key string, update func(value interface{}, found bool) (next interface{}, remove bool, preserveTTL bool, err error)) error
 }
 
+// ExpiryAtomicUpdater 在同一原子边界内读取值及绝对过期时间，并允许条件恢复原过期时间。
+// expiryOverride=nil 使用传入 ttl；非 nil 使用指定绝对时刻，零时刻表示永久。
+// 回调可因乐观冲突重试；返回错误不得提交值或 TTL，已经到期的恢复项必须删除。
+type ExpiryAtomicUpdater interface {
+	UpdateWithExpiryContext(ctx context.Context, key string, ttl time.Duration, update func(interface{}, bool, time.Time) (interface{}, bool, *time.Time, error)) error
+}
+
 // ContextualDistributedLocker 为支持请求取消的分布式锁驱动提供可选上下文能力。
 type ContextualDistributedLocker interface {
 	AcquireLockContext(ctx context.Context, key string, owner string, ttl time.Duration) (bool, error)

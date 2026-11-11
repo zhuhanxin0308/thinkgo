@@ -54,6 +54,17 @@ func (c *Memory) updateAtomicTTLPolicy(key string, ttl time.Duration, update fun
 
 // updateAtomicLocked 在唯一内存锁内完成值和 TTL 更新，调用方已经取得互斥权。
 func (c *Memory) updateAtomicLocked(key string, ttl time.Duration, update func(interface{}, bool) (interface{}, bool, bool, error)) error {
+	return c.updateAtomicExpiryLocked(key, ttl, func(value interface{}, found bool, expiry time.Time) (interface{}, bool, *time.Time, error) {
+		next, remove, preserve, err := update(value, found)
+		var override *time.Time
+		if preserve && found {
+			override = &expiry
+		}
+		return next, remove, override, err
+	})
+}
+
+func (c *Memory) updateAtomicExpiryLocked(key string, ttl time.Duration, update func(interface{}, bool, time.Time) (interface{}, bool, *time.Time, error)) error {
 	now := time.Now()
 	c.ensureMapsLocked()
 	c.sweepExpiredLocked(now)
@@ -80,7 +91,7 @@ func (c *Memory) updateAtomicLocked(key string, ttl time.Duration, update func(i
 			}
 		}
 	}
-	next, remove, preserveTTL, err := update(current, found)
+	next, remove, expiryOverride, err := update(current, found, stored.expiry)
 	if err != nil {
 		return err
 	}
@@ -97,13 +108,18 @@ func (c *Memory) updateAtomicLocked(key string, ttl time.Duration, update func(i
 			return err
 		}
 	}
-	expiry := stored.expiry
-	if !preserveTTL {
-		expiry = time.Time{}
-		if ttl > 0 {
-			// 新值的 TTL 从提交准备完成时开始，不消耗在回调和快照复制上。
-			expiry = time.Now().Add(ttl)
+	expiry := time.Time{}
+	if expiryOverride != nil {
+		expiry = *expiryOverride
+	} else if ttl > 0 {
+		// 新值的 TTL 从提交准备完成时开始，不消耗在回调和快照复制上。
+		expiry = time.Now().Add(ttl)
+	}
+	if !expiry.IsZero() && !expiry.After(time.Now()) {
+		if found {
+			c.removeItemLocked(key, stored)
 		}
+		return nil
 	}
 	c.sequence++
 	return c.storeItemLocked(key, cloned, expiry, c.sequence, isMetadataKey(key))
