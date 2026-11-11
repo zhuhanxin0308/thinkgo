@@ -31,7 +31,7 @@ func run(ctx context.Context, arguments []string, stdout, stderr io.Writer, look
 	flags.SetOutput(stderr)
 	var secretEnvironment, output string
 	flags.StringVar(&configuration.URL, "url", configuration.URL, "被测应用的 loopback HTTP 根地址")
-	flags.StringVar(&configuration.Scenario, "scenario", configuration.Scenario, "catalog/detail/order/ticket/mixed，混合权重40/30/20/10")
+	flags.StringVar(&configuration.Scenario, "scenario", configuration.Scenario, "catalog/detail/order/ticket/mixed，混合权重由四个业务权重参数指定")
 	flags.Float64Var(&configuration.Rate, "rate", configuration.Rate, "每秒计划请求数；正数为开放负载，0为闭环")
 	flags.IntVar(&configuration.Concurrency, "concurrency", configuration.Concurrency, "闭环固定并发请求数")
 	flags.IntVar(&configuration.MaxInflight, "max-inflight", configuration.MaxInflight, "开放负载最大在途数，超出记录为dropped")
@@ -46,6 +46,13 @@ func run(ctx context.Context, arguments []string, stdout, stderr io.Writer, look
 	flags.IntVar(&configuration.ProductsPerTenant, "products-per-tenant", configuration.ProductsPerTenant, "每租户商品数量")
 	flags.IntVar(&configuration.TicketsPerTenant, "tickets-per-tenant", configuration.TicketsPerTenant, "每租户工单数量")
 	flags.IntVar(&configuration.Categories, "categories", configuration.Categories, "每租户分类数量")
+	flags.IntVar(&configuration.InactiveProductModulus, "inactive-product-modulus", configuration.InactiveProductModulus, "种子数据中商品下架模数")
+	flags.IntVar(&configuration.HotProductsPerTenant, "hot-products-per-tenant", configuration.HotProductsPerTenant, "每租户热点活动商品数量")
+	flags.IntVar(&configuration.CacheHitWeight, "cache-hit-weight", configuration.CacheHitWeight, "详情访问热点商品的百分比，并非实际缓存命中率")
+	flags.IntVar(&configuration.MixedWeights.Catalog, "catalog-weight", configuration.MixedWeights.Catalog, "混合负载中的目录权重")
+	flags.IntVar(&configuration.MixedWeights.Detail, "detail-weight", configuration.MixedWeights.Detail, "混合负载中的详情权重")
+	flags.IntVar(&configuration.MixedWeights.Order, "order-weight", configuration.MixedWeights.Order, "混合负载中的订单权重")
+	flags.IntVar(&configuration.MixedWeights.Ticket, "ticket-weight", configuration.MixedWeights.Ticket, "混合负载中的工单权重")
 	flags.IntVar(&configuration.ErrorSampleLimit, "error-samples", configuration.ErrorSampleLimit, "有界错误样本数量，正文与认证头不会保存")
 	if err := flags.Parse(arguments); err != nil {
 		if errors.Is(err, flag.ErrHelp) {

@@ -36,26 +36,39 @@ const (
 	maximumHeaderBytes       = 64 << 10
 	tokenExpiryGrace         = 5 * time.Minute
 	tcpKeepAlive             = 30 * time.Second
+	percentageTotal          = 100
 )
+
+// ScenarioWeights 与数据集的四类业务权重保持同一字段结构。
+type ScenarioWeights struct {
+	Catalog int `json:"catalog"`
+	Detail  int `json:"detail"`
+	Order   int `json:"order"`
+	Ticket  int `json:"ticket"`
+}
 
 // Config 的数据规模和种子必须与被测应用的种子数据一致；Secret 永远不序列化。
 type Config struct {
-	URL               string        `json:"url"`
-	Scenario          string        `json:"scenario"`
-	Rate              float64       `json:"rate_per_second"`
-	Concurrency       int           `json:"concurrency"`
-	MaxInflight       int           `json:"max_inflight"`
-	Duration          time.Duration `json:"duration_ns"`
-	Timeout           time.Duration `json:"timeout_ns"`
-	Seed              uint64        `json:"seed"`
-	RunID             string        `json:"run_id"`
-	Secret            string        `json:"-"`
-	TenantCount       int           `json:"tenant_count"`
-	UsersPerTenant    int           `json:"users_per_tenant"`
-	ProductsPerTenant int           `json:"products_per_tenant"`
-	TicketsPerTenant  int           `json:"tickets_per_tenant"`
-	Categories        int           `json:"categories"`
-	ErrorSampleLimit  int           `json:"error_sample_limit"`
+	URL                    string          `json:"url"`
+	Scenario               string          `json:"scenario"`
+	Rate                   float64         `json:"rate_per_second"`
+	Concurrency            int             `json:"concurrency"`
+	MaxInflight            int             `json:"max_inflight"`
+	Duration               time.Duration   `json:"duration_ns"`
+	Timeout                time.Duration   `json:"timeout_ns"`
+	Seed                   uint64          `json:"seed"`
+	RunID                  string          `json:"run_id"`
+	Secret                 string          `json:"-"`
+	TenantCount            int             `json:"tenant_count"`
+	UsersPerTenant         int             `json:"users_per_tenant"`
+	ProductsPerTenant      int             `json:"products_per_tenant"`
+	TicketsPerTenant       int             `json:"tickets_per_tenant"`
+	Categories             int             `json:"categories"`
+	ErrorSampleLimit       int             `json:"error_sample_limit"`
+	InactiveProductModulus int             `json:"inactive_product_modulus"`
+	HotProductsPerTenant   int             `json:"hot_products_per_tenant"`
+	CacheHitWeight         int             `json:"cache_hit_weight"`
+	MixedWeights           ScenarioWeights `json:"mixed_weights"`
 }
 
 // DefaultConfig 集中定义可通过命令行覆盖的实验默认值。
@@ -66,6 +79,9 @@ func DefaultConfig() Config {
 		Seed: 1, TenantCount: defaultTenants, UsersPerTenant: defaultUsersPerTenant,
 		ProductsPerTenant: defaultProductsPerTenant, TicketsPerTenant: defaultTicketsPerTenant,
 		Categories: defaultCategories, ErrorSampleLimit: defaultErrorSampleLimit,
+		InactiveProductModulus: inactiveProductEvery, HotProductsPerTenant: hotProductCount,
+		CacheHitWeight: detailHotCount * percentageTotal / detailCycleSize,
+		MixedWeights:   ScenarioWeights{Catalog: 40, Detail: 30, Order: 20, Ticket: 10},
 	}
 }
 
@@ -89,8 +105,25 @@ func (configuration Config) Validate() error {
 	if configuration.TenantCount < 1 || configuration.UsersPerTenant < 1 || configuration.TenantCount > maximumTokenEntries/configuration.UsersPerTenant {
 		return errors.New("tenant-count 和 users-per-tenant 必须为正，且缓存身份数不能超过预算")
 	}
-	if configuration.ProductsPerTenant < 2*hotProductCount || configuration.TicketsPerTenant < 1 || configuration.Categories < 1 {
-		return errors.New("商品须容纳冷热集合，工单与分类数量必须为正")
+	if configuration.ProductsPerTenant < 1 || configuration.TicketsPerTenant < 1 || configuration.Categories < 1 || configuration.InactiveProductModulus < 2 {
+		return errors.New("商品、工单与分类数量必须为正，下架模数至少为2")
+	}
+	activeProducts := configuration.ProductsPerTenant - configuration.ProductsPerTenant/configuration.InactiveProductModulus
+	if configuration.HotProductsPerTenant < 1 || activeProducts <= configuration.HotProductsPerTenant {
+		return errors.New("活动商品必须容纳配置的热点集合并至少保留一个冷商品")
+	}
+	if configuration.CacheHitWeight < 0 || configuration.CacheHitWeight > percentageTotal {
+		return errors.New("热点权重必须在0到100之间")
+	}
+	weight := 0
+	for _, current := range configuration.MixedWeights.values() {
+		if current < 1 || current > percentageTotal {
+			return errors.New("混合场景必须包含全部业务，单项权重必须在1到100之间")
+		}
+		weight += current
+	}
+	if weight != percentageTotal {
+		return errors.New("混合业务权重之和必须为100")
 	}
 	for _, size := range []int{configuration.ProductsPerTenant, configuration.TicketsPerTenant} {
 		if int64(size) > math.MaxInt64/int64(configuration.TenantCount) {

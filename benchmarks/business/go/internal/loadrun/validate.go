@@ -126,7 +126,7 @@ func validateCard(configuration Config, tenant int, card productCard) bool {
 		return false
 	}
 	local := *card.ID - int64(tenant-1)*int64(configuration.ProductsPerTenant)
-	return local > 0 && local <= int64(configuration.ProductsPerTenant) && local%inactiveProductEvery != 0 &&
+	return local > 0 && local <= int64(configuration.ProductsPerTenant) && local%int64(configuration.InactiveProductModulus) != 0 &&
 		*card.PriceCents > 0 && *card.Stock >= 0 && *card.Name != "" && *card.Category != ""
 }
 
@@ -185,10 +185,10 @@ func catalogHasActiveProducts(configuration Config, category int) bool {
 	if category > configuration.ProductsPerTenant {
 		return false
 	}
-	if category%inactiveProductEvery != 0 {
+	if category%configuration.InactiveProductModulus != 0 {
 		return true
 	}
-	return configuration.Categories%inactiveProductEvery != 0 && configuration.Categories <= configuration.ProductsPerTenant-category
+	return configuration.Categories%configuration.InactiveProductModulus != 0 && configuration.Categories <= configuration.ProductsPerTenant-category
 }
 
 func validateDetail(configuration Config, request requestSpec, body []byte) error {

@@ -38,6 +38,8 @@ type workload struct {
 	mix           []string
 	positions     []uint64
 	weights       map[string]uint64
+	detailCycle   uint64
+	detailHot     uint64
 }
 
 // newWorkload 在计时前缓存所有合法身份；每个请求仅由种子和全局序号决定。
@@ -45,9 +47,23 @@ func newWorkload(configuration Config, now time.Time) *workload {
 	result := &workload{
 		configuration: configuration,
 		tokens:        make([][]string, configuration.TenantCount),
-		weights:       map[string]uint64{"catalog": 4, "detail": 3, "order": 2, "ticket": 1},
-		mix:           []string{"catalog", "catalog", "catalog", "catalog", "detail", "detail", "detail", "order", "order", "ticket"},
+		weights:       make(map[string]uint64),
 	}
+	weights := configuration.MixedWeights.values()
+	divisor := 0
+	for _, weight := range weights {
+		divisor = weightGCD(divisor, weight)
+	}
+	for index, scenario := range []string{"catalog", "detail", "order", "ticket"} {
+		count := weights[index] / divisor
+		result.weights[scenario] = uint64(count)
+		for range count {
+			result.mix = append(result.mix, scenario)
+		}
+	}
+	hotDivisor := weightGCD(configuration.CacheHitWeight, percentageTotal)
+	result.detailCycle = uint64(percentageTotal / hotDivisor)
+	result.detailHot = uint64(configuration.CacheHitWeight / hotDivisor)
 	expiry := now.Add(configuration.Duration + configuration.Timeout + tokenExpiryGrace).Unix()
 	for tenant := 1; tenant <= configuration.TenantCount; tenant++ {
 		result.tokens[tenant-1] = make([]string, configuration.UsersPerTenant)
@@ -90,7 +106,7 @@ func (workload *workload) request(sequence uint64) requestSpec {
 	localUser := random.IntN(configuration.UsersPerTenant) + 1
 	request := requestSpec{Scenario: scenario, Method: http.MethodGet, Tenant: tenant}
 	productOffset := int64(tenant-1) * int64(configuration.ProductsPerTenant)
-	activeProducts := configuration.ProductsPerTenant - configuration.ProductsPerTenant/inactiveProductEvery
+	activeProducts := configuration.ProductsPerTenant - configuration.ProductsPerTenant/configuration.InactiveProductModulus
 	switch scenario {
 	case "catalog":
 		category := random.IntN(configuration.Categories) + 1
@@ -98,19 +114,19 @@ func (workload *workload) request(sequence uint64) requestSpec {
 		request.Path = fmt.Sprintf("/api/catalog?category_id=%d&min_price=0&max_price=%d&cursor_price=0&cursor_id=0&limit=%d", category, catalogMaximumPrice, catalogPageSize)
 	case "detail":
 		var activeIndex int
-		if ordinal%detailCycleSize < detailHotCount {
-			activeIndex = random.IntN(hotProductCount)
+		if ordinal%workload.detailCycle < workload.detailHot {
+			activeIndex = random.IntN(configuration.HotProductsPerTenant)
 		} else {
 			// 冷请求按租户交错遍历全域键空间，全部租户的冷键访问完之后才允许复用。
-			coldOrdinal := ordinal / detailCycleSize
+			coldOrdinal := ordinal/workload.detailCycle*(workload.detailCycle-workload.detailHot) + ordinal%workload.detailCycle - workload.detailHot
 			// #nosec G115 -- 配置验证要求租户数为正且总身份数至多一百万，取模后必能装入 int。
 			tenant = int(coldOrdinal%uint64(configuration.TenantCount)) + 1
 			request.Tenant = tenant
 			productOffset = int64(tenant-1) * int64(configuration.ProductsPerTenant)
 			// #nosec G115 -- 冷商品总数为正，余数小于已验证的 int 商品规模，索引加热点偏移仍在界内。
-			activeIndex = hotProductCount + int(coldOrdinal/uint64(configuration.TenantCount)%uint64(activeProducts-hotProductCount))
+			activeIndex = configuration.HotProductsPerTenant + int(coldOrdinal/uint64(configuration.TenantCount)%uint64(activeProducts-configuration.HotProductsPerTenant))
 		}
-		request.ResourceID = productOffset + activeProductID(activeIndex)
+		request.ResourceID = productOffset + activeProductID(activeIndex, configuration.InactiveProductModulus)
 		request.Path = "/api/products/" + strconv.FormatInt(request.ResourceID, 10)
 	case "order":
 		first := random.IntN(activeProducts)
@@ -120,8 +136,8 @@ func (workload *workload) request(sequence uint64) requestSpec {
 			second++
 		}
 		request.OrderItems = []orderItem{
-			{ProductID: productOffset + activeProductID(first), Quantity: int64(random.IntN(maximumOrderQuantity) + 1)},
-			{ProductID: productOffset + activeProductID(second), Quantity: int64(random.IntN(maximumOrderQuantity) + 1)},
+			{ProductID: productOffset + activeProductID(first, configuration.InactiveProductModulus), Quantity: int64(random.IntN(maximumOrderQuantity) + 1)},
+			{ProductID: productOffset + activeProductID(second, configuration.InactiveProductModulus), Quantity: int64(random.IntN(maximumOrderQuantity) + 1)},
 		}
 		request.Method, request.Path = http.MethodPost, "/api/orders"
 		request.Body, _ = json.Marshal(struct {
@@ -143,8 +159,8 @@ func (workload *workload) request(sequence uint64) requestSpec {
 	return request
 }
 
-// activeProductID 把连续活动序号映射为排除每十个下架商品后的种子主键。
-func activeProductID(index int) int64 {
-	activePerBlock := inactiveProductEvery - 1
-	return int64(index/activePerBlock)*inactiveProductEvery + int64(index%activePerBlock) + 1
+// activeProductID 按数据集的下架模数，将连续活动序号映射到种子主键。
+func activeProductID(index, modulus int) int64 {
+	activePerBlock := modulus - 1
+	return int64(index/activePerBlock)*int64(modulus) + int64(index%activePerBlock) + 1
 }

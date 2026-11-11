@@ -17,6 +17,9 @@ func TestCLIValidatesFlagsAndSecret(t *testing.T) {
 	for _, args := range [][]string{
 		{"-unknown"},
 		{"-duration=broken"},
+		{"-inactive-product-modulus=1", "-run-id=test", "-output=result.json"},
+		{"-cache-hit-weight=101", "-run-id=test", "-output=result.json"},
+		{"-catalog-weight=99", "-run-id=test", "-output=result.json"},
 		{"-url=http://example.com", "-run-id=test", "-output=result.json"},
 		{"-run-id=test"},
 		{"-output=result.json"},
