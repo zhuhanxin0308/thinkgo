@@ -41,12 +41,7 @@ func (c *DB) UpdateIfLockOwnerContext(ctx context.Context, key string, ttl time.
 	}
 	err = db.NewDB(c.conn).TransactionContext(ctx, func(transaction *db.Tx) error {
 		lease := transaction.Table(c.table).Where("key", dbLockStorageKey(lockKey))
-		guard := lease
-		if connection, ok := c.conn.(*db.SQLConnection); ok && connection.Builder != nil && connection.Builder.DialectName() == "oracle" {
-			guard = guard.WhereRaw(fmt.Sprintf("DBMS_LOB.COMPARE(%s, TO_CLOB(?)) = 0", c.quoteIdentifier("value")), ownerValue)
-		} else {
-			guard = guard.Where("value", ownerValue)
-		}
+		guard := c.whereEncodedValue(lease, ownerValue)
 		matched, err := guard.Where("expiry", ">", time.Now().UnixMilli()).Update(map[string]interface{}{"value": dbLeaseCommitMarker})
 		if err != nil {
 			return err

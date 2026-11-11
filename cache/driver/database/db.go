@@ -190,9 +190,7 @@ func (c *DB) ReleaseLock(key string, owner string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	deleted, err := db.NewDB(c.conn).Table(c.table).
-		Where("key", dbLockStorageKey(key)).
-		Where("value", ownerValue).
+	deleted, err := c.compareValue(dbLockStorageKey(key), ownerValue).
 		Where("expiry", ">", time.Now().UnixMilli()).
 		Delete()
 	return deleted > 0, err
@@ -210,9 +208,7 @@ func (c *DB) RenewLock(key string, owner string, ttl time.Duration) (bool, error
 	data := map[string]interface{}{
 		"expiry": time.Now().Add(ttl).UnixMilli(),
 	}
-	updated, err := db.NewDB(c.conn).Table(c.table).
-		Where("key", dbLockStorageKey(key)).
-		Where("value", ownerValue).
+	updated, err := c.compareValue(dbLockStorageKey(key), ownerValue).
 		Where("expiry", ">", time.Now().UnixMilli()).
 		Update(data)
 	return updated > 0, err
