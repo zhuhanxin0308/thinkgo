@@ -15,6 +15,9 @@ func cacheDriverSupportsGuardedUpdates(driver Driver) bool {
 
 // commitRememberValue 在后端持有租约检查的原子区间内提交，并保持标签与失效代际语义。
 func (c *Cache) commitRememberValue(ctx context.Context, key string, value interface{}, ttl time.Duration, lock *Lock) error {
+	if err := validateCacheNumber(value); err != nil {
+		return err
+	}
 	driver, release, err := c.driver()
 	if err != nil {
 		return err

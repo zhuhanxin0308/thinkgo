@@ -105,6 +105,9 @@ func (c *Cache) SetManyContext(ctx context.Context, values map[string]interface{
 		if err := validatePublicCacheKey(key); err != nil {
 			return err
 		}
+		if err := validateCacheNumber(values[key]); err != nil {
+			return err
+		}
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)

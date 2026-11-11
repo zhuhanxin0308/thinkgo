@@ -65,6 +65,9 @@ func (c *Cache) UpdateContext(ctx context.Context, key string, ttl time.Duration
 					return nil, false, decodeErr
 				}
 				next, remove, updateErr := update(value, found)
+				if updateErr == nil && !remove {
+					updateErr = validateCacheNumber(next)
+				}
 				if updateErr == nil {
 					removed, committedOrigin = remove, origin
 					if !remove && generation > 0 {

@@ -64,6 +64,9 @@ func encodePreciseCacheInteger(value interface{}) (interface{}, string) {
 		if _, err := strconv.ParseInt(typed.String(), 10, 64); err == nil {
 			return typed.String(), cacheIntegerEncoding + "json-number"
 		}
+		if validCacheJSONInteger(typed.String()) {
+			return typed.String(), cacheIntegerEncoding + "json-number-wide"
+		}
 	}
 	return value, ""
 }
@@ -78,6 +81,11 @@ func decodePreciseCacheInteger(value interface{}, encoding string) (interface{},
 	}
 	kind := strings.TrimPrefix(encoding, cacheIntegerEncoding)
 	switch kind {
+	case "json-number-wide":
+		if !validCacheJSONInteger(text) {
+			return nil, ErrCorruptCacheEnvelope
+		}
+		return json.Number(text), nil
 	case "int", "int64", "json-number":
 		parsed, err := strconv.ParseInt(text, 10, 64)
 		if err != nil {
@@ -328,6 +336,9 @@ func atomicUpdateCacheValueConditionalTTL(driver Driver, key string, update func
 }
 
 func (c *Cache) writeFencedCacheValueContext(ctx context.Context, driver Driver, key string, value interface{}, ttl time.Duration) error {
+	if err := validateCacheNumber(value); err != nil {
+		return err
+	}
 	if !cacheDriverSupportsAtomicFencing(driver) {
 		return setCacheValueContext(ctx, driver, key, value, ttl)
 	}
@@ -342,6 +353,9 @@ func (c *Cache) writeFencedCacheValueContext(ctx context.Context, driver Driver,
 }
 
 func (c *Cache) commitFencedValueContext(ctx context.Context, driver Driver, key string, value interface{}, ttl time.Duration, generation uint64) error {
+	if err := validateCacheNumber(value); err != nil {
+		return err
+	}
 	return atomicUpdateCacheValueContext(ctx, driver, key, ttl, func(raw interface{}, found bool) (interface{}, bool, error) {
 		if found {
 			_, currentGeneration, enveloped, err := decodeCacheValueEnvelope(raw)
