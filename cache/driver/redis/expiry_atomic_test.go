@@ -75,7 +75,8 @@ func TestRedisExpirySnapshotRejectsInvalidCalls(t *testing.T) {
 	update := func(interface{}, bool, time.Time) (interface{}, bool, *time.Time, error) {
 		return "value", false, nil, nil
 	}
-	if err := backend.UpdateWithExpiryContext(nil, "key", 0, update); !errors.Is(err, ErrInvalidRedisContext) {
+	var nilContext context.Context
+	if err := backend.UpdateWithExpiryContext(nilContext, "key", 0, update); !errors.Is(err, ErrInvalidRedisContext) {
 		t.Fatal(err)
 	}
 	if err := backend.UpdateWithExpiryContext(context.Background(), "key", 0, nil); !errors.Is(err, ErrNilAtomicUpdate) {
