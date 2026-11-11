@@ -91,6 +91,11 @@ func (c *DB) reclaimObsoleteWrite(physicalKey string) error {
 // compareValue 使用读取到的值进行原子比较更新，Oracle 的 CLOB 使用其明确的比较能力。
 func (c *DB) compareValue(key string, encoded string) *db.Query {
 	query := db.NewDB(c.conn).Table(c.table).Where("key", key)
+	return c.whereEncodedValue(query, encoded)
+}
+
+// whereEncodedValue 在原查询上追加值匹配条件，保留事务、上下文和其他谓词。
+func (c *DB) whereEncodedValue(query *db.Query, encoded string) *db.Query {
 	if connection, ok := c.conn.(*db.SQLConnection); ok && connection.Builder != nil && connection.Builder.DialectName() == "oracle" {
 		return query.WhereRaw(fmt.Sprintf("DBMS_LOB.COMPARE(%s, TO_CLOB(?)) = 0", c.quoteIdentifier("value")), encoded)
 	}

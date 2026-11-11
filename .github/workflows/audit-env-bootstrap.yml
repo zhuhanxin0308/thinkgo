@@ -49,12 +49,12 @@ jobs:
           mkdir -p "$BASE"/{downloads,toolchains,metadata,prefetch,home,tmp,modcache,gocache,gopath,artifacts/toolchain,artifacts/source,artifacts/modules}
           [[ "$AUDIT_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
           test "$(git -C source rev-parse HEAD)" = "$AUDIT_SOURCE_SHA"
-          test "$(awk '$1 == "go" { print $2; exit }' source/go.mod)" = 1.26.10
+          test "$(awk '$1 == "go" { print $2; exit }' source/go.mod)" = 1.27.4
           curl --fail --location --proto '=https' --tlsv1.2 --retry 2 --max-time 180 \
-            https://go.dev/dl/go1.26.10.linux-amd64.tar.gz \
-            -o "$BASE/artifacts/toolchain/go1.26.10.linux-amd64.tar.gz"
-          printf '%s  %s\n' ccfe7ae822d2c2f41f4fe7c956199967a4dac22d0ee0d2b2bfdb440aab3b20c5 "$BASE/artifacts/toolchain/go1.26.10.linux-amd64.tar.gz" | sha256sum --check --strict
-          tar --no-same-owner -xzf "$BASE/artifacts/toolchain/go1.26.10.linux-amd64.tar.gz" -C "$BASE/toolchains"
+            https://go.dev/dl/go1.27.4.linux-amd64.tar.gz \
+            -o "$BASE/artifacts/toolchain/go1.27.4.linux-amd64.tar.gz"
+          printf '%s  %s\n' 7226736c2339719cda28fbf3a54d71aa63bcefe376e98cef00034268dab24840 "$BASE/artifacts/toolchain/go1.27.4.linux-amd64.tar.gz" | sha256sum --check --strict
+          tar --no-same-owner -xzf "$BASE/artifacts/toolchain/go1.27.4.linux-amd64.tar.gz" -C "$BASE/toolchains"
           "$BASE/toolchains/go/bin/go" version | tee "$BASE/artifacts/toolchain/version.txt"
           printf '%s\n' "$AUDIT_SOURCE_SHA" > "$BASE/artifacts/source/source-ref.txt"
           git -C source archive --format=tar.gz HEAD > "$BASE/artifacts/source/thinkgo-${AUDIT_SOURCE_SHA}.tar.gz"
@@ -68,7 +68,7 @@ jobs:
           "${goenv[@]}" go list -m -json all > "$BASE/artifacts/modules/module-graph.json"
           "${goenv[@]}" go mod graph > "$BASE/artifacts/modules/module-edges.txt"
           # Parse imports and fetch authenticated modules only. No target program runs during preparation.
-          printf 'module audit-prefetch\n\ngo 1.26.10\n\nrequire github.com/zhuhanxin0308/thinkgo/v3 v3.0.0\nreplace github.com/zhuhanxin0308/thinkgo/v3 => %s\n' "$GITHUB_WORKSPACE/source" > "$BASE/prefetch/go.mod"
+          printf 'module audit-prefetch\n\ngo 1.27.4\n\nrequire github.com/zhuhanxin0308/thinkgo/v3 v3.0.0\nreplace github.com/zhuhanxin0308/thinkgo/v3 => %s\n' "$GITHUB_WORKSPACE/source" > "$BASE/prefetch/go.mod"
           cp "$BASE/artifacts/modules/go.sum" "$BASE/prefetch/go.sum"
           cat > "$BASE/prefetch/imports.go" <<'GO'
           package auditprefetch

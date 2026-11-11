@@ -55,7 +55,7 @@ func (c *Cache) UpdateContext(ctx context.Context, key string, ttl time.Duration
 		return ErrCacheAtomicUpdateUnsupported
 	}
 	c.trace("UPDATE", key)
-	runUpdate := func(cleanMetadata bool) (bool, error) {
+	runUpdate := func(ctx context.Context, cleanMetadata bool) (bool, error) {
 		removed := false
 		committedOrigin := uint64(0)
 		generation, _, err := c.withFreshAtomicFence(ctx, driver, key, func(generation, started, invalidation uint64) error {
@@ -65,6 +65,9 @@ func (c *Cache) UpdateContext(ctx context.Context, key string, ttl time.Duration
 					return nil, false, decodeErr
 				}
 				next, remove, updateErr := update(value, found)
+				if updateErr == nil && !remove {
+					updateErr = validateCacheNumber(next)
+				}
 				if updateErr == nil {
 					removed, committedOrigin = remove, origin
 					if !remove && generation > 0 {
@@ -104,17 +107,17 @@ func (c *Cache) UpdateContext(ctx context.Context, key string, ttl time.Duration
 		return err
 	}
 	if len(tags) > 0 {
-		return c.withTagMutationLockContext(ctx, driver, func() error {
+		return c.withTagMutationLockContext(ctx, driver, func(ctx context.Context) error {
 			c.state.tagMu.Lock()
 			defer c.state.tagMu.Unlock()
 			if repairErr := c.repairMissingKeyMetadataLockedContext(ctx, driver, key); repairErr != nil {
 				return repairErr
 			}
-			_, updateErr := runUpdate(true)
+			_, updateErr := runUpdate(ctx, true)
 			return updateErr
 		})
 	}
-	removed, err := runUpdate(false)
+	removed, err := runUpdate(ctx, false)
 	if err != nil || !removed {
 		return err
 	}
@@ -153,7 +156,7 @@ func (c *Cache) ClearPrefixContext(ctx context.Context, prefix string) error {
 		return ErrCacheNamespaceClearUnsupported
 	}
 	c.trace("CLEAR_PREFIX", prefix)
-	return c.withTagMutationLockContext(ctx, driver, func() error {
+	return c.withTagMutationLockContext(ctx, driver, func(ctx context.Context) error {
 		c.state.tagMu.Lock()
 		defer c.state.tagMu.Unlock()
 		return c.clearAtFence(ctx, driver, prefix)

@@ -105,6 +105,9 @@ func (c *Cache) SetManyContext(ctx context.Context, values map[string]interface{
 		if err := validatePublicCacheKey(key); err != nil {
 			return err
 		}
+		if err := validateCacheNumber(values[key]); err != nil {
+			return err
+		}
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
@@ -151,7 +154,7 @@ func (c *Cache) SetManyContext(ctx context.Context, values map[string]interface{
 	if !needsMetadataLock {
 		return writeValues()
 	}
-	return c.withTagMutationLockContext(ctx, driver, func() error {
+	return c.withTagMutationLockContext(ctx, driver, func(ctx context.Context) error {
 		c.state.tagMu.Lock()
 		defer c.state.tagMu.Unlock()
 		for _, key := range keys {

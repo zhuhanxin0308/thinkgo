@@ -12,7 +12,7 @@ import (
 var (
 	ErrInvalidMemoryBudget    = errors.New("内存缓存预算非法")
 	ErrMemoryValueTooLarge    = errors.New("内存缓存值超过预算")
-	ErrUnsupportedMemoryValue = errors.New("内存缓存预算不支持该值类型")
+	ErrUnsupportedMemoryValue = errors.New("内存缓存不支持安全复制该值类型")
 )
 
 // MemoryBudget defines explicit per-driver admission limits. Bytes are conservative

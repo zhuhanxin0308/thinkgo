@@ -32,7 +32,7 @@ func TestDetailColdOrdinalAtSequenceBoundary(t *testing.T) {
 		if local < 1 || local > int64(configuration.ProductsPerTenant) || local%inactiveProductEvery == 0 {
 			t.Fatalf("请求商品越界或被下架: sequence=%d local=%d", sequence, local)
 		}
-		if sequence%detailCycleSize == detailCycleSize-1 && local <= activeProductID(hotProductCount-1) {
+		if sequence%detailCycleSize == detailCycleSize-1 && local <= activeProductID(hotProductCount-1, inactiveProductEvery) {
 			t.Fatalf("冷请求意外命中热点: sequence=%d local=%d", sequence, local)
 		}
 	}

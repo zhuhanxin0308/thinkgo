@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -476,6 +477,20 @@ type oneShotSetFailureDriver struct {
 }
 
 func (d *oneShotSetFailureDriver) Set(key string, value interface{}, ttl time.Duration) error {
+	if err := d.failOnce(key); err != nil {
+		return err
+	}
+	return d.Memory.Set(key, value, ttl)
+}
+
+func (d *oneShotSetFailureDriver) UpdateIfLockOwnerContext(ctx context.Context, key string, ttl time.Duration, lockKey, owner string, update func(interface{}, bool) (interface{}, bool, error)) (bool, error) {
+	if err := d.failOnce(key); err != nil {
+		return false, err
+	}
+	return d.Memory.UpdateIfLockOwnerContext(ctx, key, ttl, lockKey, owner, update)
+}
+
+func (d *oneShotSetFailureDriver) failOnce(key string) error {
 	d.mu.Lock()
 	if key == d.failKey && !d.failed {
 		d.failed = true
@@ -483,7 +498,7 @@ func (d *oneShotSetFailureDriver) Set(key string, value interface{}, ttl time.Du
 		return d.err
 	}
 	d.mu.Unlock()
-	return d.Memory.Set(key, value, ttl)
+	return nil
 }
 
 // TestTaggedSetRollsBackPartialMetadata 验证标签双向元数据任一步骤失败时不会留下幽灵成员。

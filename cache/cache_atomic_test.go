@@ -65,6 +65,13 @@ func (driver *failingFencedBatchDriver) Update(key string, ttl time.Duration, up
 	return driver.Memory.Update(key, ttl, update)
 }
 
+func (driver *failingFencedBatchDriver) UpdateWithExpiryContext(ctx context.Context, key string, ttl time.Duration, update func(interface{}, bool, time.Time) (interface{}, bool, *time.Time, error)) error {
+	if key == driver.failKey {
+		return driver.err
+	}
+	return driver.Memory.UpdateWithExpiryContext(ctx, key, ttl, update)
+}
+
 // TestCacheAtomicUpdateMaintainsTagMetadata 验证创建、更新、失败和删除都在原子边界内，
 // 删除后不会遗留标签的双向映射。
 func TestCacheAtomicUpdateMaintainsTagMetadata(t *testing.T) {

@@ -20,7 +20,7 @@
   "gateway_connections": 4096,
   "gateway_upstream_keepalive": 64,
   "build_provenance": {
-    "go_version": "go1.27.3",
+    "go_version": "go1.27.4",
     "module": "github.com/zhuhanxin0308/thinkgo/benchmarks/business",
     "absent_settings": ["-race", "-cover", "-asan", "-msan"],
     "settings": {"-trimpath": "true", "CGO_ENABLED": "1", "GOAMD64": "v1", "GOOS": "linux", "GOARCH": "amd64"}

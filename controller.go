@@ -24,11 +24,12 @@ type ControllerMiddleware struct {
 // Controller 基础控制器
 // 对应 ThinkPHP 的 BaseController
 type Controller struct {
-	App           *App
-	Request       *context.Request
-	viewData      map[string]interface{}
-	middleware    []ControllerMiddleware // 控制器级中间件声明
-	batchValidate bool                   // 是否按 ThinkPHP BaseController 规则收集全部验证错误
+	App            *App
+	Request        *context.Request
+	viewData       map[string]interface{}
+	middleware     []ControllerMiddleware // 控制器级中间件声明
+	batchValidate  bool                   // 是否按 ThinkPHP BaseController 规则收集全部验证错误
+	strictValidate bool                   // 是否拒绝当前规则或场景未声明的顶层字段
 }
 
 // GetMiddleware 返回控制器声明的中间件列表。
@@ -179,10 +180,7 @@ func (c *Controller) Validate(data map[string]interface{}, definition interface{
 
 // ValidateResult 提供显式 Result/error 边界，供确实需要自行组织验证响应的业务使用。
 func (c *Controller) ValidateResult(data map[string]interface{}, rules map[string]string) (validate.Result, error) {
-	if c != nil && c.App != nil {
-		return validate.ValidateRules(data, rules, validate.WithLocation(c.App.Location()))
-	}
-	return validate.ValidateRules(data, rules)
+	return validate.ValidateRules(data, rules, c.controllerValidationOptions()...)
 }
 
 type controllerValidatorContract interface {
@@ -194,10 +192,7 @@ type controllerValidatorMessageSetter interface {
 }
 
 func (c *Controller) resolveControllerValidator(definition interface{}, arguments ...interface{}) (controllerValidatorContract, []validate.Option, error) {
-	options := make([]validate.Option, 0, 2)
-	if c != nil && c.App != nil {
-		options = append(options, validate.WithLocation(c.App.Location()))
-	}
+	options := c.controllerValidationOptions()
 	var validator controllerValidatorContract
 	switch typed := definition.(type) {
 	case map[string]string:

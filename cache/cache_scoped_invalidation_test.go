@@ -28,6 +28,15 @@ func (driver *blockingIndependentUpdateDriver) UpdatePreserveTTLConditionally(ke
 	return driver.Memory.UpdatePreserveTTLConditionally(key, update)
 }
 
+// UpdateWithExpiryContext 为批次快照入口保留相同交错，避免新增能力绕过原有并发回归。
+func (driver *blockingIndependentUpdateDriver) UpdateWithExpiryContext(ctx context.Context, key string, ttl time.Duration, update func(interface{}, bool, time.Time) (interface{}, bool, *time.Time, error)) error {
+	if key == driver.target {
+		driver.once.Do(func() { close(driver.started) })
+		<-driver.release
+	}
+	return driver.Memory.UpdateWithExpiryContext(ctx, key, ttl, update)
+}
+
 // TestInvalidationDoesNotDeleteUnrelatedWrites 验证失效范围不能扩散到同一缓存中的其他业务或会话。
 func TestInvalidationDoesNotDeleteUnrelatedWrites(t *testing.T) {
 	for _, operation := range []string{"set", "update", "counter", "batch"} {

@@ -64,15 +64,18 @@ type templateSnapshot struct {
 
 type templateLoad struct {
 	done        chan struct{}
-	template    *template.Template
+	template    *templateCacheEntry
 	err         error
 	generation  uint64
 	invalidated bool
 }
 
 type templateCacheEntry struct {
-	parsed *template.Template
-	order  *list.Element
+	parsed     *template.Template
+	order      *list.Element
+	execOnce   sync.Once
+	executable *template.Template
+	execErr    error
 }
 
 // NewGoTemplate 创建尚未配置根目录的 GoTemplate 驱动。
@@ -167,7 +170,7 @@ func (d *GoTemplate) Display(writer io.Writer, templateName string, data map[str
 	return d.DisplayWithFuncMap(writer, templateName, data, nil)
 }
 
-// DisplayWithFuncMap 克隆从未执行的缓存模板，并仅在本次执行中覆盖请求函数。
+// DisplayWithFuncMap 复用普通执行快照，仅为请求级函数覆盖克隆未执行的原始模板。
 func (d *GoTemplate) DisplayWithFuncMap(writer io.Writer, templateName string, data map[string]interface{}, funcMap map[string]interface{}) error {
 	if isNilTemplateWriter(writer) {
 		return ErrInvalidTemplateWriter
@@ -176,18 +179,24 @@ func (d *GoTemplate) DisplayWithFuncMap(writer io.Writer, templateName string, d
 	if err != nil {
 		return err
 	}
-	executable, err := tmpl.Clone()
+	if len(funcMap) == 0 {
+		tmpl.execOnce.Do(func() {
+			tmpl.executable, tmpl.execErr = tmpl.parsed.Clone()
+		})
+		if tmpl.execErr != nil {
+			return fmt.Errorf("克隆模板执行实例失败: %w", tmpl.execErr)
+		}
+		return tmpl.executable.Execute(writer, data)
+	}
+	validated, validateErr := validateTemplateFuncMap(funcMap)
+	if validateErr != nil {
+		return validateErr
+	}
+	executable, err := tmpl.parsed.Clone()
 	if err != nil {
 		return fmt.Errorf("克隆模板执行实例失败: %w", err)
 	}
-	if len(funcMap) > 0 {
-		validated, validateErr := validateTemplateFuncMap(funcMap)
-		if validateErr != nil {
-			return validateErr
-		}
-		executable = executable.Funcs(validated)
-	}
-	return executable.Execute(writer, data)
+	return executable.Funcs(validated).Execute(writer, data)
 }
 
 // Exists 检查模板是否为根目录内可读取的普通文件，并保留真实文件系统错误。
@@ -227,7 +236,7 @@ func (d *GoTemplate) SetFuncMap(funcMap map[string]interface{}) error {
 	return nil
 }
 
-func (d *GoTemplate) getTemplate(templateName string) (*template.Template, error) {
+func (d *GoTemplate) getTemplate(templateName string) (*templateCacheEntry, error) {
 	if d == nil {
 		return nil, ErrInvalidViewConfig
 	}
@@ -238,7 +247,11 @@ func (d *GoTemplate) getTemplate(templateName string) (*template.Template, error
 			return nil, err
 		}
 		if !snapshot.cacheEnable {
-			return parseTemplate(snapshot, candidate)
+			parsed, err := parseTemplate(snapshot, candidate)
+			if err != nil {
+				return nil, err
+			}
+			return &templateCacheEntry{parsed: parsed}, nil
 		}
 
 		d.mutex.Lock()
@@ -249,7 +262,7 @@ func (d *GoTemplate) getTemplate(templateName string) (*template.Template, error
 		if cached := d.cache[candidate]; cached != nil {
 			d.touchCacheEntryLocked(cached)
 			d.mutex.Unlock()
-			return cached.parsed, nil
+			return cached, nil
 		}
 		if currentLoad := d.loads[candidate]; currentLoad != nil && currentLoad.generation == snapshot.generation {
 			done := currentLoad.done
@@ -273,14 +286,8 @@ func (d *GoTemplate) getTemplate(templateName string) (*template.Template, error
 			load.invalidated = true
 		} else {
 			if parseErr == nil {
-				if cached := d.cache[candidate]; cached != nil {
-					d.touchCacheEntryLocked(cached)
-					tmpl = cached.parsed
-				} else {
-					d.storeTemplateLocked(candidate, tmpl)
-				}
+				load.template = d.storeTemplateLocked(candidate, tmpl)
 			}
-			load.template = tmpl
 			load.err = parseErr
 		}
 		close(load.done)
@@ -305,13 +312,13 @@ func (d *GoTemplate) touchCacheEntryLocked(entry *templateCacheEntry) {
 
 // storeTemplateLocked 在容量满时淘汰最久未使用模板，再缓存本次解析结果。
 // 调用方必须持有写锁。
-func (d *GoTemplate) storeTemplateLocked(candidate string, tmpl *template.Template) {
+func (d *GoTemplate) storeTemplateLocked(candidate string, tmpl *template.Template) *templateCacheEntry {
 	if d.cache == nil {
 		d.resetCacheLocked()
 	}
 	if cached := d.cache[candidate]; cached != nil {
 		d.touchCacheEntryLocked(cached)
-		return
+		return cached
 	}
 	if len(d.cache) >= maxCachedTemplates {
 		d.evictLeastRecentlyUsedLocked()
@@ -320,6 +327,7 @@ func (d *GoTemplate) storeTemplateLocked(candidate string, tmpl *template.Templa
 		parsed: tmpl,
 		order:  d.cacheOrder.PushFront(candidate),
 	}
+	return d.cache[candidate]
 }
 
 // evictLeastRecentlyUsedLocked 淘汰最久未命中的模板；调用方必须持有写锁，

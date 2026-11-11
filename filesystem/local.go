@@ -506,9 +506,6 @@ func (disk *Local) Copy(source string, destination string, optionSets ...map[str
 	if err != nil {
 		return err
 	}
-	if from == to {
-		return nil
-	}
 	disk.mu.RLock()
 	defer disk.mu.RUnlock()
 	if err = disk.ensureOpenLocked(); err != nil {
@@ -524,6 +521,10 @@ func (disk *Local) Copy(source string, destination string, optionSets ...map[str
 	visibility, err := disk.copyVisibilityLocked(from, sourceInformation, options)
 	if err != nil {
 		return err
+	}
+	// 同路径仅省略实际写入，仍须满足与普通复制相同的前置条件。
+	if from == to {
+		return nil
 	}
 	if err = disk.ensureAtomicParentDirectoryLocked(to, disk.configuration.Visibility); err != nil {
 		return err

@@ -90,7 +90,12 @@ def load_command(root, protocol, dataset, url, run_id, scenario, duration, outpu
                  "-seed", protocol["seed"], "-run-id", run_id, "-secret-env", "BENCH_SECRET", "-output", output,
                  "-tenant-count", dataset["tenant_count"], "-users-per-tenant", dataset["users_per_tenant"],
                  "-products-per-tenant", dataset["products_per_tenant"], "-tickets-per-tenant", dataset["tickets_per_tenant"],
-                 "-categories", dataset["categories_per_tenant"]]
+                 "-categories", dataset["categories_per_tenant"],
+                 "-inactive-product-modulus", dataset["inactive_product_modulus"],
+                 "-hot-products-per-tenant", dataset["hot_products_per_tenant"],
+                 "-cache-hit-weight", dataset["cache_hit_weight"]]
+    for scenario in ("catalog", "detail", "order", "ticket"):
+        arguments.extend((f"-{scenario}-weight", dataset["mixed_weights"][scenario]))
     return list(map(str, arguments))
 
 

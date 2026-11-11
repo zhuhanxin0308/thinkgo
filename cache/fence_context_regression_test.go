@@ -50,13 +50,18 @@ func TestFenceAllocationPreservesRequestContext(t *testing.T) {
 				t.Fatal(err)
 			}
 			manager := NewCache(nil, namespace)
-			ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+			ctx, cancel := context.WithTimeout(context.WithValue(t.Context(), cacheContextKey{}, "fence-request"), time.Minute)
 			defer cancel()
 			if err := operation(manager, ctx); !errors.Is(err, context.DeadlineExceeded) {
 				t.Fatalf("期限错误丢失: %v", err)
 			}
-			if backend.received != ctx || backend.legacyCalled || !strings.Contains(backend.key, "namespace:") {
+			if backend.received == nil || backend.received.Value(cacheContextKey{}) != "fence-request" || backend.legacyCalled || !strings.Contains(backend.key, "namespace:") {
 				t.Fatalf("代际上下文或命名空间丢失: legacy=%t key=%q", backend.legacyCalled, backend.key)
+			}
+			wantDeadline, _ := ctx.Deadline()
+			gotDeadline, hasDeadline := backend.received.Deadline()
+			if !hasDeadline || !gotDeadline.Equal(wantDeadline) {
+				t.Fatalf("派生上下文未保留请求期限: got=%v want=%v", gotDeadline, wantDeadline)
 			}
 			if _, found, err := manager.Get("value"); err != nil || found {
 				t.Fatalf("领票失败后仍写入: %t %v", found, err)

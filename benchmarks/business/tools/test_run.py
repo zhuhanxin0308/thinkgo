@@ -61,6 +61,17 @@ class RunTest(unittest.TestCase):
             self.assertEqual(opened[opened.index(option) + 1], expected)
         self.assertNotIn("BENCH_SECRET=", " ".join(closed))
 
+    def test_custom_dataset_reaches_load_generator(self):
+        self.dataset.update(inactive_product_modulus=3, hot_products_per_tenant=75, cache_hit_weight=80,
+                            mixed_weights={"catalog": 10, "detail": 10, "order": 10, "ticket": 70})
+        command = load_command(ROOT, self.protocol, self.dataset, "http://127.0.0.1:18081", "custom",
+                               "mixed", 30, pathlib.Path("custom.json.gz"), 0)
+        for option, expected in {"-inactive-product-modulus": "3", "-hot-products-per-tenant": "75",
+                                 "-cache-hit-weight": "80", "-catalog-weight": "10", "-detail-weight": "10",
+                                 "-order-weight": "10", "-ticket-weight": "70"}.items():
+            self.assertIn(option, command)
+            self.assertEqual(command[command.index(option) + 1], expected)
+
     def test_resume_rejects_modified_or_invalid_evidence(self):
         with tempfile.TemporaryDirectory() as directory:
             folder = pathlib.Path(directory)

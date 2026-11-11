@@ -16,6 +16,8 @@ from dataclasses import dataclass
 
 TOKEN_LIFETIME_SECONDS = 3600
 CONCURRENT_REPLAYS = 8
+CATALOG_PAGE_SIZE = 2
+CATALOG_PAGES_TO_VERIFY = 2
 CARD_FIELDS = {"id", "name", "price_cents", "category", "stock"}
 DETAIL_FIELDS = CARD_FIELDS | {"description", "specs"}
 ORDER_FIELDS = {"order_id", "total_cents", "status", "items"}
@@ -170,42 +172,58 @@ class Verifier:
             expect_error(self.request("GET", "/api/catalog", token=token), 401)
         return {"protected_routes": len(routes), "invalid_credentials": 4}
 
+    def catalog_samples(self, tenant):
+        # 独立读取预期记录及一条前瞻记录，不要求每类都存在固定数量的活动商品。
+        limit = CATALOG_PAGE_SIZE * CATALOG_PAGES_TO_VERIFY + 1
+        return self.sql(f"""SELECT COALESCE(json_agg(sample), '[]'::json) FROM (
+            SELECT p.id,p.name,p.price_cents,c.name AS category,p.stock
+            FROM bench_products p JOIN bench_categories c
+              ON c.tenant_id=p.tenant_id AND c.id=p.category_id
+            WHERE p.tenant_id = {int(tenant)} AND p.category_id=1 AND p.active
+            ORDER BY p.price_cents,p.id LIMIT {limit}) sample""")
+
+    def verify_catalog_page(self, page, expected, offset):
+        items = expected[offset:offset + CATALOG_PAGE_SIZE]
+        require(page["items"] == items, "目录分页记录与种子数据不符")
+        cursor = None
+        if len(expected) > offset + CATALOG_PAGE_SIZE:
+            cursor = {key: items[-1][key] for key in ("price_cents", "id")}
+        require(page["next_cursor"] == cursor, "目录游标与剩余记录不符")
+
     def catalog(self):
-        page_size = 2
+        page_size = CATALOG_PAGE_SIZE
+        expected = self.catalog_samples(1)
         first = expect(self.request("GET", f"/api/catalog?category_id=1&limit={page_size}"),
                        200, {"items", "next_cursor"})
+        self.verify_catalog_page(first, expected, 0)
         cursor = first["next_cursor"]
-        require(isinstance(cursor, dict) and set(cursor) == {"price_cents", "id"}, "游标字段不符")
-        next_path = (f"/api/catalog?category_id=1&limit={page_size}&cursor_price={cursor['price_cents']}"
-                     f"&cursor_id={cursor['id']}")
-        second = expect(self.request("GET", next_path), 200, {"items", "next_cursor"})
-        combined = first["items"] + second["items"]
-        require(len(first["items"]) == page_size and len(second["items"]) == page_size, "分页大小不符")
-        for card in combined:
-            require(set(card) == CARD_FIELDS, "目录卡片包含额外字段")
-            require(1 <= card["id"] <= self.dataset["products_per_tenant"] and card["category"] == "分类-1",
-                    "目录返回错误租户或分类")
-        ordering = [(card["price_cents"], card["id"]) for card in combined]
-        require(ordering == sorted(ordering) and len(set(ordering)) == len(ordering), "游标分页排序或去重错误")
-        require(cursor == {key: first["items"][-1][key] for key in cursor}, "游标不是本页最后记录")
-        price = first["items"][0]["price_cents"]
-        filtered = expect(self.request("GET", f"/api/catalog?category_id=1&min_price={price}&max_price={price}"),
-                          200, {"items", "next_cursor"})
-        require(filtered["items"] and all(item["price_cents"] == price for item in filtered["items"]),
-                "价格过滤不准确")
+        combined = list(first["items"])
+        pages = 1
+        if cursor is not None:
+            next_path = (f"/api/catalog?category_id=1&limit={page_size}&cursor_price={cursor['price_cents']}"
+                         f"&cursor_id={cursor['id']}")
+            second = expect(self.request("GET", next_path), 200, {"items", "next_cursor"})
+            self.verify_catalog_page(second, expected, page_size)
+            combined.extend(second["items"])
+            pages += 1
+        if first["items"]:
+            price = first["items"][0]["price_cents"]
+            filtered = expect(self.request("GET", f"/api/catalog?category_id=1&min_price={price}&max_price={price}"),
+                              200, {"items", "next_cursor"})
+            require(filtered["items"] and all(item["price_cents"] == price for item in filtered["items"]),
+                    "价格过滤不准确")
         empty = expect(self.request("GET", "/api/catalog?min_price=0&max_price=0"),
                        200, {"items", "next_cursor"})
         require(empty == {"items": [], "next_cursor": None}, "空目录页面与结束游标不符")
         other = authenticate(self.secret, 2, self.dataset["users_per_tenant"] + 1)
         other_page = expect(self.request("GET", "/api/catalog?limit=2", token=other), 200, {"items", "next_cursor"})
-        require(other_page["items"] and all(self.dataset["products_per_tenant"] < item["id"] <=
-                2 * self.dataset["products_per_tenant"] for item in other_page["items"]), "目录未隔离租户")
+        self.verify_catalog_page(other_page, self.catalog_samples(2), 0)
         invalid = ["internal_cost=1", "limit=0", f"limit={self.dataset['maximum_page_size'] + 1}",
                    "limit=1&limit=2", "min_price=-1", "cursor_price=1", "category_id=0", "limit=01",
                    "cursor_price=0", "cursor_id=0", "limit=%GG", "limit=2&", "&limit=2"]
         for query in invalid:
             expect_error(self.request("GET", "/api/catalog?" + query), 422)
-        return {"pages": 2, "ordered_unique_products": len(combined), "invalid_queries": len(invalid)}
+        return {"pages": pages, "ordered_unique_products": len(combined), "invalid_queries": len(invalid)}
 
     def detail(self):
         product = self.fixtures["products"][0]

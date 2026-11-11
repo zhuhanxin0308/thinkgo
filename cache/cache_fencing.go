@@ -64,6 +64,9 @@ func encodePreciseCacheInteger(value interface{}) (interface{}, string) {
 		if _, err := strconv.ParseInt(typed.String(), 10, 64); err == nil {
 			return typed.String(), cacheIntegerEncoding + "json-number"
 		}
+		if validCacheJSONInteger(typed.String()) {
+			return typed.String(), cacheIntegerEncoding + "json-number-wide"
+		}
 	}
 	return value, ""
 }
@@ -78,6 +81,11 @@ func decodePreciseCacheInteger(value interface{}, encoding string) (interface{},
 	}
 	kind := strings.TrimPrefix(encoding, cacheIntegerEncoding)
 	switch kind {
+	case "json-number-wide":
+		if !validCacheJSONInteger(text) {
+			return nil, ErrCorruptCacheEnvelope
+		}
+		return json.Number(text), nil
 	case "int", "int64", "json-number":
 		parsed, err := strconv.ParseInt(text, 10, 64)
 		if err != nil {
@@ -328,6 +336,9 @@ func atomicUpdateCacheValueConditionalTTL(driver Driver, key string, update func
 }
 
 func (c *Cache) writeFencedCacheValueContext(ctx context.Context, driver Driver, key string, value interface{}, ttl time.Duration) error {
+	if err := validateCacheNumber(value); err != nil {
+		return err
+	}
 	if !cacheDriverSupportsAtomicFencing(driver) {
 		return setCacheValueContext(ctx, driver, key, value, ttl)
 	}
@@ -342,6 +353,9 @@ func (c *Cache) writeFencedCacheValueContext(ctx context.Context, driver Driver,
 }
 
 func (c *Cache) commitFencedValueContext(ctx context.Context, driver Driver, key string, value interface{}, ttl time.Duration, generation uint64) error {
+	if err := validateCacheNumber(value); err != nil {
+		return err
+	}
 	return atomicUpdateCacheValueContext(ctx, driver, key, ttl, func(raw interface{}, found bool) (interface{}, bool, error) {
 		if found {
 			_, currentGeneration, enveloped, err := decodeCacheValueEnvelope(raw)
@@ -360,20 +374,42 @@ func (c *Cache) writeFencedCacheValuesContext(ctx context.Context, driver Driver
 	if len(keys) == 0 {
 		return nil
 	}
+	updater, ok := driver.(ExpiryAtomicUpdater)
+	if !ok {
+		return ErrCacheAtomicUpdateUnsupported
+	}
 	generation, err := c.nextFenceGenerationContext(ctx, driver)
 	if err != nil {
 		return err
 	}
-	committed := make([]string, 0, len(keys))
+	committed := make([]cacheBatchSnapshot, 0, len(keys))
 	for _, key := range keys {
-		if err = c.commitFencedValueContext(ctx, driver, key, values[key], ttl, generation); err != nil {
+		snapshot := cacheBatchSnapshot{key: key}
+		err = updater.UpdateWithExpiryContext(ctx, key, ttl, func(raw interface{}, found bool, expiry time.Time) (interface{}, bool, *time.Time, error) {
+			snapshot = cacheBatchSnapshot{key: key}
+			if found {
+				_, current, enveloped, decodeErr := decodeCacheValueEnvelope(raw)
+				if decodeErr != nil {
+					return nil, false, nil, decodeErr
+				}
+				if enveloped && current > generation {
+					return nil, false, nil, ErrCacheLockLost
+				}
+			}
+			snapshot = cacheBatchSnapshot{key: key, value: raw, found: found, expiry: expiry, captured: true}
+			return newCacheValueEnvelope(generation, values[key]), false, nil, nil
+		})
+		// 即使响应丢失，回调已执行的键也可能实际提交；条件回滚会核验真正的代际。
+		if snapshot.captured {
+			committed = append(committed, snapshot)
+		}
+		if err != nil {
 			break
 		}
-		committed = append(committed, key)
 	}
 	if err == nil {
-		for _, key := range committed {
-			latestInvalidation, fenceErr := c.invalidationForKey(ctx, driver, key)
+		for _, snapshot := range committed {
+			latestInvalidation, fenceErr := c.invalidationForKey(ctx, driver, snapshot.key)
 			if fenceErr != nil {
 				err = fenceErr
 				break
@@ -387,8 +423,8 @@ func (c *Cache) writeFencedCacheValuesContext(ctx context.Context, driver Driver
 	if err == nil {
 		return nil
 	}
-	for _, key := range committed {
-		err = errors.Join(err, c.deleteExactGenerationContext(context.WithoutCancel(ctx), driver, key, generation))
+	for index := len(committed) - 1; index >= 0; index-- {
+		err = errors.Join(err, rollbackCacheBatchSnapshot(context.WithoutCancel(ctx), updater, committed[index], generation))
 	}
 	return err
 }

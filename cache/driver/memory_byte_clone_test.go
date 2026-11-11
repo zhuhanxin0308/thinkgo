@@ -18,7 +18,10 @@ func TestMemoryByteClonePreservesTypesAndOwnership(t *testing.T) {
 	}
 	for _, input := range inputs {
 		t.Run(reflect.TypeOf(input).String(), func(t *testing.T) {
-			got := cloneMemoryValue(input)
+			got, err := cloneMemoryValue(input)
+			if err != nil {
+				t.Fatal(err)
+			}
 			if !reflect.DeepEqual(got, input) {
 				t.Fatalf("clone changed type or contents: got=%#v input=%#v", got, input)
 			}

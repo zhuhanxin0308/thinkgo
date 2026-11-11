@@ -119,7 +119,7 @@ func TestDetailColdKeysVisitCompleteTenantSpaceBeforeReuse(t *testing.T) {
 					t.Fatal("详情认证用户不属于目标租户")
 				}
 				local := request.ResourceID - int64(request.Tenant-1)*int64(configuration.ProductsPerTenant)
-				if local <= activeProductID(hotProductCount-1) {
+				if local <= activeProductID(hotProductCount-1, inactiveProductEvery) {
 					continue
 				}
 				if local > int64(configuration.ProductsPerTenant) || local%inactiveProductEvery == 0 {

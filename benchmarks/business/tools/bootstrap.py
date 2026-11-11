@@ -176,8 +176,10 @@ class Installer:
         environment = dict(os.environ)
         for key in ["MAKEFLAGS", "MFLAGS", "CFLAGS", "CXXFLAGS", "CPPFLAGS", "LDFLAGS", "PKG_CONFIG_PATH", "PHP_INI_SCAN_DIR"]:
             environment.pop(key, None)
+        go_paths = [str(self.runtime / item["prefix"] / "bin")
+                    for item in self.manifest["components"] if item["name"] == "go"]
         environment["PATH"] = os.pathsep.join([str(self.runtime / "build-tools/bin"), str(self.runtime / "php/bin"),
-                                                str(self.runtime / "go-1.27.3/bin"), environment.get("PATH", "")])
+                                                *go_paths, environment.get("PATH", "")])
         environment["PHP_INI_SCAN_DIR"] = str(self.runtime / "php/etc/conf.d")
         environment["LC_ALL"] = "C.UTF-8"
         for key, value in component.get("environment", {}).items():

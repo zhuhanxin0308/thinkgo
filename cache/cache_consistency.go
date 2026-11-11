@@ -20,7 +20,7 @@ func (c *Cache) getCacheValueAndRepairContext(ctx context.Context, driver Driver
 	if err != nil || len(tags) == 0 {
 		return nil, false, err
 	}
-	err = c.withTagMutationLockContext(ctx, driver, func() error {
+	err = c.withTagMutationLockContext(ctx, driver, func(ctx context.Context) error {
 		c.state.tagMu.Lock()
 		defer c.state.tagMu.Unlock()
 		value, found, err = c.getVisibleCacheValue(ctx, driver, key)
@@ -77,7 +77,7 @@ func (c *Cache) repairBatchMissesContext(ctx context.Context, driver Driver, key
 	if len(candidates) == 0 {
 		return nil
 	}
-	return c.withTagMutationLockContext(ctx, driver, func() error {
+	return c.withTagMutationLockContext(ctx, driver, func(ctx context.Context) error {
 		c.state.tagMu.Lock()
 		defer c.state.tagMu.Unlock()
 		for _, key := range candidates {
@@ -118,7 +118,7 @@ func (c *Cache) mutateWithTagRepairContext(ctx context.Context, driver Driver, k
 	if len(tags) == 0 {
 		return mutation()
 	}
-	return c.withTagMutationLockContext(ctx, driver, func() error {
+	return c.withTagMutationLockContext(ctx, driver, func(ctx context.Context) error {
 		c.state.tagMu.Lock()
 		defer c.state.tagMu.Unlock()
 		if err := c.repairMissingKeyMetadataLockedContext(ctx, driver, key); err != nil {

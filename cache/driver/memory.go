@@ -97,7 +97,8 @@ func (c *Memory) Get(key string) (interface{}, bool, error) {
 		cloned, _, err := budgetSnapshot(value, c.budget.MaxValueBytes)
 		return cloned, err == nil, err
 	}
-	return cloneMemoryValue(value), true, nil
+	cloned, err := cloneMemoryValue(value)
+	return cloned, err == nil, err
 }
 
 // lookup 借用驱动内不可变值，仅限内部使用；公开 Get 必须复制后再交给调用方。
@@ -145,7 +146,11 @@ func (c *Memory) Set(key string, value interface{}, ttl time.Duration) error {
 	}
 	cloned := value
 	if c.budget == nil {
-		cloned = cloneMemoryValue(value)
+		var err error
+		cloned, err = cloneMemoryValue(value)
+		if err != nil {
+			return err
+		}
 	}
 	c.lock.Lock()
 	c.ensureMapsLocked()
@@ -374,32 +379,35 @@ func (c *Memory) RenewLock(key string, owner string, ttl time.Duration) (bool, e
 }
 
 // cloneMemoryValue 复制常见可变值，避免缓存内部状态被调用方通过 map、slice 或指针旁路修改。
-func cloneMemoryValue(value interface{}) (cloned interface{}) {
-	cloned = value
+func cloneMemoryValue(value interface{}) (cloned interface{}, cloneErr error) {
 	defer func() {
-		if recover() != nil {
-			cloned = value
+		if recovered := recover(); recovered != nil {
+			cloned = nil
+			cloneErr = fmt.Errorf("%w: %v", ErrUnsupportedMemoryValue, recovered)
 		}
 	}()
 	if value == nil {
-		return nil
+		return nil, nil
 	}
 	switch value.(type) {
 	case bool, string,
 		int, int8, int16, int32, int64,
 		uint, uint8, uint16, uint32, uint64, uintptr,
 		float32, float64, complex64, complex128, time.Time:
-		return value
+		return value, nil
 	}
-	result := cloneMemoryReflect(reflect.ValueOf(value), make(map[memoryCloneVisit]reflect.Value))
+	result := cloneMemoryReflect(reflect.ValueOf(value), make(map[memoryCloneVisit]reflect.Value), &cloneErr)
+	if cloneErr != nil {
+		return nil, cloneErr
+	}
 	if !result.IsValid() {
-		return nil
+		return nil, nil
 	}
-	return result.Interface()
+	return result.Interface(), nil
 }
 
-func cloneMemoryReflect(value reflect.Value, visited map[memoryCloneVisit]reflect.Value) reflect.Value {
-	if !value.IsValid() {
+func cloneMemoryReflect(value reflect.Value, visited map[memoryCloneVisit]reflect.Value, cloneErr *error) reflect.Value {
+	if !value.IsValid() || *cloneErr != nil {
 		return value
 	}
 	switch value.Kind() {
@@ -407,7 +415,7 @@ func cloneMemoryReflect(value reflect.Value, visited map[memoryCloneVisit]reflec
 		if value.IsNil() {
 			return reflect.Zero(value.Type())
 		}
-		cloned := cloneMemoryReflect(value.Elem(), visited)
+		cloned := cloneMemoryReflect(value.Elem(), visited, cloneErr)
 		result := reflect.New(value.Type()).Elem()
 		if cloned.IsValid() && cloned.Type().AssignableTo(value.Type()) {
 			result.Set(cloned)
@@ -422,8 +430,11 @@ func cloneMemoryReflect(value reflect.Value, visited map[memoryCloneVisit]reflec
 			return cloned
 		}
 		result := reflect.New(value.Type().Elem())
+		if result.Type() != value.Type() {
+			result = result.Convert(value.Type())
+		}
 		visited[visit] = result
-		result.Elem().Set(cloneMemoryReflect(value.Elem(), visited))
+		result.Elem().Set(cloneMemoryReflect(value.Elem(), visited, cloneErr))
 		return result
 	case reflect.Map:
 		if value.IsNil() {
@@ -437,7 +448,11 @@ func cloneMemoryReflect(value reflect.Value, visited map[memoryCloneVisit]reflec
 		visited[visit] = result
 		iter := value.MapRange()
 		for iter.Next() {
-			result.SetMapIndex(iter.Key(), cloneMemoryReflect(iter.Value(), visited))
+			if !memorySnapshotImmutableKey(iter.Key()) {
+				*cloneErr = fmt.Errorf("%w: map 键包含可变引用", ErrUnsupportedMemoryValue)
+				return reflect.Zero(value.Type())
+			}
+			result.SetMapIndex(iter.Key(), cloneMemoryReflect(iter.Value(), visited, cloneErr))
 		}
 		return result
 	case reflect.Slice:
@@ -467,25 +482,35 @@ func cloneMemoryReflect(value reflect.Value, visited map[memoryCloneVisit]reflec
 			return result
 		}
 		for index := 0; index < value.Len(); index++ {
-			result.Index(index).Set(cloneMemoryReflect(value.Index(index), visited))
+			result.Index(index).Set(cloneMemoryReflect(value.Index(index), visited, cloneErr))
 		}
 		return result
 	case reflect.Array:
 		result := reflect.New(value.Type()).Elem()
 		for index := 0; index < value.Len(); index++ {
-			result.Index(index).Set(cloneMemoryReflect(value.Index(index), visited))
+			result.Index(index).Set(cloneMemoryReflect(value.Index(index), visited, cloneErr))
 		}
 		return result
 	case reflect.Struct:
+		if value.Type() == reflect.TypeFor[time.Time]() {
+			return value
+		}
 		result := reflect.New(value.Type()).Elem()
 		result.Set(value)
 		for index := 0; index < value.NumField(); index++ {
 			if !result.Field(index).CanSet() {
+				if !memorySnapshotImmutableType(value.Field(index).Type()) {
+					*cloneErr = fmt.Errorf("%w: %s.%s 为私有可变字段", ErrUnsupportedMemoryValue, value.Type(), value.Type().Field(index).Name)
+					return reflect.Zero(value.Type())
+				}
 				continue
 			}
-			result.Field(index).Set(cloneMemoryReflect(value.Field(index), visited))
+			result.Field(index).Set(cloneMemoryReflect(value.Field(index), visited, cloneErr))
 		}
 		return result
+	case reflect.Chan, reflect.Func, reflect.UnsafePointer:
+		*cloneErr = fmt.Errorf("%w: %s", ErrUnsupportedMemoryValue, value.Type())
+		return reflect.Zero(value.Type())
 	default:
 		return value
 	}
