@@ -72,7 +72,9 @@ func TestRedisExpirySnapshotRetriesWithCurrentState(t *testing.T) {
 // TestRedisExpirySnapshotRejectsInvalidCalls 验证无效输入和取消在提交前失败。
 func TestRedisExpirySnapshotRejectsInvalidCalls(t *testing.T) {
 	backend := newConditionalRedis(t)
-	update := func(interface{}, bool, time.Time) (interface{}, bool, *time.Time, error) { return "value", false, nil, nil }
+	update := func(interface{}, bool, time.Time) (interface{}, bool, *time.Time, error) {
+		return "value", false, nil, nil
+	}
 	if err := backend.UpdateWithExpiryContext(nil, "key", 0, update); !errors.Is(err, ErrInvalidRedisContext) {
 		t.Fatal(err)
 	}

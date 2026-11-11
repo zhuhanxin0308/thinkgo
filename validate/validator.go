@@ -72,6 +72,9 @@ type validationOptions struct {
 	collectAll   bool
 	strictFields bool
 	location     *time.Location
+	language     *lang.Lang
+	locale       string
+	localeSet    bool
 }
 
 // Option 配置一次 Validate 调用，不修改共享验证器。
@@ -139,6 +142,7 @@ type Validator struct {
 type validatorConfig struct {
 	messages map[string]string
 	language *lang.Lang
+	locale   string
 }
 
 type cachedValidationPlan struct {
@@ -257,6 +261,10 @@ func (v *Validator) Validate(data map[string]interface{}, optionFunctions ...Opt
 	if err != nil {
 		return Result{}, err
 	}
+	if options.language != nil {
+		config.language = options.language
+	}
+	config.locale = options.locale
 	result := Result{violations: make([]Violation, 0)}
 	if options.strictFields {
 		allowed := make(map[string]struct{}, len(plan))
@@ -401,14 +409,14 @@ func buildViolation(config validatorConfig, field compiledField, rule compiledRu
 
 	message := configuredMessage(config.messages, field.name, rule.name)
 	if message != "" && config.language != nil {
-		translated := config.language.Get(message, variables, "")
+		translated := config.language.Get(message, variables, config.locale)
 		if translated != message {
 			message = translated
 		}
 	}
 	if message == "" && config.language != nil {
 		defaultKey := "validate.default." + rule.name
-		translated := config.language.Get(defaultKey, variables, "")
+		translated := config.language.Get(defaultKey, variables, config.locale)
 		if translated != defaultKey {
 			message = translated
 		}
