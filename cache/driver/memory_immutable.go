@@ -30,3 +30,30 @@ func memorySnapshotImmutableType(value reflect.Type) bool {
 		return false
 	}
 }
+
+// memorySnapshotImmutableKey 检查接口键的实际值，不能因静态接口类型拒绝安全的标量键。
+func memorySnapshotImmutableKey(value reflect.Value) bool {
+	if memorySnapshotImmutableType(value.Type()) {
+		return true
+	}
+	switch value.Kind() {
+	case reflect.Interface:
+		return value.IsNil() || memorySnapshotImmutableKey(value.Elem())
+	case reflect.Struct:
+		for index := 0; index < value.NumField(); index++ {
+			if !memorySnapshotImmutableKey(value.Field(index)) {
+				return false
+			}
+		}
+		return true
+	case reflect.Array:
+		for index := 0; index < value.Len(); index++ {
+			if !memorySnapshotImmutableKey(value.Index(index)) {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
+}

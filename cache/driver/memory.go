@@ -448,7 +448,7 @@ func cloneMemoryReflect(value reflect.Value, visited map[memoryCloneVisit]reflec
 		visited[visit] = result
 		iter := value.MapRange()
 		for iter.Next() {
-			if !memorySnapshotImmutableType(iter.Key().Type()) {
+			if !memorySnapshotImmutableKey(iter.Key()) {
 				*cloneErr = fmt.Errorf("%w: map 键包含可变引用", ErrUnsupportedMemoryValue)
 				return reflect.Zero(value.Type())
 			}

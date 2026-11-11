@@ -16,6 +16,7 @@ func TestMemoryRejectsPrivateMutableSnapshots(t *testing.T) {
 	for _, value := range []interface{}{
 		big.NewInt(1234567), privateMutableSnapshot{data: []byte("secret")},
 		map[string]interface{}{"nested": big.NewInt(1234567)},
+		map[interface{}]int{big.NewInt(1): 1},
 		[]privateMutableSnapshot{{data: []byte("nested")}},
 		make(chan int), func() {},
 	} {
@@ -55,5 +56,21 @@ func TestMemoryPreservesImmutablePrivateFields(t *testing.T) {
 	got, found, err := backend.Get("value")
 	if err != nil || !found || !reflect.DeepEqual(got, value) {
 		t.Fatalf("不可变字段不应被拒绝或改写: got=%v found=%v err=%v", got, found, err)
+	}
+}
+
+// TestMemoryPreservesImmutableInterfaceMapKeys 验证接口封装的不可变键保持原有兼容性。
+func TestMemoryPreservesImmutableInterfaceMapKeys(t *testing.T) {
+	backend := NewMemory()
+	input := map[interface{}][]int{
+		"name": {1}, 42: {2}, nil: {3}, struct{ Key interface{} }{Key: "nested"}: {4},
+	}
+	if err := backend.Set("keys", input, 0); err != nil {
+		t.Fatal(err)
+	}
+	input["name"][0] = 99
+	got, found, err := backend.Get("keys")
+	if err != nil || !found || got.(map[interface{}][]int)["name"][0] != 1 || len(got.(map[interface{}][]int)) != len(input) {
+		t.Fatalf("接口键丢失或值共享了原切片: got=%v found=%v err=%v", got, found, err)
 	}
 }
