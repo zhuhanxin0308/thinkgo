@@ -26,11 +26,23 @@ var renameControllerDiscoveryPath = func(root *os.Root, oldPath, newPath string)
 	return root.Rename(oldPath, newPath)
 }
 
+var linkControllerDiscoveryPublication = func(root *os.Root, source, target string) error {
+	return linkControllerDiscoveryPath(root, source, target)
+}
+
+var linkControllerDiscoveryPath = func(root *os.Root, source, target string) error {
+	return root.Link(source, target)
+}
+
+// ErrControllerDiscoveryPublishConflict 表示外部修改使本次发布失去目标所有权。
+var ErrControllerDiscoveryPublishConflict = errors.New("控制器发现发布冲突")
+
 type stagedControllerDiscoverySource struct {
 	relativePath     string
 	temporaryPath    string
 	backupPath       string
 	original         []byte
+	originalInfo     os.FileInfo
 	existed          bool
 	backupMoved      bool
 	published        bool
@@ -88,6 +100,7 @@ func stageControllerDiscoverySources(root *os.Root, sources []generatedApplicati
 			}
 			current.existed = true
 			current.original = content
+			current.originalInfo = information
 		case errors.Is(statErr, os.ErrNotExist):
 		default:
 			return staged, fmt.Errorf("检查控制器发现目标 %q 失败: %w", relativePath, statErr)
@@ -117,6 +130,16 @@ func stageControllerDiscoverySources(root *os.Root, sources []generatedApplicati
 }
 
 func publishControllerDiscoverySources(root *os.Root, staged []stagedControllerDiscoverySource) error {
+	// 整批预检在任何旧目标被移动之前完成，避免不支持硬链接时连恢复也无法执行。
+	for _, current := range staged {
+		probe := current.temporaryPath + ".link-check"
+		if err := linkControllerDiscoveryPath(root, current.temporaryPath, probe); err != nil {
+			return fmt.Errorf("控制器发现目标 %q 不支持原子不覆盖发布，旧文件保持原位: %w", current.relativePath, err)
+		}
+		if err := root.Remove(probe); err != nil {
+			return fmt.Errorf("清理控制器发现发布检查文件 %q 失败，旧文件保持原位: %w", probe, err)
+		}
+	}
 	for index := range staged {
 		current := &staged[index]
 		if err := verifyControllerDiscoveryTarget(root, current); err != nil {
@@ -132,18 +155,29 @@ func publishControllerDiscoverySources(root *os.Root, staged []stagedControllerD
 				return fmt.Errorf("备份控制器发现文件 %q 失败: %w", current.relativePath, err)
 			}
 			current.backupMoved = true
+			// 核验实际捕获的对象，覆盖预检之后、移走目标之前的外部保存窗口。
+			if err := verifyOriginalControllerDiscoverySource(root, current.backupPath, current); err != nil {
+				return fmt.Errorf("%w: 捕获目标 %q 后发现外部修改: %w", ErrControllerDiscoveryPublishConflict, current.relativePath, err)
+			}
 		}
-		if err := renameControllerDiscoveryPath(root, current.temporaryPath, current.relativePath); err != nil {
+		// 最终发布原子拒绝已存在的路径，既保护首次生成，也保护备份之后的新目标。
+		if err := linkControllerDiscoveryPublication(root, current.temporaryPath, current.relativePath); err != nil {
+			if errors.Is(err, os.ErrExist) {
+				return fmt.Errorf("%w: 目标 %q 已被创建: %w", ErrControllerDiscoveryPublishConflict, current.relativePath, err)
+			}
 			return fmt.Errorf("发布控制器发现文件 %q 失败: %w", current.relativePath, err)
 		}
-		current.temporaryPath = ""
 		current.published = true
+		if err := root.Remove(current.temporaryPath); err != nil {
+			return fmt.Errorf("清理已发布控制器发现临时文件 %q 失败: %w", current.temporaryPath, err)
+		}
+		current.temporaryPath = ""
 	}
 	return nil
 }
 
 func verifyControllerDiscoveryTarget(root *os.Root, staged *stagedControllerDiscoverySource) error {
-	information, err := root.Lstat(staged.relativePath)
+	_, err := root.Lstat(staged.relativePath)
 	if !staged.existed {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil
@@ -151,20 +185,13 @@ func verifyControllerDiscoveryTarget(root *os.Root, staged *stagedControllerDisc
 		if err != nil {
 			return fmt.Errorf("重新检查控制器发现目标 %q 失败: %w", staged.relativePath, err)
 		}
-		return fmt.Errorf("控制器发现目标 %q 在批次发布期间被创建", staged.relativePath)
+		return fmt.Errorf("%w: 目标 %q 在批次发布期间被创建", ErrControllerDiscoveryPublishConflict, staged.relativePath)
 	}
 	if err != nil {
 		return fmt.Errorf("控制器发现目标 %q 在批次发布期间不可用: %w", staged.relativePath, err)
 	}
-	if information.Mode()&os.ModeSymlink != 0 || !information.Mode().IsRegular() {
-		return fmt.Errorf("控制器发现目标 %q 在批次发布期间不再是普通文件", staged.relativePath)
-	}
-	content, err := root.ReadFile(staged.relativePath)
-	if err != nil {
-		return fmt.Errorf("重新读取控制器发现目标 %q 失败: %w", staged.relativePath, err)
-	}
-	if !bytes.Equal(content, staged.original) {
-		return fmt.Errorf("控制器发现目标 %q 在批次发布期间已变化", staged.relativePath)
+	if err := verifyOriginalControllerDiscoverySource(root, staged.relativePath, staged); err != nil {
+		return fmt.Errorf("%w: 目标 %q 在批次发布期间已变化: %w", ErrControllerDiscoveryPublishConflict, staged.relativePath, err)
 	}
 	return nil
 }
@@ -186,6 +213,10 @@ func cleanupControllerDiscoveryBackups(root *os.Root, staged []stagedControllerD
 	var cleanupErr error
 	for index := range staged {
 		if staged[index].backupPath == "" {
+			continue
+		}
+		if err := verifyOriginalControllerDiscoverySource(root, staged[index].backupPath, &staged[index]); err != nil {
+			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("%w: 备份 %q 已变化并保留: %w", ErrControllerDiscoveryPublishConflict, staged[index].backupPath, err))
 			continue
 		}
 		if err := root.Remove(staged[index].backupPath); err != nil && !errors.Is(err, os.ErrNotExist) {

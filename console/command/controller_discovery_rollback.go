@@ -55,7 +55,7 @@ func rollbackControllerDiscoverySource(root *os.Root, current *stagedControllerD
 // restoreControllerDiscoveryPathWithoutReplace 通过创建硬链接原子拒绝已存在的目标。
 // 链接失败时源版本仍在；不支持该能力的文件系统保留备份并返回错误，不退化为覆盖。
 func restoreControllerDiscoveryPathWithoutReplace(root *os.Root, source, target string) error {
-	if err := root.Link(source, target); err != nil {
+	if err := linkControllerDiscoveryPath(root, source, target); err != nil {
 		return err
 	}
 	return root.Remove(source)
@@ -73,13 +73,21 @@ func restoreControllerDiscoveryBackup(root *os.Root, current *stagedControllerDi
 	return nil
 }
 
-func verifyPublishedControllerDiscoverySource(root *os.Root, path string, current *stagedControllerDiscoverySource) (returnErr error) {
+func verifyPublishedControllerDiscoverySource(root *os.Root, path string, current *stagedControllerDiscoverySource) error {
+	return verifyControllerDiscoverySourceSnapshot(root, path, current.publishedInfo, current.publishedContent)
+}
+
+func verifyOriginalControllerDiscoverySource(root *os.Root, path string, current *stagedControllerDiscoverySource) error {
+	return verifyControllerDiscoverySourceSnapshot(root, path, current.originalInfo, current.original)
+}
+
+func verifyControllerDiscoverySourceSnapshot(root *os.Root, path string, expected os.FileInfo, contentSnapshot []byte) (returnErr error) {
 	information, err := root.Lstat(path)
 	if err != nil {
 		return err
 	}
-	if current.publishedInfo == nil || !information.Mode().IsRegular() || !os.SameFile(current.publishedInfo, information) {
-		return errors.New("已发布文件身份发生变化")
+	if expected == nil || !information.Mode().IsRegular() || !os.SameFile(expected, information) {
+		return errors.New("文件身份发生变化")
 	}
 	file, err := root.Open(path)
 	if err != nil {
@@ -91,9 +99,9 @@ func verifyPublishedControllerDiscoverySource(root *os.Root, path string, curren
 		return err
 	}
 	if !os.SameFile(information, opened) || !opened.Mode().IsRegular() {
-		return errors.New("已发布文件在打开期间被替换")
+		return errors.New("文件在打开期间被替换")
 	}
-	content, err := io.ReadAll(io.LimitReader(file, int64(len(current.publishedContent))+1))
+	content, err := io.ReadAll(io.LimitReader(file, int64(len(contentSnapshot))+1))
 	if err != nil {
 		return err
 	}
@@ -102,9 +110,9 @@ func verifyPublishedControllerDiscoverySource(root *os.Root, path string, curren
 		return err
 	}
 	if !latest.Mode().IsRegular() || !os.SameFile(opened, latest) ||
-		latest.Mode() != current.publishedInfo.Mode() || !latest.ModTime().Equal(current.publishedInfo.ModTime()) ||
-		!bytes.Equal(content, current.publishedContent) {
-		return errors.New("已发布文件内容、权限或身份已被外部修改")
+		latest.Mode() != expected.Mode() || !latest.ModTime().Equal(expected.ModTime()) ||
+		!bytes.Equal(content, contentSnapshot) {
+		return errors.New("文件内容、权限或身份已被外部修改")
 	}
 	return nil
 }
