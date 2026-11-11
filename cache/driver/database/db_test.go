@@ -659,7 +659,6 @@ func cachePredicateMatches(row map[string]interface{}, predicate db.Predicate) b
 				return false
 			}
 			pattern := strings.TrimSuffix(fmt.Sprint(clause.Args[argumentIndex]), "%")
-			argumentIndex++
 			field := strings.Trim(parts[0], "`\"[]")
 			if strings.HasPrefix(fmt.Sprint(row[field]), pattern) {
 				return false
@@ -673,7 +672,6 @@ func cachePredicateMatches(row map[string]interface{}, predicate db.Predicate) b
 		operator := parts[1]
 		actual := fmt.Sprint(row[field])
 		expected := fmt.Sprint(clause.Args[argumentIndex])
-		argumentIndex++
 		switch operator {
 		case "like":
 			if !strings.HasPrefix(actual, strings.TrimSuffix(expected, "%")) {
