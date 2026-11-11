@@ -61,7 +61,7 @@ func clearCacheDriverContext(ctx context.Context, driver Driver) error {
 }
 
 // withTagMutationLockContext 在有限窗口内获取标签变更锁，并响应调用方取消。
-func (c *Cache) withTagMutationLockContext(ctx context.Context, driver Driver, callback func() error) (resultErr error) {
+func (c *Cache) withTagMutationLockContext(ctx context.Context, driver Driver, callback func(context.Context) error) (resultErr error) {
 	if ctx == nil {
 		return ErrInvalidCacheContext
 	}
@@ -72,14 +72,14 @@ func (c *Cache) withTagMutationLockContext(ctx context.Context, driver Driver, c
 		return ErrCacheDriverNotConfigured
 	}
 	if capability, ok := driver.(interface{ supportsTagMutationLock() bool }); ok && !capability.supportsTagMutationLock() {
-		return callback()
+		return callback(ctx)
 	}
 	locker, supported := driver.(DistributedLocker)
 	if !supported {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		return callback()
+		return callback(ctx)
 	}
 	owner, err := newLockOwner(cacheMetadataScope)
 	if err != nil {
@@ -93,6 +93,9 @@ func (c *Cache) withTagMutationLockContext(ctx context.Context, driver Driver, c
 	if !acquired {
 		return ErrCacheLockBusy
 	}
+	leaseContext := context.WithValue(ctx, tagMutationLeaseKey{}, tagMutationLease{key: lockKey, owner: owner})
+	operationContext, cancel := context.WithCancelCause(leaseContext)
+	defer cancel(nil)
 	defer func() {
 		released, releaseErr := releaseDistributedLock(context.WithoutCancel(ctx), locker, lockKey, owner)
 		if releaseErr == nil && !released {
@@ -102,7 +105,12 @@ func (c *Cache) withTagMutationLockContext(ctx context.Context, driver Driver, c
 	}()
 	if renewer, supported := driver.(LockRenewer); supported {
 		renewal := startLockRenewal(func() (bool, error) {
-			return renewDistributedLock(context.WithoutCancel(ctx), renewer, locker, lockKey, owner, tagMutationLockTTL)
+			renewed, err := renewDistributedLock(context.WithoutCancel(ctx), renewer, locker, lockKey, owner, tagMutationLockTTL)
+			if err != nil || !renewed {
+				err = errors.Join(ErrCacheLockLost, err)
+				cancel(err)
+			}
+			return renewed, err
 		}, tagMutationLockTTL)
 		defer func() {
 			resultErr = errors.Join(resultErr, renewal.stop())
@@ -111,7 +119,7 @@ func (c *Cache) withTagMutationLockContext(ctx context.Context, driver Driver, c
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return callback()
+	return errors.Join(callback(operationContext), context.Cause(operationContext))
 }
 
 type lockRenewalSession struct {

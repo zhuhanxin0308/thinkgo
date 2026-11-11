@@ -62,7 +62,7 @@ func (c *TaggedCache) SetContext(ctx context.Context, key string, value interfac
 	}
 	defer release()
 	c.cache.trace("TAG_SET", key)
-	return c.cache.withTagMutationLockContext(ctx, driver, func() error {
+	return c.cache.withTagMutationLockContext(ctx, driver, func(ctx context.Context) error {
 		c.cache.state.tagMu.Lock()
 		defer c.cache.state.tagMu.Unlock()
 		if err := c.cache.repairMissingKeyMetadataLockedContext(ctx, driver, key); err != nil {
@@ -130,7 +130,7 @@ func (c *TaggedCache) FlushContext(ctx context.Context) error {
 	}
 	defer release()
 	c.cache.trace("TAG_FLUSH", strings.Join(c.tags, ","))
-	return c.cache.withTagMutationLockContext(ctx, driver, func() error {
+	return c.cache.withTagMutationLockContext(ctx, driver, func(ctx context.Context) error {
 		c.cache.state.tagMu.Lock()
 		defer c.cache.state.tagMu.Unlock()
 		keys := make(map[string][]string)
@@ -404,6 +404,11 @@ func metadataRollbackContext(ctx context.Context, driver Driver, updates []metad
 }
 
 func writeStringMetadataContext(ctx context.Context, driver Driver, key string, values []string) error {
+	if ctx != nil {
+		if lease, ok := ctx.Value(tagMutationLeaseKey{}).(tagMutationLease); ok {
+			return writeLeasedTagMetadata(ctx, driver, lease, key, values)
+		}
+	}
 	if len(values) == 0 {
 		return deleteCacheValueContext(ctx, driver, key)
 	}

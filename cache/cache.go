@@ -444,7 +444,7 @@ func (c *Cache) ForgetContext(ctx context.Context, key string) error {
 	}
 	defer release()
 	c.trace("FORGET", key)
-	return c.withTagMutationLockContext(ctx, driver, func() error {
+	return c.withTagMutationLockContext(ctx, driver, func(ctx context.Context) error {
 		c.state.tagMu.Lock()
 		defer c.state.tagMu.Unlock()
 		if cacheDriverSupportsAtomicFencing(driver) {
@@ -500,7 +500,7 @@ func (c *Cache) FlushContext(ctx context.Context) error {
 	}
 	defer release()
 	c.trace("FLUSH", "*")
-	return c.withTagMutationLockContext(ctx, driver, func() error {
+	return c.withTagMutationLockContext(ctx, driver, func(ctx context.Context) error {
 		c.state.tagMu.Lock()
 		defer c.state.tagMu.Unlock()
 		return c.clearAtFence(ctx, driver, "")
