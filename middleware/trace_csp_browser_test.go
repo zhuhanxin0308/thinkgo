@@ -53,6 +53,9 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 `
 
+// traceBrowserExecutionTimeout 为 CI 冷启动浏览器预留有界时间，页面断言仍使用原有虚拟时间预算。
+const traceBrowserExecutionTimeout = time.Minute
+
 // TestTraceBrowserDefaultCSP 在真实无头浏览器验证默认安全头、面板交互与 Console 输出。
 func TestTraceBrowserDefaultCSP(t *testing.T) {
 	browser := traceTestBrowser(t)
@@ -88,7 +91,7 @@ func TestTraceBrowserDefaultCSP(t *testing.T) {
 			if got := probe.Header.Get("Content-Security-Policy"); got != DefaultSecurityHeadersConfig().ContentSecurityPolicy {
 				t.Fatalf("Trace 改变了默认 CSP: %q", got)
 			}
-			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+			ctx, cancel := context.WithTimeout(t.Context(), traceBrowserExecutionTimeout)
 			defer cancel()
 			arguments := []string{"--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check",
 				"--disable-background-networking", "--user-data-dir=" + t.TempDir(), "--dump-dom", "--virtual-time-budget=1000"}
@@ -102,7 +105,7 @@ func TestTraceBrowserDefaultCSP(t *testing.T) {
 			process.Stderr = &diagnostic
 			document, err := process.Output()
 			if err != nil {
-				t.Fatalf("浏览器执行失败: %v\n%s", err, diagnostic.String())
+				t.Fatalf("浏览器执行失败: %v；上下文错误: %v\n%s", err, ctx.Err(), diagnostic.String())
 			}
 			_, result, found := strings.Cut(string(document), `<pre id="trace-test-result">`)
 			result, _, ended := strings.Cut(result, "</pre>")
