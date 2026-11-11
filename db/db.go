@@ -85,10 +85,10 @@ func (database *DB) SetLocation(location *time.Location) {
 	database.mu.Unlock()
 	if managed != nil {
 		if locationAware, ok := managed.connection.(LocationAwareConnection); ok {
-			locationAware.SetLocation(location)
+			database.publishLocation(locationAware.SetLocation)
 		} else if locationAware, ok := managed.connection.(interface{ SetLocation(*time.Location) }); ok {
 			// 兼容只实现旧 SetLocation 方法的外部连接器。
-			locationAware.SetLocation(location)
+			database.publishLocation(locationAware.SetLocation)
 		}
 	}
 }
