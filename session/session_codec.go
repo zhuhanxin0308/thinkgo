@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"strings"
 	"time"
 	"unicode/utf8"
 )
@@ -144,14 +145,17 @@ func decodeSessionValue(raw json.RawMessage) (interface{}, error) {
 	return normalizeSessionDecodedValue(value), nil
 }
 
-// normalizeSessionDecodedValue 恢复 JSON 数字的业务标量类型，避免 Session.Get
-// 向业务层泄露编码器内部使用的 json.Number。
+// normalizeSessionDecodedValue 保持普通整数和小数的兼容类型，超范围整数保留 json.Number。
 // 输入由本次 decodeSessionValue 独占，可就地转换新解码的集合；不接收共享 Session 数据。
 func normalizeSessionDecodedValue(value interface{}) interface{} {
 	switch typed := value.(type) {
 	case json.Number:
 		if integer, err := typed.Int64(); err == nil {
 			return integer
+		}
+		// 解码器已经验证 JSON 数字语法，纯整数不能经 float64 舍入后返回。
+		if !strings.ContainsAny(typed.String(), ".eE") {
+			return typed
 		}
 		if decimal, err := typed.Float64(); err == nil {
 			return decimal

@@ -20,9 +20,9 @@ type lockSQLCapture struct {
 }
 
 func (capture *lockSQLCapture) Connect(context.Context) (driver.Conn, error) { return capture, nil }
-func (capture *lockSQLCapture) Driver() driver.Driver                     { return capture }
-func (capture *lockSQLCapture) Open(string) (driver.Conn, error)           { return capture, nil }
-func (capture *lockSQLCapture) Close() error                              { return nil }
+func (capture *lockSQLCapture) Driver() driver.Driver                        { return capture }
+func (capture *lockSQLCapture) Open(string) (driver.Conn, error)             { return capture, nil }
+func (capture *lockSQLCapture) Close() error                                 { return nil }
 func (capture *lockSQLCapture) Begin() (driver.Tx, error) {
 	return nil, errors.New("本测试不使用事务")
 }
