@@ -75,7 +75,7 @@ func TestMakeAppRollbackPreservesEditedPublishedDiscovery(t *testing.T) {
 	if err := buildNativeApplication(app, "index"); err != nil {
 		t.Fatal(err)
 	}
-	target := filepath.Join("app", applicationDiscoveryFilename)
+	target := applicationDiscoveryFilename
 	before, err := os.ReadFile(filepath.Join(base, target))
 	if err != nil {
 		t.Fatal(err)

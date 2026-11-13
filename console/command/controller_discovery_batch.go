@@ -105,6 +105,11 @@ func stageControllerDiscoverySources(root *os.Root, sources []generatedApplicati
 		default:
 			return staged, fmt.Errorf("检查控制器发现目标 %q 失败: %w", relativePath, statErr)
 		}
+		if expected := generated.expected; expected != nil {
+			if current.existed != (expected.information != nil) || current.existed && (!os.SameFile(information, expected.information) || !bytes.Equal(current.original, expected.content)) {
+				return staged, fmt.Errorf("%w: 入口 %q 在生成迁移计划后发生变化", ErrControllerDiscoveryPublishConflict, relativePath)
+			}
+		}
 		if err = root.MkdirAll(filepath.Dir(relativePath), 0o755); err != nil {
 			return staged, fmt.Errorf("创建控制器发现目录失败: %w", err)
 		}

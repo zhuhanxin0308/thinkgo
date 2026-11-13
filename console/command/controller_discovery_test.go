@@ -60,7 +60,7 @@ func Load(route *framework.Route) {}
 	if !strings.Contains(text, `applicationRoute.Load`) {
 		t.Fatalf("app/index/route 包未进入应用装配入口:\n%s", text)
 	}
-	rootGenerated := readGeneratedDiscoverySource(t, basePath, "app/autoload_generated.go")
+	rootGenerated := readGeneratedDiscoverySource(t, basePath, "autoload_generated.go")
 	if !strings.Contains(rootGenerated, "RegisterApplications") || !strings.Contains(rootGenerated, "applicationIndex.Definition()") {
 		t.Fatalf("根应用清单未引用 index 定义:\n%s", rootGenerated)
 	}
@@ -134,7 +134,7 @@ func Load(route *framework.Route) {}
 	if err := RefreshControllerDiscovery(application); err != nil {
 		t.Fatalf("生成独立宿主装配入口失败: %v", err)
 	}
-	writeDiscoveryFixture(t, basePath, "app/autoload_generated_test.go", `package app
+	writeDiscoveryFixture(t, basePath, "autoload_generated_test.go", `package main
 
 import (
 	"context"
@@ -163,9 +163,9 @@ func (*generatedModelConnection) Count(context.Context, db.CountRequest) (int64,
 func (*generatedModelConnection) Close() error { return nil }
 
 func TestGeneratedValidatorBinding(t *testing.T) {
-	application := framework.NewAppUninitialized("..")
+	application := framework.NewAppUninitialized(".")
 	defer application.Close()
-	if err := Register(application); err != nil {
+	if err := registerApplications(application); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 	if err := application.Initialize(); err != nil {

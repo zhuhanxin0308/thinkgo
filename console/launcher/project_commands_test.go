@@ -122,10 +122,13 @@ import (
     "errors"
     "github.com/zhuhanxin0308/thinkgo/v3"
 )
-func Register(*framework.App) error { return errors.New("业务装配标记") }
+func RegisterGlobals(*framework.App) error { return errors.New("业务装配标记") }
 `)
 	writeProjectCommandFixture(t, base, "config/app.json", "broken")
 	for _, args := range [][]string{{"list"}, {"help", "audit:probe"}, {"audit:probe", "--help"}, {"missing"}, {"audit:probe"}, {"audit:probe", "Alice"}} {
+		if len(args) == 2 && args[1] == "Alice" {
+			writeProjectCommandConfig(t, base)
+		}
 		var output bytes.Buffer
 		err := Run(context.Background(), base, args, &output, &output, nil)
 		text := output.String()
@@ -260,6 +263,12 @@ func projectCommandTestModule(t *testing.T) string {
 		t.Fatal(err)
 	}
 	writeProjectCommandFixture(t, base, "go.sum", string(checksums))
+	writeProjectCommandFixture(t, base, "app/index/autoload_generated.go", `package index
+import framework "github.com/zhuhanxin0308/thinkgo/v3"
+func Definition() framework.ApplicationDefinition {
+    return framework.ApplicationDefinition{Name: "index", Register: func(*framework.App) error { return nil }}
+}
+`)
 	return base
 }
 
@@ -291,7 +300,7 @@ func writeProjectCommandFixture(t *testing.T, base, path, source string) {
 
 const projectRegistrationSource = `package app
 import "github.com/zhuhanxin0308/thinkgo/v3"
-func Register(*framework.App) error { return nil }
+func RegisterGlobals(*framework.App) error { return nil }
 `
 
 const projectAuditCommandSource = `package command

@@ -75,7 +75,7 @@ func TestCrossBuildPreservesHostDiscovery(t *testing.T) {
 		info    os.FileInfo
 	}
 	before := make(map[string]snapshot)
-	for _, path := range []string{"app/autoload_generated.go", "app/index/autoload_generated.go", "go.mod", "go.sum"} {
+	for _, path := range []string{"autoload_generated.go", "cmd/think/autoload_generated.go", "app/autoload_generated.go", "app/index/autoload_generated.go", "go.mod", "go.sum"} {
 		content, err := os.ReadFile(filepath.Join(base, path))
 		if err != nil {
 			t.Fatal(err)

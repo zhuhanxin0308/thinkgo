@@ -36,7 +36,7 @@ func TestBuiltInCommandDefinitions(t *testing.T) {
 		{command: &MigrateStatus{}, signature: "migrate:status", optionNames: []string{"app"}},
 		{command: &DeployCheck{}, signature: "deploy:check", optionNames: []string{"app", "strict"}},
 		{command: &Version{}, signature: "version"},
-		{command: &ServiceDiscover{}, signature: "service:discover", optionNames: []string{"overlay-dir"}},
+		{command: &ServiceDiscover{}, signature: "service:discover", optionNames: []string{"overlay-dir", "migrate"}},
 		{command: &Optimize{}, signature: "optimize"},
 		{command: &OptimizeConfig{}, signature: "optimize:config", argumentName: "dir"},
 		{command: &OptimizeRoute{}, signature: "optimize:route", argumentName: "dir"},
