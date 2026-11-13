@@ -69,14 +69,13 @@ func Load(route *framework.Route) {}
 		t.Fatalf("生成原生多应用装配入口失败: %v", err)
 	}
 
-	rootSource := readGeneratedDiscoverySource(t, basePath, "app/autoload_generated.go")
+	rootSource := readGeneratedDiscoverySource(t, basePath, "autoload_generated.go")
 	for _, expected := range []string{
-		"RegisterApplications(registerGlobalApplication",
+		"RegisterApplications(businessapp.RegisterGlobals",
 		`applicationAdmin.Definition()`,
 		`applicationIndex.Definition()`,
 		`applicationAdmin "example.com/project/app/admin"`,
 		`applicationIndex "example.com/project/app/index"`,
-		"RegisterGlobalMiddleware",
 	} {
 		if !strings.Contains(rootSource, expected) {
 			t.Errorf("根应用装配入口缺少 %q:\n%s", expected, rootSource)
@@ -87,6 +86,10 @@ func Load(route *framework.Route) {}
 	}
 	if strings.Contains(rootSource, "applicationEmpty") || strings.Contains(rootSource, `"example.com/project/app/view"`) {
 		t.Fatalf("空目录不得被识别为业务应用:\n%s", rootSource)
+	}
+	globalSource := readGeneratedDiscoverySource(t, basePath, "app/autoload_generated.go")
+	if !strings.Contains(globalSource, "RegisterGlobalComponents") || strings.Contains(globalSource, "example.com/project/app/") {
+		t.Fatalf("公共包只声明全局组件，不得导入子应用:\n%s", globalSource)
 	}
 
 	indexSource := readGeneratedDiscoverySource(t, basePath, "app/index/autoload_generated.go")

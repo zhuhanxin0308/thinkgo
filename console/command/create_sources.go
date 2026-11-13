@@ -14,8 +14,8 @@ func projectSources(module string) (map[string][]byte, error) {
 		sources[filepath.Join("app", name)] = source
 	}
 	sources["go.mod"] = "module " + module + "\n\ngo " + scaffoldGoVersion + "\n"
-	sources["main.go"] = fmt.Sprintf(projectMainSource, module)
-	sources["main_test.go"] = fmt.Sprintf(projectTestSource, module)
+	sources["main.go"] = projectMainSource
+	sources["main_test.go"] = projectTestSource
 	sources[filepath.Join("cmd", "think", "main.go")] = projectConsoleSource
 	sources[filepath.Join("cmd", "think", "runtime.go")] = fmt.Sprintf(projectRuntimeConsoleSource, module)
 	sources[filepath.Join("app", "index", "view", "index.html")] = nativeApplicationWelcomeView("index")
@@ -49,7 +49,6 @@ import (
     "path/filepath"
     _ "time/tzdata" // 内置时区，发布包无需依赖系统时区文件。
 
-    businessapp "%s/app"
     "github.com/zhuhanxin0308/thinkgo/v3"
     "github.com/zhuhanxin0308/thinkgo/v3/db/connector"
     fwhttp "github.com/zhuhanxin0308/thinkgo/v3/http"
@@ -66,7 +65,7 @@ func main() {
 func runHTTP() error {
     connector.RegisterBuiltins()
     app := framework.NewApp(runtimeBasePath())
-    if err := businessapp.Register(app); err != nil {
+    if err := registerApplications(app); err != nil {
         return errors.Join(err, app.Close())
     }
     kernel, err := fwhttp.NewHttp(app)
@@ -131,13 +130,12 @@ const projectRuntimeConsoleSource = `//go:build thinkgo_runtime
 package main
 
 import (
-    businessapp "%[1]s/app"
     "%[1]s/cmd/think/commandautoload"
 )
 
 // init 只在需要业务装配的命令宿主中注册应用。
 func init() {
-    registerBusiness = businessapp.Register
+    registerBusiness = registerApplications
     projectCommands = commandautoload.Commands()
 }
 `
@@ -149,7 +147,6 @@ import (
     "net/http/httptest"
     "strings"
     "testing"
-    businessapp "%s/app"
     "github.com/zhuhanxin0308/thinkgo/v3"
     fwhttp "github.com/zhuhanxin0308/thinkgo/v3/http"
 )
@@ -158,14 +155,14 @@ import (
 func TestWelcome(t *testing.T) {
     app := framework.NewConsoleAppUninitialized(".")
     t.Cleanup(func() { _ = app.Close() })
-    if err := businessapp.Register(app); err != nil { t.Fatal(err) }
+    if err := registerApplications(app); err != nil { t.Fatal(err) }
     if err := app.Initialize(); err != nil { t.Fatal(err) }
     host, err := fwhttp.NewHttp(app)
     if err != nil { t.Fatal(err) }
     response := httptest.NewRecorder()
     host.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "http://localhost/", nil))
     if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "ThinkGo") {
-        t.Fatalf("首页响应异常: %%d %%s", response.Code, response.Body.String())
+        t.Fatalf("首页响应异常: %d %s", response.Code, response.Body.String())
     }
 }
 
@@ -173,7 +170,7 @@ func TestWelcome(t *testing.T) {
 func TestExplicitRoutesOnly(t *testing.T) {
     app := framework.NewConsoleAppUninitialized(".")
     t.Cleanup(func() { _ = app.Close() })
-    if err := businessapp.Register(app); err != nil { t.Fatal(err) }
+    if err := registerApplications(app); err != nil { t.Fatal(err) }
     if err := app.Initialize(); err != nil { t.Fatal(err) }
     host, err := fwhttp.NewHttp(app)
     if err != nil { t.Fatal(err) }
@@ -186,7 +183,7 @@ func TestExplicitRoutesOnly(t *testing.T) {
         response := httptest.NewRecorder()
         host.ServeHTTP(response, httptest.NewRequest(test.method, "http://localhost"+test.path, nil))
         if response.Code != test.status {
-            t.Errorf("%%s %%s: status=%%d, want %%d", test.method, test.path, response.Code, test.status)
+            t.Errorf("%s %s: status=%d, want %d", test.method, test.path, response.Code, test.status)
         }
     }
 }

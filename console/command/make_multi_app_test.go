@@ -29,7 +29,7 @@ func TestMakeControllerSelectsApplicationWithThinkPHPAtSyntax(t *testing.T) {
 	if !strings.Contains(applicationSource, `Name: "admin"`) || !strings.Contains(applicationSource, "applicationController.Account") {
 		t.Fatalf("admin 应用未装配新控制器:\n%s", applicationSource)
 	}
-	rootSource := readGeneratedFile(t, basePath, "app", applicationDiscoveryFilename)
+	rootSource := readGeneratedFile(t, basePath, applicationDiscoveryFilename)
 	if !strings.Contains(rootSource, "applicationAdmin.Definition()") {
 		t.Fatalf("根应用清单未发现 admin:\n%s", rootSource)
 	}

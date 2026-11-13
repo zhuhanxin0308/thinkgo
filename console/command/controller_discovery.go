@@ -24,6 +24,7 @@ func (command *ServiceDiscover) Configure() {
 	command.Signature = "service:discover"
 	command.Description = "Discover Services for ThinkGo"
 	command.AddOption("overlay-dir", "", "Write isolated Go build overlay without changing project sources", "")
+	command.AddBoolOption("migrate", "", "显式迁移旧项目的 HTTP、CLI 和测试入口")
 }
 
 // Execute 扫描全部原生应用目录并生成稳定注册代码。
@@ -35,10 +36,14 @@ func (command *ServiceDiscover) Execute(input *console.Input, output *console.Ou
 		return console.ErrInvalidOutput
 	}
 	var err error
+	migrate := input != nil && input.GetOption("migrate") == "true"
 	if input != nil && input.GetOption("overlay-dir") != "" {
+		if migrate {
+			return fmt.Errorf("--migrate 与 --overlay-dir 不能同时使用")
+		}
 		err = writeControllerDiscoveryOverlay(command.App, input.GetOption("overlay-dir"))
 	} else {
-		err = RefreshControllerDiscovery(command.App)
+		err = refreshControllerDiscovery(command.App, migrate)
 	}
 	if err != nil {
 		return fmt.Errorf("刷新控制器发现信息失败: %w", err)
@@ -50,9 +55,13 @@ func (command *ServiceDiscover) Execute(input *console.Input, output *console.Ou
 // RefreshControllerDiscovery 根据 app/<应用名> 生成各应用装配入口与根应用清单；
 // 保留函数名以兼容已有构建调用。
 func RefreshControllerDiscovery(app *framework.App) error {
+	return refreshControllerDiscovery(app, false)
+}
+
+func refreshControllerDiscovery(app *framework.App, migrate bool) error {
 	controllerDiscoveryTransactionMu.Lock()
 	defer controllerDiscoveryTransactionMu.Unlock()
-	sources, err := nativeApplicationDiscoverySources(app)
+	sources, err := nativeApplicationDiscoverySourcesWithMigration(app, migrate)
 	if err != nil {
 		return err
 	}

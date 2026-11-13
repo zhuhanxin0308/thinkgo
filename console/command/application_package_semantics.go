@@ -471,6 +471,9 @@ func discoverApplicationEntryPointsWithContext(context *applicationSemanticConte
 	if !inspected.hasSource {
 		return applicationEntryPoints{}, nil
 	}
+	if directory == "app" && inspected.packageGo.Scope().Lookup("RegisterGlobals") != nil {
+		return applicationEntryPoints{}, fmt.Errorf("根 app.RegisterGlobals 名称已被手写声明占用，请人工迁移后重试")
+	}
 	emptyInterface := types.NewInterfaceType(nil, nil)
 	emptyInterface.Complete()
 	eventDefinition, err := context.frameworkType(frameworkImportPath, "EventDefinition")

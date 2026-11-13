@@ -116,16 +116,29 @@ func runProjectCommandHost(ctx context.Context, basePath string, args []string, 
 	if err := os.WriteFile(sourcePath, source, 0o600); err != nil {
 		return err
 	}
+	sourcePaths := []string{sourcePath}
+	if business {
+		assembly, err := command.ProjectApplicationAssemblySource(ctx, base)
+		if err != nil {
+			return err
+		}
+		assemblyPath := filepath.Join(directory, "autoload_generated.go")
+		if err := os.WriteFile(assemblyPath, assembly, 0o600); err != nil {
+			return err
+		}
+		sourcePaths = append(sourcePaths, assemblyPath)
+	}
 	filename := "think-commands"
 	if runtime.GOOS == "windows" {
 		filename += ".exe"
 	}
 	executable := filepath.Join(directory, filename)
 	// #nosec G204 -- 编译参数固定，源文件和输出文件均在本次独占临时目录中，不经过 shell。
-	build := exec.CommandContext(ctx, "go", "build", "-mod=readonly", "-o", executable, sourcePath)
+	build := exec.CommandContext(ctx, "go", "build", "-mod=readonly", "-o", executable)
 	if business {
-		build.Args = append(build.Args[:len(build.Args)-1], "-tags="+runtimeBuildTag, sourcePath)
+		build.Args = append(build.Args, "-tags="+runtimeBuildTag)
 	}
+	build.Args = append(build.Args, sourcePaths...)
 	build.Dir, build.Stdout, build.Stderr = base, stdout, stderr
 	build.Env = append(os.Environ(), "GOWORK=off")
 	if err := build.Run(); err != nil {
@@ -147,8 +160,7 @@ func projectCommandHostSource(commands []command.ProjectCommandType, modulePath 
 	imports, values := command.ProjectCommandImportsAndValues(commands)
 	registration := "nil"
 	if modulePath != "" {
-		imports += fmt.Sprintf("\tbusinessapp %q\n", modulePath+"/app")
-		registration = "businessapp.Register"
+		registration = "registerApplications"
 	}
 	source := fmt.Sprintf(`// 此临时宿主只装配本次命令执行需要的项目包。
 package main

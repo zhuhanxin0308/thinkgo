@@ -20,22 +20,45 @@ type ApplicationComponents struct {
 	RouteLoader        RouteLoader
 }
 
+// GlobalApplicationComponents 描述项目公共扩展，不引用任何子应用包。
+type GlobalApplicationComponents struct {
+	Services   []interface{}
+	Events     EventDefinition
+	Middleware []middleware.Handler
+	Providers  map[string]interface{}
+}
+
+// RegisterGlobalComponents 装配项目公共扩展，保留全局中间件与应用中间件的层级。
+func (app *App) RegisterGlobalComponents(components GlobalApplicationComponents) error {
+	return app.registerCommonComponents(components, app.RegisterGlobalMiddleware, "全局应用")
+}
+
 // RegisterApplicationComponents 按稳定名称顺序装配单个业务应用的全部组件。
 func (app *App) RegisterApplicationComponents(components ApplicationComponents) error {
+	if err := app.registerCommonComponents(GlobalApplicationComponents{
+		Services: components.Services, Events: components.Events,
+		Middleware: components.Middleware, Providers: components.Providers,
+	}, app.RegisterApplicationMiddleware, "应用"); err != nil {
+		return err
+	}
+	return app.registerTypedApplicationComponents(components)
+}
+
+func (app *App) registerCommonComponents(components GlobalApplicationComponents, registerMiddleware func(middleware.Handler) error, scope string) error {
 	if app == nil {
 		return ErrNilApplication
 	}
 	for index, service := range components.Services {
 		if err := app.Register(service); err != nil {
-			return fmt.Errorf("注册第 %d 个应用服务失败: %w", index+1, err)
+			return fmt.Errorf("注册第 %d 个%s服务失败: %w", index+1, scope, err)
 		}
 	}
 	if err := app.LoadEvent(components.Events); err != nil {
-		return fmt.Errorf("注册应用事件失败: %w", err)
+		return fmt.Errorf("注册%s事件失败: %w", scope, err)
 	}
 	for _, handler := range components.Middleware {
-		if err := app.RegisterApplicationMiddleware(handler); err != nil {
-			return fmt.Errorf("注册应用中间件失败: %w", err)
+		if err := registerMiddleware(handler); err != nil {
+			return fmt.Errorf("注册%s中间件失败: %w", scope, err)
 		}
 	}
 	for _, name := range sortedComponentNames(components.Providers) {
@@ -46,9 +69,13 @@ func (app *App) RegisterApplicationComponents(components ApplicationComponents) 
 			err = app.Bind(name, components.Providers[name])
 		}
 		if err != nil {
-			return fmt.Errorf("注册应用容器绑定 %q 失败: %w", name, err)
+			return fmt.Errorf("注册%s容器绑定 %q 失败: %w", scope, name, err)
 		}
 	}
+	return nil
+}
+
+func (app *App) registerTypedApplicationComponents(components ApplicationComponents) error {
 	for _, name := range sortedComponentNames(components.Controllers) {
 		if err := app.RegisterController(name, components.Controllers[name]); err != nil {
 			return fmt.Errorf("注册控制器 %s 失败: %w", name, err)

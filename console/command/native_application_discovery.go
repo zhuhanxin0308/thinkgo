@@ -17,6 +17,7 @@ import (
 type generatedApplicationSource struct {
 	relativePath string
 	source       []byte
+	expected     *discoverySourceSnapshot
 }
 
 var formatControllerDiscoverySource = format.Source
@@ -45,11 +46,19 @@ type discoveredNativeApplication struct {
 // nativeApplicationDiscoverySources 先完整解析所有应用，再生成各应用入口和
 // 最后的根清单，避免扫描失败时写出只完成一半的装配关系。
 func nativeApplicationDiscoverySources(app *framework.App) ([]generatedApplicationSource, error) {
+	return nativeApplicationDiscoverySourcesWithMigration(app, false)
+}
+
+func nativeApplicationDiscoverySourcesWithMigration(app *framework.App, migrate bool) ([]generatedApplicationSource, error) {
 	if app == nil {
 		return nil, framework.ErrNilApplication
 	}
 	applicationDirectory := "app"
 	modulePath, err := readApplicationModulePath(app.BasePath)
+	if err != nil {
+		return nil, err
+	}
+	entrySources, err := projectAssemblyMigrationSources(app.BasePath, modulePath, migrate)
 	if err != nil {
 		return nil, err
 	}
@@ -77,7 +86,7 @@ func nativeApplicationDiscoverySources(app *framework.App) ([]generatedApplicati
 			source:       source,
 		})
 	}
-	rootSource, err := buildNativeApplicationCatalogSource(modulePath, applicationDirectory, rootEntryPoints, applications)
+	rootSource, err := buildGlobalApplicationSource(rootEntryPoints)
 	if err != nil {
 		return nil, err
 	}
@@ -85,6 +94,14 @@ func nativeApplicationDiscoverySources(app *framework.App) ([]generatedApplicati
 		relativePath: filepath.Join(applicationDirectory, applicationDiscoveryFilename),
 		source:       rootSource,
 	})
+	assemblySource, err := buildNativeApplicationCatalogSource(modulePath, applications)
+	if err != nil {
+		return nil, err
+	}
+	sources = append(sources,
+		generatedApplicationSource{relativePath: applicationDiscoveryFilename, source: assemblySource},
+		generatedApplicationSource{relativePath: filepath.Join("cmd", "think", applicationDiscoveryFilename), source: append([]byte("//go:build thinkgo_runtime\n\n"), assemblySource...)},
+	)
 	commandSource, err := projectCommandDiscoverySource(semanticContext)
 	if err != nil {
 		return nil, err
@@ -95,6 +112,10 @@ func nativeApplicationDiscoverySources(app *framework.App) ([]generatedApplicati
 		return nil, err
 	}
 	sources = append(sources, comments...)
+	sources = append(sources, entrySources...)
+	if err := protectAssemblyTargets(app.BasePath, sources); err != nil {
+		return nil, err
+	}
 	return sources, nil
 }
 
@@ -281,60 +302,6 @@ func discoverApplicationEntryPoints(basePath, directory, packageName string) (ap
 	return discoverApplicationEntryPointsWithContext(semanticContext, directory, packageName)
 }
 
-func buildNativeApplicationCatalogSource(modulePath, applicationDirectory string, entryPoints applicationEntryPoints, applications []discoveredNativeApplication) ([]byte, error) {
-	applicationImport := strings.TrimSuffix(modulePath, "/") + "/" + filepath.ToSlash(applicationDirectory)
-	var source strings.Builder
-	source.WriteString("// 此文件由 service:discover 根据原生多应用目录生成，不需要开发者手工维护。\n\n")
-	source.WriteString("package app\n\n")
-	source.WriteString("import (\n")
-	if entryPoints.services || entryPoints.events || entryPoints.middleware || entryPoints.providers {
-		source.WriteString("\t\"fmt\"\n")
-	}
-	if entryPoints.providers {
-		source.WriteString("\t\"sort\"\n")
-	}
-	if entryPoints.services || entryPoints.events || entryPoints.middleware || entryPoints.providers {
-		source.WriteString("\n")
-	}
-	source.WriteString("\tframework \"github.com/zhuhanxin0308/thinkgo/v3\"\n")
-	for _, application := range applications {
-		source.WriteString(fmt.Sprintf("\t%s %q\n", application.importAlias, applicationImport+"/"+application.name))
-	}
-	source.WriteString(")\n\n")
-	source.WriteString("// Register 注册项目级定义和全部业务应用，HTTP 内核据此原生解析多应用。\n")
-	source.WriteString("func Register(application *framework.App) error {\n")
-	source.WriteString("\tif application == nil {\n\t\treturn framework.ErrNilApplication\n\t}\n")
-	source.WriteString("\treturn application.RegisterApplications(registerGlobalApplication,\n")
-	for _, application := range applications {
-		source.WriteString(fmt.Sprintf("\t\t%s.Definition(),\n", application.importAlias))
-	}
-	source.WriteString("\t)\n}\n\n")
-	source.WriteString("// registerGlobalApplication 装配根 app 下的全局事件、服务、中间件和容器绑定。\n")
-	source.WriteString("func registerGlobalApplication(current *framework.App) error {\n")
-	writeGlobalApplicationRegistrations(&source, entryPoints)
-	source.WriteString("\treturn nil\n}\n")
-	formatted, err := formatControllerDiscoverySource([]byte(source.String()))
-	if err != nil {
-		return nil, fmt.Errorf("格式化根应用发现源码失败: %w", err)
-	}
-	return formatted, nil
-}
-
-func writeGlobalApplicationRegistrations(source *strings.Builder, entryPoints applicationEntryPoints) {
-	if entryPoints.services {
-		source.WriteString("\tfor _, service := range Services() {\n\t\tif err := current.Register(service); err != nil {\n\t\t\treturn fmt.Errorf(\"注册全局应用服务失败: %w\", err)\n\t\t}\n\t}\n")
-	}
-	if entryPoints.events {
-		source.WriteString("\tif err := current.LoadEvent(Events()); err != nil {\n\t\treturn fmt.Errorf(\"注册全局应用事件失败: %w\", err)\n\t}\n")
-	}
-	if entryPoints.middleware {
-		source.WriteString("\tfor _, handler := range Middleware() {\n\t\tif err := current.RegisterGlobalMiddleware(handler); err != nil {\n\t\t\treturn fmt.Errorf(\"注册全局应用中间件失败: %w\", err)\n\t\t}\n\t}\n")
-	}
-	if entryPoints.providers {
-		writeProviderRegistrations(source, "current", "全局应用")
-	}
-}
-
 func buildNativeApplicationSource(modulePath string, application discoveredNativeApplication) ([]byte, error) {
 	applicationImport := strings.TrimSuffix(modulePath, "/") + "/" + filepath.ToSlash(application.relativeDirectory)
 	var source strings.Builder
@@ -418,14 +385,4 @@ func writeNativeApplicationRegistrations(source *strings.Builder, application di
 		source.WriteString("\t\tRouteLoader: func(routeApplication *framework.App) error {\n\t\t\tapplicationRoute.Load(routeApplication.Route())\n\t\t\treturn nil\n\t\t},\n")
 	}
 	source.WriteString("\t})\n")
-}
-
-func writeProviderRegistrations(source *strings.Builder, applicationVariable, scope string) {
-	source.WriteString("\tbindings := Providers()\n\tbindingNames := make([]string, 0, len(bindings))\n\tfor name := range bindings {\n\t\tbindingNames = append(bindingNames, name)\n\t}\n\tsort.Strings(bindingNames)\n\tfor _, name := range bindingNames {\n\t\tvar err error\n\t\tif name == string(framework.ServiceRequest) {\n")
-	source.WriteString(fmt.Sprintf("\t\t\terr = %s.BindFactory(name, bindings[name])\n", applicationVariable))
-	source.WriteString("\t\t} else {\n")
-	source.WriteString(fmt.Sprintf("\t\t\terr = %s.Bind(name, bindings[name])\n", applicationVariable))
-	source.WriteString("\t\t}\n\t\tif err != nil {\n")
-	source.WriteString(fmt.Sprintf("\t\t\treturn fmt.Errorf(\"注册%s容器绑定 %%q 失败: %%w\", name, err)\n", scope))
-	source.WriteString("\t\t}\n\t}\n")
 }
