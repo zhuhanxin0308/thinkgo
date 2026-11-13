@@ -137,7 +137,7 @@ func migrateApplicationEntry(content []byte, appImport string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if file.Scope.Lookup("registerApplications") != nil {
+	if file.Name.Name == "main" && file.Scope.Lookup("registerApplications") != nil {
 		return nil, fmt.Errorf("registerApplications 名称已被手写声明占用")
 	}
 	var edits []applicationEntryEdit

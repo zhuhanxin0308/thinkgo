@@ -49,6 +49,15 @@ func TestAssemblyMigrationRewritesOnlyResolvedImports(t *testing.T) {
 	}
 }
 
+// TestAssemblyMigrationPreservesExternalTestHelper 验证外部测试包可合法保留自己的同名辅助函数。
+func TestAssemblyMigrationPreservesExternalTestHelper(t *testing.T) {
+	source := []byte("package main_test\n\nfunc registerApplications() {}\n")
+	got, err := migrateApplicationEntry(source, "example.com/project/app")
+	if err != nil || !bytes.Equal(got, source) {
+		t.Fatalf("外部测试包不得因无关同名声明被修改或拒绝: %s %v", got, err)
+	}
+}
+
 // TestAssemblyMigrationRejectsHandwrittenConflicts 验证不覆盖同名源码，也不绕过手写注册逻辑。
 func TestAssemblyMigrationRejectsHandwrittenConflicts(t *testing.T) {
 	for _, test := range []struct{ path, source string }{
