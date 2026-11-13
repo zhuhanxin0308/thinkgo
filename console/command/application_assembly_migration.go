@@ -66,11 +66,11 @@ func projectAssemblyMigrationSources(basePath, modulePath string, migrate bool) 
 	}
 	if len(sources) > 0 {
 		semantic := newApplicationSemanticContext(basePath, modulePath)
-		inspected, err := semantic.inspectApplicationPackage("app", "app")
+		declared, err := semantic.declaresApplicationName("app", "app", "Register")
 		if err != nil {
 			return nil, err
 		}
-		if inspected.hasSource && inspected.packageGo.Scope().Lookup("Register") != nil {
+		if declared {
 			return nil, fmt.Errorf("根 app.Register 包含手写实现，请人工迁移其业务逻辑后重试")
 		}
 	}
@@ -193,5 +193,41 @@ func migrateApplicationEntry(content []byte, appImport string) ([]byte, error) {
 	for _, edit := range edits {
 		result = append(append(result[:edit.start:edit.start], edit.text...), result[edit.end:]...)
 	}
+	if err := validateMigratedApplicationBindings(result, edits); err != nil {
+		return nil, err
+	}
 	return format.Source(result)
+}
+
+// validateMigratedApplicationBindings 重新解析候选源码，在每个替换位置核对词法绑定。
+// 只检查新插入的标识符，允许无关作用域同名和短声明右侧合法引用全局入口。
+func validateMigratedApplicationBindings(content []byte, edits []applicationEntryEdit) error {
+	positions := token.NewFileSet()
+	file, err := parser.ParseFile(positions, "entry.go", content, 0)
+	if err != nil {
+		return err
+	}
+	targets := make(map[int]bool)
+	delta := 0
+	for index := len(edits) - 1; index >= 0; index-- {
+		edit := edits[index]
+		if edit.text == "registerApplications" {
+			targets[edit.start+delta] = true
+		}
+		delta += len(edit.text) - (edit.end - edit.start)
+	}
+	ast.Inspect(file, func(node ast.Node) bool {
+		identifier, ok := node.(*ast.Ident)
+		if ok && targets[positions.Position(identifier.Pos()).Offset] && identifier.Obj != nil {
+			err = fmt.Errorf("迁移后的 registerApplications 在第 %d 行被局部声明遮蔽，请人工调整", positions.Position(identifier.Pos()).Line)
+		}
+		// 解析器不绑定导入名称；保留下来的同名包引用同样会遮蔽生成函数。
+		if selector, ok := node.(*ast.SelectorExpr); ok {
+			if qualifier, ok := selector.X.(*ast.Ident); ok && qualifier.Name == "registerApplications" && qualifier.Obj == nil {
+				err = fmt.Errorf("registerApplications 已用于包引用，请人工调整导入名称")
+			}
+		}
+		return err == nil
+	})
+	return err
 }

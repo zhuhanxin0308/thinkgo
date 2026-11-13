@@ -463,16 +463,56 @@ func discoverApplicationConstructorsWithContext(context *applicationSemanticCont
 	return constructors, nil
 }
 
+// declaresApplicationName 检查未删减的包级声明，避免发现阶段忽略变量后漏掉手写入口。
+func (context *applicationSemanticContext) declaresApplicationName(directory, packageName, name string) (bool, error) {
+	files, _, err := context.parseApplicationFiles(directory, packageName)
+	if err != nil {
+		return false, err
+	}
+	for _, file := range files {
+		for _, declaration := range file.Decls {
+			switch declared := declaration.(type) {
+			case *ast.FuncDecl:
+				if declared.Recv == nil && declared.Name.Name == name {
+					return true, nil
+				}
+			case *ast.GenDecl:
+				for _, specification := range declared.Specs {
+					switch value := specification.(type) {
+					case *ast.ValueSpec:
+						for _, identifier := range value.Names {
+							if identifier.Name == name {
+								return true, nil
+							}
+						}
+					case *ast.TypeSpec:
+						if value.Name.Name == name {
+							return true, nil
+						}
+					}
+				}
+			}
+		}
+	}
+	return false, nil
+}
+
 func discoverApplicationEntryPointsWithContext(context *applicationSemanticContext, directory, packageName string) (applicationEntryPoints, error) {
+	if directory == "app" {
+		declared, err := context.declaresApplicationName(directory, packageName, "RegisterGlobals")
+		if err != nil {
+			return applicationEntryPoints{}, err
+		}
+		if declared {
+			return applicationEntryPoints{}, fmt.Errorf("根 app.RegisterGlobals 名称已被手写声明占用，请人工迁移后重试")
+		}
+	}
 	inspected, err := context.inspectApplicationPackage(directory, packageName)
 	if err != nil {
 		return applicationEntryPoints{}, err
 	}
 	if !inspected.hasSource {
 		return applicationEntryPoints{}, nil
-	}
-	if directory == "app" && inspected.packageGo.Scope().Lookup("RegisterGlobals") != nil {
-		return applicationEntryPoints{}, fmt.Errorf("根 app.RegisterGlobals 名称已被手写声明占用，请人工迁移后重试")
 	}
 	emptyInterface := types.NewInterfaceType(nil, nil)
 	emptyInterface.Complete()

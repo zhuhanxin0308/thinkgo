@@ -26,6 +26,13 @@ func TestAssemblyMigrationRewritesOnlyResolvedImports(t *testing.T) {
 		{"点导入", "package main\nimport . \"example.com/project/app\"\nvar register = Register\n", "", true},
 		{"外部测试包", "package main_test\nimport shared \"example.com/project/app\"\nvar register = shared.Register\n", "", true},
 		{"非法源码", "package main\nfunc (", "", true},
+		{"局部目标变量", "package main\nimport app \"example.com/project/app\"\nfunc f() { registerApplications := func() {}; _ = registerApplications; app.Register() }\n", "", true},
+		{"目标参数", "package main\nimport app \"example.com/project/app\"\nfunc f(registerApplications func()) { app.Register() }\n", "", true},
+		{"闭包捕获目标", "package main\nimport app \"example.com/project/app\"\nfunc f(registerApplications func()) { _ = func() { app.Register() } }\n", "", true},
+		{"目标导入别名", "package main\nimport app \"example.com/project/app\"\nimport registerApplications \"strings\"\nvar text = registerApplications.TrimSpace(\"\")\nvar register = app.Register\n", "", true},
+		{"根包使用目标别名", "package main\nimport registerApplications \"example.com/project/app\"\nvar register = registerApplications.Register\n", "var register = registerApplications", false},
+		{"声明右侧仍用全局", "package main\nimport app \"example.com/project/app\"\nvar register = app.Register\nfunc f() { registerApplications := app.Register; _ = registerApplications }\n", "registerApplications := registerApplications", false},
+		{"无关作用域同名", "package main\nimport app \"example.com/project/app\"\nvar register = app.Register\nfunc f(registerApplications func()) { registerApplications() }\n", "registerApplications()", false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			got, err := migrateApplicationEntry([]byte(test.source), "example.com/project/app")
@@ -50,10 +57,12 @@ func TestAssemblyMigrationRejectsHandwrittenConflicts(t *testing.T) {
 		{"main.go", "package main\nfunc registerApplications() {}\n"},
 		{"app/custom.go", "package app\nfunc RegisterGlobals() {}\n"},
 		{"app/custom.go", "package app\nfunc Register() {}\n"},
+		{"app/custom.go", "package app\nvar Register = func() {}\n"},
+		{"app/custom.go", "package app\nvar RegisterGlobals = func() {}\n"},
 	} {
 		t.Run(test.path+test.source, func(t *testing.T) {
 			app, _ := prepareControllerDiscoveryTransactionFixture(t, false)
-			if strings.Contains(test.source, "func Register()") {
+			if strings.Contains(test.source, "func Register()") || strings.Contains(test.source, "var Register =") {
 				writeDiscoveryFixture(t, app.BasePath, "main.go", "package main\nimport app \"example.com/transaction/app\"\nvar register = app.Register\n")
 			}
 			writeDiscoveryFixture(t, app.BasePath, test.path, test.source)
