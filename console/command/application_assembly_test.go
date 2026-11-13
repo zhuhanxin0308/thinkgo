@@ -21,7 +21,7 @@ func TestApplicationAssemblySharesRootController(t *testing.T) {
 		writeDiscoveryFixture(t, base, path, string(source))
 	}
 	writeDiscoveryModuleFixture(t, base, "example.com/shared")
-	writeDiscoveryFixture(t, base, "external_test.go", "package main_test\n\nfunc registerApplications() {}\n")
+	writeDiscoveryFixture(t, base, "external_test.go", "package main_test\nimport . \"example.com/shared/app\"\nvar _ BaseController\nfunc registerApplications() {}\n")
 	writeDiscoveryFixture(t, base, "app/base_controller.go", `package app
 import framework "github.com/zhuhanxin0308/thinkgo/v3"
 type BaseController struct { framework.Controller; initialized bool }

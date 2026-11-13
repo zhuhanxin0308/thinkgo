@@ -151,7 +151,12 @@ func migrateApplicationEntry(content []byte, appImport string) ([]byte, error) {
 			alias = imported.Name.Name
 		}
 		if alias == "." {
-			return nil, fmt.Errorf("根 app 的点导入无法安全迁移")
+			for _, identifier := range file.Unresolved {
+				if identifier.Name == "Register" {
+					return nil, fmt.Errorf("根 app 的点导入无法安全迁移旧 Register 引用")
+				}
+			}
+			continue
 		}
 		used, changed := false, false
 		ast.Inspect(file, func(node ast.Node) bool {
