@@ -116,7 +116,8 @@ func protectAssemblyTargets(basePath string, sources []generatedApplicationSourc
 		if err != nil {
 			return err
 		}
-		content := bytes.TrimPrefix(snapshot.content, []byte("//go:build thinkgo_runtime\n\n"))
+		content := bytes.ReplaceAll(snapshot.content, []byte("\r\n"), []byte("\n"))
+		content = bytes.TrimPrefix(content, []byte("//go:build thinkgo_runtime\n\n"))
 		if !bytes.HasPrefix(content, []byte(applicationAssemblyHeader)) {
 			return fmt.Errorf("应用清单 %q 已被手写文件占用，请人工迁移后重试", current.relativePath)
 		}

@@ -117,6 +117,39 @@ func (c *Probe) Execute(_ *console.Input, output *console.Output) error {
 	if err := CheckControllerDiscovery(app); err != nil {
 		t.Fatalf("重复生成后清单不一致: %v", err)
 	}
+	// 模拟旧版 HTTP、运行时 CLI 和入口测试，使用真实源码命令完成迁移。
+	for _, path := range []string{"main.go", "main_test.go", "cmd/think/runtime.go"} {
+		content := readGeneratedDiscoverySource(t, base, path)
+		content = strings.ReplaceAll(content, "registerApplications", "businessapp.Register")
+		content = strings.Replace(content, "import (", "import (\n businessapp \"example.com/shared/app\"", 1)
+		writeDiscoveryFixture(t, base, path, content)
+	}
+	writeDiscoveryFixture(t, base, "app/autoload_generated.go", `package app
+import (
+    framework "github.com/zhuhanxin0308/thinkgo/v3"
+    "example.com/shared/app/index"
+    "example.com/shared/app/admin"
+)
+func Register(app *framework.App) error {
+    return app.RegisterApplications(func(current *framework.App) error {
+        return current.RegisterGlobalComponents(framework.GlobalApplicationComponents{
+            Services: Services(), Events: Events(), Middleware: Middleware(), Providers: Providers(),
+        })
+    }, index.Definition(), admin.Definition())
+}
+`)
+	for _, args := range [][]string{
+		{"run", "-mod=readonly", "./cmd/think", "service:discover", "--migrate"},
+		{"test", "-mod=readonly", "./...", "-count=1"},
+		{"run", "-mod=readonly", "-tags=thinkgo_runtime", "./cmd/think", "shared:probe"},
+	} {
+		process := exec.Command("go", args...)
+		process.Dir = base
+		process.Env = append(os.Environ(), "GOWORK=off", "CGO_ENABLED=0")
+		if output, err := process.CombinedOutput(); err != nil {
+			t.Fatalf("真实旧项目迁移验收 %v 失败: %v\n%s", args, err, output)
+		}
+	}
 	if _, err := os.Stat(filepath.Join(base, "internal", "appregistry")); !os.IsNotExist(err) {
 		t.Fatalf("不应创建项目注册包: %v", err)
 	}

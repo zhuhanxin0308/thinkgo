@@ -84,6 +84,21 @@ func TestAssemblyMigrationCommandRejectsOverlay(t *testing.T) {
 	}
 }
 
+// TestAssemblyDiscoveryAcceptsWindowsCheckout 验证 Git 转换为 CRLF 后仍识别自有清单。
+func TestAssemblyDiscoveryAcceptsWindowsCheckout(t *testing.T) {
+	app, _ := prepareControllerDiscoveryTransactionFixture(t, true)
+	for _, path := range []string{applicationDiscoveryFilename, "cmd/think/" + applicationDiscoveryFilename} {
+		content := readGeneratedDiscoverySource(t, app.BasePath, path)
+		writeDiscoveryFixture(t, app.BasePath, path, strings.ReplaceAll(content, "\n", "\r\n"))
+	}
+	if err := RefreshControllerDiscovery(app); err != nil {
+		t.Fatalf("换行转换不应被误判为手写文件: %v", err)
+	}
+	if err := CheckControllerDiscovery(app); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestAssemblyMigrationCompilesLegacyCycle 验证已形成循环的旧清单也能显式迁移。
 func TestAssemblyMigrationCompilesLegacyCycle(t *testing.T) {
 	base := t.TempDir()
