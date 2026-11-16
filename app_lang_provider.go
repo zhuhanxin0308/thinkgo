@@ -34,6 +34,9 @@ func (provider *appLangProvider) Initialize(app *App) error {
 	langConfig := app.config.GetMap("lang")
 	// 兼容旧配置：如果 lang 配置没有 default_lang，从 app 配置读取。
 	if _, ok := langConfig["default_lang"]; !ok {
+		if langConfig == nil {
+			langConfig = make(map[string]interface{})
+		}
 		langConfig["default_lang"] = app.config.Get("app.default_lang", "zh-cn")
 	}
 
