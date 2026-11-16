@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"sync"
 	"time"
 
@@ -119,7 +120,7 @@ func (provider *Provider) Initialize(app *framework.App) (initializeErr error) {
 	}
 	sdk := sdktrace.NewTracerProvider(
 		sdktrace.WithResource(resources),
-		sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.TraceIDRatioBased(parsed.SampleRatio))),
+		sdktrace.WithSampler(newSamplingPolicy(parsed.SampleRatio, rand.Float64)),
 		sdktrace.WithBatcher(
 			exporter,
 			sdktrace.WithBatchTimeout(parsed.BatchTimeout),
