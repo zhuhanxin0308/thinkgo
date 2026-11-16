@@ -121,7 +121,7 @@ class RunTest(unittest.TestCase):
                 for name in ["dataset.json", "queries.json", "schema.sql", "seed.sql", "protocol.json"]:
                     (contracts / name).write_bytes((ROOT / "contracts" / name).read_bytes())
                 original = {path: path.read_bytes() for path in output.rglob("*") if path.is_file()}
-                environment = mock.Mock()
+                environment = mock.Mock(dataset=self.dataset, url="http://127.0.0.1:18081")
                 environment.start.side_effect = error
                 arguments = SimpleNamespace(mode="pilot", variants="", runtime="runtime", work="work",
                                             output=str(output), resume=True)
@@ -145,6 +145,26 @@ class RunTest(unittest.TestCase):
                 # 失败启动只能追加会话开始事件，不能留下成功完成的声明。
                 events = [json.loads(line)["event"] for line in (output / "progress.jsonl").read_text().splitlines()]
                 self.assertEqual(events, ["session_start"])
+
+    def test_catalog_preflight_failure_never_starts_services_or_writes_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = pathlib.Path(directory) / "raw"
+            dataset = {**self.dataset, "catalog_page_size": 20000, "categories_per_tenant": 1}
+            environment = mock.Mock(dataset=dataset, url="http://127.0.0.1:18081")
+            environment.command.side_effect = ValueError("目录响应预算不足")
+            environment.start.side_effect = AssertionError("不得启动服务")
+            arguments = SimpleNamespace(mode="pilot", variants="", runtime="runtime", work="work",
+                                        output=str(output), resume=False)
+            with mock.patch.object(run, "Environment", return_value=environment), \
+                    mock.patch.object(run, "identity", return_value={"mode": "pilot"}):
+                with self.assertRaisesRegex(ValueError, "目录响应预算不足"):
+                    run.execute(arguments)
+            command = environment.command.call_args.args[0]
+            self.assertIn("-check-config", command)
+            self.assertEqual(command[command.index("-catalog-page-size") + 1], "20000")
+            self.assertNotIn("-output", command)
+            environment.start.assert_not_called()
+            self.assertFalse((output / "manifest.json").exists())
 
 
 class LoadLifecycleTest(unittest.TestCase):

@@ -145,11 +145,34 @@ func (configuration Config) Validate() error {
 			return errors.New("全局数据主键溢出")
 		}
 	}
+	if configuration.Scenario == "catalog" || configuration.Scenario == "mixed" {
+		if err := configuration.validateCatalogResponseBudget(); err != nil {
+			return err
+		}
+	}
 	if strings.TrimSpace(configuration.RunID) == "" || strings.TrimSpace(configuration.Secret) == "" {
 		return errors.New("run-id 和认证密钥不能为空")
 	}
 	if configuration.ErrorSampleLimit < 0 || configuration.ErrorSampleLimit > maximumErrorSamples {
 		return fmt.Errorf("error-samples 必须在 0..%d 之间", maximumErrorSamples)
+	}
+	return nil
+}
+
+func (configuration Config) validateCatalogResponseBudget() error {
+	// 分类按租户内商品编号轮转。用种子字段的最大 JSON 编码长度估算，无需访问数据库。
+	rows := min(configuration.CatalogPageSize, 1+(configuration.ProductsPerTenant-1)/configuration.Categories)
+	idDigits := len(strconv.FormatInt(int64(configuration.TenantCount)*int64(configuration.ProductsPerTenant), 10))
+	priceDigits := len(strconv.FormatInt(min(configuration.MaximumPriceCents, seededPriceUpperBound), 10))
+	stockDigits := len(strconv.FormatInt(math.MaxInt64, 10))
+	// 为可能转义 Unicode 的 JSON 编码器计入六字节转义，并为每项计入逗号。
+	nameBytes := len(`\u901a\u7528\u5546\u54c1--`) + len(strconv.Itoa(configuration.TenantCount)) + len(strconv.Itoa(configuration.ProductsPerTenant))
+	categoryBytes := len(`\u5206\u7c7b-`) + len(strconv.Itoa(min(configuration.Categories, configuration.ProductsPerTenant)))
+	cardBytes := len(`{"id":,"name":"","price_cents":,"category":"","stock":},`) + idDigits + nameBytes + priceDigits + categoryBytes + stockDigits
+	responseBytes := len(`{"items":[],"next_cursor":{"price_cents":,"id":}}`+"\n") + priceDigits + idDigits
+	maximumRows := (maximumResponseBytes - responseBytes) / cardBytes
+	if rows > maximumRows {
+		return fmt.Errorf("目录分页最多可返回 %d 条，超过 %d 字节响应预算可验收的 %d 条", rows, maximumResponseBytes, maximumRows)
 	}
 	return nil
 }

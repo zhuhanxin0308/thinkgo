@@ -75,6 +75,22 @@ func TestCLIProducesReportAndSummary(t *testing.T) {
 	}
 }
 
+func TestCLIChecksConfigurationWithoutWritingAReport(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "preflight.json")
+	args := []string{"-check-config", "-run-id=preflight", "-output=" + path}
+	var stdout, stderr bytes.Buffer
+	lookup := func(string) string { return "fixture-secret" }
+	if code := run(t.Context(), args, &stdout, &stderr, lookup); code != 0 {
+		t.Fatalf("默认配置应通过预检查，退出码 %d，错误 %q", code, stderr.String())
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("预检查不能写入测量结果: %v", err)
+	}
+	if code := run(t.Context(), append(args, "-catalog-page-size=20000", "-categories=1"), &stdout, &stderr, lookup); code != 2 {
+		t.Fatalf("超出响应预算的配置应在预检查失败，退出码 %d", code)
+	}
+}
+
 func TestCLICancellationSavesPartialResult(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

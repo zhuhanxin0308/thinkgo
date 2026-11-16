@@ -44,7 +44,8 @@ class CohortTests(unittest.TestCase):
     def test_selected_protocol_bytes_are_frozen_before_any_service_starts(self):
         with tempfile.TemporaryDirectory() as directory:
             output = pathlib.Path(directory) / "raw"
-            environment = mock.Mock()
+            environment = mock.Mock(dataset=json.loads((ROOT / "contracts/dataset.json").read_text()),
+                                    url="http://127.0.0.1:18081")
             environment.start.side_effect = RuntimeError("服务没有启动")
             arguments = SimpleNamespace(mode="verify", variants="", protocol=str(COMPARISON),
                                         go_tool="specified-go", runtime="runtime", work="work", output=output, resume=False)
@@ -113,7 +114,9 @@ class CohortTests(unittest.TestCase):
             output = pathlib.Path(directory) / "raw"
             protocol = experiment.load_protocol(COMPARISON)
             manifest = {"mode": "measure", "protocol": protocol}
-            environment = mock.Mock(seed_counts={"products": 100000})
+            environment = mock.Mock(seed_counts={"products": 100000},
+                                    dataset=json.loads((ROOT / "contracts/dataset.json").read_text()),
+                                    url="http://127.0.0.1:18081")
             arguments = SimpleNamespace(mode="measure", variants="", protocol=str(COMPARISON),
                                         runtime="runtime", work="work", output=output, resume=False)
             called = []

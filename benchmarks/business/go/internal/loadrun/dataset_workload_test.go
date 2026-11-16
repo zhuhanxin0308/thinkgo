@@ -50,6 +50,20 @@ func TestConfiguredWorkloadStaysWithinBusinessLimits(t *testing.T) {
 	}
 }
 
+func TestCatalogBodyBudgetUsesPossibleRowsPerCategory(t *testing.T) {
+	configuration := testConfig()
+	configuration.Scenario = "mixed"
+	configuration.CatalogPageSize = 20000
+	configuration.Categories = 1
+	if err := configuration.Validate(); err == nil {
+		t.Fatal("预算无法容纳的目录响应应在开跑前拒绝")
+	}
+	configuration.Categories = configuration.ProductsPerTenant
+	if err := configuration.Validate(); err != nil {
+		t.Fatalf("每个分类最多一个商品，较大的配置页大小不应被拒绝: %v", err)
+	}
+}
+
 // TestDefaultWorkloadTrajectory 固定修复前请求轨迹摘要，确保默认实验的每个请求保持兼容。
 func TestDefaultWorkloadTrajectory(t *testing.T) {
 	for scenario, expected := range map[string]string{
