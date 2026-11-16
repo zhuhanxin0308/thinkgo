@@ -116,11 +116,18 @@ func (r *Router) matchDynamic(method string, requestParts []string, trailingSlas
 				}
 			}
 			if matched, params := candidate.matchRequestPartsWithOptions(requestParts, trailingSlash); matched {
-				if !candidate.matchesExtensionAlias(requestParts) {
+				usesAlias := candidate.matchesExtensionAlias(requestParts)
+				if alias == nil && !usesAlias {
 					return candidate, params
 				}
+				consumed, endsInLiteral := candidate.matchedDynamicPathShape(params)
 				if alias == nil {
+					if consumed != len(requestParts) {
+						return candidate, params
+					}
 					alias, aliasParams, aliasSpecificity = candidate, params, routeSpecificity(candidate)
+				} else if !usesAlias && endsInLiteral && consumed == len(requestParts) {
+					return candidate, params
 				}
 			}
 		}
@@ -210,8 +217,10 @@ func moreSpecificStaticRoute(candidate, current *Route, requestParts []string) b
 	if (candidate.domain != "") != (current.domain != "") {
 		return candidate.domain != ""
 	}
-	if candidateAlias, currentAlias := candidate.matchesExtensionAlias(requestParts), current.matchesExtensionAlias(requestParts); candidateAlias != currentAlias {
-		return !candidateAlias
+	if len(candidate.pathParts) == len(requestParts) {
+		if candidateAlias, currentAlias := candidate.matchesExtensionAlias(requestParts), current.matchesExtensionAlias(requestParts); candidateAlias != currentAlias {
+			return !candidateAlias
+		}
 	}
 	return candidate.order < current.order
 }
@@ -482,6 +491,20 @@ func (r *Route) hasLiteralExtension(caseSensitive bool) bool {
 // matchesExtensionAlias 只将实际剥离后缀的候选视为别名，字面候选之间保持注册顺序。
 func (r *Route) matchesExtensionAlias(parts []string) bool {
 	return r.ext != "" && !r.literalExtension && len(parts) > 0 && strings.HasSuffix(parts[len(parts)-1], "."+r.ext)
+}
+
+// matchedDynamicPathShape 忽略未消费的可选参数，计算真正参与匹配的请求尾段。
+func (r *Route) matchedDynamicPathShape(params map[string]string) (consumed int, endsInLiteral bool) {
+	consumed = len(params)
+	for _, part := range r.pathParts {
+		if part.param == "" {
+			consumed++
+			endsInLiteral = true
+		} else if _, exists := params[part.param]; exists {
+			endsInLiteral = false
+		}
+	}
+	return consumed, endsInLiteral
 }
 
 func (r *Route) requestPartsForMatch(parts []string) ([]string, bool) {

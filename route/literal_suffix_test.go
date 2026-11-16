@@ -125,6 +125,53 @@ func TestLiteralSuffixKeepsEquivalentRegistrationOrder(t *testing.T) {
 	}
 }
 
+// TestExtensionAliasIgnoresUnconsumedSuffix 验证未消费的请求尾段不会改变前缀路由顺序。
+func TestExtensionAliasIgnoresUnconsumedSuffix(t *testing.T) {
+	for _, test := range []struct{ rule, path string }{
+		{"/files", "/files/detail.json"},
+		{"/files/:id", "/files/5/detail.json"},
+		{"/files/:id?/view", "/files/view/detail.json"},
+	} {
+		t.Run(test.rule, func(t *testing.T) {
+			router := NewRouter()
+			first, err := router.Get(test.rule, "Files@First")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := first.WithExtension("json"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := router.Get(test.rule, "Files@Second"); err != nil {
+				t.Fatal(err)
+			}
+			req := fwcontext.MustNewRequest(httptest.NewRequest(http.MethodGet, "http://example.test"+test.path, nil))
+			if got, _ := matchForTest(t, router, req); got != first {
+				t.Fatalf("相同前缀应遵守注册顺序: %v", got)
+			}
+		})
+	}
+}
+
+// TestDynamicAliasPreservesOrderForParameterOnlyMatches 验证没有字面后缀的参数候选不改变顺序。
+func TestDynamicAliasPreservesOrderForParameterOnlyMatches(t *testing.T) {
+	router := NewRouter()
+	first, err := router.Get("/items/:id", "Items@First")
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := NewJSONHandler(func() string { return "second" }, http.StatusOK)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := router.Get("/items/:name", handler); err != nil {
+		t.Fatal(err)
+	}
+	req := fwcontext.MustNewRequest(httptest.NewRequest(http.MethodGet, "http://example.test/items/7.html", nil))
+	if got, params := matchForTest(t, router, req); got != first || params["id"] != "7" {
+		t.Fatalf("同优先级的参数路由应遵守注册顺序，参数为 %v", params)
+	}
+}
+
 // TestLiteralExtensionKeepsRequiredRequestSuffix 验证前缀匹配仍校验整个请求的强制后缀。
 func TestLiteralExtensionKeepsRequiredRequestSuffix(t *testing.T) {
 	for _, pair := range []struct{ rule, path string }{
