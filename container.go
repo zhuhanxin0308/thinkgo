@@ -333,6 +333,9 @@ func (c *Container) callFactory(plan *factoryPlan, scope *resolution, params []i
 	if err := plan.validateParameterCount(len(params)); err != nil {
 		return nil, err
 	}
+	if plan.outputError != nil {
+		return nil, plan.outputError
+	}
 	if plan.directCall != nil {
 		return plan.directCall(c, scope, params)
 	}
@@ -342,9 +345,6 @@ func (c *Container) callFactory(plan *factoryPlan, scope *resolution, params []i
 	}
 
 	outputs := plan.factory.Call(inputs)
-	if plan.outputError != nil {
-		return nil, plan.outputError
-	}
 	if len(outputs) == 2 {
 		if reflectErrorOutputIsNil(outputs[1]) {
 			return outputs[0].Interface(), nil
