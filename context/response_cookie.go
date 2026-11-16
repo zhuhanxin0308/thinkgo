@@ -79,8 +79,14 @@ func applyResponseCookieOptions(cookie *http.Cookie, options []interface{}) erro
 
 // #nosec G124 -- 映射值来自 ThinkPHP 兼容配置，调用方可显式设置 Secure、HttpOnly 与 SameSite。
 func applyResponseCookieOptionMap(cookie *http.Cookie, values map[string]interface{}) error {
+	seen := make(map[string]struct{}, len(values))
 	for rawName, value := range values {
-		switch strings.ToLower(strings.TrimSpace(rawName)) {
+		name := strings.ToLower(strings.TrimSpace(rawName))
+		if _, duplicate := seen[name]; duplicate {
+			return fmt.Errorf("重复的 Cookie 选项 %q", name)
+		}
+		seen[name] = struct{}{}
+		switch name {
 		case "expire":
 			if expires, ok := value.(time.Time); ok {
 				cookie.Expires = expires
