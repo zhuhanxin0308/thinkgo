@@ -408,12 +408,20 @@ func (l *Log) DriverErrorCount() int64 {
 }
 
 // recordEntry 创建并记录一条日志条目。
-func (l *Log) recordEntry(msg string, level string, ctx map[string]interface{}, callerSkip int) {
+func (l *Log) recordEntry(msg string, level string, ctx map[string]interface{}, callerSkip int, messageLimit ...int) {
 	if !l.IsLevelEnabled(level) {
 		return
 	}
 
 	entry := newLogEntry(l.now(), level, msg, ctx)
+	if len(messageLimit) > 0 && messageLimit[0] > 0 {
+		// 先识别完整凭据，再截断输出，避免截断符成为凭据的一部分。
+		if limit := messageLimit[0]; len(entry.Message) > limit {
+			entry.Message = strings.ToValidUTF8(entry.Message[:limit], "�") + "…"
+		} else {
+			entry.Message = strings.ToValidUTF8(entry.Message, "�")
+		}
+	}
 
 	if l.isCallerEnabled() {
 		if _, file, line, ok := runtime.Caller(callerSkip); ok {
@@ -620,6 +628,11 @@ func (l *Log) beginSynchronousIO() ([]Driver, io.Writer, bool) {
 // Record 记录日志到异步通道。
 func (l *Log) Record(msg string, level string) {
 	l.recordEntry(msg, level, nil, 2)
+}
+
+// RecordLimitedContext 记录结构化日志，在脱敏后按字节限制主消息；非正值表示不限制。
+func (l *Log) RecordLimitedContext(msg, level string, ctx map[string]interface{}, maxBytes int) {
+	l.recordEntry(msg, level, ctx, 2, maxBytes)
 }
 
 // Shutdown 保留旧名称但返回关闭错误；新代码应使用 Close。

@@ -153,7 +153,7 @@ func (h *Handle) Render(w http.ResponseWriter, r *http.Request, recovered interf
 		return h.renderDebugPage(w, r, recovered)
 	}
 	if exposeDetails {
-		return writeTextResponse(w, http.StatusInternalServerError, safeExceptionTextWith(recovered, sanitizeExceptionText))
+		return writeTextResponse(w, http.StatusInternalServerError, safeExceptionText(recovered))
 	}
 	return writeTextResponse(w, http.StatusInternalServerError, internalServerErrorText)
 }
@@ -238,7 +238,7 @@ func isNilValue(value interface{}) bool {
 	}
 }
 
-func safeExceptionTextWith(value interface{}, sanitize func(string) string) (text string) {
+func exceptionValueText(value interface{}) (text string) {
 	typeName := fmt.Sprintf("%T", value)
 	if value == nil || isNilValue(value) {
 		return typeName
@@ -248,7 +248,6 @@ func safeExceptionTextWith(value interface{}, sanitize func(string) string) (tex
 		if recover() != nil {
 			text = typeName
 		}
-		text = sanitize(text)
 	}()
 
 	switch typed := value.(type) {
@@ -280,11 +279,7 @@ func sanitizeExceptionText(text string) string {
 
 // normalizeExceptionText 统一处理异常文本的长度、编码和控制字符，避免结构化脱敏后的占位符再次被改写。
 func normalizeExceptionText(text string) string {
-	if len(text) > maxExceptionLogTextBytes {
-		text = strings.ToValidUTF8(text[:maxExceptionLogTextBytes], "�") + "…"
-	} else {
-		text = strings.ToValidUTF8(text, "�")
-	}
+	text = limitExceptionText(text)
 	text = strings.NewReplacer("\r", `\r`, "\n", `\n`, "\t", `\t`).Replace(text)
 	return strings.Map(func(character rune) rune {
 		if character < 0x20 || character == 0x7f {
@@ -292,6 +287,13 @@ func normalizeExceptionText(text string) string {
 		}
 		return character
 	}, text)
+}
+
+func limitExceptionText(text string) string {
+	if len(text) > maxExceptionLogTextBytes {
+		return strings.ToValidUTF8(text[:maxExceptionLogTextBytes], "�") + "…"
+	}
+	return strings.ToValidUTF8(text, "�")
 }
 
 // Report 按异常类型选择日志级别，并与 Render 保持彼此独立。
@@ -319,7 +321,7 @@ func (h *Handle) Report(err interface{}) {
 		return
 	}
 
-	h.Log.ErrorCtx(safeExceptionLogText(err), map[string]interface{}{
+	h.reportLogMessage(frameworkLog.LevelError, exceptionValueText(err), map[string]interface{}{
 		"stack": string(debug.Stack()),
 	})
 }
@@ -335,10 +337,10 @@ func (h *Handle) reportHTTPException(err *HttpException) {
 	ctx := map[string]interface{}{"status": err.StatusCode}
 	if err.StatusCode >= http.StatusInternalServerError {
 		ctx["stack"] = string(debug.Stack())
-		h.Log.ErrorCtx(sanitizeExceptionLogText(err.Message), ctx)
+		h.reportLogMessage(frameworkLog.LevelError, err.Message, ctx)
 		return
 	}
-	h.Log.WarningCtx(sanitizeExceptionLogText(err.Message), ctx)
+	h.reportLogMessage(frameworkLog.LevelWarning, err.Message, ctx)
 }
 
 func (h *Handle) reportValidateException(err *ValidateException) {
@@ -346,7 +348,7 @@ func (h *Handle) reportValidateException(err *ValidateException) {
 		return
 	}
 
-	h.Log.WarningCtx(sanitizeExceptionLogText(err.Message), map[string]interface{}{
+	h.reportLogMessage(frameworkLog.LevelWarning, err.Message, map[string]interface{}{
 		"field":  err.Field,
 		"status": http.StatusUnprocessableEntity,
 	})
@@ -373,15 +375,15 @@ func (h *Handle) reportBusinessException(err *BusinessException) {
 	}
 	if status >= http.StatusInternalServerError {
 		ctx["stack"] = string(debug.Stack())
-		h.Log.ErrorCtx(sanitizeExceptionLogText(err.Message), ctx)
+		h.reportLogMessage(frameworkLog.LevelError, err.Message, ctx)
 		return
 	}
-	h.Log.WarningCtx(sanitizeExceptionLogText(err.Message), ctx)
+	h.reportLogMessage(frameworkLog.LevelWarning, err.Message, ctx)
 }
 
 // renderHttpException 渲染 HTTP 异常，并在非本地调试场景隐藏 5xx 详情。
 func (h *Handle) renderHttpException(w http.ResponseWriter, r *http.Request, err *HttpException, exposeDetails bool) error {
-	message := err.Message
+	message := sanitizeExceptionText(err.Message)
 	data := cloneExceptionData(err.Data)
 	if err.StatusCode >= http.StatusInternalServerError && !exposeDetails {
 		message = internalServerErrorText
@@ -395,21 +397,22 @@ func (h *Handle) renderHttpException(w http.ResponseWriter, r *http.Request, err
 
 // renderValidateException 渲染参数校验异常。
 func (h *Handle) renderValidateException(w http.ResponseWriter, r *http.Request, err *ValidateException) error {
+	message := sanitizeExceptionText(err.Message)
 	data := map[string]interface{}{
 		"field":   err.Field,
-		"message": err.Message,
+		"message": message,
 	}
 
 	if h.isJSONRequest(r) {
-		return h.renderJSON(w, http.StatusUnprocessableEntity, err.Message, data)
+		return h.renderJSON(w, http.StatusUnprocessableEntity, message, data)
 	}
-	return writeTextResponse(w, http.StatusUnprocessableEntity, err.Message)
+	return writeTextResponse(w, http.StatusUnprocessableEntity, message)
 }
 
 // renderBusinessException 渲染业务异常，服务端失败只返回统一错误信封。
 func (h *Handle) renderBusinessException(w http.ResponseWriter, r *http.Request, err *BusinessException, exposeDetails bool) error {
 	status := err.StatusCode()
-	message := err.Message
+	message := sanitizeExceptionText(err.Message)
 	code := err.Code
 	data := cloneExceptionData(err.Data)
 	if status >= http.StatusInternalServerError && !exposeDetails {

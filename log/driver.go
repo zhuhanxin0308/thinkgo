@@ -32,10 +32,10 @@ func newLogEntry(at time.Time, level, message string, fields map[string]any) *Lo
 		if err != nil {
 			encoded = `{"log_context":"[UNSERIALIZABLE]"}`
 		} else {
-			encoded = string(data)
+			encoded = escapeLogLineValue(string(data))
 		}
 	}
-	return &LogEntry{Time: at, Level: level, Message: message, Context: values, snapshot: &logContextSnapshot{values: values, encoded: encoded}}
+	return &LogEntry{Time: at, Level: level, Message: SanitizeErrorText(message), Context: values, snapshot: &logContextSnapshot{values: values, encoded: encoded}}
 }
 
 // forDriver 隔离驱动可修改的数据，脱敏不再由驱动重复执行。
@@ -45,7 +45,9 @@ func (e *LogEntry) forDriver() *LogEntry {
 	}
 	result := *e
 	if result.snapshot == nil {
-		result.snapshot = newLogEntry(e.Time, e.Level, e.Message, e.Context).snapshot
+		sanitized := newLogEntry(e.Time, e.Level, e.Message, e.Context)
+		result.snapshot = sanitized.snapshot
+		result.Message = sanitized.Message
 	}
 	result.Context = cloneContext(result.snapshot.values)
 	return &result
@@ -67,7 +69,11 @@ func (e *LogEntry) FormatEntry() string {
 	}
 
 	// 消息
-	sb.WriteString(" " + escapeLogLineValue(e.Message))
+	message := e.Message
+	if e.snapshot == nil {
+		message = SanitizeErrorText(message)
+	}
+	sb.WriteString(" " + escapeLogLineValue(message))
 
 	// 上下文（如果有）
 	if e.snapshot != nil {

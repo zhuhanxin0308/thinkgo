@@ -43,7 +43,7 @@ func TestExceptionCredentialBoundaries(t *testing.T) {
 
 // TestExceptionCredentialOutputPipeline 验证真实日志驱动和调试 JSON 响应采用各自的凭据可见性策略。
 func TestExceptionCredentialOutputPipeline(t *testing.T) {
-	const message = "Authorization: Bearer tokn-private-suffix\nCookie: sid=sess-private-suffix; other=cook-private-suffix"
+	const message = "Authorization: Bearer tokn-private-suffix\nCookie: sid=sess-private-suffix; other=cook-private-suffix\npassword=pass-private-suffix safe=yes"
 	var output bytes.Buffer
 	driver, err := logDriver.NewConsoleWithWriter(&output)
 	if err != nil {
@@ -63,6 +63,9 @@ func TestExceptionCredentialOutputPipeline(t *testing.T) {
 			t.Fatal("实际日志未保留指定前缀")
 		}
 	}
+	if !strings.Contains(output.String(), "password=pass[REDACTED] safe=yes") {
+		t.Fatal("真实日志输出应保留后续字段的前缀策略和安全诊断信息")
+	}
 	request := httptest.NewRequest(http.MethodGet, "https://example.com", nil)
 	request.Header.Set("Accept", "application/json")
 	recorder := httptest.NewRecorder()
@@ -79,5 +82,42 @@ func TestExceptionCredentialOutputPipeline(t *testing.T) {
 		if strings.Contains(result.Message, fragment) {
 			t.Fatal("调试响应错误地沿用了日志前缀策略")
 		}
+	}
+}
+
+func TestPublicHTTPErrorRejectsPunctuationDelimitedCredentialLeaks(t *testing.T) {
+	handler := &Handle{}
+	request := httptest.NewRequest(http.MethodGet, "https://example.com", nil)
+	request.Header.Set("Accept", "application/json")
+	recorder := httptest.NewRecorder()
+	err := handler.Render(recorder, request, NewHttpException(
+		http.StatusBadRequest, "password=;hidden-auth-token token=prefix&hidden-token-tail,rest safe=yes",
+	))
+	if err != nil || recorder.Code != http.StatusBadRequest {
+		t.Fatalf("公共异常响应渲染失败: status=%d err=%v", recorder.Code, err)
+	}
+	body := recorder.Body.String()
+	if strings.Contains(body, "hidden-") || !strings.Contains(body, "password=[REDACTED] token=[REDACTED] safe=yes") {
+		t.Fatalf("公共响应泄露凭据或丢失安全字段: %s", body)
+	}
+}
+
+func TestExceptionLogRedactsShortCredentialBeforeTruncation(t *testing.T) {
+	const password = "abcd"
+	prefix := strings.Repeat("x", maxExceptionLogTextBytes-len(" password="+password))
+	var output bytes.Buffer
+	driver, err := logDriver.NewConsoleWithWriter(&output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logger := frameworkLog.NewLog(driver)
+	handler := &Handle{Log: logger}
+	handler.Report(errors.New(prefix + " password=" + password + " safe=yes"))
+	if err := logger.Close(); err != nil {
+		t.Fatal(err)
+	}
+	logged := output.String()
+	if strings.Contains(logged, password) || !strings.Contains(logged, "password=") || !strings.Contains(logged, "…") {
+		t.Fatal("截断标记不能使短密码可见，日志仍应显示截断")
 	}
 }
