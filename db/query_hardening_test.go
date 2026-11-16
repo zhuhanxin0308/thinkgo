@@ -50,6 +50,36 @@ func TestSQLServerLockHintIsAttachedToTable(t *testing.T) {
 	}
 }
 
+func TestScalarAggregatesUseSingleDriverColumnWhenAliasCaseChanges(t *testing.T) {
+	const want = 37.25
+	// godror 默认以具名字符串返回部分 NUMBER 值。
+	type oracleNumber string
+	connection := &queryHardeningConnection{
+		selectRows: []map[string]any{{"TP_AGGREGATE": oracleNumber("37.25")}},
+	}
+	query := NewDB(connection).Table("orders")
+	for _, aggregate := range []struct {
+		name string
+		run  func(*Query, string) (float64, error)
+	}{
+		{"Sum", (*Query).Sum}, {"Avg", (*Query).Avg}, {"Max", (*Query).Max}, {"Min", (*Query).Min},
+	} {
+		t.Run(aggregate.name, func(t *testing.T) {
+			if got, err := aggregate.run(query, "amount"); err != nil || got != want {
+				t.Fatalf("应读取驱动返回的大写聚合列: got=%v err=%v", got, err)
+			}
+		})
+	}
+	connection.selectRows = []map[string]any{{"unexpected": 1, "other": 2}}
+	if _, err := query.Sum("amount"); !errors.Is(err, ErrInvalidDatabaseRow) {
+		t.Fatalf("缺少唯一聚合列时应返回结果形状错误: %v", err)
+	}
+	connection.selectRows = []map[string]any{{"TP_AGGREGATE": nil}}
+	if got, err := query.Sum("amount"); err != nil || got != 0 {
+		t.Fatalf("有效的 NULL 聚合应沿用零值约定: got=%v err=%v", got, err)
+	}
+}
+
 // TestAggregateParsesDriverNumericRepresentations 验证聚合值兼容各 SQL 驱动常见数字表示，
 // 同时拒绝 NaN、无穷值和非法文本。
 func TestAggregateParsesDriverNumericRepresentations(t *testing.T) {
