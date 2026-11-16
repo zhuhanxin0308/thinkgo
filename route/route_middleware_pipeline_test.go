@@ -29,9 +29,15 @@ func TestRouteMiddlewarePipelineReuse(t *testing.T) {
 	registered, err := router.Get("/users", func(*fwcontext.Request) *fwcontext.Response {
 		order = append(order, "destination")
 		return fwcontext.NewResponse().Content("ok")
-	}, first, second)
+	})
 	if err != nil {
 		t.Fatalf("注册带中间件路由失败: %v", err)
+	}
+	if err := registered.WithNamedMiddleware("first", first); err != nil {
+		t.Fatal(err)
+	}
+	if err := registered.WithNamedMiddleware("second", second); err != nil {
+		t.Fatal(err)
 	}
 	if plain.HasMiddleware() {
 		t.Fatal("无中间件路由不应创建管道")
@@ -51,7 +57,7 @@ func TestRouteMiddlewarePipelineReuse(t *testing.T) {
 		t.Fatalf("路由管道执行顺序错误: %#v", order)
 	}
 
-	if err := registered.WithoutMiddleware(first, second); err != nil {
+	if err := registered.WithoutNamedMiddleware("first", "second"); err != nil {
 		t.Fatalf("移除路由中间件失败: %v", err)
 	}
 	if registered.HasMiddleware() {

@@ -3,6 +3,7 @@ package route
 import (
 	"fmt"
 	"regexp"
+	"slices"
 
 	"github.com/zhuhanxin0308/thinkgo/v3/middleware"
 )
@@ -55,8 +56,10 @@ func (r *Router) registerDefinitionsWithCommit(definitions []routeDefinition, co
 		if err = validateRouteHandler(definition.handler); err != nil {
 			return nil, err
 		}
-		if err = validateMiddleware(definition.middlewares); err != nil {
-			return nil, err
+		for index, entry := range definition.middlewares {
+			if entry.handler == nil {
+				return nil, fmt.Errorf("%w: 第 %d 项为空", ErrInvalidRouteMiddleware, index+1)
+			}
 		}
 		domain, err := normalizeAndValidateRouteDomain(definition.domain)
 		if err != nil {
@@ -68,7 +71,7 @@ func (r *Router) registerDefinitionsWithCommit(definitions []routeDefinition, co
 			method:             method,
 			path:               path,
 			handler:            definition.handler,
-			middlewares:        append([]middleware.Handler(nil), definition.middlewares...),
+			middlewares:        slices.Clone(definition.middlewares),
 			middlewarePipeline: buildMiddlewarePipeline(definition.middlewares),
 			patterns:           make(map[string]string),
 			compiled:           make(map[string]*regexp.Regexp),
