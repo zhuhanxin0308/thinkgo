@@ -8,9 +8,14 @@ import (
 
 // adaptiveResponseWriter 隐藏具体包装器的固定方法集，只按原始 writer 的真实能力构造 facade。
 type adaptiveResponseWriter struct {
-	http.ResponseWriter
+	responseWriterBridge
 	controllerTarget http.ResponseWriter
 }
+
+// responseWriterBridge 公开框架写入链；ResponseController 仍直接访问传输能力。
+type responseWriterBridge struct{ http.ResponseWriter }
+
+func (w responseWriterBridge) FrameworkResponseWriter() http.ResponseWriter { return w.ResponseWriter }
 
 func (w *adaptiveResponseWriter) Unwrap() http.ResponseWriter {
 	return unwrapAdaptiveTarget(w.controllerTarget, w.ResponseWriter)
@@ -158,7 +163,7 @@ type adaptiveWriterStorage struct {
 }
 
 func (s *adaptiveWriterStorage) adapt(writer http.ResponseWriter, capabilitySource http.ResponseWriter) http.ResponseWriter {
-	s.writer = adaptiveResponseWriter{ResponseWriter: writer, controllerTarget: capabilitySource}
+	s.writer = adaptiveResponseWriter{responseWriterBridge: responseWriterBridge{writer}, controllerTarget: capabilitySource}
 	_, canFlush := capabilitySource.(http.Flusher)
 	_, canHijack := capabilitySource.(http.Hijacker)
 	_, canPush := capabilitySource.(http.Pusher)

@@ -51,6 +51,32 @@ func TestRegistryEnableObserveAndPrometheus(t *testing.T) {
 	}
 }
 
+func TestRegistryCountsUnknownAndDeclaredHijackedResponses(t *testing.T) {
+	registry := NewRegistry()
+	registry.EndHijacked(registry.Begin(), 0, time.Millisecond)
+	registry.Enable()
+	registry.EndHijacked(registry.Begin(), 0, time.Millisecond)
+	registry.EndHijacked(registry.Begin(), http.StatusSwitchingProtocols, time.Millisecond)
+	snapshot := registry.Snapshot()
+	if snapshot.Requests != 2 || snapshot.InFlight != 0 || snapshot.OtherStatuses != 1 ||
+		snapshot.HijackedUnknown != 1 || snapshot.HijackedKnown != 1 || snapshot.StatusClasses[0] != 1 ||
+		snapshot.StatusClasses[1] != 0 {
+		t.Fatalf("接管计数或状态分类错误: %+v", snapshot)
+	}
+	for _, fragment := range []string{
+		`thinkgo_http_hijacked_requests_total{status_known="false"} 1`,
+		`thinkgo_http_hijacked_requests_total{status_known="true"} 1`,
+	} {
+		if !strings.Contains(registry.Prometheus(), fragment) {
+			t.Errorf("接管指标输出缺少 %q", fragment)
+		}
+	}
+	registry.Reset()
+	if snapshot := registry.Snapshot(); snapshot.HijackedKnown != 0 || snapshot.HijackedUnknown != 0 {
+		t.Fatalf("重置未清除接管计数: %+v", snapshot)
+	}
+}
+
 func TestRegistryServeHTTPAndReset(t *testing.T) {
 	registry := NewRegistry()
 	recorder := httptest.NewRecorder()

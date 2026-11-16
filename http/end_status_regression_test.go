@@ -112,3 +112,25 @@ func TestEndReportsFinalTransmissionStatus(t *testing.T) {
 		})
 	}
 }
+
+func TestEndReportsStatusOfRegularSwitchingProtocolsResponse(t *testing.T) {
+	app := newTestHTTPApp(t, t.TempDir(), map[string]interface{}{"enable": false})
+	if _, err := mustHTTPRoute(t, app).Get("/upgrade", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusSwitchingProtocols)
+	})); err != nil {
+		t.Fatal(err)
+	}
+	var ended *event.HttpEndEvent
+	if err := app.Event().Listen(event.EventHttpEnd, &event.SimpleListener{Handler: func(current event.Event) error {
+		ended = current.(*event.HttpEndEvent)
+		return nil
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	writer := httptest.NewRecorder()
+	newTestHTTPHandler(t, app).ServeHTTP(writer, httptest.NewRequest(http.MethodGet, "http://127.0.0.1/upgrade", nil))
+	if writer.Code != http.StatusSwitchingProtocols || ended == nil || ended.StatusCode != writer.Code ||
+		ended.Data.(*fwcontext.Response).GetStatus() != writer.Code {
+		t.Fatalf("直接写出的 101 必须进入结束事件: wire=%d event=%+v", writer.Code, ended)
+	}
+}

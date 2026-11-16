@@ -298,6 +298,7 @@ func (w *statusTrackingResponseWriter) hijackResponse() (net.Conn, *bufio.ReadWr
 		return nil, nil, err
 	}
 	w.state = responseStateHijacked
+	w.status = 0
 	return connection, readWriter, nil
 }
 

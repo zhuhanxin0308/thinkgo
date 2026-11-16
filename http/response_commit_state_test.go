@@ -308,6 +308,9 @@ func TestAdaptiveHijackLocksSuccessfulOwnershipTransfer(t *testing.T) {
 	if !status.Hijacked() || !status.Written() {
 		t.Fatalf("成功 Hijack 必须锁定所有权: hijacked=%t written=%t", status.Hijacked(), status.Written())
 	}
+	if status.Status() != 0 {
+		t.Errorf("连接接管后未声明状态应记为未知，实际为 %d", status.Status())
+	}
 	if _, err = writer.Write([]byte("late-http")); !errors.Is(err, stdhttp.ErrHijacked) {
 		t.Fatalf("Hijack 后不得继续 HTTP 写入: %v", err)
 	}

@@ -80,6 +80,9 @@ func (h *Http) dispatch(matchedRoute *route.Route, req *context.Request) *contex
 			writer = adaptResponseWriterCapabilities(&headResponseWriter{ResponseWriter: writer}, writer)
 		}
 		standardHandler.ServeHTTP(writer, raw)
+		if tracking := findTrackedResponseWriter(writer); tracking.Hijacked() {
+			return context.NewResponse().ObserveTransmission(tracking.Status(), true)
+		}
 		return context.NewCommittedResponse(responseWriterStatus(writer))
 	}
 	if callback := reflect.ValueOf(handler); callback.IsValid() && callback.Kind() == reflect.Func {
@@ -348,7 +351,7 @@ func standardRouteHandler(handler route.HandlerFunc) (netHandler http.Handler, o
 func responseWriterStatus(writer http.ResponseWriter) int {
 	if statusWriter, ok := writer.(interface{ Status() int }); ok {
 		status := statusWriter.Status()
-		if status >= http.StatusOK && status <= 599 {
+		if status == http.StatusSwitchingProtocols || status >= http.StatusOK && status <= 599 {
 			return status
 		}
 	}

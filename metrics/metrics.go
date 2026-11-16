@@ -34,13 +34,15 @@ var durationBucketBounds = [durationBucketCount]float64{
 
 // Registry 保存低基数 HTTP 指标。默认关闭，避免兼容应用在未启用观测时承担采集开销。
 type Registry struct {
-	enabled       atomic.Bool
-	inFlight      atomic.Int64
-	requests      atomic.Uint64
-	errors        atomic.Uint64
-	statusClasses [statusClassCount]atomic.Uint64
-	otherStatuses atomic.Uint64
-	durationSum   atomic.Uint64
+	enabled         atomic.Bool
+	inFlight        atomic.Int64
+	requests        atomic.Uint64
+	errors          atomic.Uint64
+	statusClasses   [statusClassCount]atomic.Uint64
+	otherStatuses   atomic.Uint64
+	hijackedKnown   atomic.Uint64
+	hijackedUnknown atomic.Uint64
+	durationSum     atomic.Uint64
 	// 每项只记录落入该区间的样本；Snapshot 负责累加为公开的累计桶。
 	durationBucket [bucketCount]atomic.Uint64
 }
@@ -53,6 +55,8 @@ type Snapshot struct {
 	Errors          uint64
 	StatusClasses   [statusClassCount]uint64
 	OtherStatuses   uint64
+	HijackedKnown   uint64
+	HijackedUnknown uint64
 	DurationCount   uint64
 	DurationSum     float64
 	DurationBuckets [bucketCount]uint64
@@ -98,6 +102,19 @@ func (r *Registry) End(active bool, status int, duration time.Duration) {
 	}
 	r.inFlight.Add(-1)
 	r.observe(status, duration)
+}
+
+// EndHijacked 结束已接管连接的观测；状态为 0 时记录专门的未知状态计数。
+func (r *Registry) EndHijacked(active bool, status int, duration time.Duration) {
+	if r == nil || !active {
+		return
+	}
+	if status == 0 {
+		r.hijackedUnknown.Add(1)
+	} else {
+		r.hijackedKnown.Add(1)
+	}
+	r.End(active, status, duration)
 }
 
 // Observe 直接记录一次已经完成的请求，不改变 in-flight 数量。
@@ -148,6 +165,8 @@ func (r *Registry) Snapshot() Snapshot {
 		snapshot.StatusClasses[index] = r.statusClasses[index].Load()
 	}
 	snapshot.OtherStatuses = r.otherStatuses.Load()
+	snapshot.HijackedKnown = r.hijackedKnown.Load()
+	snapshot.HijackedUnknown = r.hijackedUnknown.Load()
 	snapshot.DurationSum = math.Float64frombits(r.durationSum.Load())
 	var cumulative uint64
 	for index := range snapshot.DurationBuckets {
@@ -169,6 +188,8 @@ func (r *Registry) Reset() {
 		r.statusClasses[index].Store(0)
 	}
 	r.otherStatuses.Store(0)
+	r.hijackedKnown.Store(0)
+	r.hijackedUnknown.Store(0)
 	r.durationSum.Store(0)
 	for index := range r.durationBucket {
 		r.durationBucket[index].Store(0)
@@ -194,6 +215,9 @@ func (r *Registry) Prometheus() string {
 		fmt.Fprintf(&builder, "thinkgo_http_status_class_requests_total{class=\"%sxx\"} %d\n", strconv.Itoa(index+1), count)
 	}
 	fmt.Fprintf(&builder, "thinkgo_http_status_class_requests_total{class=\"other\"} %d\n", snapshot.OtherStatuses)
+	writeMetricHeader(&builder, "thinkgo_http_hijacked_requests_total", "counter", "按状态是否已知统计已接管的 HTTP 请求。")
+	fmt.Fprintf(&builder, "thinkgo_http_hijacked_requests_total{status_known=\"false\"} %d\n", snapshot.HijackedUnknown)
+	fmt.Fprintf(&builder, "thinkgo_http_hijacked_requests_total{status_known=\"true\"} %d\n", snapshot.HijackedKnown)
 	writeMetricHeader(&builder, "thinkgo_http_request_duration_seconds", "histogram", "HTTP 请求处理耗时分布。")
 	for index, count := range snapshot.DurationBuckets {
 		if index == len(durationBucketBounds) {

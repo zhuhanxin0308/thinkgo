@@ -388,7 +388,7 @@ func (h *Http) serveHTTP(originalWriter http.ResponseWriter, raw *http.Request, 
 	// ServeContent 可能依据条件请求返回 206/304；把真实状态回写到同一
 	// Response，确保随后 Http.End 收到的状态与客户端一致。
 	if state.response != nil && state.response.Committed() && state.statusWriter.Written() {
-		state.response.Code(state.statusWriter.Status())
+		state.response.ObserveTransmission(state.statusWriter.Status(), state.statusWriter.Hijacked())
 	}
 	if state.response.Committed() || state.statusWriter.Written() {
 		return
@@ -515,11 +515,22 @@ func (h *Http) finishRequest(state *requestServeState, recovered interface{}) {
 	// 指标和服务端 Span 必须覆盖完整请求生命周期，但不能被扩展回调的
 	// panic 绕过；请求收尾自身有独立截止时间，因此该 defer 最终必定执行。
 	defer func() {
+		status := state.statusWriter.Status()
+		hijacked := state.statusWriter.Hijacked()
 		if state.metricsRegistry != nil {
-			state.metricsRegistry.End(state.metricsActive, state.statusWriter.Status(), time.Since(state.startedAt))
+			duration := time.Since(state.startedAt)
+			if hijacked {
+				state.metricsRegistry.EndHijacked(state.metricsActive, status, duration)
+			} else {
+				state.metricsRegistry.End(state.metricsActive, status, duration)
+			}
 		}
 		if h != nil && h.telemetry != nil && h.telemetry.Enabled() && state.raw != nil {
-			telemetry.EndHTTPServer(state.raw.Context(), state.statusWriter.Status(), requestErr)
+			if hijacked {
+				telemetry.EndHijackedHTTPServer(state.raw.Context(), status, requestErr)
+			} else {
+				telemetry.EndHTTPServer(state.raw.Context(), status, requestErr)
+			}
 		}
 	}()
 	if recovered != nil && recovered != http.ErrAbortHandler {
@@ -586,10 +597,10 @@ func (h *Http) finishRequest(state *requestServeState, recovered interface{}) {
 	terminatorResponse := state.response
 	// 文件、流和提交钩子都可能在 Send 内改变最终状态，结束阶段统一使用真实传输结果。
 	if terminatorResponse != nil && state.statusWriter.Written() {
-		terminatorResponse.Code(state.statusWriter.Status())
+		terminatorResponse.ObserveTransmission(state.statusWriter.Status(), state.statusWriter.Hijacked())
 	}
 	if terminatorResponse == nil && state.req != nil {
-		terminatorResponse = context.NewCommittedResponse(state.statusWriter.Status())
+		terminatorResponse = context.NewResponse().ObserveTransmission(state.statusWriter.Status(), state.statusWriter.Hijacked())
 		h.rememberRequestEndState(terminatorResponse, state.req)
 	}
 	if terminatorResponse != nil {
@@ -710,15 +721,24 @@ func (h *Http) writeAccessLogRecord(ctx stdcontext.Context, state *requestServeS
 		ip = state.req.Ip()
 	}
 	duration := time.Since(state.startedAt)
-	message := fmt.Sprintf("%s %s %d %.3fms", state.raw.Method, path, state.statusWriter.Status(), float64(duration.Microseconds())/1000)
+	status := state.statusWriter.Status()
+	displayedStatus := any(status)
 	fields := map[string]interface{}{
 		"method":      state.raw.Method,
 		"path":        path,
-		"status":      state.statusWriter.Status(),
+		"status":      status,
 		"duration_ms": float64(duration.Microseconds()) / 1000,
 		"ip":          ip,
 		"user_agent":  state.raw.UserAgent(),
 	}
+	if state.statusWriter.Hijacked() {
+		fields["hijacked"] = true
+		if status == 0 {
+			fields["status"] = nil
+			displayedStatus = "hijacked/unknown"
+		}
+	}
+	message := fmt.Sprintf("%s %s %v %.3fms", state.raw.Method, path, displayedStatus, float64(duration.Microseconds())/1000)
 	if nonBlocking {
 		return h.log.RecordContextNonBlocking(ctx, message, frameworkLog.LevelInfo, fields)
 	}
