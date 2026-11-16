@@ -31,9 +31,6 @@ func TestSchemaCacheLoadsIntoFreshConnection(t *testing.T) {
 	if err != nil || again.Columns[0].Name != "id" {
 		t.Fatalf("调用方修改污染了共享缓存: %#v %v", again, err)
 	}
-	if fields := connection.cachedSchemaFields("users"); fields != "id,name" {
-		t.Fatalf("查询没有可消费的结构字段: %s", fields)
-	}
 	if err := database.LoadSchemaCache(content, "tenant-b"); err == nil {
 		t.Fatal("不同数据库身份共用了缓存")
 	}

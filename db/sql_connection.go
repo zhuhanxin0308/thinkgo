@@ -143,11 +143,6 @@ func (c *SQLConnection) selectRowsContext(ctx context.Context, request SelectReq
 		return nil, err
 	}
 	fields := request.Fields()
-	if fields == "*" {
-		if cached := c.cachedSchemaFields(request.Table()); cached != "" {
-			fields = cached
-		}
-	}
 	fieldsForValidation := fields
 	if aggregate := request.Aggregate(); aggregate != nil {
 		if err := aggregate.validate(); err != nil {
