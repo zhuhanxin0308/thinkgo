@@ -371,22 +371,14 @@ class Environment:
                         self.work, self.base_env, self.work / "logs/redis.log", affinity["redis"])
         self.infrastructure["redis"] = redis
         wait_for(lambda timeout: tcp_ready(self.protocol["ports"]["redis"], timeout=timeout), redis)
+        self.prepare_template()
+
+    def prepare_template(self):
         contracts = self.root / "contracts"
         digest = hashlib.sha256()
         for name in ["dataset.json", "schema.sql", "seed.sql"]:
             digest.update((contracts / name).read_bytes())
         self.template = "benchmark_seed_" + digest.hexdigest()[:12]
-        exists = self.sql(f"SELECT 1 FROM pg_database WHERE datname='{self.template}'", "postgres")
-        if exists != "1":
-            self.sql(f"CREATE DATABASE {self.template}", "postgres")
-            self.sql("CREATE EXTENSION pg_stat_statements", self.template)
-            arguments = [self.binary("postgresql", "psql"), "-Xq", "-v", "ON_ERROR_STOP=1"]
-            for key, value in self.dataset.items():
-                if isinstance(value, int):
-                    arguments.extend(["-v", f"{key}={value}"])
-            arguments.extend(["-f", contracts / "schema.sql", "-f", contracts / "seed.sql"])
-            self.command(arguments, database=self.template)
-            self.sql("CHECKPOINT", self.template)
         expected = {
             "tenants": self.dataset["tenant_count"],
             "users": self.dataset["tenant_count"] * self.dataset["users_per_tenant"],
@@ -396,10 +388,51 @@ class Environment:
             "comments": self.dataset["tenant_count"] * self.dataset["tickets_per_tenant"] * self.dataset["initial_comments_per_ticket"],
             "orders": 0,
         }
+        exists = self.sql(f"SELECT 1 FROM pg_database WHERE datname='{self.template}'", "postgres")
+        if exists not in ("", "1"):
+            raise RuntimeError(f"模板数据库存在性查询返回无效结果: {exists!r}")
+        if exists == "1" and self.template_counts(self.template, expected) == expected:
+            self.seed_counts = expected
+            return
+
+        # 只处理当前受管实例中由合同摘要命名的暂存库，验证成功后才发布。
+        staging = self.template + "_building"
+        self.sql(f"DROP DATABASE IF EXISTS {staging}", "postgres")
+        self.sql(f"CREATE DATABASE {staging}", "postgres")
+        try:
+            arguments = [self.binary("postgresql", "psql"), "-Xq", "-v", "ON_ERROR_STOP=1", "--single-transaction"]
+            for key, value in self.dataset.items():
+                if isinstance(value, int):
+                    arguments.extend(["-v", f"{key}={value}"])
+            arguments.extend(["-c", "CREATE EXTENSION pg_stat_statements",
+                              "-f", contracts / "schema.sql", "-f", contracts / "seed.sql"])
+            self.command(arguments, database=staging)
+            self.sql("CHECKPOINT", staging)
+            counts = self.template_counts(staging, expected)
+            if counts != expected:
+                raise RuntimeError(f"模板数据库初始化后不完整: {counts}")
+            if exists == "1":
+                self.sql(f"DROP DATABASE {self.template}", "postgres")
+            self.sql(f"ALTER DATABASE {staging} RENAME TO {self.template}", "postgres")
+        except BaseException as error:
+            try:
+                self.sql(f"DROP DATABASE IF EXISTS {staging}", "postgres")
+            except Exception as cleanup_error:
+                error.add_note(f"清理暂存模板失败: {cleanup_error}")
+            raise
+        self.seed_counts = counts
+
+    def template_counts(self, database, expected):
+        tables = (*expected, "categories", "order_items", "order_audit")
+        required = [f"to_regclass('public.bench_{name}') IS NOT NULL" for name in tables]
+        required.append("EXISTS (SELECT 1 FROM pg_extension WHERE extname='pg_stat_statements')")
+        present = self.sql("SELECT " + " AND ".join(required), database)
+        if present == "f":
+            return None
+        if present != "t":
+            raise RuntimeError(f"模板数据库结构查询返回无效结果: {present!r}")
         columns = ",".join(f"'{name}',(SELECT count(*) FROM bench_{name})" for name in expected)
-        self.seed_counts = json.loads(self.sql("SELECT json_build_object(" + columns + ")", self.template))
-        if self.seed_counts != expected:
-            raise RuntimeError(f"模板数据库不完整，拒绝基于残留数据运行: {self.seed_counts}")
+        return json.loads(self.sql("SELECT json_build_object(" + columns + ")", database))
 
     def reset(self):
         if self.application:
