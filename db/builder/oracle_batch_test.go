@@ -11,6 +11,15 @@ import (
 	"github.com/zhuhanxin0308/thinkgo/v3/db"
 )
 
+// TestOracleRebindKeepsLiteralBackslashes 验证普通字符串以反斜杠结尾时还能绑定后续参数。
+func TestOracleRebindKeepsLiteralBackslashes(t *testing.T) {
+	const query = `SELECT 'C:\' AS dir, ? AS bound FROM dual`
+	const want = `SELECT 'C:\' AS dir, :1 AS bound FROM dual`
+	if got := (&Oracle{}).Rebind(query); got != want {
+		t.Fatalf("Oracle 重绑定错误: %q，期望 %q", got, want)
+	}
+}
+
 func TestOracleTypedLockCapabilities(t *testing.T) {
 	oracle := &Oracle{}
 	update, err := oracle.Lock(db.LockForUpdate)

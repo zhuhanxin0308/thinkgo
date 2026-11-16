@@ -157,13 +157,19 @@ func copySQLQuotedToken(result *strings.Builder, sqlText string, index int, clos
 	return index
 }
 
-// SQLite 与 PostgreSQL 普通引用不使用反斜杠转义；PostgreSQL E 字符串由共享扫描器处理。
+// SQLite、SQL Server、Oracle 和 PostgreSQL 的普通引用通过重复分隔符转义。
+// PostgreSQL 的 E 字符串单独处理；未声明方言时仍保留兼容的反斜杠处理。
 func sqlBackslashEscapes(dialects ...string) bool {
 	if len(dialects) == 0 {
 		return true
 	}
 	dialect := strings.ToLower(strings.TrimSpace(dialects[0]))
-	return dialect != "sqlite" && dialect != "postgres"
+	switch dialect {
+	case "sqlite", "postgres", "sqlserver", "oracle":
+		return false
+	default:
+		return true
+	}
 }
 
 func sqlBuilderDialect(builder Builder) string {
@@ -237,12 +243,14 @@ func countSQLPlaceholders(sqlText string, dialects ...string) (int, error) {
 			case '?':
 				// PostgreSQL 单字符 JSONB 存在操作符使用 ?? 转义；
 				// ?|、?& 与 @? 语法无歧义，可直接保留且不计入绑定参数。
-				if index+1 < len(sqlText) && sqlText[index+1] == '?' {
-					index++
-					continue
-				}
-				if isPostgresQuestionOperator(sqlText, index) {
-					continue
+				if postgres {
+					if index+1 < len(sqlText) && sqlText[index+1] == '?' {
+						index++
+						continue
+					}
+					if sqllex.PostgresQuestionOperator(sqlText, index) {
+						continue
+					}
 				}
 				count++
 			case '\'':
@@ -334,18 +342,6 @@ func countSQLPlaceholders(sqlText string, dialects ...string) (int, error) {
 		return 0, fmt.Errorf("SQL 引用或注释未闭合")
 	}
 	return count, nil
-}
-
-// isPostgresQuestionOperator 识别没有绑定占位符歧义的 PostgreSQL 操作符。
-// 独立的单字符 ? 必须由调用方写成 ??，避免根据上下文猜测而误绑参数。
-func isPostgresQuestionOperator(sqlText string, index int) bool {
-	if index < 0 || index >= len(sqlText) || sqlText[index] != '?' {
-		return false
-	}
-	if index+1 < len(sqlText) && (sqlText[index+1] == '|' || sqlText[index+1] == '&') {
-		return true
-	}
-	return index > 0 && sqlText[index-1] == '@'
 }
 
 func readDollarQuoteDelimiter(text string) string {

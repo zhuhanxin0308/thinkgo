@@ -43,6 +43,15 @@ func newSQLiteQuoteDatabase(t *testing.T) (*DB, *SQLConnection) {
 	return database, connection
 }
 
+// TestSQLiteBitwiseOperatorsAcceptAdjacentBindings 验证相邻的按位运算符和问号能执行真实查询。
+func TestSQLiteBitwiseOperatorsAcceptAdjacentBindings(t *testing.T) {
+	database, _ := newSQLiteQuoteDatabase(t)
+	rows, err := database.Query(`SELECT ?|? AS bit_or, ?&? AS bit_and`, 5, 3, 5, 3)
+	if err != nil || len(rows) != 1 || rows[0]["bit_or"] != int64(7) || rows[0]["bit_and"] != int64(1) {
+		t.Fatalf("SQLite 相邻运算符查询结果错误: %v, %v", rows, err)
+	}
+}
+
 func TestIssue125SQLiteSuccessAndFailureLogsRedactLiteral(t *testing.T) {
 	database, _ := newSQLiteQuoteDatabase(t)
 	logger := &sqliteQuoteLogger{}
