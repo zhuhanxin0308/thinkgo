@@ -97,9 +97,19 @@ func IsValueType(typ reflect.Type) bool {
 	if typ == nil {
 		return false
 	}
+	// 快慢指针沿元素类型解包，遇到递归类型时终止，有限层级仍按叶子类型分类。
+	slow, advanceSlow := typ, false
+	for typ.Kind() == reflect.Pointer || typ.Kind() == reflect.Slice {
+		typ = typ.Elem()
+		if advanceSlow {
+			slow = slow.Elem()
+		}
+		if typ == slow {
+			return false
+		}
+		advanceSlow = !advanceSlow
+	}
 	switch typ.Kind() {
-	case reflect.Pointer, reflect.Slice:
-		return IsValueType(typ.Elem())
 	case reflect.Interface:
 		return typ.NumMethod() == 0
 	case reflect.String, reflect.Bool,
