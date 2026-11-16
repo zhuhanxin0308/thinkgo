@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"net/url"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -14,7 +15,6 @@ import (
 )
 
 const (
-	defaultEndpoint           = "https://localhost:4318/v1/traces"
 	defaultExporterTimeout    = 10 * time.Second
 	defaultBatchTimeout       = 5 * time.Second
 	defaultMaxExportBatchSize = 512
@@ -58,7 +58,6 @@ func parseProviderConfig(values map[string]interface{}, defaultServiceName, defa
 		ServiceName:        strings.TrimSpace(defaultServiceName),
 		ServiceVersion:     strings.TrimSpace(defaultVersion),
 		Environment:        strings.TrimSpace(defaultEnvironment),
-		Endpoint:           defaultEndpoint,
 		Headers:            make(map[string]string),
 		Timeout:            defaultExporterTimeout,
 		SampleRatio:        1,
@@ -97,7 +96,7 @@ func parseProviderConfig(values map[string]interface{}, defaultServiceName, defa
 	if config.ServiceName == "" || config.ServiceVersion == "" || config.Environment == "" {
 		return providerConfig{}, errors.New("telemetry 服务名、版本和环境继承结果不能为空")
 	}
-	if config.Endpoint, err = strictString(values, "endpoint", config.Endpoint, true); err != nil {
+	if config.Endpoint, err = strictString(values, "endpoint", "", true); err != nil {
 		return providerConfig{}, err
 	}
 	if err = validateEndpoint(config.Endpoint); err != nil {
@@ -164,24 +163,31 @@ func strictHeaders(raw interface{}) (map[string]string, error) {
 		return make(map[string]string), nil
 	}
 	values, ok := raw.(map[string]interface{})
+	typed, typedOK := raw.(map[string]string)
 	if encoded, encodedOK := raw.(string); encodedOK {
 		var err error
 		values, err = decodeHeaderJSON(encoded)
 		if err != nil {
 			return nil, err
 		}
-	} else if !ok {
+	} else if !ok && !typedOK {
 		return nil, errors.New("telemetry.headers 必须是字符串对象或 JSON 对象字符串")
 	}
-	if len(values) > maximumHeaderCount {
+	if len(values)+len(typed) > maximumHeaderCount {
 		return nil, fmt.Errorf("telemetry.headers 不能超过 %d 个", maximumHeaderCount)
+	}
+	if typedOK {
+		values = make(map[string]interface{}, len(typed))
+		for name, value := range typed {
+			values[name] = value
+		}
 	}
 	result := make(map[string]string, len(values))
 	seen := make(map[string]struct{}, len(values))
 	for name, rawValue := range values {
-		// 编码声明必须与导出器实际生成的正文一致，不能由自定义请求头覆盖。
-		if strings.EqualFold(name, "Content-Encoding") {
-			return nil, fmt.Errorf("telemetry.headers 中的 %q 由 OTLP 导出器管理，不能自定义", name)
+		// 请求编码由导出器决定，响应编码由 HTTP Transport 协商并解压。
+		if strings.EqualFold(name, "Content-Encoding") || strings.EqualFold(name, "Accept-Encoding") {
+			return nil, fmt.Errorf("telemetry.headers 中的 %q 由 OTLP HTTP 传输管理，不能自定义", name)
 		}
 		value, ok := rawValue.(string)
 		if !ok || !headerNamePattern.MatchString(name) || len(value) > maximumHeaderValueBytes || strings.ContainsAny(value, "\r\n\x00") {
@@ -196,6 +202,23 @@ func strictHeaders(raw interface{}) (map[string]string, error) {
 		result[name] = value
 	}
 	return result, nil
+}
+
+func validateEnvironmentAcceptEncoding() error {
+	// SDK 优先采用 Trace 专用变量，非空时覆盖通用环境变量。
+	source := "OTEL_EXPORTER_OTLP_TRACES_HEADERS"
+	headers := strings.TrimSpace(os.Getenv(source))
+	if headers == "" {
+		source = "OTEL_EXPORTER_OTLP_HEADERS"
+		headers = os.Getenv(source)
+	}
+	for pair := range strings.SplitSeq(headers, ",") {
+		name, _, found := strings.Cut(pair, "=")
+		if found && strings.EqualFold(strings.TrimSpace(name), "Accept-Encoding") {
+			return fmt.Errorf("%s 不能自定义 Accept-Encoding，该字段由 OTLP HTTP 传输管理", source)
+		}
+	}
+	return nil
 }
 
 func decodeHeaderJSON(encoded string) (map[string]interface{}, error) {

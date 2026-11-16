@@ -3,6 +3,7 @@ package otlp
 import (
 	"encoding/json"
 	"math"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -108,4 +109,36 @@ func minTelemetryTestStringLength(length int) int {
 		return length
 	}
 	return 32
+}
+
+func TestTelemetryTypedHeadersFollowValidationLimits(t *testing.T) {
+	tooMany := make(map[string]string, maximumHeaderCount+1)
+	for i := 0; i <= maximumHeaderCount; i++ {
+		tooMany["X-Test-"+strconv.Itoa(i)] = "safe"
+	}
+	for _, headers := range []map[string]string{
+		tooMany,
+		{"Bad Header": "safe"},
+		{"X-Too-Long": strings.Repeat("x", maximumHeaderValueBytes+1)},
+		{"X-Control": "value\r\n\x00"},
+	} {
+		if _, err := strictHeaders(headers); err == nil {
+			t.Fatal("非法的类型化请求头必须被拒绝")
+		}
+	}
+}
+
+func TestEnabledTelemetryRequiresExplicitEndpoint(t *testing.T) {
+	values := enabledTelemetryValues()
+	delete(values, "endpoint")
+	if _, err := parseProviderConfig(values, "orders", "1", "test"); err == nil || !strings.Contains(err.Error(), "telemetry.endpoint") {
+		t.Fatalf("启用遥测但省略端点时必须明确报错: %v", err)
+	}
+	for _, endpoint := range []string{"http://localhost:4318/v1/traces", "https://localhost:4318/v1/traces"} {
+		values["endpoint"] = endpoint
+		parsed, err := parseProviderConfig(values, "orders", "1", "test")
+		if err != nil || parsed.Endpoint != endpoint {
+			t.Fatalf("应接受显式端点 %q: %v", endpoint, err)
+		}
+	}
 }

@@ -444,11 +444,14 @@ func checkTelemetry(_ context.Context, app *framework.App) Result {
 	if !configuration.GetBool("telemetry.enable") {
 		return warn("OpenTelemetry Trace 导出未启用")
 	}
+	endpoint := strings.TrimSpace(configuration.GetString("telemetry.endpoint"))
+	if endpoint == "" {
+		return fail("启用 OTLP 导出时必须配置 telemetry.endpoint")
+	}
 	tracing, err := framework.ResolveServiceAs[*telemetry.Tracing](app, framework.ServiceTelemetry)
 	if err != nil || !tracing.Enabled() {
 		return fail("telemetry.enable=true，但 OTLP Provider 未注册或初始化失败")
 	}
-	endpoint := strings.TrimSpace(configuration.GetString("telemetry.endpoint"))
 	if strings.HasPrefix(strings.ToLower(endpoint), "http://") {
 		return warn("OTLP Collector 使用明文 HTTP；请确认链路位于受信网络")
 	}
