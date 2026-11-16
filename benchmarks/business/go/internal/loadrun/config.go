@@ -19,6 +19,7 @@ const (
 	defaultProductsPerTenant = 25000
 	defaultTicketsPerTenant  = 5000
 	defaultCategories        = 32
+	defaultDatasetSeed       = 20261107
 	defaultConcurrency       = 32
 	defaultMaxInflight       = 256
 	defaultErrorSampleLimit  = 20
@@ -27,6 +28,9 @@ const (
 	maximumErrorSamples      = 10000
 	catalogPageSize          = 20
 	catalogMaximumPrice      = 100000000
+	defaultOrderItems        = 8
+	defaultItemQuantity      = 10
+	orderProductCount        = 2
 	inactiveProductEvery     = 10
 	hotProductCount          = 100
 	detailCycleSize          = 10
@@ -57,6 +61,7 @@ type Config struct {
 	Duration               time.Duration   `json:"duration_ns"`
 	Timeout                time.Duration   `json:"timeout_ns"`
 	Seed                   uint64          `json:"seed"`
+	DatasetSeed            int64           `json:"dataset_seed"`
 	RunID                  string          `json:"run_id"`
 	Secret                 string          `json:"-"`
 	TenantCount            int             `json:"tenant_count"`
@@ -64,6 +69,10 @@ type Config struct {
 	ProductsPerTenant      int             `json:"products_per_tenant"`
 	TicketsPerTenant       int             `json:"tickets_per_tenant"`
 	Categories             int             `json:"categories"`
+	CatalogPageSize        int             `json:"catalog_page_size"`
+	MaximumPriceCents      int64           `json:"maximum_price_cents"`
+	MaximumOrderItems      int             `json:"maximum_order_items"`
+	MaximumItemQuantity    int             `json:"maximum_item_quantity"`
 	ErrorSampleLimit       int             `json:"error_sample_limit"`
 	InactiveProductModulus int             `json:"inactive_product_modulus"`
 	HotProductsPerTenant   int             `json:"hot_products_per_tenant"`
@@ -76,9 +85,11 @@ func DefaultConfig() Config {
 	return Config{
 		URL: "http://127.0.0.1:8080", Scenario: "mixed", Duration: time.Minute,
 		Timeout: 5 * time.Second, Concurrency: defaultConcurrency, MaxInflight: defaultMaxInflight,
-		Seed: 1, TenantCount: defaultTenants, UsersPerTenant: defaultUsersPerTenant,
+		Seed: 1, DatasetSeed: defaultDatasetSeed, TenantCount: defaultTenants, UsersPerTenant: defaultUsersPerTenant,
 		ProductsPerTenant: defaultProductsPerTenant, TicketsPerTenant: defaultTicketsPerTenant,
 		Categories: defaultCategories, ErrorSampleLimit: defaultErrorSampleLimit,
+		CatalogPageSize: catalogPageSize, MaximumPriceCents: catalogMaximumPrice,
+		MaximumOrderItems: defaultOrderItems, MaximumItemQuantity: defaultItemQuantity,
 		InactiveProductModulus: inactiveProductEvery, HotProductsPerTenant: hotProductCount,
 		CacheHitWeight: detailHotCount * percentageTotal / detailCycleSize,
 		MixedWeights:   ScenarioWeights{Catalog: 40, Detail: 30, Order: 20, Ticket: 10},
@@ -108,6 +119,10 @@ func (configuration Config) Validate() error {
 	if configuration.ProductsPerTenant < 1 || configuration.TicketsPerTenant < 1 || configuration.Categories < 1 || configuration.InactiveProductModulus < 2 {
 		return errors.New("商品、工单与分类数量必须为正，下架模数至少为2")
 	}
+	if configuration.CatalogPageSize < 1 || configuration.MaximumPriceCents < 1 ||
+		configuration.MaximumOrderItems < 1 || configuration.MaximumItemQuantity < 1 {
+		return errors.New("目录页大小、价格和订单数量上限必须为正")
+	}
 	activeProducts := configuration.ProductsPerTenant - configuration.ProductsPerTenant/configuration.InactiveProductModulus
 	if configuration.HotProductsPerTenant < 1 || activeProducts <= configuration.HotProductsPerTenant {
 		return errors.New("活动商品必须容纳配置的热点集合并至少保留一个冷商品")
@@ -130,11 +145,34 @@ func (configuration Config) Validate() error {
 			return errors.New("全局数据主键溢出")
 		}
 	}
+	if configuration.Scenario == "catalog" || configuration.Scenario == "mixed" {
+		if err := configuration.validateCatalogResponseBudget(); err != nil {
+			return err
+		}
+	}
 	if strings.TrimSpace(configuration.RunID) == "" || strings.TrimSpace(configuration.Secret) == "" {
 		return errors.New("run-id 和认证密钥不能为空")
 	}
 	if configuration.ErrorSampleLimit < 0 || configuration.ErrorSampleLimit > maximumErrorSamples {
 		return fmt.Errorf("error-samples 必须在 0..%d 之间", maximumErrorSamples)
+	}
+	return nil
+}
+
+func (configuration Config) validateCatalogResponseBudget() error {
+	// 分类按租户内商品编号轮转。用种子字段的最大 JSON 编码长度估算，无需访问数据库。
+	rows := min(configuration.CatalogPageSize, 1+(configuration.ProductsPerTenant-1)/configuration.Categories)
+	idDigits := len(strconv.FormatInt(int64(configuration.TenantCount)*int64(configuration.ProductsPerTenant), 10))
+	priceDigits := len(strconv.FormatInt(min(configuration.MaximumPriceCents, seededPriceUpperBound), 10))
+	stockDigits := len(strconv.FormatInt(math.MaxInt64, 10))
+	// 为可能转义 Unicode 的 JSON 编码器计入六字节转义，并为每项计入逗号。
+	nameBytes := len(`\u901a\u7528\u5546\u54c1--`) + len(strconv.Itoa(configuration.TenantCount)) + len(strconv.Itoa(configuration.ProductsPerTenant))
+	categoryBytes := len(`\u5206\u7c7b-`) + len(strconv.Itoa(min(configuration.Categories, configuration.ProductsPerTenant)))
+	cardBytes := len(`{"id":,"name":"","price_cents":,"category":"","stock":},`) + idDigits + nameBytes + priceDigits + categoryBytes + stockDigits
+	responseBytes := len(`{"items":[],"next_cursor":{"price_cents":,"id":}}`+"\n") + priceDigits + idDigits
+	maximumRows := (maximumResponseBytes - responseBytes) / cardBytes
+	if rows > maximumRows {
+		return fmt.Errorf("目录分页最多可返回 %d 条，超过 %d 字节响应预算可验收的 %d 条", rows, maximumResponseBytes, maximumRows)
 	}
 	return nil
 }

@@ -87,13 +87,20 @@ def load_command(root, protocol, dataset, url, run_id, scenario, duration, outpu
     arguments = [root / "bin/load", "-url", url, "-scenario", scenario, "-rate", rate,
                  "-concurrency", protocol["closed_concurrency"], "-max-inflight", protocol["open_max_inflight"],
                  "-duration", f"{duration}s", "-timeout", f"{protocol['request_timeout_seconds']}s",
-                 "-seed", protocol["seed"], "-run-id", run_id, "-secret-env", "BENCH_SECRET", "-output", output,
+                 "-seed", protocol["seed"], "-run-id", run_id, "-secret-env", "BENCH_SECRET",
                  "-tenant-count", dataset["tenant_count"], "-users-per-tenant", dataset["users_per_tenant"],
                  "-products-per-tenant", dataset["products_per_tenant"], "-tickets-per-tenant", dataset["tickets_per_tenant"],
                  "-categories", dataset["categories_per_tenant"],
+                 "-dataset-seed", dataset["seed"],
+                 "-catalog-page-size", dataset["catalog_page_size"],
+                 "-maximum-price-cents", dataset["maximum_price_cents"],
+                 "-maximum-order-items", dataset["maximum_order_items"],
+                 "-maximum-item-quantity", dataset["maximum_item_quantity"],
                  "-inactive-product-modulus", dataset["inactive_product_modulus"],
                  "-hot-products-per-tenant", dataset["hot_products_per_tenant"],
                  "-cache-hit-weight", dataset["cache_hit_weight"]]
+    if output is not None:
+        arguments.extend(("-output", output))
     for scenario in ("catalog", "detail", "order", "ticket"):
         arguments.extend((f"-{scenario}-weight", dataset["mixed_weights"][scenario]))
     return list(map(str, arguments))
@@ -335,27 +342,33 @@ def execute(arguments):
         if {variant["id"] for variant in protocol["variants"]} != selected:
             raise ValueError("指定了未知框架变体")
     output = pathlib.Path(arguments.output).resolve()
-    output.mkdir(parents=True, exist_ok=True)
     environment = Environment(ROOT, arguments.runtime, arguments.work, protocol)
     manifest = identity(environment, protocol, arguments.mode, go_tool=getattr(arguments, "go_tool", "go"))
     manifest_path = output / "manifest.json"
-    if manifest_path.exists():
+    existing_manifest = manifest_path.exists()
+    if existing_manifest:
         previous = json.loads(manifest_path.read_text())
         if not arguments.resume or previous != manifest:
             raise ValueError("已有结果不允许覆盖；恢复要求显式--resume且源码、二进制、协议与环境完全一致")
-    else:
+    index_path = output / "index.json"
+    secret = secrets.token_hex(32)
+    if not index_path.exists():
+        check = load_command(ROOT, protocol, environment.dataset, environment.url, "preflight", "catalog",
+                             protocol["warmup_seconds"], None, 0)
+        environment.command([*check, "-check-config"], environment={**os.environ, "BENCH_SECRET": secret})
+    output.mkdir(parents=True, exist_ok=True)
+    if not existing_manifest:
         write_json(manifest_path, manifest)
     for name in ["dataset.json", "queries.json", "schema.sql", "seed.sql", "protocol.json"]:
         # 明确归档实际选择的协议，不能把十配置实验错误标成默认九配置。
         source = protocol_path if name == "protocol.json" else ROOT / "contracts" / name
         preserve_bytes(output / "contracts" / name, source.read_bytes())
-    if (output / "index.json").exists():
-        index = json.loads((output / "index.json").read_text())
+    if index_path.exists():
+        index = json.loads(index_path.read_text())
         for record in index["rounds"]:
             validate_artifacts(output / "rounds" / record["id"], record)
         progress(output, "already_complete", rounds=len(index["rounds"]))
         return
-    secret = secrets.token_hex(32)
     progress(output, "session_start", mode=arguments.mode)
     try:
         environment.start()

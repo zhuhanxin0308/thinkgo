@@ -138,11 +138,15 @@ func validateCatalog(configuration Config, request requestSpec, body []byte) err
 	if err := decodeStrict(body, &response); err != nil {
 		return err
 	}
-	if response.Items == nil || len(response.Items) > catalogPageSize || response.NextCursor == nil {
+	if response.Items == nil || len(response.Items) > configuration.CatalogPageSize || response.NextCursor == nil {
 		return errResponseData
 	}
 	if len(response.Items) == 0 {
-		if catalogHasActiveProducts(configuration, request.CategoryID) || !bytes.Equal(bytes.TrimSpace(response.NextCursor), []byte("null")) {
+		hasGoods := request.catalogHasGoods
+		if hasGoods == nil {
+			hasGoods = func() bool { return catalogHasActiveProducts(configuration, request.CategoryID) }
+		}
+		if !bytes.Equal(bytes.TrimSpace(response.NextCursor), []byte("null")) || hasGoods() {
 			return errResponseData
 		}
 		return nil
@@ -150,7 +154,7 @@ func validateCatalog(configuration Config, request requestSpec, body []byte) err
 	expectedCategory := catalogCategoryPrefix + strconv.Itoa(request.CategoryID)
 	productOffset := int64(request.Tenant-1) * int64(configuration.ProductsPerTenant)
 	for index, card := range response.Items {
-		if !validateCard(configuration, request.Tenant, card) || *card.PriceCents > catalogMaximumPrice {
+		if !validateCard(configuration, request.Tenant, card) || *card.PriceCents > configuration.MaximumPriceCents {
 			return errResponseData
 		}
 		// 与冻结种子合同一致：分类由租户内商品编号计算，不能只相信响应文案。
@@ -178,17 +182,51 @@ func validateCatalog(configuration Config, request requestSpec, body []byte) err
 	return nil
 }
 
-// catalogHasActiveProducts 按种子中的等差商品编号判断分类是否为空。
-// 首项下架且步长是下架模数的倍数时整类下架；否则下一项存在即为活动商品。
-// 负载器的价格上限高于种子最大价格，因此此处无需枚举价格或扫描整个数据集。
+// 与 contracts/seed.sql 中的商品价格公式保持一致。
+const (
+	seededPriceBase       = 100
+	seededPriceStride     = 7919
+	seededPriceModulus    = 199900
+	seededPriceUpperBound = seededPriceBase + seededPriceModulus - 1
+)
+
+// catalogHasActiveProducts 判断分类是否存在活动且价格不超过本次上限的商品。
 func catalogHasActiveProducts(configuration Config, category int) bool {
 	if category > configuration.ProductsPerTenant {
 		return false
 	}
-	if category%configuration.InactiveProductModulus != 0 {
-		return true
+	if configuration.MaximumPriceCents >= seededPriceUpperBound {
+		// 首项下架且步长是下架模数的倍数时整类下架，否则下一项存在即为活动商品。
+		return category%configuration.InactiveProductModulus != 0 ||
+			configuration.Categories%configuration.InactiveProductModulus != 0 && configuration.Categories <= configuration.ProductsPerTenant-category
 	}
-	return configuration.Categories%configuration.InactiveProductModulus != 0 && configuration.Categories <= configuration.ProductsPerTenant-category
+	if configuration.MaximumPriceCents < seededPriceBase && configuration.DatasetSeed >= -seededPriceStride {
+		return false
+	}
+	for id := category; ; id += configuration.Categories {
+		if id%configuration.InactiveProductModulus != 0 {
+			price := seededProductPrice(int64(id), configuration.DatasetSeed)
+			if price > 0 && price <= configuration.MaximumPriceCents {
+				return true
+			}
+		}
+		if configuration.Categories > configuration.ProductsPerTenant-id {
+			return false
+		}
+	}
+}
+
+func seededProductPrice(id, seed int64) int64 {
+	// 先取余以避免乘法溢出，再按 PostgreSQL 中被除数的符号恢复余数。
+	remainder := (id%seededPriceModulus*seededPriceStride + seed%seededPriceModulus) % seededPriceModulus
+	if seed < 0 && id <= -(seed/seededPriceStride) {
+		if remainder > 0 {
+			remainder -= seededPriceModulus
+		}
+	} else if remainder < 0 {
+		remainder += seededPriceModulus
+	}
+	return seededPriceBase + remainder
 }
 
 func validateDetail(configuration Config, request requestSpec, body []byte) error {

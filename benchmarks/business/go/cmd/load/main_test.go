@@ -20,6 +20,10 @@ func TestCLIValidatesFlagsAndSecret(t *testing.T) {
 		{"-inactive-product-modulus=1", "-run-id=test", "-output=result.json"},
 		{"-cache-hit-weight=101", "-run-id=test", "-output=result.json"},
 		{"-catalog-weight=99", "-run-id=test", "-output=result.json"},
+		{"-catalog-page-size=0", "-run-id=test", "-output=result.json"},
+		{"-maximum-price-cents=-1", "-run-id=test", "-output=result.json"},
+		{"-maximum-order-items=0", "-run-id=test", "-output=result.json"},
+		{"-maximum-item-quantity=0", "-run-id=test", "-output=result.json"},
 		{"-url=http://example.com", "-run-id=test", "-output=result.json"},
 		{"-run-id=test"},
 		{"-output=result.json"},
@@ -41,12 +45,16 @@ func TestCLIValidatesFlagsAndSecret(t *testing.T) {
 
 func TestCLIProducesReportAndSummary(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if query := request.URL.Query(); query.Get("limit") != "10" || query.Get("max_price") != "200000" {
+			t.Errorf("负载器未将 CLI 的业务上限传入目录请求: %v", query)
+		}
 		writer.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(writer, `{"items":[{"id":1,"name":"商品","price_cents":100,"stock":10,"category":"分类"}],"next_cursor":null}`)
 	}))
 	defer server.Close()
 	path := filepath.Join(t.TempDir(), "measurement.json.gz")
-	args := []string{"-url=" + server.URL, "-scenario=catalog", "-tenant-count=1", "-run-id=cli-unit", "-duration=20ms", "-concurrency=1", "-output=" + path}
+	args := []string{"-url=" + server.URL, "-scenario=catalog", "-tenant-count=1", "-run-id=cli-unit",
+		"-duration=20ms", "-concurrency=1", "-catalog-page-size=10", "-maximum-price-cents=200000", "-output=" + path}
 	var stdout, stderr bytes.Buffer
 	lookup := func(name string) string {
 		if name != "BENCH_SECRET" {
@@ -64,6 +72,22 @@ func TestCLIProducesReportAndSummary(t *testing.T) {
 	stderr.Reset()
 	if code := run(context.Background(), args, &stdout, &stderr, lookup); code != 1 {
 		t.Fatalf("重复输出没有拒绝覆盖: code=%d", code)
+	}
+}
+
+func TestCLIChecksConfigurationWithoutWritingAReport(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "preflight.json")
+	args := []string{"-check-config", "-run-id=preflight", "-output=" + path}
+	var stdout, stderr bytes.Buffer
+	lookup := func(string) string { return "fixture-secret" }
+	if code := run(t.Context(), args, &stdout, &stderr, lookup); code != 0 {
+		t.Fatalf("默认配置应通过预检查，退出码 %d，错误 %q", code, stderr.String())
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("预检查不能写入测量结果: %v", err)
+	}
+	if code := run(t.Context(), append(args, "-catalog-page-size=20000", "-categories=1"), &stdout, &stderr, lookup); code != 2 {
+		t.Fatalf("超出响应预算的配置应在预检查失败，退出码 %d", code)
 	}
 }
 
