@@ -117,17 +117,22 @@ func defaultGeneratorApplication(app *framework.App) string {
 
 // writeGeneratedAppSource 校验应用实例后写入生成源码。
 func writeGeneratedAppSource(app *framework.App, target generatorTarget, relativeDir, filename string, source []byte) error {
+	_, err := writeGeneratedAppSourceSnapshot(app, target, relativeDir, filename, source)
+	return err
+}
+
+func writeGeneratedAppSourceSnapshot(app *framework.App, target generatorTarget, relativeDir, filename string, source []byte) (stagedControllerDiscoverySource, error) {
 	if app == nil {
-		return framework.ErrNilApplication
+		return stagedControllerDiscoverySource{}, framework.ErrNilApplication
 	}
 	if err := validateNativeApplicationPackageName(target.application); err != nil {
-		return err
+		return stagedControllerDiscoverySource{}, err
 	}
 	if target.directory != "" {
 		var err error
 		source, err = generatorPackageSource(source, filepath.Base(target.directory))
 		if err != nil {
-			return err
+			return stagedControllerDiscoverySource{}, err
 		}
 	}
 	return writeGeneratedSource(app.BasePath, filepath.Join("app", target.application, relativeDir, target.directory), filename, source)
@@ -142,31 +147,32 @@ func writeAndRefreshGeneratedControllerSource(app *framework.App, target generat
 // writeAndRefreshGeneratedApplicationSource 创建可自动发现的业务类型后刷新
 // 应用装配入口；刷新失败时回滚源码，避免留下无法被框架解析的类型。
 func writeAndRefreshGeneratedApplicationSource(app *framework.App, target generatorTarget, layer, filename string, source []byte) error {
-	if err := writeGeneratedAppSource(app, target, layer, filename, source); err != nil {
-		return err
+	generated, err := writeGeneratedAppSourceSnapshot(app, target, layer, filename, source)
+	if err == nil {
+		err = RefreshControllerDiscovery(app)
 	}
-	if err := RefreshControllerDiscovery(app); err != nil {
-		return errors.Join(err, removeGeneratedAppSource(app, filepath.Join("app", target.application, layer, target.directory), filename))
+	if err != nil && generated.published {
+		err = errors.Join(err, removeGeneratedAppSource(app, &generated))
 	}
-	return nil
+	return err
 }
 
-func removeGeneratedAppSource(app *framework.App, relativeDir, filename string) error {
+func removeGeneratedAppSource(app *framework.App, generated *stagedControllerDiscoverySource) error {
 	if app == nil {
 		return framework.ErrNilApplication
 	}
-	if filepath.IsAbs(relativeDir) || filename == "" || filepath.Base(filename) != filename || filepath.Ext(filename) != ".go" {
-		return fmt.Errorf("生成回滚路径非法: dir=%q file=%q", relativeDir, filename)
+	if generated == nil || !generated.published {
+		return nil
+	}
+	if path := generated.relativePath; !filepath.IsLocal(path) || filepath.Ext(path) != ".go" {
+		return fmt.Errorf("生成回滚路径非法: %q", path)
 	}
 	root, err := os.OpenRoot(app.BasePath)
 	if err != nil {
 		return fmt.Errorf("打开项目根目录失败: %w", err)
 	}
 	defer root.Close()
-	if err := root.Remove(filepath.Join(relativeDir, filename)); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("回滚生成文件失败: %w", err)
-	}
-	return nil
+	return rollbackControllerDiscoverySource(root, generated)
 }
 
 func applicationRelativeDirectory(app *framework.App) (string, error) {
@@ -224,56 +230,55 @@ func applicationRelativeDirectory(app *framework.App) (string, error) {
 
 // writeGeneratedSource 在应用根目录约束内格式化并独占创建 Go 源码。
 // os.Root 阻止路径穿越和指向根目录外的符号链接，O_EXCL 消除检查后覆盖竞态。
-func writeGeneratedSource(basePath, relativeDir, filename string, source []byte) (returnErr error) {
+func writeGeneratedSource(basePath, relativeDir, filename string, source []byte) (generated stagedControllerDiscoverySource, returnErr error) {
 	if strings.TrimSpace(basePath) == "" {
-		return fmt.Errorf("应用根目录不能为空")
+		return generated, fmt.Errorf("应用根目录不能为空")
 	}
 	if filepath.IsAbs(relativeDir) || filename == "" || filepath.Base(filename) != filename || filepath.Ext(filename) != ".go" {
-		return fmt.Errorf("生成路径非法: dir=%q file=%q", relativeDir, filename)
+		return generated, fmt.Errorf("生成路径非法: dir=%q file=%q", relativeDir, filename)
 	}
 	formatted, err := format.Source(source)
 	if err != nil {
-		return fmt.Errorf("生成的 Go 源码格式化失败: %w", err)
+		return generated, fmt.Errorf("生成的 Go 源码格式化失败: %w", err)
 	}
 
 	root, err := os.OpenRoot(basePath)
 	if err != nil {
-		return fmt.Errorf("打开应用根目录失败: %w", err)
+		return generated, fmt.Errorf("打开应用根目录失败: %w", err)
 	}
 	defer func() {
 		returnErr = errors.Join(returnErr, root.Close())
 	}()
 	if err := root.MkdirAll(relativeDir, 0o755); err != nil {
-		return fmt.Errorf("创建生成目录失败: %w", err)
+		return generated, fmt.Errorf("创建生成目录失败: %w", err)
 	}
 
 	relativePath := filepath.Join(relativeDir, filename)
 	file, err := root.OpenFile(relativePath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
-		return fmt.Errorf("创建生成文件失败: %w", err)
+		return generated, fmt.Errorf("创建生成文件失败: %w", err)
 	}
-	complete := false
-	defer func() {
-		if !complete {
-			returnErr = errors.Join(returnErr, root.Remove(relativePath))
-		}
-	}()
 
 	written, writeErr := file.Write(formatted)
 	if writeErr == nil && written != len(formatted) {
 		writeErr = io.ErrShortWrite
 	}
-	if writeErr != nil {
-		return errors.Join(fmt.Errorf("写入生成文件失败: %w", writeErr), file.Close())
+	if writeErr == nil {
+		writeErr = file.Sync()
 	}
-	if err := file.Sync(); err != nil {
-		return errors.Join(fmt.Errorf("同步生成文件失败: %w", err), file.Close())
+	// 从创建时的句柄取得身份，后续同名替换不能冒充本次生成的文件。
+	information, statErr := file.Stat()
+	closeErr := file.Close()
+	writtenSource := stagedControllerDiscoverySource{
+		relativePath:     relativePath,
+		published:        true,
+		publishedInfo:    information,
+		publishedContent: formatted[:written],
 	}
-	if err := file.Close(); err != nil {
-		return fmt.Errorf("关闭生成文件失败: %w", err)
+	if err := errors.Join(writeErr, statErr, closeErr); err != nil {
+		return generated, errors.Join(fmt.Errorf("写入生成文件失败: %w", err), rollbackControllerDiscoverySource(root, &writtenSource))
 	}
-	complete = true
-	return nil
+	return writtenSource, nil
 }
 
 // normalizeGeneratorName 把命令输入转换成安全的 Go 导出类型名，并拒绝路径穿越。
