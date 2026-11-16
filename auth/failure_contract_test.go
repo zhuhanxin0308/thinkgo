@@ -67,7 +67,7 @@ func TestAuthorizationDistinguishesDenialFromFailure(t *testing.T) {
 		{context.DeadlineExceeded, http.StatusInternalServerError},
 	} {
 		request := fwcontext.MustNewRequest(httptest.NewRequest(http.MethodGet, "/", nil))
-		request.Set(requestIdentityKey, Identity{Subject: "user"})
+		requestIdentityKey.Store(request, Identity{Subject: "user"})
 		reported := &capturedAuthFailure{}
 		response := (&middleware.Recovery{Handler: reported}).Handle(request, func(request *fwcontext.Request) *fwcontext.Response {
 			return Require(failingAuthorizer{err: item.cause}, "users.read")(request, func(*fwcontext.Request) *fwcontext.Response {
