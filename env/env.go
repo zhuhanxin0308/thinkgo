@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"regexp"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -57,7 +56,7 @@ var (
 	ErrEnvDuplicateKey = errors.New("duplicate env key")
 	// ErrEnvLineTooLong 表示 .env 中存在超过单行限制的内容。
 	ErrEnvLineTooLong = errors.New("env line is too long")
-	// ErrEnvPermissionsTooOpen 表示 Unix .env 文件向组或其他用户暴露权限。
+	// ErrEnvPermissionsTooOpen 表示 .env 文件向受信主体之外的用户开放权限。
 	ErrEnvPermissionsTooOpen = errors.New("env file permissions are too open")
 )
 
@@ -128,9 +127,6 @@ func (e *Env) Load(file string) (err error) {
 	if !info.Mode().IsRegular() {
 		return fmt.Errorf("环境配置路径不是普通文件: %s", file)
 	}
-	if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
-		return fmt.Errorf("%w: %s", ErrEnvPermissionsTooOpen, file)
-	}
 	if info.Size() > maxEnvFileBytes {
 		return fmt.Errorf("%w: %s", ErrEnvFileTooLarge, file)
 	}
@@ -151,6 +147,9 @@ func (e *Env) Load(file string) (err error) {
 	}
 	if !os.SameFile(info, openedInfo) {
 		return fmt.Errorf("%w: %s", ErrEnvFileChanged, file)
+	}
+	if err := verifyEnvFilePermissions(f, openedInfo); err != nil {
+		return fmt.Errorf("检查环境配置文件 %s 权限失败: %w", file, err)
 	}
 
 	content, readErr := io.ReadAll(io.LimitReader(f, maxEnvFileBytes+1))
