@@ -20,6 +20,12 @@ const (
 	maxStaticMissCacheEntries       = 256
 )
 
+type staticPrefixEntry struct {
+	at      time.Time
+	probeID uint64
+	missing bool
+}
+
 // servePublicFile 通过已验证的文件句柄响应并返回已发送状态，非静态请求返回零。
 func (h *Http) servePublicFile(writer http.ResponseWriter, req *http.Request, urlPath string) int {
 	if req == nil || req.URL == nil || containsEncodedPathSeparator(req.URL.EscapedPath()) {
@@ -99,15 +105,17 @@ func (h *Http) openPublicFile(urlPath string) (*os.File, os.FileInfo, bool) {
 	if !publicStaticRelativePath(strings.TrimPrefix(cleanPath, "/")) {
 		return nil, nil, false
 	}
-	probeAt := time.Now()
-	if h.reserveStaticPrefixProbe(cleanPath, probeAt) {
+	prefix := staticPathPrefix(cleanPath)
+	probeID, cached := h.reserveStaticPrefixProbe(prefix, time.Now())
+	if cached {
 		return nil, nil, false
 	}
+	missing := false
+	defer func() { h.finishStaticPrefixProbe(prefix, probeID, missing, time.Now()) }()
 
 	publicPath := h.app.ProjectPublicPath()
 	publicAbsolute, err := filepath.Abs(publicPath)
 	if err != nil {
-		h.clearStaticPrefixProbe(cleanPath, probeAt, false)
 		return nil, nil, false
 	}
 	targetCandidate := filepath.Join(publicAbsolute, filepath.FromSlash(strings.TrimPrefix(cleanPath, "/")))
@@ -116,15 +124,13 @@ func (h *Http) openPublicFile(urlPath string) (*os.File, os.FileInfo, bool) {
 	// 并在返回前确认句柄与已校验目标是同一文件，避免降低防穿越保护。
 	file, info, err := regularfile.Open(targetCandidate)
 	if err != nil {
-		if os.IsNotExist(err) {
-			h.rememberStaticPrefixMiss(cleanPath, publicAbsolute, probeAt)
-		} else {
-			h.clearStaticPrefixProbe(cleanPath, probeAt, false)
+		if probeID != 0 && os.IsNotExist(err) {
+			// 子文件缺失时，只有首级路径也不存在才能发布负缓存。
+			_, err := os.Lstat(filepath.Join(publicAbsolute, filepath.FromSlash(prefix)))
+			missing = os.IsNotExist(err)
 		}
 		return nil, nil, false
 	}
-	// 打开的文件已证明一级目录存在；清除本轮占用后再决定是否可服务文件。
-	h.clearStaticPrefixProbe(cleanPath, probeAt, true)
 	publicReal, err := filepath.EvalSymlinks(publicAbsolute)
 	if err != nil {
 		_ = file.Close()
@@ -144,74 +150,48 @@ func (h *Http) openPublicFile(urlPath string) (*os.File, os.FileInfo, bool) {
 	return file, info, true
 }
 
-// reserveStaticPrefixProbe 缓存 public 中不存在的首级目录。缓存有效时直接
-// 跳过静态探测；缓存到期后仅允许一个请求重新探测，其余并发请求继续命中缓存，
-// 避免到期瞬间的文件系统惊群。新建静态目录最多延迟一个缓存窗口后可见。
-func (h *Http) reserveStaticPrefixProbe(cleanPath string, now time.Time) bool {
-	prefix := staticPathPrefix(cleanPath)
-	if h == nil || prefix == "" {
-		return false
-	}
+// reserveStaticPrefixProbe 为可能发布的结果保留编号。已知缺失的条目只允许一次过期刷新。
+func (h *Http) reserveStaticPrefixProbe(prefix string, now time.Time) (uint64, bool) {
 	h.staticMissMu.Lock()
 	defer h.staticMissMu.Unlock()
-	at, exists := h.staticMisses[prefix]
-	if !exists || at.IsZero() {
-		return false
+	entry, exists := h.staticMisses[prefix]
+	if entry.missing && now.Sub(entry.at) < staticMissCacheTTL {
+		return 0, true
 	}
-	if now.Sub(at) < staticMissCacheTTL {
-		return true
-	}
-	// 先续期再由当前请求探测，确保其余并发请求不会重复打开同一缺失路径。
-	h.staticMisses[prefix] = now
-	return false
-}
-
-func (h *Http) rememberStaticPrefixMiss(cleanPath, publicAbsolute string, probeAt time.Time) {
-	prefix := staticPathPrefix(cleanPath)
-	if h == nil || prefix == "" || publicAbsolute == "" {
-		return
-	}
-	if _, err := os.Lstat(filepath.Join(publicAbsolute, filepath.FromSlash(prefix))); !os.IsNotExist(err) {
-		// 缺失的子文件不能为已存在的一级目录续期。
-		h.clearStaticPrefixProbe(cleanPath, probeAt, err == nil)
-		return
-	}
-
-	h.cacheStaticPrefixMiss(prefix, probeAt, time.Now())
-}
-
-func (h *Http) cacheStaticPrefixMiss(prefix string, probeAt, now time.Time) {
-	h.staticMissMu.Lock()
-	defer h.staticMissMu.Unlock()
-	// 过期的探测已经让出这一轮缓存，不能恢复后来被删除的条目。
-	if now.Sub(probeAt) >= staticMissCacheTTL || h.staticMisses[prefix].After(probeAt) {
-		return
-	}
-	if h.staticMisses == nil {
-		h.staticMisses = make(map[string]time.Time)
-	}
-	if len(h.staticMisses) >= maxStaticMissCacheEntries {
-		for key, at := range h.staticMisses {
-			if now.Sub(at) >= staticMissCacheTTL {
+	if !exists && len(h.staticMisses) >= maxStaticMissCacheEntries {
+		for key, candidate := range h.staticMisses {
+			if now.Sub(candidate.at) >= staticMissCacheTTL {
 				delete(h.staticMisses, key)
 			}
 		}
 		if len(h.staticMisses) >= maxStaticMissCacheEntries {
-			return
+			return 0, false
 		}
 	}
-	h.staticMisses[prefix] = probeAt
+	if h.staticMisses == nil {
+		h.staticMisses = make(map[string]staticPrefixEntry)
+	}
+	h.staticProbeID++
+	h.staticMisses[prefix] = staticPrefixEntry{at: now, probeID: h.staticProbeID, missing: entry.missing}
+	return h.staticProbeID, false
 }
 
-// clearStaticPrefixProbe 清除本次占用；已确认目录存在时也作废更早的缺失结果。
-func (h *Http) clearStaticPrefixProbe(cleanPath string, probeAt time.Time, prefixExists bool) {
-	prefix := staticPathPrefix(cleanPath)
+func (h *Http) finishStaticPrefixProbe(prefix string, probeID uint64, missing bool, now time.Time) {
+	if probeID == 0 {
+		return
+	}
 	h.staticMissMu.Lock()
 	defer h.staticMissMu.Unlock()
-	at := h.staticMisses[prefix]
-	if at == probeAt || prefixExists && at.Before(probeAt) {
-		delete(h.staticMisses, prefix)
+	entry := h.staticMisses[prefix]
+	// 只有当前探测可以发布。更新的结果、逐出和清理都会使旧编号失效。
+	if entry.probeID != probeID {
+		return
 	}
+	if missing && now.Sub(entry.at) < staticMissCacheTTL {
+		h.staticMisses[prefix] = staticPrefixEntry{at: entry.at, missing: true}
+		return
+	}
+	delete(h.staticMisses, prefix)
 }
 
 func (h *Http) forgetStaticPrefixMiss(cleanPath string) {

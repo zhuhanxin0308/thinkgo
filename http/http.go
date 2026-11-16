@@ -56,7 +56,8 @@ type Http struct {
 	spaIndexCached      bool
 	spaIndexAt          time.Time
 	staticMissMu        sync.RWMutex
-	staticMisses        map[string]time.Time
+	staticMisses        map[string]staticPrefixEntry
+	staticProbeID       uint64
 	initializeOnce      sync.Once
 	initializeErr       error
 	httpRunWarning      applicationRunWarningState
@@ -124,7 +125,7 @@ func newHttp(app *framework.App, allowApplications bool) (*Http, error) {
 		startupOutput:      os.Stdout,
 		dispatchPlans:      make(map[string]*controllerDispatchPlan),
 		routeCallbackPlans: make(map[reflect.Type]*routeCallbackPlan),
-		staticMisses:       make(map[string]time.Time),
+		staticMisses:       make(map[string]staticPrefixEntry),
 		endStates:          make(map[*context.ResponseIdentity]*requestEndState),
 		requestTasks:       make(map[*context.Request]requestTaskEntry),
 		allowApplications:  allowApplications,

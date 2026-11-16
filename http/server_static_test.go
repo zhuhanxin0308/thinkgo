@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -132,7 +133,7 @@ func TestStaticMissingPrefixCacheExpires(t *testing.T) {
 	}
 
 	handler.staticMissMu.Lock()
-	handler.staticMisses["api"] = time.Now().Add(-staticMissCacheTTL)
+	handler.staticMisses["api"] = staticPrefixEntry{at: time.Now().Add(-staticMissCacheTTL), missing: true}
 	handler.staticMissMu.Unlock()
 	file, _, ok := handler.openPublicFile("/api/health")
 	if !ok || file == nil {
@@ -160,7 +161,7 @@ func TestStaticMissingChildDoesNotRenewAnExistingPrefixMiss(t *testing.T) {
 	}
 	for range 3 {
 		handler.staticMissMu.Lock()
-		handler.staticMisses[prefix] = time.Now().Add(-staticMissCacheTTL)
+		handler.staticMisses[prefix] = staticPrefixEntry{at: time.Now().Add(-staticMissCacheTTL), missing: true}
 		handler.staticMissMu.Unlock()
 		miss := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, "http://example.test"+missing, nil)
@@ -177,77 +178,106 @@ func TestStaticMissingChildDoesNotRenewAnExistingPrefixMiss(t *testing.T) {
 }
 
 func TestStaticPrefixProbeKeepsNewerNegativeCacheDecisions(t *testing.T) {
-	root := t.TempDir()
-	handler := newTestHTTPHandler(t, newTestHTTPApp(t, root, map[string]interface{}{"enable": false}))
-	const path = "/assets/missing"
+	handler := &Http{staticMisses: make(map[string]staticPrefixEntry)}
 	const prefix = "assets"
 	probeAt := time.Now()
-	handler.staticMisses[prefix] = probeAt.Add(-staticMissCacheTTL)
+	handler.staticMisses[prefix] = staticPrefixEntry{at: probeAt.Add(-staticMissCacheTTL), missing: true}
 	const workers = 12
 	start := make(chan struct{})
-	results := make(chan bool, workers)
+	results := make(chan uint64, workers)
 	for range workers {
 		go func() {
 			<-start
-			results <- handler.reserveStaticPrefixProbe(path, probeAt)
+			probeID, _ := handler.reserveStaticPrefixProbe(prefix, probeAt)
+			results <- probeID
 		}()
 	}
 	close(start)
+	var earlier uint64
 	var probes int
 	for range workers {
-		if !<-results {
+		if probeID := <-results; probeID != 0 {
+			earlier = probeID
 			probes++
 		}
 	}
 	if probes != 1 {
 		t.Fatalf("同一轮过期后只能有一个探测请求，实际为 %d", probes)
 	}
-	newer := probeAt.Add(2 * time.Millisecond)
-	handler.staticMisses[prefix] = newer
-	handler.clearStaticPrefixProbe(path, probeAt, false)
-	handler.rememberStaticPrefixMiss(path, root, probeAt)
-	if got := handler.staticMisses[prefix]; got != newer {
+	nextAt := probeAt.Add(staticMissCacheTTL)
+	newer, cached := handler.reserveStaticPrefixProbe(prefix, nextAt)
+	if cached || newer == 0 {
+		t.Fatal("过期占用应允许下一轮重新探测")
+	}
+	handler.finishStaticPrefixProbe(prefix, newer, true, nextAt)
+	handler.finishStaticPrefixProbe(prefix, earlier, false, nextAt)
+	handler.finishStaticPrefixProbe(prefix, earlier, true, nextAt)
+	if got := handler.staticMisses[prefix]; got.at != nextAt || !got.missing {
 		t.Fatalf("旧探测不能改写新一轮负缓存: %v", got)
 	}
 }
 
 func TestExpiredStaticProbeCannotRecreateClearedNegativeCache(t *testing.T) {
-	handler := &Http{staticMisses: make(map[string]time.Time)}
-	const path = "/assets/missing"
+	handler := &Http{}
 	const prefix = "assets"
-	older := time.Now()
-	handler.staticMisses[prefix] = older
-	newer := older.Add(staticMissCacheTTL)
-	if handler.reserveStaticPrefixProbe(path, newer) {
+	probeAt := time.Now()
+	older, _ := handler.reserveStaticPrefixProbe(prefix, probeAt)
+	nextAt := probeAt.Add(staticMissCacheTTL)
+	newer, cached := handler.reserveStaticPrefixProbe(prefix, nextAt)
+	if cached || newer == 0 {
 		t.Fatal("新一轮探测应确认目录已经出现")
 	}
-	handler.clearStaticPrefixProbe(path, newer, true)
+	handler.finishStaticPrefixProbe(prefix, newer, false, nextAt)
 	// 旧请求的 Lstat 结果在新探测清除负缓存后才准备发布。
-	handler.cacheStaticPrefixMiss(prefix, older, newer.Add(time.Millisecond))
+	handler.finishStaticPrefixProbe(prefix, older, true, nextAt.Add(time.Millisecond))
 	if _, exists := handler.staticMisses[prefix]; exists {
 		t.Fatal("已经过期的 Lstat 结果不能恢复已确认失效的缓存")
 	}
 }
 
 func TestSuccessfulStaticProbeClearsEarlierColdMiss(t *testing.T) {
-	handler := &Http{staticMisses: make(map[string]time.Time)}
-	const path = "/assets/ready.js"
-	const prefix = "assets"
-	earlier := time.Now()
-	later := earlier.Add(time.Millisecond)
-	if handler.reserveStaticPrefixProbe(path, earlier) || handler.reserveStaticPrefixProbe(path, later) {
-		t.Fatal("冷缓存下两个请求都能探测静态目录")
+	for _, finishOlderFirst := range []bool{true, false} {
+		handler := &Http{}
+		const prefix = "assets"
+		now := time.Now()
+		older, oldCached := handler.reserveStaticPrefixProbe(prefix, now)
+		newer, newCached := handler.reserveStaticPrefixProbe(prefix, now)
+		if oldCached || newCached || older == 0 || newer == 0 || newer == older {
+			t.Fatal("两个冷缓存探测应独立获得编号，即使起始时间相同")
+		}
+		// 旧请求可能在后发请求验证文件的过程中或完成后发布 ENOENT。
+		if finishOlderFirst {
+			handler.finishStaticPrefixProbe(prefix, older, true, now)
+		}
+		handler.finishStaticPrefixProbe(prefix, newer, false, now)
+		if !finishOlderFirst {
+			handler.finishStaticPrefixProbe(prefix, older, true, now)
+		}
+		if _, exists := handler.staticMisses[prefix]; exists {
+			t.Fatal("后发请求成功验证文件后，旧请求不能留下负缓存")
+		}
 	}
-	handler.cacheStaticPrefixMiss(prefix, earlier, later)
-	// 较新的请求已通过打开目标文件确认目录存在。
-	handler.clearStaticPrefixProbe(path, later, true)
-	if _, exists := handler.staticMisses[prefix]; exists {
-		t.Fatal("成功探测应使更早的冷缓存结果失效")
+}
+
+func TestStaticPrefixReservationsRespectCapacity(t *testing.T) {
+	handler := &Http{}
+	now := time.Now()
+	for index := range maxStaticMissCacheEntries {
+		_, _ = handler.reserveStaticPrefixProbe(strconv.Itoa(index), now)
 	}
-	handler.cacheStaticPrefixMiss(prefix, later, later)
-	handler.clearStaticPrefixProbe(path, earlier, true)
-	if got := handler.staticMisses[prefix]; got != later {
-		t.Fatalf("较旧的成功探测不得丢弃后到的负缓存: %v", got)
+	const prefix = "extra"
+	probeID, cached := handler.reserveStaticPrefixProbe(prefix, now)
+	if probeID != 0 || cached || len(handler.staticMisses) != maxStaticMissCacheEntries {
+		t.Fatal("缓存满时仍应允许探测文件，但不能增加缓存槽")
+	}
+	nextAt := now.Add(staticMissCacheTTL)
+	probeID, cached = handler.reserveStaticPrefixProbe(prefix, nextAt)
+	if probeID == 0 || cached || len(handler.staticMisses) != 1 {
+		t.Fatal("探测过期后应回收占用")
+	}
+	handler.finishStaticPrefixProbe(prefix, probeID, true, nextAt.Add(staticMissCacheTTL))
+	if len(handler.staticMisses) != 0 {
+		t.Fatal("超时探测不能续期负缓存")
 	}
 }
 
