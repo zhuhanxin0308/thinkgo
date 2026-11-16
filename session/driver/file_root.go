@@ -48,7 +48,7 @@ func openFileSessionInRoot(rootPath, relativePath string) (*File, error) {
 	}
 	subpath, err := filepath.Rel(actualRoot, target)
 	if err != nil || !filepath.IsLocal(subpath) {
-		return nil, fmt.Errorf("Session 目录必须位于应用运行目录内: %q", relativePath)
+		return nil, fmt.Errorf("文件会话目录必须位于应用运行目录内: %q", relativePath)
 	}
 	if err = root.MkdirAll(subpath, 0o700); err != nil {
 		return nil, err
@@ -87,7 +87,7 @@ func verifyFileSessionDirectory(directory *os.Root, path string) (os.FileInfo, e
 	}
 	relative, err := filepath.Rel(path, resolved)
 	if err != nil || relative != "." || !actual.IsDir() || !os.SameFile(expected, actual) {
-		return nil, fmt.Errorf("Session 目录已变更: %q", path)
+		return nil, fmt.Errorf("文件会话目录已变更: %q", path)
 	}
 	return expected, nil
 }

@@ -80,7 +80,7 @@ func restrictFileSessionDirectory(_ *os.Root, path string, expected os.FileInfo)
 			return err
 		}
 		if !actual.IsDir() || !os.SameFile(expected, actual) {
-			return fmt.Errorf("Session 目录已变更: %q", path)
+			return fmt.Errorf("文件会话目录已变更: %q", path)
 		}
 		return windows.SetSecurityInfo(handle, windows.SE_FILE_OBJECT, restrictedSessionSecurityInformation, nil, nil, acl, nil)
 	})
