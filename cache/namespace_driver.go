@@ -288,18 +288,43 @@ func (driver *NamespaceDriver) GetManyContext(ctx context.Context, keys []string
 		return nil, err
 	}
 	if batch, ok := driver.driver.(ContextualBatchGetter); ok {
-		physical := make([]string, len(keys))
-		reverse := make(map[string]string, len(keys))
-		for index, key := range keys {
-			physical[index] = driver.key(key)
-			reverse[physical[index]] = key
-		}
+		physical, reverse := driver.namespaceReadKeys(keys)
 		values, err := batch.GetManyContext(ctx, physical)
 		return restoreNamespaceKeys(values, reverse), err
 	}
+	return driver.getManyKeysInOrder(ctx, keys)
+}
+
+// GetManyStrictContext 为失效水位保留逐键错误和读取顺序。
+func (driver *NamespaceDriver) GetManyStrictContext(ctx context.Context, keys []string) (map[string]interface{}, error) {
+	if ctx == nil {
+		return nil, ErrInvalidCacheContext
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if batch, ok := driver.driver.(strictBatchGetter); ok {
+		physical, reverse := driver.namespaceReadKeys(keys)
+		values, err := batch.GetManyStrictContext(ctx, physical)
+		return restoreNamespaceKeys(values, reverse), err
+	}
+	return driver.getManyKeysInOrder(ctx, keys)
+}
+
+func (driver *NamespaceDriver) namespaceReadKeys(keys []string) ([]string, map[string]string) {
+	physical := make([]string, len(keys))
+	reverse := make(map[string]string, len(keys))
+	for index, key := range keys {
+		physical[index] = driver.key(key)
+		reverse[physical[index]] = key
+	}
+	return physical, reverse
+}
+
+func (driver *NamespaceDriver) getManyKeysInOrder(ctx context.Context, keys []string) (map[string]interface{}, error) {
 	result := make(map[string]interface{}, len(keys))
 	for _, key := range keys {
-		// 同步 Batch 无法表达逐项取消，回退时复用单键 Context 能力与取消检查。
+		// 单键回退保留逐项取消和后端错误。
 		value, found, err := getCacheValueContext(ctx, driver.driver, driver.key(key))
 		if err != nil {
 			return nil, err
