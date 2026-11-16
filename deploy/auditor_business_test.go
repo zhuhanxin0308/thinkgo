@@ -150,6 +150,28 @@ func TestOperationalAndDatabasePoliciesAreDeploymentVisible(t *testing.T) {
 	}
 }
 
+func TestOperationalCIDRAuditRejectsMappedGlobalAndCanonicalDuplicates(t *testing.T) {
+	app, configuration := newDeployTestApp(t)
+	configuration.Set("app.operational_routes_enable", true)
+	configuration.Set("app.operational_routes_access", string(framework.OperationalAccessRestricted))
+	for _, tc := range []struct {
+		allowed []string
+		level   Level
+	}{
+		{[]string{"::ffff:127.0.0.0/120"}, LevelPass},
+		{[]string{"::ffff:127.0.0.0/96"}, LevelFail},
+		{[]string{"::ffff:127.0.0.0/95"}, LevelFail},
+		{[]string{"::ffff:127.0.0.1/120", "127.0.0.0/24"}, LevelFail},
+	} {
+		if err := configuration.Set("app.operational_routes_allowed_cidrs", tc.allowed); err != nil {
+			t.Fatal(err)
+		}
+		if result := checkOperationalAccess(context.Background(), app); result.Level != tc.level {
+			t.Errorf("部署检查 %v 得到 %#v，期望 %s", tc.allowed, result, tc.level)
+		}
+	}
+}
+
 // TestDatabaseConnectivityChecksRealQueryShape 验证部署数据库探针要求无错误且恰好返回一行。
 func TestDatabaseConnectivityChecksRealQueryShape(t *testing.T) {
 	app, _ := newDeployTestApp(t)

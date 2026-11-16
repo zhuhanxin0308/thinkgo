@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net/netip"
 	"strings"
+
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/operational"
 )
 
 // SecurityProfile 描述应用实际使用的认证与浏览器状态边界。
@@ -179,19 +181,5 @@ func readOperationalPrefixes(raw interface{}) ([]netip.Prefix, error) {
 		return nil, fmt.Errorf("必须是 CIDR 字符串列表")
 	}
 
-	prefixes := make([]netip.Prefix, 0, len(values))
-	seen := make(map[netip.Prefix]struct{}, len(values))
-	for _, value := range values {
-		prefix, err := netip.ParsePrefix(strings.TrimSpace(value))
-		if err != nil || prefix.Bits() == 0 {
-			return nil, fmt.Errorf("CIDR %q 非法或覆盖全部地址", value)
-		}
-		prefix = prefix.Masked()
-		if _, exists := seen[prefix]; exists {
-			return nil, fmt.Errorf("CIDR %q 重复", value)
-		}
-		seen[prefix] = struct{}{}
-		prefixes = append(prefixes, prefix)
-	}
-	return prefixes, nil
+	return operational.ParsePrefixes(values)
 }
