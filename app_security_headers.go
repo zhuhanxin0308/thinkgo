@@ -9,11 +9,13 @@ import (
 	"github.com/zhuhanxin0308/thinkgo/v3/middleware"
 )
 
+const productionBrowserHSTSMaxAgeSeconds = 365 * 24 * 60 * 60
+
 func createAppSecurityHeaders(values map[string]interface{}) (middleware.Handler, bool, error) {
-	return createAppSecurityHeadersForProfile(values, SecurityProfileStatelessAPI)
+	return createAppSecurityHeadersForProfile(values, SecurityProfileStatelessAPI, false)
 }
 
-func createAppSecurityHeadersForProfile(values map[string]interface{}, profile SecurityProfile) (middleware.Handler, bool, error) {
+func createAppSecurityHeadersForProfile(values map[string]interface{}, profile SecurityProfile, production bool) (middleware.Handler, bool, error) {
 	allowed := map[string]struct{}{
 		"enable": {}, "content_security_policy": {}, "referrer_policy": {}, "permissions_policy": {},
 		"cross_origin_opener_policy": {}, "cross_origin_resource_policy": {}, "frame_options": {},
@@ -47,7 +49,11 @@ func createAppSecurityHeadersForProfile(values map[string]interface{}, profile S
 	if config.FrameOptions, err = securityHeaderString(values, "frame_options"); err != nil {
 		return nil, true, err
 	}
-	if config.HSTSMaxAgeSeconds, err = securityHeaderInt(values, "hsts_max_age_seconds", 0); err != nil {
+	hstsMaxAge := 0
+	if production && profile == SecurityProfileBrowserCookie {
+		hstsMaxAge = productionBrowserHSTSMaxAgeSeconds
+	}
+	if config.HSTSMaxAgeSeconds, err = securityHeaderInt(values, "hsts_max_age_seconds", hstsMaxAge); err != nil {
 		return nil, true, err
 	}
 	if config.HSTSIncludeSubDomains, err = securityHeaderBool(values, "hsts_include_subdomains", false); err != nil {

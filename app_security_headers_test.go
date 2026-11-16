@@ -56,3 +56,28 @@ func TestSecurityHeadersAcceptPlatformIntegerRangeFromJSON(t *testing.T) {
 		}
 	}
 }
+
+func TestProductionBrowserHSTSRespectsExplicitConfiguration(t *testing.T) {
+	const key = "hsts_max_age_seconds"
+	for _, test := range []struct {
+		values map[string]any
+		want   string
+	}{
+		{values: map[string]any{key: 0}},
+		{values: map[string]any{key: 600}, want: "max-age=600"},
+		{values: map[string]any{key: 600, "hsts_include_subdomains": true}, want: "max-age=600; includeSubDomains"},
+	} {
+		handler, enabled, err := createAppSecurityHeadersForProfile(test.values, SecurityProfileBrowserCookie, true)
+		if err != nil || !enabled {
+			t.Fatalf("配置生产安全响应头失败: %v", err)
+		}
+		req := context.MustNewRequest(httptest.NewRequest(http.MethodGet, "https://example.test/", nil))
+		response := handler(req, func(*context.Request) *context.Response { return context.NewResponse() })
+		if got := response.Headers().Get("Strict-Transport-Security"); got != test.want {
+			t.Fatalf("HSTS 显式配置得到 %q，期望 %q", got, test.want)
+		}
+	}
+	if handler, enabled, err := createAppSecurityHeadersForProfile(map[string]any{"enable": false}, SecurityProfileBrowserCookie, true); err != nil || enabled || handler != nil {
+		t.Fatalf("显式关闭安全头必须生效: enabled=%t error=%v", enabled, err)
+	}
+}

@@ -109,7 +109,8 @@ func (app *App) initializeControllerBindings() error {
 // initializeMiddleware 装配框架级和应用级中间件。
 func (app *App) initializeMiddleware(services applicationAssemblyServices) {
 	// 已校验的固定安全头包装恢复响应，也覆盖 CORS 预检与拒绝响应。
-	securityHandler, securityEnabled, securityErr := createAppSecurityHeadersForProfile(services.config.GetMap("security_headers"), app.securityProfile)
+	production := app.securityWarningEnvironment() == securityEnvironmentProduction
+	securityHandler, securityEnabled, securityErr := createAppSecurityHeadersForProfile(services.config.GetMap("security_headers"), app.securityProfile, production)
 	if securityErr != nil {
 		app.recordStartupError(fmt.Errorf("初始化安全响应头失败: %w", securityErr))
 	} else if securityEnabled {
