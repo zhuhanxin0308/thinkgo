@@ -122,7 +122,11 @@ func (r *Router) matchDynamic(method string, requestParts []string, trailingSlas
 				}
 				consumed, endsInLiteral := candidate.matchedDynamicPathShape(params)
 				if alias == nil {
-					if consumed != len(requestParts) {
+					aliasPartCount := len(requestParts)
+					if requestParts[aliasPartCount-1] == "."+candidate.ext {
+						aliasPartCount--
+					}
+					if consumed != aliasPartCount {
 						return candidate, params
 					}
 					alias, aliasParams, aliasSpecificity = candidate, params, routeSpecificity(candidate)

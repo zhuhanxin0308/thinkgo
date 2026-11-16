@@ -172,6 +172,29 @@ func TestDynamicAliasPreservesOrderForParameterOnlyMatches(t *testing.T) {
 	}
 }
 
+// TestDynamicSuffixOnlySegmentPrefersLiteral 验证扩展名独占一个请求段时也优先匹配字面路径。
+func TestDynamicSuffixOnlySegmentPrefersLiteral(t *testing.T) {
+	for _, rules := range [][]string{
+		{"/item/:id?/view", "/item/:id?/.html"},
+		{"/item/:id?/.html", "/item/:id?/view"},
+	} {
+		router := NewRouter()
+		if err := router.SetCompleteMatch(true); err != nil {
+			t.Fatal(err)
+		}
+		for _, rule := range rules {
+			if _, err := router.Get(rule, "Items@Show"); err != nil {
+				t.Fatal(err)
+			}
+		}
+		request := fwcontext.MustNewRequest(httptest.NewRequest(http.MethodGet, "http://example.test/item/view/.html", nil))
+		got, params := matchForTest(t, router, request)
+		if got == nil || got.path != "/item/:id?/.html" || params["id"] != "view" {
+			t.Fatalf("字面扩展名路径应优先匹配: %v, %v", got, params)
+		}
+	}
+}
+
 // TestLiteralExtensionKeepsRequiredRequestSuffix 验证前缀匹配仍校验整个请求的强制后缀。
 func TestLiteralExtensionKeepsRequiredRequestSuffix(t *testing.T) {
 	for _, pair := range []struct{ rule, path string }{
