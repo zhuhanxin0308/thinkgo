@@ -191,55 +191,47 @@ func matchLanguageSnapshot(snapshot *languageDetectionSnapshot, candidate string
 			return normalized
 		}
 	}
-	prefix := strings.SplitN(normalized, "-", 2)[0]
+	prefix, _, _ := strings.Cut(normalized, "-")
 	for _, language := range snapshot.prefixes[prefix] {
 		return language
 	}
 	return ""
 }
 
-type weightedLanguage struct {
-	tag      string
-	quality  float64
-	position int
-}
-
-func parseAcceptLanguage(header string) []weightedLanguage {
-	if len(header) == 0 || len(header) > maxAcceptLanguageBytes {
-		return nil
+// selectAcceptLanguage 返回品质最高的可用语言，同品质时保留客户端的先后顺序。
+func selectAcceptLanguage(snapshot *languageDetectionSnapshot, header string) string {
+	if len(header) == 0 || len(header) > maxAcceptLanguageBytes || strings.Count(header, ",") >= maxAcceptLanguageEntries {
+		return ""
 	}
-	parts := strings.Split(header, ",")
-	if len(parts) > maxAcceptLanguageEntries {
-		return nil
-	}
-
-	languages := make([]weightedLanguage, 0, len(parts))
-	for position, part := range parts {
-		segments := strings.Split(part, ";")
-		tag := strings.TrimSpace(segments[0])
+	best := ""
+	bestQuality := 0.0
+	for part := range strings.SplitSeq(header, ",") {
+		tag, parameters, _ := strings.Cut(part, ";")
+		tag = strings.TrimSpace(tag)
 		if tag == "" {
 			continue
 		}
-		quality, valid := parseLanguageQuality(segments[1:])
-		if !valid || quality <= 0 {
+		quality, valid := parseLanguageQuality(parameters)
+		if !valid || quality <= bestQuality {
 			continue
 		}
-		languages = append(languages, weightedLanguage{tag: tag, quality: quality, position: position})
-	}
-
-	sort.SliceStable(languages, func(left, right int) bool {
-		if languages[left].quality == languages[right].quality {
-			return languages[left].position < languages[right].position
+		if tag == "*" {
+			tag = snapshot.defaultLang
 		}
-		return languages[left].quality > languages[right].quality
-	})
-	return languages
+		if selected := matchLanguageSnapshot(snapshot, tag); selected != "" {
+			if quality == 1 {
+				return selected
+			}
+			best, bestQuality = selected, quality
+		}
+	}
+	return best
 }
 
-func parseLanguageQuality(parameters []string) (float64, bool) {
+func parseLanguageQuality(parameters string) (float64, bool) {
 	quality := 1.0
 	found := false
-	for _, parameter := range parameters {
+	for parameter := range strings.SplitSeq(parameters, ";") {
 		name, raw, exists := strings.Cut(strings.TrimSpace(parameter), "=")
 		if !exists || !strings.EqualFold(strings.TrimSpace(name), "q") {
 			continue
@@ -492,17 +484,9 @@ func (l *Lang) DetectLanguage(queryValue, cookieValue, headerValue, acceptLangua
 	if selected := matchLanguageSnapshot(snapshot, headerValue); selected != "" {
 		return selected
 	}
-	if snapshot.config.AutoDetectBrowser && strings.TrimSpace(acceptLanguage) != "" {
-		for _, candidate := range parseAcceptLanguage(acceptLanguage) {
-			if candidate.tag == "*" {
-				if selected := matchLanguageSnapshot(snapshot, snapshot.defaultLang); selected != "" {
-					return selected
-				}
-				continue
-			}
-			if selected := matchLanguageSnapshot(snapshot, candidate.tag); selected != "" {
-				return selected
-			}
+	if snapshot.config.AutoDetectBrowser {
+		if selected := selectAcceptLanguage(snapshot, acceptLanguage); selected != "" {
+			return selected
 		}
 	}
 	return snapshot.defaultLang
@@ -820,21 +804,19 @@ func normalizeLanguageTag(language string) (string, error) {
 	if language == "" || len(language) > maxLanguageTagBytes || strings.Contains(language, "_") {
 		return "", fmt.Errorf("%w: %q", ErrInvalidLanguageTag, language)
 	}
-	parts := strings.Split(language, "-")
-	if len(parts) == 0 || len(parts[0]) < 2 || len(parts[0]) > 8 {
-		return "", fmt.Errorf("%w: %q", ErrInvalidLanguageTag, language)
-	}
-	for index, part := range parts {
-		if part == "" || len(part) > 8 {
+	primary := true
+	for part := range strings.SplitSeq(language, "-") {
+		if part == "" || len(part) > 8 || primary && len(part) < 2 {
 			return "", fmt.Errorf("%w: %q", ErrInvalidLanguageTag, language)
 		}
 		for _, char := range part {
 			letter := char >= 'a' && char <= 'z'
 			digit := char >= '0' && char <= '9'
-			if !letter && (index == 0 || !digit) {
+			if !letter && (primary || !digit) {
 				return "", fmt.Errorf("%w: %q", ErrInvalidLanguageTag, language)
 			}
 		}
+		primary = false
 	}
 	return language, nil
 }
