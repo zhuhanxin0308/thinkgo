@@ -2,6 +2,7 @@ package db
 
 import (
 	"errors"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -53,5 +54,17 @@ func TestModelRecordRowsValidateCustomDriverValues(t *testing.T) {
 	invalid := []map[string]any{{"id": int64(1)}, {"id": int64(2), "private": make(chan int)}}
 	if _, _, err := query.prepareRecordRows(invalid); !errors.Is(err, ErrInvalidQuery) {
 		t.Fatalf("不能复制的驱动值应使用现有快照校验，实际为 %v", err)
+	}
+}
+
+func TestModelRecordRowsBudgetIncludesMapKeys(t *testing.T) {
+	// 行占一个节点，每个非空字段包含键、接口和具体值三个节点。
+	const fields = (maxDatabaseValueNodes-1)/3 + 1
+	row := make(map[string]any, fields)
+	for column := range fields {
+		row[strconv.Itoa(column)] = int64(1)
+	}
+	if reusableModelRow(row) {
+		t.Fatalf("%d 个标准字段超过原始映射的快照预算，必须走完整校验", fields)
 	}
 }
