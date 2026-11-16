@@ -69,6 +69,8 @@ ThinkGo 默认关闭自动路由、开启强制路由。`config/route.json` 中�
 
 控制器注册不等于公开其所有动作；业务入口应按 HTTP 方法显式注册路由。未命中规则时不再按 URL 自动调用控制器动作，没有显式 MISS 等接管时返回 404。强制路由不等于 `route_complete_match`，也不替代认证、授权和 CSRF。
 
+客户端的 `X-HTTP-Method-Override` 只对原始 POST 生效，且只接受单个 PUT、PATCH 或 DELETE。其他值和重复的头部会被忽略，`Request.Method(true)` 始终可读取原始方法。
+
 已有项目显式配置的 `url_route_must=false` 或注册期调用 `EnableAutoRoute(true)` 仍是主动启用自动调度，不会被自动重写。采用安全默认策略时，应删除旧的显式 `false` 或改为 `true`，并核对路由加载器。完整行为与边界见[自动路由](docs/路由/自动路由.md)。本节描述当前源码策略，已发布版本以对应版本实现为准。
 
 ## 浏览器会话安全

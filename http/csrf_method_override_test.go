@@ -40,13 +40,14 @@ func TestCSRFProtectsOriginalAndEffectiveMethods(t *testing.T) {
 		t.Fatalf("安全请求未正常下发 CSRF Cookie: %d", page.Code)
 	}
 	for _, test := range []struct {
-		name, original, override string
-		withToken                bool
+		name, original, override, effective string
+		withToken                           bool
+		want                                int
 	}{
-		{"POST 覆盖为 GET", stdhttp.MethodPost, stdhttp.MethodGet, false},
-		{"GET 覆盖为 PATCH", stdhttp.MethodGet, stdhttp.MethodPatch, false},
-		{"POST 覆盖为 GET 且持有效凭据", stdhttp.MethodPost, stdhttp.MethodGet, true},
-		{"GET 覆盖为 PATCH 且持有效凭据", stdhttp.MethodGet, stdhttp.MethodPatch, true},
+		{"POST 尝试覆写为 GET 仍须提供令牌", stdhttp.MethodPost, stdhttp.MethodGet, stdhttp.MethodPost, false, stdhttp.StatusForbidden},
+		{"GET 尝试覆写为 PATCH 保持只读", stdhttp.MethodGet, stdhttp.MethodPatch, stdhttp.MethodGet, false, stdhttp.StatusOK},
+		{"POST 覆写为 PATCH 仍须提供令牌", stdhttp.MethodPost, stdhttp.MethodPatch, stdhttp.MethodPatch, false, stdhttp.StatusForbidden},
+		{"POST 提供令牌并覆写为 PATCH", stdhttp.MethodPost, stdhttp.MethodPatch, stdhttp.MethodPatch, true, stdhttp.StatusOK},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			before := calls
@@ -54,15 +55,13 @@ func TestCSRFProtectsOriginalAndEffectiveMethods(t *testing.T) {
 			req.Header.Set("X-HTTP-Method-Override", test.override)
 			req.Header.Set("Origin", "http://127.0.0.1")
 			req.AddCookie(token)
-			want := stdhttp.StatusForbidden
 			if test.withToken {
 				req.Header.Set(config.HeaderName, token.Value)
-				want = stdhttp.StatusOK
 			}
 			recorder := httptest.NewRecorder()
 			host.ServeHTTP(recorder, req)
-			if recorder.Code != want || test.withToken && (calls != before+1 || recorder.Body.String() != test.override) || !test.withToken && calls != before {
-				t.Fatalf("状态=%d，预期=%d，动作调用次数变化=%d，响应=%q", recorder.Code, want, calls-before, recorder.Body.String())
+			if recorder.Code != test.want || test.want == stdhttp.StatusOK && (calls != before+1 || recorder.Body.String() != test.effective) || test.want == stdhttp.StatusForbidden && calls != before {
+				t.Fatalf("状态=%d，预期=%d，动作调用次数变化=%d，响应=%q", recorder.Code, test.want, calls-before, recorder.Body.String())
 			}
 		})
 	}
