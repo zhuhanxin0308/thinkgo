@@ -302,6 +302,8 @@ class PostgresStartupTest(unittest.TestCase):
             if "pg_database" in query:
                 self.assertEqual(database, "postgres")
                 return "1"
+            if "to_regclass" in query:
+                return "t"
             return json.dumps(self.counts)
 
         postgres = mock.Mock(command=["postgres"])
@@ -314,8 +316,60 @@ class PostgresStartupTest(unittest.TestCase):
                 mock.patch.object(self.environment, "sql", side_effect=template_query) as sql:
             self.environment.start()
         self.assertEqual(command.call_count, 3)
-        self.assertEqual(sql.call_count, 2)
+        self.assertEqual(sql.call_count, 3)
         self.assertEqual(self.environment.seed_counts, self.counts)
+
+    def test_template_seed_failure_can_resume_in_the_same_work_directory(self):
+        databases = {"unrelated": True}
+        fail_seed = True
+
+        def sql(query, database):
+            words = query.split()
+            if "FROM pg_database WHERE datname=" in query:
+                return "1" if query.split("'")[1] in databases else ""
+            if query.startswith("CREATE DATABASE "):
+                self.assertNotIn(words[2], databases)
+                databases[words[2]] = False
+            elif query.startswith("DROP DATABASE IF EXISTS "):
+                databases.pop(words[4], None)
+            elif query.startswith("DROP DATABASE "):
+                del databases[words[2]]
+            elif query.startswith("ALTER DATABASE "):
+                self.assertTrue(databases[words[2]], "发布前必须已验证模板")
+                databases[words[5]] = databases.pop(words[2])
+            elif "to_regclass" in query:
+                return "t" if databases[database] else "f"
+            elif "json_build_object" in query:
+                if not databases[database]:
+                    raise RuntimeError("模板缺少关系")
+                return json.dumps(self.counts)
+            return ""
+
+        def command(arguments, *, database):
+            if fail_seed:
+                raise RuntimeError("种子初始化失败")
+            self.assertIn("--single-transaction", arguments)
+            databases[database] = True
+            return ""
+
+        with mock.patch.object(self.environment, "prepare"), \
+                mock.patch.object(native, "Process"), mock.patch.object(native, "wait_for"), \
+                mock.patch.object(self.environment, "sql", side_effect=sql), \
+                mock.patch.object(self.environment, "command", side_effect=command) as seed:
+            with self.assertRaisesRegex(RuntimeError, "种子初始化失败"):
+                self.environment.start()
+            self.environment.close()
+            self.assertNotIn(self.environment.template, databases)
+            self.assertTrue(databases["unrelated"])
+            # 旧实现可能已留下正式库，进程崩溃也可能遗留暂存库。
+            databases[self.environment.template] = False
+            databases[self.environment.template + "_building"] = False
+            fail_seed = False
+            self.environment.start()
+            self.assertEqual(databases, {"unrelated": True, self.environment.template: True})
+            self.assertEqual(self.environment.seed_counts, self.counts)
+            self.environment.start()
+            self.assertEqual(seed.call_count, 2, "已完成的模板应直接复用")
 
     def test_postgres_probe_retries_connection_loss_timeout_and_read_only_state(self):
         responses = [subprocess.CompletedProcess(["psql"], 2, "", "FATAL: recovery in progress"),
