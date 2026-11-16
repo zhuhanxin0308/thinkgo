@@ -272,25 +272,28 @@ func (e *Env) Get(key string, def ...string) string {
 // All 返回当前环境变量快照，进程环境变量保持与 Get 相同的最高优先级。
 func (e *Env) All() map[string]string {
 	result := make(map[string]string)
-	if e != nil {
+	var processValues map[string]string
+	if e == nil {
+		processValues = currentProcessEnvironment()
+	} else {
 		e.mu.RLock()
 		for key, value := range e.data {
 			result[key] = value
 		}
-		var processValues map[string]string
 		if e.processSnapshot == nil {
 			processValues = currentProcessEnvironment()
 		} else {
 			processValues = cloneEnvironmentValues(e.processSnapshot)
 		}
 		e.mu.RUnlock()
-		for key, value := range processValues {
-			result[key] = value
-		}
-		return result
 	}
-	for key, value := range currentProcessEnvironment() {
+	for key, value := range processValues {
 		result[key] = value
+		if alias, exists := legacyDatabaseEnvironmentAlias(key); exists {
+			if _, explicit := processValues[alias]; !explicit {
+				result[alias] = value
+			}
+		}
 	}
 	return result
 }
@@ -343,28 +346,29 @@ func (e *Env) Lookup(key string) (string, bool) {
 	key = normalizeEnvName(key)
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	if e.processSnapshot != nil {
-		if value, ok := e.processSnapshot[key]; ok {
+	if value, ok := e.lookupProcessKey(key); ok {
+		return value, true
+	}
+	legacy, hasLegacy := legacyDatabaseEnvironmentFallback(key)
+	if hasLegacy {
+		if value, ok := e.lookupProcessKey(legacy); ok {
 			return value, true
 		}
-	} else if value, ok := os.LookupEnv(key); ok {
-		return value, true
 	}
 	if value, ok := e.data[key]; ok {
 		return value, true
 	}
-	if alias, exists := legacyDatabaseEnvironmentFallback(key); exists {
-		if e.processSnapshot != nil {
-			if value, ok := e.processSnapshot[alias]; ok {
-				return value, true
-			}
-		} else if value, ok := os.LookupEnv(alias); ok {
-			return value, true
-		}
-		value, ok := e.data[alias]
-		return value, ok
+	value, ok := e.data[legacy]
+	return value, hasLegacy && ok
+}
+
+// lookupProcessKey 在 Env 读锁内读取活动的进程环境或已冻结的快照。
+func (e *Env) lookupProcessKey(key string) (string, bool) {
+	if e.processSnapshot == nil {
+		return os.LookupEnv(key)
 	}
-	return "", false
+	value, ok := e.processSnapshot[key]
+	return value, ok
 }
 
 // legacyDatabaseEnvironmentAlias 返回旧式数据库键对应的规范环境变量名。
