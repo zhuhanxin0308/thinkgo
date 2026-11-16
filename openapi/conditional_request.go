@@ -9,6 +9,7 @@ func matchesIfNoneMatch(fields []string, etag string) bool {
 	if value == "*" {
 		return true
 	}
+	etag = strings.TrimPrefix(etag, "W/")
 	matched := false
 	for len(value) > 0 {
 		// 列表接收方忽略空成员；引号内的逗号仍属于标签本身。

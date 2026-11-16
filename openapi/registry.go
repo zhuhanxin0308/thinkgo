@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unicode"
 
 	"github.com/getkin/kin-openapi/openapi3"
 
@@ -401,7 +402,10 @@ func normalizeMethod(method string) (string, error) {
 
 func normalizePath(path string) (string, error) {
 	path = strings.TrimSpace(path)
-	if path == "" || len(path) > maximumContractPath || !strings.HasPrefix(path, "/") || strings.ContainsAny(path, "?#\\\r\n\x00") || strings.Contains(path, "//") {
+	if path == "" || len(path) > maximumContractPath || !strings.HasPrefix(path, "/") || strings.ContainsAny(path, "?#\\") ||
+		strings.Contains(path, "//") || strings.ContainsFunc(path, func(character rune) bool {
+		return unicode.IsSpace(character) || unicode.IsControl(character)
+	}) {
 		return "", fmt.Errorf("%w: 路径 %q 非法", ErrUnsupportedRoute, path)
 	}
 	if path != "/" {

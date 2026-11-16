@@ -9,6 +9,7 @@ import (
 )
 
 // RegisterTyped 使用请求与返回类型注册完整接口契约，字段来源和约束与绑定器一致。
+// 字符串输出沿用 text/plain 契约。需要 JSON 字符串响应时，使用 Handle 同时注册处理器与契约。
 // 同名组件仅在内容相同时复用；任何冲突均在发布注册变更前返回。
 func RegisterTyped[Input, Output any](registry *Registry, method, path, operationID string, successStatus int) error {
 	var docs binding.Documentation
