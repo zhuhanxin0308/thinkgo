@@ -54,6 +54,11 @@ func (o *Output) Writeln(message string) {
 	o.write(false, message+"\n")
 }
 
+// WritelnEscaped 将外部文本的控制字符转义后写为一行。
+func (o *Output) WritelnEscaped(message string) {
+	o.Writeln(escapeTerminalControls(message))
+}
+
 // Info 写入绿色信息；非交互输出不附加 ANSI 序列。
 func (o *Output) Info(message string) {
 	o.writeStatus(false, "32", message)
