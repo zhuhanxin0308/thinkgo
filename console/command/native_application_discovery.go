@@ -145,7 +145,7 @@ func discoverNativeApplications(semanticContext *applicationSemanticContext, app
 		if entry.Type()&os.ModeSymlink != 0 {
 			return nil, fmt.Errorf("应用目录 %q 不能是符号链接", name)
 		}
-		hasSource, err := nativeApplicationDirectoryHasSource(root, filepath.Join(applicationDirectory, name))
+		hasSource, err := nativeApplicationDirectoryHasSource(root, semanticContext, filepath.Join(applicationDirectory, name))
 		if err != nil {
 			return nil, err
 		}
@@ -172,9 +172,8 @@ func discoverNativeApplications(semanticContext *applicationSemanticContext, app
 	return applications, nil
 }
 
-// nativeApplicationDirectoryHasSource 忽略迁移或版本控制留下的空目录；
-// 只要应用根包或标准业务层中存在 Go 源码，就把它视为原生应用。
-func nativeApplicationDirectoryHasSource(root *os.Root, relativeDirectory string) (bool, error) {
+// nativeApplicationDirectoryHasSource 以本次构建选中的业务源码确定应用是否存在。
+func nativeApplicationDirectoryHasSource(root *os.Root, semantic *applicationSemanticContext, relativeDirectory string) (bool, error) {
 	directories := []string{
 		relativeDirectory,
 		filepath.Join(relativeDirectory, "controller"),
@@ -184,25 +183,12 @@ func nativeApplicationDirectoryHasSource(root *os.Root, relativeDirectory string
 		filepath.Join(relativeDirectory, "command"),
 	}
 	for _, directoryPath := range directories {
-		directory, err := root.Open(directoryPath)
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			return false, fmt.Errorf("打开应用源码目录 %q 失败: %w", directoryPath, err)
-		}
-		entries, readErr := directory.ReadDir(-1)
-		closeErr := directory.Close()
-		if readErr != nil || closeErr != nil {
-			return false, errors.Join(fmt.Errorf("读取应用源码目录 %q 失败: %w", directoryPath, readErr), closeErr)
-		}
-		for _, entry := range entries {
-			if !entry.IsDir() && filepath.Ext(entry.Name()) == ".go" && !strings.HasSuffix(entry.Name(), "_test.go") {
-				return true, nil
-			}
+		names, err := semantic.applicationSourceNames(root, directoryPath, filepath.Base(directoryPath))
+		if err != nil || len(names) > 0 {
+			return len(names) > 0, err
 		}
 		if directoryPath != relativeDirectory {
-			found, err := nestedApplicationDirectoryHasSource(root, directoryPath)
+			found, err := nestedApplicationDirectoryHasSource(root, semantic, directoryPath)
 			if err != nil || found {
 				return found, err
 			}
