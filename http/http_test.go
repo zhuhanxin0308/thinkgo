@@ -274,6 +274,9 @@ func TestServeHTTPExportsRouteAwareOpenTelemetrySpan(t *testing.T) {
 	app := newTestHTTPApp(t, t.TempDir(), map[string]interface{}{"enable": false})
 	app.Instance(string(framework.ServiceTelemetry), tracing)
 	router := mustHTTPRoute(t, app)
+	if err := router.EnableAutoRoute(true); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := router.Get("/users/:id", func(request *fwcontext.Request) *fwcontext.Response {
 		return fwcontext.NewResponse().Code(stdhttp.StatusCreated).Content(request.Route("id"))
 	}); err != nil {
@@ -296,6 +299,26 @@ func TestServeHTTPExportsRouteAwareOpenTelemetrySpan(t *testing.T) {
 	}
 	if !spans[0].Parent().IsRemote() || spans[0].Parent().TraceID().String() != "4bf92f3577b34da6a3ce929d0e0e4736" {
 		t.Fatalf("HTTP Span 远程父上下文错误: %v", spans[0].Parent())
+	}
+	for _, sample := range []struct{ method, path string }{
+		{stdhttp.MethodGet, "/reset/secretmarker"},
+		{stdhttp.MethodOptions, "/privatedir/secretmarker"},
+	} {
+		handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(sample.method, "http://private-host.example"+sample.path, nil))
+	}
+	spans = spanRecorder.Ended()
+	if len(spans) != 3 {
+		t.Fatalf("预期记录一次显式路由和两次未匹配请求: %d", len(spans))
+	}
+	if spans[1].Name() != stdhttp.MethodGet || spans[2].Name() != stdhttp.MethodOptions {
+		t.Errorf("未匹配请求的 Span 仅应以方法命名: %q, %q", spans[1].Name(), spans[2].Name())
+	}
+	for index, span := range spans {
+		for _, attr := range span.Attributes() {
+			if attr.Key == "url.path" || attr.Key == "server.address" || index != 0 && attr.Key == "http.route" {
+				t.Errorf("Span %d 不应记录原始地址或未注册模板: %s", index, attr.Key)
+			}
+		}
 	}
 }
 
