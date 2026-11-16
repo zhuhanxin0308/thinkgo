@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"slices"
 	"strconv"
 	"time"
 )
@@ -54,15 +55,65 @@ func makeRelationRows(rows []map[string]interface{}, keyFields []string, model *
 	return result, nil
 }
 
-func selectRelationRows(query *ModelQuery, keyFields ...string) ([]relationRow, error) {
+func selectRelationRows(query *ModelQuery, keyField string, keys []interface{}) ([]relationRow, error) {
 	if err := query.validationError(); err != nil {
 		return nil, err
 	}
-	rows, err := query.prepareQuery().Select()
+	rows, err := selectRelationKeyBatches(query.prepareQuery(), keyField, keys)
 	if err != nil {
 		return nil, err
 	}
-	return makeRelationRows(rows, keyFields, query.model)
+	return makeRelationRows(rows, []string{keyField}, query.model)
+}
+
+// selectRelationKeyBatches 按执行连接的参数预算预加载关联，保留已有条件和事务。
+func selectRelationKeyBatches(query *Query, field string, keys []interface{}) ([]map[string]interface{}, error) {
+	if err := query.ensureValid(); err != nil {
+		return nil, err
+	}
+	budget := maxQueryArgumentsForQuery(query) - len(query.args) - len(query.havingArgs)
+	if len(keys) <= budget {
+		return query.WhereIn(field, keys).Select()
+	}
+	if err := query.validateQueryArgumentAppend(1); err != nil {
+		return nil, err
+	}
+	var rows []map[string]interface{}
+	for batch := range slices.Chunk(keys, budget) {
+		batchKeys := make(map[relationComparableKey]bool, len(batch))
+		for _, value := range batch {
+			key, usable, err := relationComparableValueKey(value)
+			if err != nil {
+				return nil, err
+			}
+			if usable {
+				batchKeys[key] = true
+			}
+		}
+		found, err := query.WhereIn(field, batch).Select()
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range found {
+			value, exists := row[field]
+			if !exists {
+				return nil, fmt.Errorf("%w: 结果缺少关联字段 %q", ErrInvalidRelation, field)
+			}
+			key, usable, err := relationComparableValueKey(value)
+			if err != nil {
+				return nil, err
+			}
+			// 数据库的排序规则和类型转换可能让同一行命中不同批次。
+			// 只保留与当前批次连接键对应的行，避免重复关联。
+			if usable && batchKeys[key] {
+				rows = append(rows, row)
+			}
+		}
+		if err := validateMaterializedRows(rows); err != nil {
+			return nil, err
+		}
+	}
+	return rows, nil
 }
 
 func groupRawRelationRows(rows []relationRow, field string) (map[relationComparableKey][]map[string]interface{}, error) {
