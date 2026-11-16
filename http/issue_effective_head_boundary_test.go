@@ -139,6 +139,56 @@ func TestHEADFastPathsKeepCommitFailureStatusAndLogging(t *testing.T) {
 	}
 }
 
+func TestCompressedHEADWritesReturnCommitErrorsBeforeClosing(t *testing.T) {
+	const compressionThreshold = 512
+	app := newTestHTTPApp(t, t.TempDir(), map[string]interface{}{"enable": true, "min_size": compressionThreshold})
+	failure := &testCommitFailure{status: http.StatusConflict}
+	mustHTTPMiddleware(t, app).Pipe(func(req *fwcontext.Request, next func(*fwcontext.Request) *fwcontext.Response) *fwcontext.Response {
+		req.SetMethod(http.MethodHead)
+		writer, _ := req.ResponseWriter()
+		hook := writer.(interface {
+			BeforeCommit(func(http.Header) error) error
+		})
+		if err := hook.BeforeCommit(func(http.Header) error { return failure }); err != nil {
+			t.Fatal(err)
+		}
+		return next(req)
+	})
+	var wrote int
+	var writeErr error
+	router := mustHTTPRoute(t, app)
+	if _, err := router.Head("/standard", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+		wrote, writeErr = io.WriteString(w, issue151Payload)
+	})); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := router.Head("/stream", func(*fwcontext.Request) *fwcontext.Response {
+		return fwcontext.NewResponse().Code(http.StatusAccepted).Stream(func(w io.Writer) error {
+			wrote, writeErr = io.WriteString(w, issue151Payload)
+			return writeErr
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	host := newTestHTTPHandler(t, app)
+	for _, method := range []string{http.MethodHead, http.MethodGet} {
+		for _, path := range []string{"/standard", "/stream"} {
+			t.Run(method+path, func(t *testing.T) {
+				wrote, writeErr = -1, nil
+				req := httptest.NewRequest(method, "http://127.0.0.1"+path, nil)
+				req.Header.Set("Accept-Encoding", "gzip")
+				recorder := httptest.NewRecorder()
+				host.ServeHTTP(recorder, req)
+				assertIssue151HEAD(t, recorder, http.StatusConflict)
+				if wrote != 0 || !errors.Is(writeErr, failure) {
+					t.Errorf("Write 返回前必须能观察提交失败: bytes=%d err=%v", wrote, writeErr)
+				}
+			})
+		}
+	}
+}
+
 func TestStatusWriterFreezesHEADAtFirstFinalCommit(t *testing.T) {
 	request := fwcontext.MustNewRequest(httptest.NewRequest(http.MethodGet, "http://example.com/", nil))
 	recorder := &responseProtocolRecorder{}

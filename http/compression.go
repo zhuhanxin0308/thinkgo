@@ -222,6 +222,15 @@ func (w *CompressionResponseWriter) Write(b []byte) (int, error) {
 		w.WriteHeader(http.StatusOK)
 	}
 	w.ensureContentType(b)
+	if w.bodyPolicy != nil && w.BodySuppressed() {
+		// HEAD 无需等待压缩阈值；提交钩子失败必须在本次 Write 返回。
+		w.buffer.Reset()
+		w.startPlainWriter()
+		if err := w.bodyPolicy.CommitError(); err != nil {
+			return 0, err
+		}
+		return len(b), nil
+	}
 	if w.wroteHeader {
 		return w.Writer.Write(b)
 	}

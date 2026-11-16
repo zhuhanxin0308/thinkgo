@@ -332,10 +332,9 @@ func (w *headResponseWriter) Status() int {
 
 func (w *headResponseWriter) Write(body []byte) (int, error) {
 	w.ResponseWriter.WriteHeader(http.StatusOK)
-	if provider, ok := w.ResponseWriter.(interface{ CommitError() error }); ok {
-		if err := provider.CommitError(); err != nil {
-			return 0, err
-		}
+	// 空写穿过压缩层以触发最终提交，同时保持 HEAD 不输出任何实体字节。
+	if _, err := w.ResponseWriter.Write(nil); err != nil {
+		return 0, err
 	}
 	return len(body), nil
 }
