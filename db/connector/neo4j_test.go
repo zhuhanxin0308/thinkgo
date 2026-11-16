@@ -113,6 +113,28 @@ func TestNeoConnectReturnsOnlyAfterSuccessfulTargetProbe(t *testing.T) {
 	}
 }
 
+// TestNeoRuntimePingChecksConfiguredDatabase 验证建连成功后目标库失效仍会让公开健康检查失败。
+func TestNeoRuntimePingChecksConfiguredDatabase(t *testing.T) {
+	driver := &connectorFakeNeoDriver{}
+	connection, err := connectNeoWithDriver(db.Config{Type: "neo4j", Database: "tenant_a"}, driver)
+	if err != nil {
+		t.Fatal(err)
+	}
+	database := db.NewDB(connection)
+	t.Cleanup(func() { _ = database.Close() })
+	driver.databaseError = errors.New("目标库已离线")
+	if err := database.PingContext(t.Context()); !errors.Is(err, driver.databaseError) {
+		t.Fatalf("集群仍可连接时，目标库失效也应报告失败: %v", err)
+	}
+	if driver.lastDatabase != "tenant_a" || driver.verifyCalls != 1 || driver.session.closeCalls != 1 {
+		t.Fatalf("探针应访问配置的库并关闭会话: %#v", driver)
+	}
+	driver.databaseError = nil
+	if err := database.PingContext(t.Context()); err != nil || driver.session.executeReadCalls != 1 || driver.session.closeCalls != 1 {
+		t.Fatalf("目标库恢复后探针应成功: %v", err)
+	}
+}
+
 func TestNeoConnectClosesDriverOnConnectivityFailure(t *testing.T) {
 	driver := &connectorFakeNeoDriver{connectivityError: errors.New("offline")}
 	connection, err := connectNeoWithDriver(db.Config{Type: "neo4j", Database: "tenant_a"}, driver)
