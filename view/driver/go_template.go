@@ -14,6 +14,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/regularfile"
 )
 
 const (
@@ -427,14 +429,12 @@ func openTemplateFile(rootPath, candidate string) (*os.File, os.FileInfo, error)
 	if !pathWithinTemplateRoot(rootReal, targetReal) {
 		return nil, nil, ErrUnsafeTemplatePath
 	}
-	file, err := os.Open(targetReal)
+	file, info, err := regularfile.Open(targetReal)
 	if err != nil {
+		if errors.Is(err, regularfile.ErrNotRegular) {
+			return nil, nil, ErrTemplateNotRegular
+		}
 		return nil, nil, err
-	}
-	info, statErr := file.Stat()
-	if statErr != nil {
-		_ = file.Close()
-		return nil, nil, statErr
 	}
 	verifiedReal, verifyErr := filepath.EvalSymlinks(candidate)
 	if verifyErr != nil {
@@ -450,7 +450,7 @@ func openTemplateFile(rootPath, candidate string) (*os.File, os.FileInfo, error)
 		_ = file.Close()
 		return nil, nil, verifiedStatErr
 	}
-	if !os.SameFile(info, verifiedInfo) || !info.Mode().IsRegular() {
+	if !os.SameFile(info, verifiedInfo) {
 		_ = file.Close()
 		return nil, nil, ErrTemplateNotRegular
 	}

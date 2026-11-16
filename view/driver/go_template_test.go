@@ -167,20 +167,22 @@ func TestGoTemplateRejectsSymlinkEscapeAndNonRegularFiles(t *testing.T) {
 	if err := os.WriteFile(secret, []byte("private-template"), 0o600); err != nil {
 		t.Fatalf("写入根目录外模板失败: %v", err)
 	}
-	link := filepath.Join(viewRoot, "linked.html")
-	if err := os.Symlink(secret, link); err != nil {
-		t.Skipf("当前环境不允许创建符号链接: %v", err)
-	}
 	driver := NewGoTemplate()
 	if err := driver.Config(map[string]interface{}{"view_path": viewRoot}); err != nil {
 		t.Fatalf("配置模板驱动失败: %v", err)
 	}
-	if exists, err := driver.Exists("linked"); exists || !errors.Is(err, ErrUnsafeTemplatePath) {
-		t.Fatalf("越界符号链接必须被拒绝: exists=%v err=%v", exists, err)
-	}
-	if _, err := driver.Fetch("linked", nil); !errors.Is(err, ErrUnsafeTemplatePath) {
-		t.Fatalf("读取越界符号链接应返回 ErrUnsafeTemplatePath，实际为 %v", err)
-	}
+	t.Run("越界符号链接", func(t *testing.T) {
+		link := filepath.Join(viewRoot, "linked.html")
+		if err := os.Symlink(secret, link); err != nil {
+			t.Skipf("当前环境不允许创建符号链接: %v", err)
+		}
+		if exists, err := driver.Exists("linked"); exists || !errors.Is(err, ErrUnsafeTemplatePath) {
+			t.Fatalf("越界符号链接必须被拒绝: exists=%v err=%v", exists, err)
+		}
+		if _, err := driver.Fetch("linked", nil); !errors.Is(err, ErrUnsafeTemplatePath) {
+			t.Fatalf("读取越界符号链接应返回 ErrUnsafeTemplatePath，实际为 %v", err)
+		}
+	})
 	if err := os.Mkdir(filepath.Join(viewRoot, "directory.html"), 0o755); err != nil {
 		t.Fatalf("创建伪模板目录失败: %v", err)
 	}
