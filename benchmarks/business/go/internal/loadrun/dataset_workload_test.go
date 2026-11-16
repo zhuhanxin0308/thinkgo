@@ -4,9 +4,65 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"net/url"
 	"testing"
 	"time"
+
+	"github.com/zhuhanxin0308/thinkgo/benchmarks/business/internal/business"
 )
+
+func TestConfiguredWorkloadStaysWithinBusinessLimits(t *testing.T) {
+	configuration := testConfig()
+	configuration.MaximumPriceCents = 200000
+	configuration.CatalogPageSize = 10
+	configuration.MaximumOrderItems = 1
+	configuration.MaximumItemQuantity = 1
+	limits := business.Dataset{
+		CategoriesPerTenant: int64(configuration.Categories),
+		CatalogPageSize:     10,
+		MaximumPageSize:     10,
+		MaximumPriceCents:   200000,
+		MaximumOrderItems:   1,
+		MaximumItemQuantity: 1,
+	}
+	if err := configuration.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	configuration.Scenario = "catalog"
+	catalog := newWorkload(configuration, time.Now()).request(0)
+	target, err := url.Parse(catalog.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := business.ParseCatalog(target.Query(), limits); err != nil {
+		t.Fatalf("生成的目录分页和价格未通过同一业务校验: %v", err)
+	}
+	configuration.Scenario = "order"
+	orders := newWorkload(configuration, time.Now())
+	for sequence := uint64(0); sequence < 100; sequence++ {
+		var input business.OrderInput
+		if err := json.Unmarshal(orders.request(sequence).Body, &input); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := business.ValidateOrder(input, limits); err != nil {
+			t.Fatalf("请求 %d 生成了不符合数量限制的订单: %v", sequence, err)
+		}
+	}
+}
+
+func TestCatalogBodyBudgetUsesPossibleRowsPerCategory(t *testing.T) {
+	configuration := testConfig()
+	configuration.Scenario = "mixed"
+	configuration.CatalogPageSize = 20000
+	configuration.Categories = 1
+	if err := configuration.Validate(); err == nil {
+		t.Fatal("预算无法容纳的目录响应应在开跑前拒绝")
+	}
+	configuration.Categories = configuration.ProductsPerTenant
+	if err := configuration.Validate(); err != nil {
+		t.Fatalf("每个分类最多一个商品，较大的配置页大小不应被拒绝: %v", err)
+	}
+}
 
 // TestDefaultWorkloadTrajectory 固定修复前请求轨迹摘要，确保默认实验的每个请求保持兼容。
 func TestDefaultWorkloadTrajectory(t *testing.T) {

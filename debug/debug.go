@@ -107,20 +107,20 @@ func (s *memStatsSampler) CurrentAlloc() uint64 {
 // Debug 调试信息管理器（每个请求应创建独立实例）
 // 对应 ThinkPHP 8 的 Trace 调试面板数据收集器
 type Debug struct {
-	logs       []map[string]interface{} // 日志条目
-	sqls       []map[string]interface{} // SQL 查询记录
-	cache      []map[string]interface{} // 缓存操作记录
-	vars       map[string]interface{}   // 调试变量
-	files      []string                 // 加载的文件
-	fileSet    map[string]struct{}      // 文件去重集合
-	truncated  truncationFlags          // 各类别截断位图
-	start      time.Time                // 请求开始时间
-	lock       sync.RWMutex             // 读写锁
-	memSampler *memStatsSampler         // 内存采样器
-	location   *time.Location           // 调试信息显示时区
-	logChannel string                   // Trace 选中的日志通道；空值表示全部通道
-	now        func() time.Time         // 可替换的当前时间来源
-	Enabled    bool                     // 是否启用调试；发布给并发请求后应按不可变配置读取
+	logs       []logEntry             // 日志条目
+	sqls       []sqlEntry             // SQL 查询记录
+	cache      []cacheEntry           // 缓存操作记录
+	vars       map[string]interface{} // 调试变量
+	files      []string               // 加载的文件
+	fileSet    map[string]struct{}    // 文件去重集合
+	truncated  truncationFlags        // 各类别截断位图
+	start      time.Time              // 请求开始时间
+	lock       sync.RWMutex           // 读写锁
+	memSampler *memStatsSampler       // 内存采样器
+	location   *time.Location         // 调试信息显示时区
+	logChannel string                 // Trace 选中的日志通道；空值表示全部通道
+	now        func() time.Time       // 可替换的当前时间来源
+	Enabled    bool                   // 是否启用调试；发布给并发请求后应按不可变配置读取
 }
 
 // NewDebug 创建调试管理器（全局配置级别，保持向后兼容）
@@ -136,9 +136,6 @@ func NewRequestDebug(enabled bool) *Debug {
 
 func newDebug(enabled bool) *Debug {
 	return &Debug{
-		logs:       make([]map[string]interface{}, 0),
-		sqls:       make([]map[string]interface{}, 0),
-		cache:      make([]map[string]interface{}, 0),
 		vars:       make(map[string]interface{}),
 		files:      make([]string, 0),
 		fileSet:    make(map[string]struct{}),
@@ -242,10 +239,10 @@ func (d *Debug) AddLog(level, msg string, channels ...string) {
 		d.truncated |= truncationLog
 		return
 	}
-	d.logs = append(d.logs, map[string]interface{}{
-		"level": level,
-		"msg":   msg,
-		"time":  d.nowLocked().Format("15:04:05.000"),
+	d.logs = append(d.logs, logEntry{
+		level:   level,
+		message: msg,
+		at:      d.nowLocked().Format(entryTimeLayout),
 	})
 }
 
@@ -260,10 +257,10 @@ func (d *Debug) AddSql(sql string, duration time.Duration) {
 		d.truncated |= truncationSQL
 		return
 	}
-	d.sqls = append(d.sqls, map[string]interface{}{
-		"sql":      sql,
-		"duration": duration.Seconds(),
-		"time":     d.nowLocked().Format("15:04:05.000"),
+	d.sqls = append(d.sqls, sqlEntry{
+		query:   sql,
+		seconds: duration.Seconds(),
+		at:      d.nowLocked().Format(entryTimeLayout),
 	})
 }
 
@@ -278,10 +275,10 @@ func (d *Debug) AddCache(op, key string) {
 		d.truncated |= truncationCache
 		return
 	}
-	d.cache = append(d.cache, map[string]interface{}{
-		"op":   op,
-		"key":  key,
-		"time": d.nowLocked().Format("15:04:05.000"),
+	d.cache = append(d.cache, cacheEntry{
+		operation: op,
+		key:       key,
+		at:        d.nowLocked().Format(entryTimeLayout),
 	})
 }
 
@@ -346,9 +343,9 @@ func (d *Debug) GetInfo() map[string]interface{} {
 	d.lock.RLock()
 	variables := cloneDebugVars(d.vars)
 	info := map[string]interface{}{
-		"logs":  cloneDebugEntries(d.logs),
-		"sqls":  cloneDebugEntries(d.sqls),
-		"cache": cloneDebugEntries(d.cache),
+		"logs":  snapshotEntries(d.logs),
+		"sqls":  snapshotEntries(d.sqls),
+		"cache": snapshotEntries(d.cache),
 		"vars":  variables,
 		"files": append([]string(nil), d.files...),
 		"time":  time.Since(d.start).Seconds(),
@@ -408,19 +405,6 @@ func emptyDebugInfo() map[string]interface{} {
 			string(KindFile):  false,
 		},
 	}
-}
-
-// cloneDebugEntries 复制调试条目列表，避免调用方修改内部切片或 map。
-func cloneDebugEntries(entries []map[string]interface{}) []map[string]interface{} {
-	cloned := make([]map[string]interface{}, len(entries))
-	for index, entry := range entries {
-		item := make(map[string]interface{}, len(entry))
-		for key, value := range entry {
-			item[key] = value
-		}
-		cloned[index] = item
-	}
-	return cloned
 }
 
 // cloneDebugVars 复制稳定的调试变量引用，便于在锁外复制实际值。

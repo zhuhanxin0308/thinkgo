@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"runtime"
 	"sync"
 	"testing"
@@ -139,6 +140,51 @@ func TestDebugGetInfoReturnsSnapshot(t *testing.T) {
 	}
 	if got := next["files"].([]string)[0]; got != "app/index/controller/user.go" {
 		t.Fatalf("外部修改不应污染文件列表，实际为 %v", got)
+	}
+}
+
+func TestDebugEntrySnapshotsPreserveFieldsAndTime(t *testing.T) {
+	manager := NewRequestDebug(true)
+	now := time.Date(2026, 4, 15, 12, 3, 4, int(567*time.Millisecond), time.UTC)
+	manager.now = func() time.Time { return now }
+	manager.SetLocation(time.FixedZone("应用时区", int((2 * time.Hour).Seconds())))
+	manager.AddLog("info", "first")
+	manager.SetLocation(time.UTC)
+	manager.AddLog("warn", "second")
+	manager.AddSql("select 1", 2500*time.Millisecond)
+	manager.AddCache("get", "user:1")
+
+	snapshot := manager.GetInfo()
+	expected := map[string][]map[string]interface{}{
+		"logs":  {{"level": "info", "msg": "first", "time": "14:03:04.567"}, {"level": "warn", "msg": "second", "time": "12:03:04.567"}},
+		"sqls":  {{"sql": "select 1", "duration": 2.5, "time": "12:03:04.567"}},
+		"cache": {{"op": "get", "key": "user:1", "time": "12:03:04.567"}},
+	}
+	manager.Clear()
+	manager.AddLog("error", "third")
+	for category, entries := range expected {
+		if !reflect.DeepEqual(snapshot[category], entries) {
+			t.Errorf("%s 快照字段或类型发生改变: %#v", category, snapshot[category])
+		}
+	}
+}
+
+func TestDebugEntryCaptureAllocationBudget(t *testing.T) {
+	manager := NewRequestDebug(true)
+	const entriesPerKind = 40
+	allocations := testing.AllocsPerRun(20, func() {
+		manager.Clear()
+		for range entriesPerKind {
+			manager.AddLog("info", "entry")
+			manager.AddSql("select 1", time.Millisecond)
+			manager.AddCache("get", "user:1")
+		}
+	})
+	// 在复用切片后，允许每条记录为展示时间及其附加开销分配，避免恢复每条记录独立的 map。
+	const totalEntries = entriesPerKind * 3
+	t.Logf("采集 %d 条记录分配了 %.0f 次", totalEntries, allocations)
+	if allocations > 2*totalEntries {
+		t.Fatalf("采集 %d 条记录分配了 %.0f 次，超过预算 %d", totalEntries, allocations, 2*totalEntries)
 	}
 }
 

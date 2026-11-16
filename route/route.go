@@ -48,7 +48,7 @@ type Route struct {
 	method             string
 	path               string
 	handler            HandlerFunc
-	middlewares        []middleware.Handler
+	middlewares        []routeMiddleware
 	middlewarePipeline *middleware.Pipeline
 	auto               bool
 	name               string
@@ -140,14 +140,14 @@ type Group struct {
 	router      *Router
 	prefix      string
 	domain      string
-	middlewares []middleware.Handler
+	middlewares []routeMiddleware
 }
 
 type routeDefinition struct {
 	method      string
 	path        string
 	handler     HandlerFunc
-	middlewares []middleware.Handler
+	middlewares []routeMiddleware
 	domain      string
 }
 
@@ -354,7 +354,7 @@ func (r *Router) Redirect(path, target string, codes ...int) (*Route, error) {
 }
 
 func (r *Router) rootGroup() *Group {
-	return &Group{router: r, middlewares: []middleware.Handler{}}
+	return &Group{router: r}
 }
 
 func (g *Group) Add(method, path string, handler HandlerFunc, handlers ...middleware.Handler) (*Route, error) {
@@ -549,7 +549,8 @@ func (r *Router) Freeze() error {
 			}
 			key := r.pathPartsKey(routePartsWithExtension(parts, extension))
 			staticRoutes[registered.method][key] = append(staticRoutes[registered.method][key], registered)
-			if !registered.extensionRequired && extension != "" {
+			if extension != "" {
+				// 前缀请求的后缀可位于未消费的末段，保留无后缀索引供匹配器验证。
 				baseKey := r.pathPartsKey(routePartsWithExtension(parts, ""))
 				staticRoutes[registered.method][baseKey] = append(staticRoutes[registered.method][baseKey], registered)
 			}

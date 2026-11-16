@@ -83,6 +83,7 @@ type Request struct {
 
 	dataMu      sync.RWMutex
 	data        map[string]interface{}
+	keyedData   map[any]any
 	routeParams map[string]interface{}
 
 	routeMu sync.RWMutex

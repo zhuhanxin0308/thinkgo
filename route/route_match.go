@@ -10,7 +10,6 @@ import (
 	"unicode"
 
 	"github.com/zhuhanxin0308/thinkgo/v3/context"
-	"github.com/zhuhanxin0308/thinkgo/v3/middleware"
 )
 
 // Match 在冻结后的只读索引中匹配请求，并区分未找到、方法不允许和非法请求路径。
@@ -89,8 +88,32 @@ func (r *Router) matchStatic(method string, requestParts []string, trailingSlash
 	if len(methodRoutes) == 0 {
 		return nil
 	}
-	candidates := r.staticCandidates(method, methodRoutes, requestParts)
-	return candidates.firstMatch(host, requestParts, trailingSlash)
+	key := r.pathPartsKey(requestParts)
+	var best *Route
+	for _, candidate := range methodRoutes[key] {
+		if candidate.domain != "" && candidate.domain != host {
+			continue
+		}
+		if matched, _ := candidate.matchRequestPartsWithOptions(requestParts, trailingSlash); matched && moreSpecificStaticRoute(candidate, best, requestParts) {
+			best = candidate
+		}
+	}
+	// 精确索引优先。只剩前缀匹配或末段为独立后缀时，沿本次请求路径查询祖先。
+	if best != nil || len(requestParts) == 0 ||
+		r.completeMatch && !strings.HasPrefix(requestParts[len(requestParts)-1], ".") {
+		return best
+	}
+	for {
+		if boundary := strings.LastIndexByte(key, 0); boundary >= 0 {
+			key = key[:boundary]
+		} else {
+			key = ""
+		}
+		best = matchStaticPrefix(methodRoutes[key], requestParts, trailingSlash, host)
+		if best != nil || r.completeMatch || key == "" {
+			return best
+		}
+	}
 }
 
 func (r *Router) matchDynamic(method string, requestParts []string, trailingSlash bool, host string) (*Route, map[string]string) {
@@ -142,53 +165,11 @@ func (r *Router) matchDynamic(method string, requestParts []string, trailingSlas
 	return nil, nil
 }
 
-// staticCandidateSegments 将精确索引与冻结注册表分段保存；前缀段按需只读扫描，不复制共享切片。
-type staticCandidateSegments struct {
-	indexed          []*Route
-	registered       []*Route
-	method           string
-	requestPartCount int
-	includePrefix    bool
-}
-
-func (r *Router) staticCandidates(method string, indexedPaths map[string][]*Route, requestParts []string) staticCandidateSegments {
-	return staticCandidateSegments{
-		indexed:          indexedPaths[r.pathPartsKey(requestParts)],
-		registered:       r.routes,
-		method:           method,
-		requestPartCount: len(requestParts),
-		includePrefix:    !r.completeMatch,
-	}
-}
-
-// firstMatch 先匹配全部精确路径，再选择最长静态前缀。只有路径同样具体时，
-// 精确域名才优先于公共路由；相同优先级保持注册顺序，不改写冻结索引。
-func (candidates staticCandidateSegments) firstMatch(host string, requestParts []string, trailingSlash bool) *Route {
+func matchStaticPrefix(candidates []*Route, requestParts []string, trailingSlash bool, host string) *Route {
 	var best *Route
-	for _, candidate := range candidates.indexed {
-		if candidate.domain != "" && candidate.domain != host {
-			continue
-		}
-		if matched, _ := candidate.matchRequestPartsWithOptions(requestParts, trailingSlash); matched && moreSpecificStaticRoute(candidate, best, requestParts) {
-			best = candidate
-		}
-	}
-	// An indexed full match consumes as many segments as the raw request.
-	// Extension-only final segments can yield shorter full matches, but cannot
-	// outrank this result. The canonical key includes every EqualFold alias.
-	if best != nil {
-		return best
-	}
-	if !candidates.includePrefix && (len(requestParts) == 0 || !strings.HasPrefix(requestParts[len(requestParts)-1], ".")) {
-		// Every full match preserving the segment count has a canonical index
-		// key. Only an extension-only final segment can require the fallback.
-		return nil
-	}
-
 	bestExact := false
-	for _, candidate := range candidates.registered {
-		if !isStaticPrefixCandidate(candidate, candidates.method, candidates.requestPartCount) ||
-			candidate.domain != "" && candidate.domain != host {
+	for _, candidate := range candidates {
+		if candidate.domain != "" && candidate.domain != host {
 			continue
 		}
 		parts, ok := candidate.requestPartsForMatch(requestParts)
@@ -196,9 +177,6 @@ func (candidates staticCandidateSegments) firstMatch(host string, requestParts [
 			continue
 		}
 		exact := len(parts) == len(candidate.pathParts)
-		if !candidates.includePrefix && !exact {
-			continue
-		}
 		if best != nil && (!exact && bestExact || exact == bestExact && !moreSpecificStaticRoute(candidate, best, requestParts)) {
 			continue
 		}
@@ -209,8 +187,7 @@ func (candidates staticCandidateSegments) firstMatch(host string, requestParts [
 	return best
 }
 
-// moreSpecificStaticRoute ranks equally complete candidates without depending
-// on whether they came from the index or the registration fallback.
+// moreSpecificStaticRoute 依次比较路径深度、域名、字面后缀和注册顺序。
 func moreSpecificStaticRoute(candidate, current *Route, requestParts []string) bool {
 	if current == nil {
 		return true
@@ -229,10 +206,6 @@ func moreSpecificStaticRoute(candidate, current *Route, requestParts []string) b
 	return candidate.order < current.order
 }
 
-func isStaticPrefixCandidate(candidate *Route, method string, requestPartCount int) bool {
-	return candidate != nil && candidate.method == method && isStaticRouteParts(candidate.pathParts) && len(candidate.pathParts) <= requestPartCount
-}
-
 func automaticOptionsRoute() *Route {
 	const allow = "GET, POST, PUT, DELETE"
 	return &Route{
@@ -241,9 +214,8 @@ func automaticOptionsRoute() *Route {
 		handler: func(_ *context.Request) *context.Response {
 			return context.NewResponse().Header("Allow", allow).NoContent()
 		},
-		middlewares: []middleware.Handler{},
-		patterns:    make(map[string]string),
-		compiled:    make(map[string]*regexp.Regexp),
+		patterns: make(map[string]string),
+		compiled: make(map[string]*regexp.Regexp),
 	}
 }
 
@@ -714,7 +686,6 @@ func (r *Router) resolveAutoRoute(path string, parts []string) *Route {
 		handler:         handler,
 		auto:            true,
 		controllerLayer: r.controllerLayer,
-		middlewares:     []middleware.Handler{},
 		patterns:        make(map[string]string),
 		compiled:        make(map[string]*regexp.Regexp),
 	}

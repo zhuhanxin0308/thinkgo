@@ -49,8 +49,8 @@ func TestRouteFacadeCoversThinkPHPDefinitionAPI(t *testing.T) {
 		Pattern(map[string]string{"id": `\d+`}).
 		Domain("api.example.com").
 		Ext("json").
-		Middleware(guard).
-		WithoutMiddleware(guard)
+		NamedMiddleware("guard", guard).
+		WithoutNamedMiddleware("guard")
 	if named.Path() != "/articles/:id" || named.Method() != http.MethodGet {
 		t.Fatalf("链式规则结果错误: path=%q method=%q", named.Path(), named.Method())
 	}
@@ -59,6 +59,8 @@ func TestRouteFacadeCoversThinkPHPDefinitionAPI(t *testing.T) {
 	routes.Resource("photos", "photo").Only("index", "read")
 	routes.Resource("comments", "comment").Except("create", "edit")
 	routes.Group("api", func(group *RuleGroup) {
+		guarded := group.NamedMiddleware("group-guard", guard)
+		guarded.Get("explicitly-public", handler).WithoutNamedMiddleware("group-guard")
 		group.Get("get", handler)
 		group.Post("post", handler)
 		group.Put("put", handler)

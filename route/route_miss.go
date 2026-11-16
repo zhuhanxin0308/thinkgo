@@ -3,8 +3,6 @@ package route
 import (
 	"fmt"
 	"regexp"
-
-	"github.com/zhuhanxin0308/thinkgo/v3/middleware"
 )
 
 // Miss 注册唯一的通用未命中处理器，保留底层 Router 的显式重复检查。
@@ -51,12 +49,11 @@ func (r *Router) SetMiss(method string, handler HandlerFunc) (*Route, error) {
 
 func newMissRoute(router *Router, method string, handler HandlerFunc) *Route {
 	return &Route{
-		router:      router,
-		method:      method,
-		path:        "__miss__",
-		handler:     handler,
-		middlewares: []middleware.Handler{},
-		patterns:    make(map[string]string),
-		compiled:    make(map[string]*regexp.Regexp),
+		router:   router,
+		method:   method,
+		path:     "__miss__",
+		handler:  handler,
+		patterns: make(map[string]string),
+		compiled: make(map[string]*regexp.Regexp),
 	}
 }

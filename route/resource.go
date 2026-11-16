@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-
-	"github.com/zhuhanxin0308/thinkgo/v3/middleware"
 )
 
 // ResourceRoute 表示一组可原子裁剪的 RESTful 资源路由。
@@ -44,7 +42,7 @@ func (g *Group) Resource(path, controller string) (*ResourceRoute, error) {
 			method:      definition.method,
 			path:        joinRoutePath(g.prefix, path+definition.pathSuffix),
 			handler:     controller + "/" + definition.action,
-			middlewares: append([]middleware.Handler(nil), g.middlewares...),
+			middlewares: g.middlewares,
 			domain:      g.domain,
 		})
 	}

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/zhuhanxin0308/thinkgo/v3/config"
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/dotenvtest"
 )
 
 type nativeApplicationController struct{}
@@ -221,7 +222,7 @@ func TestNativeApplicationsShareFrozenProjectConfiguration(t *testing.T) {
 	})
 	writeNativeApplicationConfig(t, basePath, "index", "website")
 	writeNativeApplicationConfig(t, basePath, "admin", "backend")
-	if err := os.WriteFile(filepath.Join(basePath, ".env"), []byte("PROJECT_RAW_ENVIRONMENT=initial-env-file\n"), 0o600); err != nil {
+	if err := dotenvtest.WriteFile(filepath.Join(basePath, ".env"), []byte("PROJECT_RAW_ENVIRONMENT=initial-env-file\n")); err != nil {
 		t.Fatalf("写入初始项目环境文件失败: %v", err)
 	}
 	t.Setenv("APP_ENVIRONMENT_MARKER", "initial-environment")
@@ -250,7 +251,7 @@ func TestNativeApplicationsShareFrozenProjectConfiguration(t *testing.T) {
 	updateProjectApplicationConfig(t, basePath, map[string]interface{}{
 		"project_marker": "changed-file",
 	})
-	if err := os.WriteFile(filepath.Join(basePath, ".env"), []byte("PROJECT_RAW_ENVIRONMENT=changed-env-file\n"), 0o600); err != nil {
+	if err := dotenvtest.WriteFile(filepath.Join(basePath, ".env"), []byte("PROJECT_RAW_ENVIRONMENT=changed-env-file\n")); err != nil {
 		t.Fatalf("更新项目环境文件失败: %v", err)
 	}
 	t.Setenv("APP_ENVIRONMENT_MARKER", "changed-environment")
