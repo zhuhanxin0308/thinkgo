@@ -15,6 +15,7 @@ import (
 func (r *Router) URL(name string, params map[string]interface{}) (string, error) {
 	r.mu.RLock()
 	registered := r.cachedNames[name]
+	caseSensitive := r.caseSensitive
 	r.mu.RUnlock()
 	if registered == nil {
 		if err := r.Freeze(); err != nil {
@@ -22,6 +23,7 @@ func (r *Router) URL(name string, params map[string]interface{}) (string, error)
 		}
 		r.mu.RLock()
 		registered = r.namedRoutes[name]
+		caseSensitive = r.caseSensitive
 		r.mu.RUnlock()
 	}
 	if registered == nil {
@@ -57,7 +59,7 @@ func (r *Router) URL(name string, params map[string]interface{}) (string, error)
 		pathParts = append(pathParts, text)
 	}
 
-	if registered.ext != "" && (len(pathParts) > 0 || registered.extensionRequired) {
+	if registered.ext != "" && !registered.hasLiteralExtension(caseSensitive) && (len(pathParts) > 0 || registered.extensionRequired) {
 		if len(pathParts) == 0 {
 			pathParts = append(pathParts, "."+registered.ext)
 		} else {
