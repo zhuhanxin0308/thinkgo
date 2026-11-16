@@ -156,13 +156,7 @@ func (app *App) initializeProviders() error {
 		lifecycle.initializing = true
 		lifecycle.lock.Unlock()
 
-		initializeErrors := app.initializePendingProviders()
-		lifecycle.lock.Lock()
-		lifecycle.initializeErr = initializeErrors
-		lifecycle.initializing = false
-		lifecycle.initialized = true
-		lifecycle.condition.Broadcast()
-		lifecycle.lock.Unlock()
+		_ = app.initializePendingProviders(true)
 	})
 	lifecycle.lock.Lock()
 	defer lifecycle.lock.Unlock()
@@ -181,7 +175,7 @@ func (lifecycle *providerLifecycle) providerWasInitialized(provider ServiceProvi
 }
 
 // initializePendingProviders 在阶段锁内串行完成所有已注册但尚未尝试初始化的 Provider。
-func (app *App) initializePendingProviders() error {
+func (app *App) initializePendingProviders(finishInitialPhase bool) error {
 	lifecycle := &app.providers
 	initializeErrors := make([]error, 0)
 	for {
@@ -197,11 +191,19 @@ func (app *App) initializePendingProviders() error {
 			registration.initializing = true
 			pending = append(pending, registration)
 		}
-		lifecycle.lock.Unlock()
-
 		if len(pending) == 0 {
-			return errors.Join(initializeErrors...)
+			initializeErr := errors.Join(initializeErrors...)
+			if finishInitialPhase {
+				// 检查完待处理 Provider 后，在同一锁内结束初始化阶段。
+				lifecycle.initializeErr = initializeErr
+				lifecycle.initializing = false
+				lifecycle.initialized = true
+				lifecycle.condition.Broadcast()
+			}
+			lifecycle.lock.Unlock()
+			return initializeErr
 		}
+		lifecycle.lock.Unlock()
 		for _, registration := range pending {
 			var initializeErr error
 			if _, ok := registration.provider.(ServiceProviderInitializer); ok {
@@ -322,7 +324,7 @@ func (app *App) bootProviders() error {
 	initializeErr := error(nil)
 	if initializeStarted {
 		lifecycle.lock.Unlock()
-		initializeErr = app.initializePendingProviders()
+		initializeErr = app.initializePendingProviders(false)
 		lifecycle.lock.Lock()
 	}
 	providers := lifecycle.snapshotProvidersLocked()
@@ -436,7 +438,7 @@ func (app *App) shutdownProviders() error {
 
 	var initializeErr error
 	if shouldInitializePending {
-		initializeErr = app.initializePendingProviders()
+		initializeErr = app.initializePendingProviders(false)
 	}
 
 	lifecycle.lock.Lock()
