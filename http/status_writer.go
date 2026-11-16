@@ -189,9 +189,9 @@ func (w *statusTrackingResponseWriter) CommitEmpty() {
 	}
 }
 
-// ResetUncommitted 清除尚未最终提交的业务头，但保留提交钩子供异常响应复用。
+// ResetUncommitted 清除尚未最终提交的业务头，保留待运行的钩子且不会重放已运行的钩子。
 func (w *statusTrackingResponseWriter) ResetUncommitted() bool {
-	if w == nil || w.state != responseStateOpen || w.hooksRun {
+	if w == nil || w.state != responseStateOpen || w.commitErr != nil {
 		return false
 	}
 	for key := range w.Header() {
