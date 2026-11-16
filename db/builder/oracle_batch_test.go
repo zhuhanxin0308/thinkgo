@@ -11,6 +11,24 @@ import (
 	"github.com/zhuhanxin0308/thinkgo/v3/db"
 )
 
+// TestOracleRebindKeepsLiteralBackslashes 验证普通字符串以反斜杠结尾时还能绑定后续参数。
+func TestOracleRebindKeepsLiteralBackslashes(t *testing.T) {
+	const query = `SELECT 'C:\' AS dir, ? AS bound FROM dual`
+	const want = `SELECT 'C:\' AS dir, :1 AS bound FROM dual`
+	if got := (&Oracle{}).Rebind(query); got != want {
+		t.Fatalf("Oracle 重绑定错误: %q，期望 %q", got, want)
+	}
+}
+
+// TestOracleRebindPreservesAlternativeQuotedQuestionMarks 验证替代引号内的问号不会被替换。
+func TestOracleRebindPreservesAlternativeQuotedQuestionMarks(t *testing.T) {
+	const query = `SELECT q'[before' ? after]', ?, NQ'界内' ? 容界', ? FROM dual`
+	const want = `SELECT q'[before' ? after]', :1, NQ'界内' ? 容界', :2 FROM dual`
+	if got := (&Oracle{}).Rebind(query); got != want {
+		t.Fatalf("Oracle 替代字符串的字面量发生变化: %q", got)
+	}
+}
+
 func TestOracleTypedLockCapabilities(t *testing.T) {
 	oracle := &Oracle{}
 	update, err := oracle.Lock(db.LockForUpdate)
