@@ -370,8 +370,10 @@ func (h *Handle) reportBusinessException(err *BusinessException) {
 	if err.Cause != nil {
 		ctx["cause"] = safeExceptionLogText(err.Cause)
 	}
-	if err.Data != nil {
-		ctx["data"] = cloneExceptionData(err.Data)
+	if data, snapshotErr := snapshotExceptionData(err.Data, err.dataSnapshotErr); snapshotErr != nil {
+		ctx["data_error"] = safeExceptionLogText(snapshotErr)
+	} else if data != nil {
+		ctx["data"] = data
 	}
 	if status >= http.StatusInternalServerError {
 		ctx["stack"] = string(debug.Stack())
@@ -384,7 +386,10 @@ func (h *Handle) reportBusinessException(err *BusinessException) {
 // renderHttpException 渲染 HTTP 异常，并在非本地调试场景隐藏 5xx 详情。
 func (h *Handle) renderHttpException(w http.ResponseWriter, r *http.Request, err *HttpException, exposeDetails bool) error {
 	message := sanitizeExceptionText(err.Message)
-	data := cloneExceptionData(err.Data)
+	data, snapshotErr := snapshotExceptionData(err.Data, err.dataSnapshotErr)
+	if snapshotErr != nil {
+		return snapshotErr
+	}
 	if err.StatusCode >= http.StatusInternalServerError && !exposeDetails {
 		message = internalServerErrorText
 		data = nil
@@ -414,7 +419,10 @@ func (h *Handle) renderBusinessException(w http.ResponseWriter, r *http.Request,
 	status := err.StatusCode()
 	message := sanitizeExceptionText(err.Message)
 	code := err.Code
-	data := cloneExceptionData(err.Data)
+	data, snapshotErr := snapshotExceptionData(err.Data, err.dataSnapshotErr)
+	if snapshotErr != nil {
+		return snapshotErr
+	}
 	if status >= http.StatusInternalServerError && !exposeDetails {
 		message = internalServerErrorText
 		code = status

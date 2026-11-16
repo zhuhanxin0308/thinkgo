@@ -17,6 +17,8 @@ import (
 	"strings"
 	"sync"
 	"unicode"
+
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/snapshot"
 )
 
 const (
@@ -31,7 +33,7 @@ const (
 	// maxConfigDirectoryDepth 限制配置目录递归深度，避免意外扫描过深目录树。
 	maxConfigDirectoryDepth = 8
 	// maxConfigJSONDepth 限制 JSON 容器嵌套深度，避免解析过深数据消耗过多栈空间。
-	maxConfigJSONDepth = 64
+	maxConfigJSONDepth = snapshot.MaxDepth
 )
 
 var (
@@ -575,7 +577,7 @@ func deepCopyValue(value interface{}) interface{} {
 	case []bool:
 		return slices.Clone(typed)
 	default:
-		cloned, err := copyTypedConfigValue(value, 0, nil)
+		cloned, err := snapshot.CopyAt(value, 0, nil)
 		if err != nil {
 			// 写入边界已拒绝不可复制的值，内部快照必须保持此约束。
 			panic(err)
@@ -793,20 +795,20 @@ func normalizeConfigNamespace(name string) (string, error) {
 
 // normalizeConfigInputValue 规范化 Set 写入的动态 map，并为调用方隔离嵌套集合。
 func normalizeConfigInputValue(value interface{}, depth int, path string) (interface{}, error) {
-	var spans []configSnapshotSpan
+	var spans snapshot.Spans
 	normalized, err := normalizeConfigInputWithSpans(value, depth, path, &spans)
 	if err != nil {
 		return nil, err
 	}
-	err = validateConfigSnapshotSpans(spans)
+	err = spans.Validate()
 	runtime.KeepAlive(value)
 	if err != nil {
-		return nil, fmt.Errorf("%w at %s", err, path)
+		return nil, fmt.Errorf("%w at %s: %w", ErrConfigUnsupportedValue, path, err)
 	}
 	return normalized, nil
 }
 
-func normalizeConfigInputWithSpans(value interface{}, depth int, path string, spans *[]configSnapshotSpan) (interface{}, error) {
+func normalizeConfigInputWithSpans(value interface{}, depth int, path string, spans *snapshot.Spans) (interface{}, error) {
 	switch typed := value.(type) {
 	case map[string]interface{}:
 		if depth > maxConfigJSONDepth {
@@ -829,7 +831,7 @@ func normalizeConfigInputWithSpans(value interface{}, depth int, path string, sp
 		if depth > maxConfigJSONDepth {
 			return nil, fmt.Errorf("%w at %s", ErrConfigJSONTooDeep, path)
 		}
-		recordConfigSnapshotSpan(spans, reflect.ValueOf(typed))
+		spans.Record(reflect.ValueOf(typed))
 		result := make([]interface{}, len(typed))
 		for index, item := range typed {
 			normalized, err := normalizeConfigInputWithSpans(item, depth+1, fmt.Sprintf("%s[%d]", path, index), spans)
@@ -840,9 +842,9 @@ func normalizeConfigInputWithSpans(value interface{}, depth int, path string, sp
 		}
 		return result, nil
 	default:
-		copied, err := copyTypedConfigValue(value, depth, spans)
+		copied, err := snapshot.CopyAt(value, depth, spans)
 		if err != nil {
-			return nil, fmt.Errorf("%w at %s", err, path)
+			return nil, fmt.Errorf("%w at %s: %w", ErrConfigUnsupportedValue, path, err)
 		}
 		return copied, nil
 	}

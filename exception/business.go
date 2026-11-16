@@ -8,11 +8,12 @@ import (
 // BusinessException 业务异常。
 // 用于表达业务流程内的预期失败，而不是系统级故障。
 type BusinessException struct {
-	Code       int
-	Message    string
-	HTTPStatus int
-	Data       map[string]interface{}
-	Cause      error
+	Code            int
+	Message         string
+	HTTPStatus      int
+	Data            map[string]interface{}
+	Cause           error
+	dataSnapshotErr error
 }
 
 // Error 实现 error 接口。
@@ -54,12 +55,12 @@ func (e *BusinessException) WithStatus(status int) *BusinessException {
 	return e
 }
 
-// WithData 链式设置可安全返回给客户端的结构化业务数据。
+// WithData 隔离结构化业务数据并保留 Go 类型；无法复制的数据由 Render 返回错误。
 func (e *BusinessException) WithData(data map[string]interface{}) *BusinessException {
 	if e == nil {
 		return nil
 	}
-	e.Data = cloneExceptionData(data)
+	e.Data, e.dataSnapshotErr = snapshotExceptionData(data, nil)
 	return e
 }
 
