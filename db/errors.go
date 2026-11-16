@@ -41,6 +41,8 @@ var (
 	ErrUnsafeFullTableMutation = errors.New("禁止无条件全表修改")
 	// ErrInvalidPagination 表示分页值为负、越界或发生整数溢出。
 	ErrInvalidPagination = errors.New("数据库分页参数非法")
+	// ErrChunkOrderRequired 表示 OFFSET 分块未声明稳定且唯一的排序。
+	ErrChunkOrderRequired = errors.New("分块遍历需要明确的稳定唯一排序")
 	// ErrQueryResultTooMany 表示物化查询结果超过框架允许的单次行数上限。
 	ErrQueryResultTooMany = errors.New("数据库查询结果过大")
 	// ErrInvalidAggregateValue 表示数据库返回的聚合值无法精确解析。

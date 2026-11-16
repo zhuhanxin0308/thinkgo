@@ -458,21 +458,23 @@ func (q *Query) ChunkByIdWithCodec(count int, pkField string, codec CursorCodec,
 
 // Chunk 分块查询，每次查询 count 条记录并执行回调。
 // 回调返回 false 可提前终止遍历。
-// 注意：基于 OFFSET 实现，遍历期间若有数据增删可能漏读/重复；大表深分页性能随页码下降，
-// 这类场景建议改用 ChunkById（基于主键游标）。
-// 对应 ThinkPHP 的 Db::name('user')->chunk(100, function($users) { ... })
+// 调用方必须使用 Order 指定稳定唯一的顺序，多行并列时需追加唯一键。
+// 基于 OFFSET 实现，遍历期间的数据变更仍可能导致漏读或重复；这类场景可用 ChunkById。
 func (q *Query) Chunk(count int, callback func(rows []map[string]interface{}) bool) error {
 	if err := q.ensureValid(); err != nil {
 		return q.reportError("chunk", err, nil)
 	}
 	if count <= 0 {
-		count = 100
+		count = DefaultChunkSize
 	}
 	if count > maxQueryResultRows-1 {
 		return q.reportError("chunk", fmt.Errorf("%w: Chunk 大小超过 %d", ErrInvalidPagination, maxQueryResultRows-1), nil)
 	}
 	if callback == nil {
 		return q.reportError("chunk", fmt.Errorf("%w: Chunk 回调不能为空", ErrInvalidQuery), nil)
+	}
+	if strings.TrimSpace(q.order) == "" {
+		return q.reportError("chunk", fmt.Errorf("%w: %w", ErrInvalidQuery, ErrChunkOrderRequired), nil)
 	}
 
 	readLimit := count
