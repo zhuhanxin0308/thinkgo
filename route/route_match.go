@@ -270,7 +270,7 @@ func (r *Route) matchRequestPartsWithOptions(requestParts []string, trailingSlas
 				return false, nil
 			}
 		}
-		return true, nil
+		return r.acceptsLiteralRequestEnd(parts, len(r.pathParts)), nil
 	}
 
 	type state struct{ routeIndex, requestIndex int }
@@ -283,7 +283,7 @@ func (r *Route) matchRequestPartsWithOptions(requestParts []string, trailingSlas
 		}
 		if routeIndex == len(r.pathParts) {
 			completeMatch := r.jsonContract || r.router == nil || r.router.completeMatch
-			if !completeMatch || requestIndex == len(parts) {
+			if (!completeMatch || requestIndex == len(parts)) && r.acceptsLiteralRequestEnd(parts, requestIndex) {
 				return make(map[string]string), true
 			}
 			failed[current] = true
@@ -512,19 +512,16 @@ func (r *Route) matchedDynamicPathShape(params map[string]string) (consumed int,
 }
 
 func (r *Route) requestPartsForMatch(parts []string) ([]string, bool) {
-	if !r.literalExtension {
-		return stripRouteExtension(parts, r.ext, r.extensionRequired)
-	}
-	if !r.extensionRequired {
+	if r.literalExtension {
 		return parts, true
 	}
-	if len(parts) == 0 {
-		return nil, false
-	}
-	last := parts[len(parts)-1]
-	// 保留声明路径中的字面后缀，同时要求前缀请求的末段符合显式约束。
-	literal := r.pathParts[len(r.pathParts)-1].literal
-	return parts, routeLiteralEqual(r.router, literal, last) || routePathExtension(last) == r.ext
+	return stripRouteExtension(parts, r.ext, r.extensionRequired)
+}
+
+// acceptsLiteralRequestEnd 仅对实际消费的字面后缀沿用路径的大小写策略。
+func (r *Route) acceptsLiteralRequestEnd(parts []string, consumed int) bool {
+	return !r.literalExtension || !r.extensionRequired || consumed == len(parts) ||
+		routePathExtension(parts[len(parts)-1]) == r.ext
 }
 
 func routePathExtension(part string) string {

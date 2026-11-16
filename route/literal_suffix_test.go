@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	fwcontext "github.com/zhuhanxin0308/thinkgo/v3/context"
@@ -200,6 +201,7 @@ func TestLiteralExtensionKeepsRequiredRequestSuffix(t *testing.T) {
 	for _, pair := range []struct{ rule, path string }{
 		{"/legacy.html", "/legacy.html"},
 		{"/item/:id?/view.html", "/item/view.html"},
+		{"/mandatory/:id/view.html", "/mandatory/7/view.html"},
 	} {
 		t.Run(pair.rule, func(t *testing.T) {
 			router := NewRouter()
@@ -214,6 +216,16 @@ func TestLiteralExtensionKeepsRequiredRequestSuffix(t *testing.T) {
 				req := fwcontext.MustNewRequest(httptest.NewRequest(http.MethodGet, "http://example.test"+pair.path+suffix, nil))
 				if got, _ := matchForTest(t, router, req); (got == registered) != want {
 					t.Errorf("路径 %q 的匹配应为 %t，实际为 %v", pair.path+suffix, want, got)
+				}
+			}
+			if !strings.Contains(pair.rule, "?") {
+				uppercaseLiteral := strings.TrimSuffix(pair.path, ".html") + ".HTML"
+				uppercaseTail := uppercaseLiteral[strings.LastIndexByte(uppercaseLiteral, '/'):]
+				for requestPath, want := range map[string]bool{uppercaseLiteral: true, pair.path + uppercaseTail: false} {
+					req := fwcontext.MustNewRequest(httptest.NewRequest(http.MethodGet, "http://example.test"+requestPath, nil))
+					if got, _ := matchForTest(t, router, req); (got == registered) != want {
+						t.Errorf("路径 %q 的字面后缀豁免范围错误: %v", requestPath, got)
+					}
 				}
 			}
 		})
