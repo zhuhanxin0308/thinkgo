@@ -167,26 +167,50 @@ func TestMongoModelExplicitIntrinsicAndBusinessPrimaryKeysRemainStable(t *testin
 
 	t.Run("explicit business key", func(t *testing.T) {
 		businessID := bson.NewObjectID()
-		recorder := &mongoCommandRecorder{commands: make(map[string]bson.Raw)}
-		connection := newMongoMockConnectionWithMonitor(t, recorder.monitor(),
-			mongoMockSuccessResponse(bson.E{Key: "n", Value: int32(1)}),
-			mongoMockSuccessResponse(bson.E{Key: "n", Value: int32(1)}, bson.E{Key: "nModified", Value: int32(1)}),
-		)
-		model := NewModel(NewDB(connection), "users").PrimaryKey("id")
-		user := &mongoModelLoopUser{ID: businessID.Hex(), Name: "Ada"}
-		if err := model.Create(user); err != nil {
-			t.Fatalf("explicit MongoDB business-key create failed: %v", err)
-		}
-		user.Name = "Grace"
-		if err := model.Update(user); err != nil {
-			t.Fatalf("MongoDB 业务主键显式更新失败: %v", err)
-		}
-		filter := recorder.filter(t, "update")
-		if filter["id"] != businessID {
-			t.Fatalf("explicit business primary key must remain id: %#v", filter)
-		}
-		if _, exists := filter["_id"]; exists {
-			t.Fatalf("explicit business primary key must not be remapped to _id: %#v", filter)
+		for _, tc := range []struct {
+			name string
+			id   interface{}
+		}{
+			{"业务字符串", "order-17"},
+			{"十六进制业务字符串", businessID.Hex()},
+			{"显式 ObjectID", businessID},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				recorder := &mongoCommandRecorder{commands: make(map[string]bson.Raw)}
+				connection := newMongoMockConnectionWithMonitor(t, recorder.monitor(),
+					mongoMockSuccessResponse(bson.E{Key: "n", Value: int32(1)}),
+					mongoMockSuccessResponse(bson.E{Key: "n", Value: int32(1)}, bson.E{Key: "nModified", Value: int32(1)}),
+				)
+				model := NewModel(NewDB(connection), "users").PrimaryKey("id")
+				user := &struct {
+					ID   interface{} `thinkgo:"id"`
+					Name string      `thinkgo:"name"`
+				}{ID: tc.id, Name: "Ada"}
+				if err := model.Create(user); err != nil {
+					t.Fatalf("显式 MongoDB 业务主键创建失败: %v", err)
+				}
+				recorder.mu.Lock()
+				command := recorder.commands["insert"]
+				recorder.mu.Unlock()
+				var inserted bson.M
+				if err := bson.Unmarshal(command.Lookup("documents").Array().Index(0).Document(), &inserted); err != nil {
+					t.Fatal(err)
+				}
+				if inserted["id"] != tc.id || user.ID != tc.id {
+					t.Fatalf("插入或模型回填改变了业务主键类型: bson=%#v model=%#v", inserted["id"], user.ID)
+				}
+				user.Name = "Grace"
+				if err := model.Update(user); err != nil {
+					t.Fatalf("显式 MongoDB 业务主键更新失败: %v", err)
+				}
+				filter := recorder.filter(t, "update")
+				if filter["id"] != tc.id {
+					t.Fatalf("更新条件业务主键类型失配: %#v", filter)
+				}
+				if _, exists := filter["_id"]; exists {
+					t.Fatalf("显式业务主键不应重映射为 _id: %#v", filter)
+				}
+			})
 		}
 	})
 

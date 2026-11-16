@@ -113,6 +113,33 @@ func TestMongoIntrinsicIDRoundTripsWhenQueryUsesDefaultPrimaryKey(t *testing.T) 
 	}
 }
 
+func TestMongoBusinessPrimaryKeyTypesSurvivePredicatesAndReadback(t *testing.T) {
+	identifier := bson.NewObjectID()
+	connection := &MongoConnection{}
+	filter, err := connection.buildFilterWithPrimaryKey(
+		[]string{"(id = ? OR id IN (?, ?))"},
+		[]interface{}{"order-17", identifier.Hex(), identifier},
+		"id",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	alternatives := filter["$or"].([]bson.M)
+	condition := alternatives[1]["id"].(bson.M)["$in"]
+	if alternatives[0]["id"] != "order-17" || !reflect.DeepEqual(condition, []interface{}{identifier.Hex(), identifier}) {
+		t.Fatalf("业务主键查询未保留字符串和 ObjectID 类型: %#v", filter)
+	}
+
+	for _, normalize := range []func(bson.M, string, string, *time.Location) map[string]interface{}{
+		normalizeMongoDocumentWithAliasInLocation, normalizeMongoDocumentInPlaceWithAliasInLocation,
+	} {
+		row := normalize(bson.M{"_id": identifier, "id": identifier}, "id", "id", time.UTC)
+		if row["id"] != identifier || row["_id"] != identifier.Hex() {
+			t.Fatalf("读取结果改变了业务主键或内置主键契约: %#v", row)
+		}
+	}
+}
+
 func TestMongoNormalizationOnlyStringifiesPrimaryKey(t *testing.T) {
 	id := bson.NewObjectID()
 	ownerID := bson.NewObjectID()

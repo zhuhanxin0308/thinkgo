@@ -17,7 +17,7 @@ func normalizeMongoDocumentWithAliasInLocation(document bson.M, primaryKey strin
 		if primaryKey != modelPrimaryKey && key == primaryKey {
 			continue
 		}
-		if isMongoPrimaryKeyPath(key, primaryKey) {
+		if isMongoIntrinsicKeyInModel(key, primaryKey) {
 			if objectID, ok := value.(bson.ObjectID); ok {
 				result[key] = objectID.Hex()
 				continue
@@ -27,7 +27,7 @@ func normalizeMongoDocumentWithAliasInLocation(document bson.M, primaryKey strin
 	}
 	if primaryKey != "" && modelPrimaryKey != "" && primaryKey != modelPrimaryKey {
 		if value, exists := document[primaryKey]; exists {
-			if objectID, ok := value.(bson.ObjectID); ok {
+			if objectID, ok := value.(bson.ObjectID); ok && primaryKey == "_id" {
 				result[modelPrimaryKey] = objectID.Hex()
 			} else {
 				result[modelPrimaryKey] = normalizeMongoValueInLocation(value, location)
@@ -48,7 +48,7 @@ func normalizeMongoDocumentInPlaceWithAliasInLocation(document bson.M, primaryKe
 		if primaryKey != modelPrimaryKey && key == primaryKey {
 			continue
 		}
-		if isMongoPrimaryKeyPath(key, primaryKey) {
+		if isMongoIntrinsicKeyInModel(key, primaryKey) {
 			if objectID, ok := value.(bson.ObjectID); ok {
 				document[key] = objectID.Hex()
 				continue
@@ -59,7 +59,7 @@ func normalizeMongoDocumentInPlaceWithAliasInLocation(document bson.M, primaryKe
 	if primaryKey != "" && modelPrimaryKey != "" && primaryKey != modelPrimaryKey {
 		delete(document, primaryKey)
 		if primaryExists {
-			if objectID, ok := primaryValue.(bson.ObjectID); ok {
+			if objectID, ok := primaryValue.(bson.ObjectID); ok && primaryKey == "_id" {
 				document[modelPrimaryKey] = objectID.Hex()
 			} else {
 				document[modelPrimaryKey] = normalizeMongoValueInLocation(primaryValue, location)

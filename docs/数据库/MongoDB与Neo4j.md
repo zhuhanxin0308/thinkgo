@@ -73,7 +73,7 @@ rows, err := database.Name("users").
 
 字段投影、排序和集合名都执行标识符校验，负数 limit/offset 会返回 `ErrInvalidPagination`。显式字段投影未选择 `_id` 时会自动加入 `_id: 0`，返回形状不会额外泄露文档标识符。
 
-MongoDB 只在查询声明的主键路径上提供 ObjectID 对称转换：默认 `_id`（或 `PrimaryKey(...)` 指定的字段）返回十六进制字符串后，该字符串用于等值、`IN`、嵌套 `AND`/`OR`、更新或删除条件时会恢复为 `bson.ObjectID`；非法十六进制主键返回 `ErrInvalidQuery`。普通字符串字段不会因“看起来像 ObjectID”而转换，非主键及嵌套文档中的 ObjectID 也保留 BSON 类型，避免静默改变业务字段。
+MongoDB 的内置 `_id` 在模型主键路径上支持 ObjectID 对称转换。查询可将其返回为十六进制字符串，等值、`IN`、嵌套 `AND`/`OR`、更新或删除条件会把该字符串恢复为 `bson.ObjectID`。内置主键收到非法十六进制值时返回 `ErrInvalidQuery`。使用 `PrimaryKey(...)` 声明的业务字段保留 BSON 类型，24 位十六进制字符串也按 BSON string 存储和查询。已有 BSON ObjectID 类型的业务主键使用 `bson.ObjectID` 查询。
 
 MongoDB Model 为了保持 ThinkPHP 风格的 `ID` 使用体验，会把未显式配置的逻辑主键 `id` 对称映射到存储键 `_id`：Create 将真实 `InsertedID` 回填到结构体 `ID`，后续 Save、`Where("id", ...)`、Find、Count 和 Delete 都按 `_id` 执行，查询结果只暴露逻辑字段 `id`。如果集合确实使用业务字段 `id` 作为主键，必须显式调用 `PrimaryKey("id")`，并在 Create/Save 前由应用提供非零业务主键；MongoDB 不会生成该字段，零值会在发出 Insert 前返回 `ErrInvalidModel`。如果结构体标签直接使用 `thinkgo:"_id"`，则显式调用 `PrimaryKey("_id")`。
 
