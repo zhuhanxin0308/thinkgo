@@ -230,24 +230,3 @@ func (app *App) resolveStoragePath(configuredPath string) (string, error) {
 	}
 	return normalizeAppStoragePath(app.ApplicationRuntimePath(), cleanedSlash)
 }
-
-func (app *App) normalizeViewConfig(viewConfig map[string]interface{}) {
-	if app == nil {
-		return
-	}
-	viewPath, ok := viewConfig["view_path"].(string)
-	if !ok {
-		return
-	}
-	viewPath = strings.TrimSpace(viewPath)
-	viewConfig["view_path"] = viewPath
-	if viewPath == "" || filepath.IsAbs(viewPath) {
-		return
-	}
-	cleaned := filepath.ToSlash(filepath.Clean(filepath.FromSlash(viewPath)))
-	if cleaned == "view" || cleaned == "app/view" || cleaned == "app" {
-		viewConfig["view_path"] = app.ApplicationViewPath()
-		return
-	}
-	viewConfig["view_path"] = filepath.Join(app.projectBasePath(), cleaned)
-}

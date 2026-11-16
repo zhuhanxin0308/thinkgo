@@ -2,7 +2,6 @@ package framework
 
 import (
 	"path/filepath"
-	"reflect"
 	"testing"
 
 	"github.com/zhuhanxin0308/thinkgo/v3/cache"
@@ -130,42 +129,6 @@ func TestAppThinkPHPPathsAndOverrides(t *testing.T) {
 	}
 	if nilApp.GetRootPath() != "" || nilApp.GetAppPath() != "" || nilApp.ApplicationRuntimePath() != "" {
 		t.Fatal("nil App 路径读取必须返回空字符串")
-	}
-}
-
-// TestNormalizeViewConfigMatchesSingleApplicationLayout 验证兼容的 view、
-// app/view 与自定义相对目录都解析到项目根单应用布局。
-func TestNormalizeViewConfigMatchesSingleApplicationLayout(t *testing.T) {
-	basePath := t.TempDir()
-	app := NewAppUninitialized(basePath)
-	t.Cleanup(func() { _ = app.Close() })
-	tests := []struct {
-		name     string
-		value    interface{}
-		expected interface{}
-	}{
-		{name: "默认 view", value: "view", expected: filepath.Join(basePath, "view")},
-		{name: "旧 app view", value: "app/view", expected: filepath.Join(basePath, "view")},
-		{name: "旧 app", value: "app", expected: filepath.Join(basePath, "view")},
-		{name: "自定义相对目录", value: "templates", expected: filepath.Join(basePath, "templates")},
-		{name: "空目录", value: "", expected: ""},
-		{name: "绝对目录", value: filepath.Join(basePath, "absolute"), expected: filepath.Join(basePath, "absolute")},
-		{name: "非字符串", value: 7, expected: 7},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			configuration := map[string]interface{}{"view_path": test.value}
-			app.normalizeViewConfig(configuration)
-			if !reflect.DeepEqual(configuration["view_path"], test.expected) {
-				t.Fatalf("view_path 规范化错误: actual=%#v expected=%#v", configuration["view_path"], test.expected)
-			}
-		})
-	}
-	var nilApp *App
-	configuration := map[string]interface{}{"view_path": "view"}
-	nilApp.normalizeViewConfig(configuration)
-	if configuration["view_path"] != "view" {
-		t.Fatal("nil App 不得修改 view 配置")
 	}
 }
 

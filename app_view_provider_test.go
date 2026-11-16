@@ -6,6 +6,36 @@ import (
 	"testing"
 )
 
+func TestResolveViewDriverConfigUsesProjectRelativeAndNativeAbsolutePaths(t *testing.T) {
+	base := t.TempDir()
+	app := NewAppUninitialized(base)
+	t.Cleanup(func() { _ = app.Close() })
+	absolute := filepath.Join(t.TempDir(), "external")
+	for _, test := range []struct {
+		name string
+		path any
+		want string
+	}{
+		{"空路径使用默认目录", " ", filepath.Join(base, "view")},
+		{"相对路径按项目根解析", " ./assets/../templates ", filepath.Join(base, "templates")},
+		{"显式 app/view 按字面解析", "app/view", filepath.Join(base, "app", "view")},
+		{"显式 app 按字面解析", "app", filepath.Join(base, "app")},
+		{"系统原生绝对路径", absolute, absolute},
+		{"非法类型", 7, ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			configuration, err := app.resolveViewDriverConfig(map[string]any{"view_path": test.path})
+			if test.want == "" {
+				if err == nil {
+					t.Fatal("驱动应拒绝非字符串视图目录")
+				}
+			} else if err != nil || configuration["view_path"] != test.want {
+				t.Fatalf("实际视图驱动路径错误: got=%#v want=%q err=%v", configuration["view_path"], test.want, err)
+			}
+		})
+	}
+}
+
 // TestResolveViewDriverConfigMatchesThinkPHPDefault 验证项目可以直接使用
 // ThinkPHP 8 默认 view 配置，并按照相同的目录查找顺序选择模板根目录。
 func TestResolveViewDriverConfigMatchesThinkPHPDefault(t *testing.T) {
