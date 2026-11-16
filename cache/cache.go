@@ -19,18 +19,19 @@ import (
 )
 
 const (
-	defaultStoreName     = "default"
-	tagMetaPrefix        = cachekey.TagMetadataPrefix
-	tagReversePrefix     = cachekey.TagReverseMetadataPrefix
-	cacheFencePrefix     = "__thinkgo_cache_fence__:"
-	lockKeyPrefix        = "__thinkgo_lock__:"
-	defaultLockTTL       = 10 * time.Second
-	maxLockTTL           = 24 * time.Hour
-	tagMutationLockTTL   = 30 * time.Second
-	tagMutationWait      = 200 * time.Millisecond
-	rememberLockWait     = 5 * time.Second
-	lockRetryInterval    = 5 * time.Millisecond
-	maxCacheTTL          = 100 * 365 * 24 * time.Hour
+	defaultStoreName   = "default"
+	tagMetaPrefix      = cachekey.TagMetadataPrefix
+	tagReversePrefix   = cachekey.TagReverseMetadataPrefix
+	cacheFencePrefix   = "__thinkgo_cache_fence__:"
+	lockKeyPrefix      = "__thinkgo_lock__:"
+	defaultLockTTL     = 10 * time.Second
+	maxLockTTL         = 24 * time.Hour
+	tagMutationLockTTL = 30 * time.Second
+	tagMutationWait    = 200 * time.Millisecond
+	rememberLockWait   = 5 * time.Second
+	lockRetryInterval  = 5 * time.Millisecond
+	// MaxCacheTTL 是缓存值和默认过期配置支持的最长时长。
+	MaxCacheTTL          = 100 * 365 * 24 * time.Hour
 	maxCacheKeyBytes     = 1024
 	maxCacheTagBytes     = 128
 	maxTagMembers        = 10000
@@ -255,7 +256,7 @@ func (c *Cache) ConfigureStore(name string, options StoreOptions) error {
 
 // validateStoreOptions 为配置和命名空间构造复用同一组值校验。
 func validateStoreOptions(options StoreOptions) (StoreOptions, error) {
-	if options.Expire < 0 || options.Expire > maxCacheTTL {
+	if options.Expire < 0 || options.Expire > MaxCacheTTL {
 		return StoreOptions{}, fmt.Errorf("%w: %s", ErrInvalidCacheTTL, options.Expire)
 	}
 	if len(options.Prefix) > maxCacheKeyBytes || !utf8.ValidString(options.Prefix) || hasControlCharacter(options.Prefix) {
@@ -932,7 +933,7 @@ func validatePublicCacheKey(key string) error {
 }
 
 func validateCacheTTL(ttl time.Duration) error {
-	if ttl < 0 || ttl > maxCacheTTL {
+	if ttl < 0 || ttl > MaxCacheTTL {
 		return fmt.Errorf("%w: %s", ErrInvalidCacheTTL, ttl)
 	}
 	return nil

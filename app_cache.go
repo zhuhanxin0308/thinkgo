@@ -211,6 +211,9 @@ func parseAppCacheStore(resolvePath func(string) (string, error), name string, s
 		if err != nil {
 			return appCacheStoreSpec{}, fmt.Errorf("缓存 store %q 的 expire 必须是非负整数秒: %w", name, err)
 		}
+		if int64(expire) > int64(cache.MaxCacheTTL/time.Second) {
+			return appCacheStoreSpec{}, fmt.Errorf("缓存 store %q 的 expire 超过最大有效期: %w", name, cache.ErrInvalidCacheTTL)
+		}
 		spec.expire = time.Duration(expire) * time.Second
 	}
 	if rawTagPrefix, exists := storeConfig["tag_prefix"]; exists {
