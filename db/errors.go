@@ -57,6 +57,8 @@ var (
 	ErrPinnedConnectionInvalidated = errors.New("固定数据库连接已失效")
 	// ErrInvalidModel 表示模型依赖、配置或输入值非法。
 	ErrInvalidModel = errors.New("数据库模型非法")
+	// ErrModelFieldNotFillable 表示 map 写入包含未列入模型白名单的字段。
+	ErrModelFieldNotFillable = errors.New("模型写入字段不在白名单")
 	// ErrInvalidRelation 表示关联定义或关联数据不完整。
 	ErrInvalidRelation = errors.New("数据库关联非法")
 	// ErrInvalidDatabaseRow 表示结果列重复或扫描值不满足行映射约束。

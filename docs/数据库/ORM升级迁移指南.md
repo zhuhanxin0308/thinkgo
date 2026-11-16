@@ -44,6 +44,10 @@ err = userModel.Save(row) // UPDATE WHERE id = row.ID
 
 `Create` 始终是新增语义，`Update` 始终要求非零主键。主键字段不兼容会在访问驱动前返回 `ErrInvalidModel`；极少数运行期 ID 类型漂移发生在写入完成后时返回 `*db.PartialWriteError`，必须使用其 `Result` 对账，不能直接重试。
 
+接收客户端字段的 Model 写入应在初始化时使用 `userModel.SetFillable("name", "email")` 声明可写列，并检查配置错误。名单按列名精确匹配，`Insert`、`InsertGetId`、`UpdateMap`、链式 `Update` 和 `InsertAll` 会在处理调用方数据前拒绝额外字段，返回 `ErrModelFieldNotFillable`。批量写入中任意一行含额外字段时，整批拒绝。空名单禁止提交任何列。未配置名单的 Model map 写入适用于可信数据，客户端入参应通过类型化绑定或列白名单限制。
+
+白名单约束调用方 map 中的字段。框架时间戳、可信模型回调、类型化结构体写入和底层 Query 按各自的入口处理。
+
 ### UpdateResult 与 DeleteResult
 
 简化 API 继续返回数量；需要跨驱动精确语义时使用 typed result：
