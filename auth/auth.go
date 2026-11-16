@@ -13,10 +13,9 @@ import (
 	"github.com/zhuhanxin0308/thinkgo/v3/middleware"
 )
 
-const (
-	maximumBearerTokenBytes = 8192
-	requestIdentityKey      = "__thinkgo.auth.identity"
-)
+const maximumBearerTokenBytes = 8192
+
+var requestIdentityKey = new(fwcontext.RequestValueKey[Identity])
 
 var (
 	ErrUnauthenticated   = errors.New("unauthenticated")
@@ -190,7 +189,7 @@ func Authenticate(authenticator Authenticator) middleware.Handler {
 			// 基础设施错误交给统一异常链记录与渲染，不能伪装成凭据无效。
 			panic(err)
 		}
-		request.Set(requestIdentityKey, cloneIdentity(identity))
+		requestIdentityKey.Store(request, cloneIdentity(identity))
 		return next(request)
 	}
 }
@@ -219,13 +218,12 @@ func Require(authorizer Authorizer, permission string) middleware.Handler {
 	}
 }
 
-// IdentityFromRequest 返回防御性复制的当前认证主体。
+// IdentityFromRequest 返回认证中间件记录的当前主体的防御性副本。
 func IdentityFromRequest(request *fwcontext.Request) (Identity, bool) {
 	if request == nil {
 		return Identity{}, false
 	}
-	value := request.GetData(requestIdentityKey)
-	identity, ok := value.(Identity)
+	identity, ok := requestIdentityKey.Load(request)
 	return cloneIdentity(identity), ok && identity.Subject != ""
 }
 
