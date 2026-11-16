@@ -26,7 +26,7 @@ func TestWriteGeneratedSourceConfinesAndExclusivelyCreates(t *testing.T) {
 		t.Fatalf("创建项目根目录失败: %v", err)
 	}
 
-	if err := writeGeneratedSource(basePath, "..", "escaped.go", []byte("package escaped\n")); err == nil {
+	if _, err := writeGeneratedSource(basePath, "..", "escaped.go", []byte("package escaped\n")); err == nil {
 		t.Fatal("生成目录逃逸应用根目录应失败")
 	}
 	if _, err := os.Stat(filepath.Join(parent, "escaped.go")); !errors.Is(err, fs.ErrNotExist) {
@@ -42,7 +42,7 @@ func TestWriteGeneratedSourceConfinesAndExclusivelyCreates(t *testing.T) {
 		go func(call int) {
 			defer waitGroup.Done()
 			<-start
-			errorsByCall[call] = writeGeneratedSource(basePath, filepath.Join("app", "model"), "safe.go", content)
+			_, errorsByCall[call] = writeGeneratedSource(basePath, filepath.Join("app", "model"), "safe.go", content)
 		}(index)
 	}
 	close(start)
@@ -68,7 +68,7 @@ func TestWriteGeneratedSourceConfinesAndExclusivelyCreates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("读取生成源码失败: %v", err)
 	}
-	if err := writeGeneratedSource(basePath, filepath.Join("app", "model"), "safe.go", []byte("package overwritten\n")); !errors.Is(err, fs.ErrExist) {
+	if _, err := writeGeneratedSource(basePath, filepath.Join("app", "model"), "safe.go", []byte("package overwritten\n")); !errors.Is(err, fs.ErrExist) {
 		t.Fatalf("覆盖已有源码应返回 fs.ErrExist，实际为 %v", err)
 	}
 	after, err := os.ReadFile(generatedPath)
@@ -95,7 +95,7 @@ func TestWriteGeneratedSourceRejectsSymlinkEscapeAndInvalidGo(t *testing.T) {
 	if err := os.Symlink(outside, symlinkPath); err != nil {
 		t.Skipf("当前环境无法创建目录符号链接: %v", err)
 	}
-	if err := writeGeneratedSource(basePath, filepath.Join("app", "controller"), "escape.go", []byte("package controller\n")); err == nil {
+	if _, err := writeGeneratedSource(basePath, filepath.Join("app", "controller"), "escape.go", []byte("package controller\n")); err == nil {
 		t.Fatal("指向根目录外的符号链接应被拒绝")
 	}
 	if _, err := os.Stat(filepath.Join(outside, "escape.go")); !errors.Is(err, fs.ErrNotExist) {
@@ -103,7 +103,7 @@ func TestWriteGeneratedSourceRejectsSymlinkEscapeAndInvalidGo(t *testing.T) {
 	}
 
 	invalidDir := filepath.Join("app", "invalid")
-	if err := writeGeneratedSource(basePath, invalidDir, "broken.go", []byte("package {")); err == nil {
+	if _, err := writeGeneratedSource(basePath, invalidDir, "broken.go", []byte("package {")); err == nil {
 		t.Fatal("无效 Go 源码应返回错误")
 	}
 	if _, err := os.Stat(filepath.Join(basePath, invalidDir, "broken.go")); !errors.Is(err, fs.ErrNotExist) {
