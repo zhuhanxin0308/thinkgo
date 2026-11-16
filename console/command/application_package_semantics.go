@@ -129,47 +129,18 @@ func (context *applicationSemanticContext) parseApplicationFiles(directory, pack
 		return nil, false, fmt.Errorf("打开项目根目录失败: %w", err)
 	}
 	defer root.Close()
-	openedDirectory, err := root.Open(directory)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, false, nil
-		}
-		return nil, false, fmt.Errorf("打开应用目录 %q 失败: %w", directory, err)
-	}
-	entries, readErr := openedDirectory.ReadDir(-1)
-	closeErr := openedDirectory.Close()
-	if readErr != nil || closeErr != nil {
-		return nil, false, errors.Join(fmt.Errorf("读取应用目录 %q 失败: %w", directory, readErr), closeErr)
-	}
-	candidates := entries[:0]
-	for _, entry := range entries {
-		name := entry.Name()
-		if entry.IsDir() || filepath.Ext(name) != ".go" || strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_") || strings.HasSuffix(name, "_test.go") || name == applicationDiscoveryFilename {
-			continue
-		}
-		if entry.Type()&os.ModeSymlink != 0 {
-			return nil, false, fmt.Errorf("应用源码 %q 不能是符号链接", name)
-		}
-		candidates = append(candidates, entry)
-	}
-	if len(candidates) == 0 {
-		return nil, false, nil
-	}
-	files := make([]*ast.File, 0, len(candidates))
-	selected, err := context.selectedApplicationFiles(directory, packageName)
+	names, err := context.applicationSourceNames(root, directory, packageName)
 	if err != nil {
 		return nil, false, err
 	}
-	for _, entry := range candidates {
-		name := entry.Name()
-		if !selected[name] {
-			continue
-		}
-		source, readSourceErr := root.ReadFile(filepath.Join(directory, name))
+	files := make([]*ast.File, 0, len(names))
+	for _, name := range names {
+		path := filepath.Join(directory, name)
+		source, readSourceErr := root.ReadFile(path)
 		if readSourceErr != nil {
 			return nil, false, fmt.Errorf("读取应用源码 %q 失败: %w", name, readSourceErr)
 		}
-		file, parseErr := parser.ParseFile(context.fileSet, filepath.Join(directory, name), source, parser.SkipObjectResolution)
+		file, parseErr := parser.ParseFile(context.fileSet, path, source, parser.SkipObjectResolution)
 		if parseErr != nil {
 			return nil, false, fmt.Errorf("解析应用源码 %q 失败: %w", name, parseErr)
 		}
@@ -182,6 +153,47 @@ func (context *applicationSemanticContext) parseApplicationFiles(directory, pack
 		files = append(files, file)
 	}
 	return files, len(files) > 0, nil
+}
+
+// applicationSourceNames 为应用存在性和组件解析提供相同的目标平台源码集合。
+func (context *applicationSemanticContext) applicationSourceNames(root *os.Root, directory, packageName string) ([]string, error) {
+	openedDirectory, err := root.Open(directory)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("打开应用目录 %q 失败: %w", directory, err)
+	}
+	entries, readErr := openedDirectory.ReadDir(-1)
+	closeErr := openedDirectory.Close()
+	if readErr != nil || closeErr != nil {
+		return nil, errors.Join(fmt.Errorf("读取应用目录 %q 失败: %w", directory, readErr), closeErr)
+	}
+	var names []string
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || filepath.Ext(name) != ".go" || strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_") || strings.HasSuffix(name, "_test.go") || name == applicationDiscoveryFilename {
+			continue
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return nil, fmt.Errorf("应用源码 %q 不能是符号链接", name)
+		}
+		names = append(names, name)
+	}
+	if len(names) == 0 {
+		return nil, nil
+	}
+	selected, err := context.selectedApplicationFiles(directory, packageName)
+	if err != nil {
+		return nil, err
+	}
+	active := names[:0]
+	for _, name := range names {
+		if selected[name] {
+			active = append(active, name)
+		}
+	}
+	return active, nil
 }
 
 func (context *applicationSemanticContext) packagePath(directory string) string {

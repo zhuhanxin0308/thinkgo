@@ -5,10 +5,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/zhuhanxin0308/thinkgo/v3"
 	"github.com/zhuhanxin0308/thinkgo/v3/console"
+	"golang.org/x/mod/modfile"
+	"golang.org/x/mod/module"
 )
 
 const applicationDiscoveryFilename = "autoload_generated.go"
@@ -144,11 +145,17 @@ func readApplicationModulePath(basePath string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("读取 go.mod 失败: %w", err)
 	}
-	for _, line := range strings.Split(string(content), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) == 2 && fields[0] == "module" && fields[1] != "" && !strings.ContainsAny(fields[1], "\"'`\x00\r\n") {
-			return fields[1], nil
-		}
+	parsed, err := modfile.Parse("go.mod", content, nil)
+	if err != nil {
+		return "", fmt.Errorf("解析 go.mod 失败: %w", err)
 	}
-	return "", fmt.Errorf("go.mod 缺少合法 module 声明")
+	if parsed.Module == nil {
+		return "", fmt.Errorf("go.mod 缺少 module 声明")
+	}
+	path := parsed.Module.Mod.Path
+	// 本地项目可使用单段模块名，仍须满足 Go 导入路径语法。
+	if err := module.CheckImportPath(path); err != nil {
+		return "", fmt.Errorf("go.mod 的 module 路径无效: %w", err)
+	}
+	return path, nil
 }

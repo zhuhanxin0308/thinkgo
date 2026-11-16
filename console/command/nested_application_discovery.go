@@ -130,24 +130,15 @@ func writeNestedComponentRegistrations(output *strings.Builder, components []dis
 	}
 }
 
-func nestedApplicationDirectoryHasSource(root *os.Root, base string) (bool, error) {
+func nestedApplicationDirectoryHasSource(root *os.Root, semantic *applicationSemanticContext, base string) (bool, error) {
 	directories, err := nestedComponentDirectories(root, base)
 	if err != nil {
 		return false, err
 	}
 	for _, directory := range directories {
-		handle, err := root.Open(directory)
-		if err != nil {
-			return false, err
-		}
-		entries, readErr := handle.ReadDir(-1)
-		if err := errors.Join(readErr, handle.Close()); err != nil {
-			return false, err
-		}
-		for _, entry := range entries {
-			if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".go") && !strings.HasSuffix(entry.Name(), "_test.go") {
-				return true, nil
-			}
+		names, err := semantic.applicationSourceNames(root, directory, "")
+		if err != nil || len(names) > 0 {
+			return len(names) > 0, err
 		}
 	}
 	return false, nil
