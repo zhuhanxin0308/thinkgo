@@ -191,10 +191,16 @@ func (r *Response) Header(arguments ...interface{}) *Response {
 func (r *Response) setHeaderCollection(collection interface{}) *Response {
 	switch headers := collection.(type) {
 	case map[string]string:
+		if rejectDuplicateResponseHeaders(r, headers) {
+			return r
+		}
 		for name, value := range headers {
 			r.setHeader(name, value, false)
 		}
 	case map[string]interface{}:
+		if rejectDuplicateResponseHeaders(r, headers) {
+			return r
+		}
 		for name, rawValue := range headers {
 			value, ok := rawValue.(string)
 			if !ok {
@@ -204,6 +210,9 @@ func (r *Response) setHeaderCollection(collection interface{}) *Response {
 			r.setHeader(name, value, false)
 		}
 	case http.Header:
+		if rejectDuplicateResponseHeaders(r, headers) {
+			return r
+		}
 		for name, values := range headers {
 			for index, value := range values {
 				r.setHeader(name, value, index > 0)
@@ -213,6 +222,23 @@ func (r *Response) setHeaderCollection(collection interface{}) *Response {
 		r.addError(fmt.Errorf("%w: Header 不支持类型 %T", ErrInvalidResponseHeader, collection))
 	}
 	return r
+}
+
+// rejectDuplicateResponseHeaders 在写入前检查批量头名，保留单个规范名称下的有序多值。
+func rejectDuplicateResponseHeaders[T any](response *Response, headers map[string]T) bool {
+	if len(headers) < 2 {
+		return false
+	}
+	seen := make(map[string]struct{}, len(headers))
+	for name := range headers {
+		canonical := http.CanonicalHeaderKey(strings.TrimSpace(name))
+		if _, duplicate := seen[canonical]; duplicate {
+			response.addError(fmt.Errorf("%w: 批量响应头包含重复名称 %q", ErrInvalidResponseHeader, canonical))
+			return true
+		}
+		seen[canonical] = struct{}{}
+	}
+	return false
 }
 
 // AddHeader 追加可重复响应头值，适用于 Set-Cookie 等多值字段。
