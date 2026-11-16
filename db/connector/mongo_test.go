@@ -135,6 +135,23 @@ func TestBuildMongoURIEscapesCredentials(t *testing.T) {
 	}
 }
 
+func TestMongoTLSClientOptionsPreserveExplicitLocalOverride(t *testing.T) {
+	for _, params := range []map[string]string{nil, {"tlsInsecure": "true"}, {"sslInsecure": "false"}} {
+		uri, err := buildMongoURI(db.Config{Hostname: "mongo.internal", Hostport: "27017", Database: "app", Params: params})
+		if err != nil {
+			t.Fatal(err)
+		}
+		clientOptions := options.Client().ApplyURI(uri)
+		if err := clientOptions.Validate(); err != nil {
+			t.Fatal(err)
+		}
+		wantInsecure := params["tlsInsecure"] == "true"
+		if clientOptions.TLSConfig == nil || clientOptions.TLSConfig.InsecureSkipVerify != wantInsecure {
+			t.Errorf("驱动 TLS 验证配置与本地参数不一致: insecure=%t", wantInsecure)
+		}
+	}
+}
+
 // TestBuildMongoURIHonorsExplicitTLSAndRejectsAmbiguity 验证显式本地降级可用，
 // 同时拒绝大小写不同的重复选项和无用户名密码，避免驱动解析产生歧义。
 func TestBuildMongoURIHonorsExplicitTLSAndRejectsAmbiguity(t *testing.T) {
