@@ -3,6 +3,7 @@ package log
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -450,19 +451,49 @@ func TestLogEntryFormatRedactsSensitiveContext(t *testing.T) {
 
 // TestLogEntryFormatEscapesControlCharacters 验证消息和元数据不能伪造额外日志行。
 func TestLogEntryFormatEscapesControlCharacters(t *testing.T) {
+	const controls = "\x1b\x07\x7f\v\f\u0085\u2028\u2029"
+	const traceText = "普通中文" + controls + "结束"
 	entry := &LogEntry{
 		Time:    time.Date(2026, 4, 7, 9, 30, 0, 0, time.Local),
 		Level:   "info\n[error]",
-		Message: "正常消息\r\n[ERROR] 伪造消息\t结束",
+		Message: "正常消息\r\n[ERROR] 伪造消息\t结束" + controls,
 		Caller:  "handler.go:10\n[CRITICAL]",
+		Context: map[string]interface{}{"trace": traceText},
 	}
 	formatted := entry.FormatEntry()
-	if strings.ContainsAny(formatted, "\r\n\t") {
+	if strings.ContainsAny(formatted, "\r\n\t"+controls) {
 		t.Fatalf("单条日志不应包含原始控制字符，实际为 %q", formatted)
 	}
 	for _, escaped := range []string{`\r`, `\n`, `\t`} {
 		if !strings.Contains(formatted, escaped) {
 			t.Fatalf("格式化日志应保留控制字符的转义表示 %q，实际为 %q", escaped, formatted)
+		}
+	}
+	_, encoded, found := strings.Cut(formatted, " | ")
+	var fields map[string]string
+	if !found || json.Unmarshal([]byte(encoded), &fields) != nil || fields["trace"] != traceText {
+		t.Fatalf("日志行转义应保留合法的上下文 JSON 数据: %q", encoded)
+	}
+}
+
+func TestLogRedactsMessageCredentialsBeforeDriversAndTextOutput(t *testing.T) {
+	const credentials = "password=long-test-password token=;synthetic-token-tail safe=yes"
+	for _, message := range []string{credentials, "login failed " + credentials} {
+		driver := newMockDriver()
+		logger := NewLog(driver)
+		logger.Errorf("%s", message)
+		if err := logger.Close(); err != nil {
+			t.Fatal(err)
+		}
+		entries := driver.allEntries()
+		if len(entries) != 1 {
+			t.Fatalf("驱动收到 %d 条日志，期望 1 条", len(entries))
+		}
+		for _, output := range []string{entries[0].Message, entries[0].FormatEntry(), (&LogEntry{Message: message}).FormatEntry()} {
+			if strings.Contains(output, "long-test-password") || strings.Contains(output, "synthetic-token-tail") ||
+				!strings.Contains(output, "password=long[REDACTED] token=;syn[REDACTED] safe=yes") {
+				t.Fatalf("日志消息泄露凭据或改变已知的安全字段: %q", output)
+			}
 		}
 	}
 }

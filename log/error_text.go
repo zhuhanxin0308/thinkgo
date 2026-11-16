@@ -10,6 +10,7 @@ import (
 const visibleErrorCredentialRunes = 4
 
 var sensitiveErrorFieldPattern = regexp.MustCompile(`(?i)(proxy-authorization|authorization|set-cookie|cookie|password|passwd|secret|session|token|api[-_]?key|refresh[-_]?token|private[-_]?key|signing[-_]?key|encryption[-_]?key|access[-_]?key|credential|client[-_]?secret)(["']?[\t ]*[:=][\t ]*)`)
+var maskedHTTPLineBoundary = regexp.MustCompile(`(?i)\[REDACTED\](\\r\\n|\\n|\\r)(proxy-authorization|authorization|set-cookie|cookie)["']?[\t ]*[:=]`)
 
 // redactErrorCredentials 按字段类型识别凭据边界，避免把认证方案或首项 Cookie 当成完整凭据。
 func redactErrorCredentials(message string) string {
@@ -18,6 +19,9 @@ func redactErrorCredentials(message string) string {
 
 // redactErrorCredentialsWithMask 复用同一边界解析，按日志或公开错误输出的策略遮蔽凭据。
 func redactErrorCredentialsWithMask(message string, mask func(string) string) string {
+	if !strings.ContainsAny(message, ":=") {
+		return message
+	}
 	matches := sensitiveErrorFieldPattern.FindAllStringSubmatchIndex(message, -1)
 	if len(matches) == 0 {
 		return message
@@ -65,16 +69,19 @@ func errorCredentialLength(value, field string) (int, bool) {
 		return len(value), true
 	}
 	if field == "authorization" || field == "proxy-authorization" || field == "cookie" || field == "set-cookie" {
-		for index := 0; index < len(value); index++ {
-			if value[index] == '\r' || value[index] == '\n' {
-				return index, false
-			}
+		end := len(value)
+		if index := strings.IndexAny(value, "\r\n"); index >= 0 {
+			end = index
 		}
-		return len(value), false
+		// 已脱敏的日志可能含有转义换行。只有遮蔽标记之后的已知敏感头可形成边界，
+		// 后续头的值仍会单独脱敏。
+		if boundary := maskedHTTPLineBoundary.FindStringIndex(value[:end]); boundary != nil {
+			end = boundary[0] + len(logRedactedPlaceholder)
+		}
+		return end, false
 	}
-	if end := strings.IndexFunc(value, func(character rune) bool {
-		return unicode.IsSpace(character) || strings.ContainsRune(",;&", character)
-	}); end >= 0 {
+	// 逗号、分号和 & 可以出现在未经引用的凭据中，不能用作字段边界。
+	if end := strings.IndexFunc(value, unicode.IsSpace); end >= 0 {
 		return end, false
 	}
 	return len(value), false

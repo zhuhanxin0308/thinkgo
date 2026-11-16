@@ -381,7 +381,7 @@ func (h *Handle) reportBusinessException(err *BusinessException) {
 
 // renderHttpException 渲染 HTTP 异常，并在非本地调试场景隐藏 5xx 详情。
 func (h *Handle) renderHttpException(w http.ResponseWriter, r *http.Request, err *HttpException, exposeDetails bool) error {
-	message := err.Message
+	message := sanitizeExceptionText(err.Message)
 	data := cloneExceptionData(err.Data)
 	if err.StatusCode >= http.StatusInternalServerError && !exposeDetails {
 		message = internalServerErrorText
@@ -395,21 +395,22 @@ func (h *Handle) renderHttpException(w http.ResponseWriter, r *http.Request, err
 
 // renderValidateException 渲染参数校验异常。
 func (h *Handle) renderValidateException(w http.ResponseWriter, r *http.Request, err *ValidateException) error {
+	message := sanitizeExceptionText(err.Message)
 	data := map[string]interface{}{
 		"field":   err.Field,
-		"message": err.Message,
+		"message": message,
 	}
 
 	if h.isJSONRequest(r) {
-		return h.renderJSON(w, http.StatusUnprocessableEntity, err.Message, data)
+		return h.renderJSON(w, http.StatusUnprocessableEntity, message, data)
 	}
-	return writeTextResponse(w, http.StatusUnprocessableEntity, err.Message)
+	return writeTextResponse(w, http.StatusUnprocessableEntity, message)
 }
 
 // renderBusinessException 渲染业务异常，服务端失败只返回统一错误信封。
 func (h *Handle) renderBusinessException(w http.ResponseWriter, r *http.Request, err *BusinessException, exposeDetails bool) error {
 	status := err.StatusCode()
-	message := err.Message
+	message := sanitizeExceptionText(err.Message)
 	code := err.Code
 	data := cloneExceptionData(err.Data)
 	if status >= http.StatusInternalServerError && !exposeDetails {

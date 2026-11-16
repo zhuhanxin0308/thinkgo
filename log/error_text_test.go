@@ -14,6 +14,8 @@ func TestErrorTextCredentialPrefixes(t *testing.T) {
 		name, input, want string
 	}{
 		{"普通密码", "password=abcdefgh host=db", "password=abcd[REDACTED] host=db"},
+		{"分隔符开头的密码", "password=;hunter2 status=failed", "password=;hun[REDACTED] status=failed"},
+		{"分隔符在密码内部", "password=abcd;tail,more&end safe=yes", "password=abcd[REDACTED] safe=yes"},
 		{"兼容复合键", "user_password=abcdefgh someToken=ijklmnop", "user_password=abcd[REDACTED] someToken=ijkl[REDACTED]"},
 		{"短密码", "password=abc", "password=[REDACTED]"},
 		{"恰好四字", "token=abcd", "token=[REDACTED]"},
@@ -61,6 +63,17 @@ func TestErrorTextCredentialPrefixes(t *testing.T) {
 				t.Fatalf("再次脱敏不应破坏已遮蔽文本: got=%q want=%q", repeated, got)
 			}
 		})
+	}
+}
+
+func TestPublicErrorMasksCredentialDelimitersAndTheirSuffixes(t *testing.T) {
+	for _, delimiter := range []string{",", ";", "&"} {
+		for _, input := range []string{"password=" + delimiter + "private-tail", "token=begin" + delimiter + "private-tail"} {
+			if output := SanitizeErrorTextFully(input + " code=500"); strings.Contains(output, "private-tail") ||
+				!strings.Contains(output, "=[REDACTED] code=500") {
+				t.Errorf("公开错误泄露含分隔符的凭据: %q", output)
+			}
+		}
 	}
 }
 

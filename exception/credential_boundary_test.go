@@ -81,3 +81,20 @@ func TestExceptionCredentialOutputPipeline(t *testing.T) {
 		}
 	}
 }
+
+func TestPublicHTTPErrorRejectsPunctuationDelimitedCredentialLeaks(t *testing.T) {
+	handler := &Handle{}
+	request := httptest.NewRequest(http.MethodGet, "https://example.com", nil)
+	request.Header.Set("Accept", "application/json")
+	recorder := httptest.NewRecorder()
+	err := handler.Render(recorder, request, NewHttpException(
+		http.StatusBadRequest, "password=;hidden-auth-token token=prefix&hidden-token-tail,rest safe=yes",
+	))
+	if err != nil || recorder.Code != http.StatusBadRequest {
+		t.Fatalf("公共异常响应渲染失败: status=%d err=%v", recorder.Code, err)
+	}
+	body := recorder.Body.String()
+	if strings.Contains(body, "hidden-") || !strings.Contains(body, "password=[REDACTED] token=[REDACTED] safe=yes") {
+		t.Fatalf("公共响应泄露凭据或丢失安全字段: %s", body)
+	}
+}

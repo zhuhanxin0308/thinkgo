@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 const (
@@ -17,8 +19,6 @@ const (
 )
 
 var timeType = reflect.TypeOf(time.Time{})
-
-var logLineEscaper = strings.NewReplacer("\r", `\r`, "\n", `\n`, "\t", `\t`)
 
 var logKeyNormalizer = strings.NewReplacer("-", "_", ".", "_")
 
@@ -264,7 +264,31 @@ func sanitizeDriverErrorText(message string) string {
 }
 
 func escapeLogLineValue(value string) string {
-	return logLineEscaper.Replace(value)
+	var escaped strings.Builder
+	start := 0
+	for index, character := range value {
+		if !unicode.IsControl(character) && character != '\u2028' && character != '\u2029' {
+			continue
+		}
+		escaped.WriteString(value[start:index])
+		switch character {
+		case '\r':
+			escaped.WriteString(`\r`)
+		case '\n':
+			escaped.WriteString(`\n`)
+		case '\t':
+			escaped.WriteString(`\t`)
+		default:
+			// 统一用 JSON 兼容的 Unicode 转义，保证上下文仍可解析。
+			fmt.Fprintf(&escaped, `\u%04x`, character)
+		}
+		start = index + utf8.RuneLen(character)
+	}
+	if start == 0 {
+		return value
+	}
+	escaped.WriteString(value[start:])
+	return escaped.String()
 }
 
 // marshalSanitizedContext 始终返回合法 JSON，避免异常值让整条上下文静默丢失。
@@ -273,5 +297,5 @@ func marshalSanitizedContext(ctx map[string]interface{}) string {
 	if err != nil {
 		return `{"log_context":"[UNSERIALIZABLE]"}`
 	}
-	return string(encoded)
+	return escapeLogLineValue(string(encoded))
 }
