@@ -304,11 +304,6 @@ func (r *Route) validateParam(name, value string) bool {
 	return value != ""
 }
 
-func requestPathParts(req *context.Request) ([]string, string, error) {
-	parts, normalized, _, err := requestPathPartsWithOptions(req, true)
-	return parts, normalized, err
-}
-
 // requestPathPartsWithOptions 解析请求路径，并按 removeSlash 决定是否保留末尾斜杠信息。
 func requestPathPartsWithOptions(req *context.Request, removeSlash bool) ([]string, string, bool, error) {
 	raw := req.Raw()
