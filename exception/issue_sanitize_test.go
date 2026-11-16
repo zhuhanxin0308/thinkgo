@@ -66,6 +66,15 @@ func TestXMLRedactsCompleteValuesWithDecodedCredentialSeparators(t *testing.T) {
 	}
 }
 
+func TestXMLRedactsCredentialAssignmentBeforeLeadingXMLWhitespace(t *testing.T) {
+	const body = `<root note="Token :&#10;hidden-attribute"><message>password=&#10;hidden-element</message><other>metric=visible</other></root>`
+	output, ok := sanitizeXMLBody(body)
+	if !ok || strings.Contains(output, "hidden-") || strings.Count(output, redactedPlaceholder) != 2 ||
+		!strings.Contains(output, "metric=visible") {
+		t.Fatalf("XML 中凭据键后面的换行不能隐藏敏感赋值边界: %q", output)
+	}
+}
+
 // TestXMLHidesMixedContentAndNamespaceCredentials 验证混合正文和命名空间别名不会暴露原值。
 func TestXMLHidesMixedContentAndNamespaceCredentials(t *testing.T) {
 	const mixed = "<message>password=<value>mixed-secret</value></message>"

@@ -4,9 +4,12 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"io"
+	"regexp"
 	"strconv"
 	"strings"
 )
+
+var xmlAssignmentKey = regexp.MustCompile(`([[:alnum:]_.-]+)["']?[[:space:]]*[:=]`)
 
 // sanitizeJSONBody 对调试页中的 JSON 递归脱敏，解析失败时由调用方隐藏整个请求体。
 func sanitizeJSONBody(body string) (string, bool) {
@@ -135,6 +138,12 @@ func sanitizeXMLBody(body string) (string, bool) {
 }
 
 func sanitizeXMLText(value string) string {
+	// 先识别凭据键，即使实体解码后的换行让通用文本脱敏器判定值为空。
+	for _, assignment := range xmlAssignmentKey.FindAllStringSubmatch(value, -1) {
+		if isSensitiveKey(assignment[1]) {
+			return redactedPlaceholder
+		}
+	}
 	sanitized := sanitizeExceptionText(value)
 	// XML 实体展开可能把凭据中间的字符变为空白，识别到凭据后隐藏整个值。
 	if strings.Contains(sanitized, redactedPlaceholder) {
