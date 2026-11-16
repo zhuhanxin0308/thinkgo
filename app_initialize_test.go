@@ -752,6 +752,26 @@ func TestInitializeReportsLanguageLoadError(t *testing.T) {
 	}
 }
 
+// TestInitializeWithNilLangSnapshot 验证启动填充语言默认值时保留原有 nil 配置。
+func TestInitializeWithNilLangSnapshot(t *testing.T) {
+	basePath := t.TempDir()
+	writeTestAppConfigFiles(t, basePath)
+	app := NewAppUninitialized(basePath)
+	t.Cleanup(func() { _ = app.Close() })
+	if err := app.Config().Set("lang", map[string]interface{}(nil)); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.Initialize(); err != nil {
+		t.Fatal(err)
+	}
+	if !app.Config().Has("lang") || app.Config().GetMap("lang") != nil {
+		t.Fatal("语言服务初始化应保留 nil 配置快照")
+	}
+	if got := app.Lang().GetDefaultLang(); got != app.Config().GetString("app.default_lang") {
+		t.Fatalf("语言服务未继承应用默认语言: %q", got)
+	}
+}
+
 // TestInitializeReportsInvalidLanguageConfig 验证非法多语言配置会阻止应用静默使用默认值启动。
 func TestInitializeReportsInvalidLanguageConfig(t *testing.T) {
 	basePath := t.TempDir()

@@ -163,18 +163,28 @@ func TestConfigDumpRedactsTypedStringMaps(t *testing.T) {
 	}
 }
 
-func TestConfigDumpKeepsEmptyTypedSliceDistinctFromNull(t *testing.T) {
+func TestConfigDumpKeepsEmptyCollectionsDistinctFromNull(t *testing.T) {
 	appConfig := config.NewConfig()
-	if err := appConfig.Set("feature.empty", []string{}); err != nil {
-		t.Fatal(err)
+	values := []struct {
+		key, want string
+		input     interface{}
+	}{
+		{"feature.empty_strings", "[]", []string{}},
+		{"feature.nil_strings", "null", []string(nil)},
+		{"feature.empty_list", "[]", []interface{}{}},
+		{"feature.nil_list", "null", []interface{}(nil)},
+		{"feature.empty_map", "{}", map[string]interface{}{}},
+		{"feature.nil_map", "null", map[string]interface{}(nil)},
 	}
-	if err := appConfig.Set("feature.missing", []string(nil)); err != nil {
-		t.Fatal(err)
+	for _, item := range values {
+		if err := appConfig.Set(item.key, item.input); err != nil {
+			t.Fatal(err)
+		}
 	}
 	cmd := &ConfigDump{Command: console.Command{App: configDumpTestApp(t, appConfig)}}
 	cmd.Configure()
-	for key, want := range map[string]string{"feature.empty": "[]", "feature.missing": "null"} {
-		input := console.NewInput(key)
+	for _, item := range values {
+		input := console.NewInput(item.key)
 		if err := input.Parse(cmd.GetArgumentDefinitions(), cmd.GetOptionDefinitions()); err != nil {
 			t.Fatal(err)
 		}
@@ -182,8 +192,8 @@ func TestConfigDumpKeepsEmptyTypedSliceDistinctFromNull(t *testing.T) {
 		if err := cmd.Execute(input, console.NewOutputWithWriters(&stdout, &bytes.Buffer{}, false)); err != nil {
 			t.Fatal(err)
 		}
-		if got := strings.TrimSpace(stdout.String()); got != want {
-			t.Errorf("导出 %s=%q，期望 %s", key, got, want)
+		if got := strings.TrimSpace(stdout.String()); got != item.want {
+			t.Errorf("导出 %s=%q，期望 %s", item.key, got, item.want)
 		}
 	}
 }
