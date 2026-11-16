@@ -196,6 +196,9 @@ func moreSpecificStaticRoute(candidate, current *Route) bool {
 	if (candidate.domain != "") != (current.domain != "") {
 		return candidate.domain != ""
 	}
+	if candidate.literalExtension != current.literalExtension {
+		return candidate.literalExtension
+	}
 	return candidate.order < current.order
 }
 
@@ -447,6 +450,19 @@ func routePartsWithExtension(parts []routePart, extension string) []string {
 	}
 	result[len(result)-1] += "." + extension
 	return result
+}
+
+// useLiteralExtension 识别已经写入末段字面量的后缀，避免再次追加或剥离。
+func (r *Route) useLiteralExtension() {
+	if r.ext == "" || len(r.pathParts) == 0 {
+		return
+	}
+	last := r.pathParts[len(r.pathParts)-1].literal
+	if dot := strings.LastIndexByte(last, '.'); dot >= 0 && routeLiteralEqual(r.router, last[dot+1:], r.ext) {
+		r.ext = ""
+		r.extensionRequired = false
+		r.literalExtension = true
+	}
 }
 
 func stripRouteExtension(parts []string, extension string, required bool) ([]string, bool) {

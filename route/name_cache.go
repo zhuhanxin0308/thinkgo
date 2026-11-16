@@ -82,6 +82,9 @@ func (router *Router) LoadNameCache(content []byte) error {
 		return fmt.Errorf("命名路由缓存版本或结构不匹配")
 	}
 	metadataRouter := NewRouter()
+	router.mu.RLock()
+	metadataRouter.caseSensitive = router.caseSensitive
+	router.mu.RUnlock()
 	if err := metadataRouter.SetDefaultPattern(cache.DefaultPattern); err != nil {
 		return err
 	}
@@ -106,6 +109,7 @@ func (router *Router) LoadNameCache(content []byte) error {
 			return fmt.Errorf("命名路由缓存的强制后缀不能为空: %q", entry.Name)
 		}
 		registered := &Route{router: metadataRouter, path: path, pathParts: parts, ext: extension, extensionRequired: entry.ExtensionRequired, patterns: make(map[string]string), compiled: make(map[string]*regexp.Regexp)}
+		registered.useLiteralExtension()
 		for name, pattern := range entry.Patterns {
 			if err := registered.WithPattern(name, pattern); err != nil {
 				return err

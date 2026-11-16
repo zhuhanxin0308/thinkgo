@@ -145,12 +145,7 @@ func (node *routeTrieNode) finalize() {
 
 func sortRoutes(routes []*Route) {
 	sort.SliceStable(routes, func(left, right int) bool {
-		leftScore := routeSpecificity(routes[left])
-		rightScore := routeSpecificity(routes[right])
-		if leftScore != rightScore {
-			return leftScore > rightScore
-		}
-		return routes[left].order < routes[right].order
+		return routeComesBefore(routes[left], routes[right])
 	})
 }
 
@@ -305,6 +300,9 @@ func routeComesBefore(left, right *Route) bool {
 	rightScore := routeSpecificity(right)
 	if leftScore != rightScore {
 		return leftScore > rightScore
+	}
+	if left.literalExtension != right.literalExtension {
+		return left.literalExtension
 	}
 	return left.order < right.order
 }

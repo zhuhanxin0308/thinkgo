@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"reflect"
 	"regexp"
-	"sort"
 	"strings"
 	"sync"
 
@@ -58,6 +57,7 @@ type Route struct {
 	domain             string
 	ext                string
 	extensionRequired  bool
+	literalExtension   bool
 	jsonContract       bool
 	pathParts          []routePart
 	trailingSlash      bool
@@ -538,6 +538,7 @@ func (r *Router) Freeze() error {
 		if registered.ext == "" && r.defaultExtension != "" && !registered.jsonContract {
 			registered.ext = r.defaultExtension
 		}
+		registered.useLiteralExtension()
 		if isStaticRouteParts(parts) {
 			if _, ok := staticRoutes[registered.method]; !ok {
 				staticRoutes[registered.method] = make(map[string][]*Route)
@@ -553,9 +554,7 @@ func (r *Router) Freeze() error {
 		dynamicRoutes[registered.method] = append(dynamicRoutes[registered.method], registered)
 	}
 	for method := range dynamicRoutes {
-		sort.SliceStable(dynamicRoutes[method], func(left, right int) bool {
-			return routeSpecificity(dynamicRoutes[method][left]) > routeSpecificity(dynamicRoutes[method][right])
-		})
+		sortRoutes(dynamicRoutes[method])
 	}
 	r.staticRoutes = staticRoutes
 	r.dynamicRoutes = dynamicRoutes
