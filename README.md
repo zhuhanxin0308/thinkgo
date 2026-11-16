@@ -77,6 +77,8 @@ SPA 入口只回退 GET 和 HEAD 的非 API 请求，且请求路径末段必须
 
 ## 浏览器会话安全
 
+`Response.Content` 默认使用 `text/plain; charset=utf-8`，并保留显式指定的内容类型。返回可信的 HTML 页面时使用 `Response.HTML`，视图路由会自动发送 HTML 类型。
+
 `browser_cookie` 应用默认启用 CSRF 和安全响应头；启用 Session 时也会推导这一 profile。认证成功后使用 `Session.SetAuthenticated` 轮换 ID，再处理持久化结果。生产或预发环境可显式设置 `app.security_strict=true`，检查 Cookie 属性和未知会话 ID 策略。升级时核对 CSRF 密钥、客户端令牌提交和 CSP 所需资源，完整配置见[严格安全检查](docs/security/strict-security.md)和[会话认证轮换](docs/security/session-identity.md)。
 
 ## 上传安全默认值

@@ -10,11 +10,13 @@ type responseHeaders struct {
 	values            http.Header
 	contentType       string
 	inlineContentType bool
+	contentTypeSet    bool
 }
 
 // set 接受已经校验并规范化的头部名称，避免默认类型被 JSON 替换时创建无用映射和切片。
 func (headers *responseHeaders) set(key, value string, appendValue bool) {
 	if key == "Content-Type" {
+		headers.contentTypeSet = true
 		if headers.inlineContentType {
 			if !appendValue {
 				headers.contentType = value

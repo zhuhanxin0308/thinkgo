@@ -374,7 +374,7 @@ func (r *Response) Code(code int) *Response {
 	return r
 }
 
-// Content 设置页面输出内容，接受 ThinkPHP 支持的 nil、字符串、数字和可字符串化对象。
+// Content 设置响应内容，默认使用 UTF-8 纯文本，保留调用方显式设置的内容类型。
 func (r *Response) Content(content interface{}) *Response {
 	if r == nil {
 		return nil
@@ -388,11 +388,16 @@ func (r *Response) Content(content interface{}) *Response {
 	if r.header == nil {
 		r.header = &responseHeaders{}
 	}
-	if r.header.get("Content-Type") == "" {
-		r.header.set("Content-Type", defaultResponseContentType, false)
+	if !r.header.contentTypeSet || r.header.get("Content-Type") == "" {
+		r.header.set("Content-Type", "text/plain; charset=utf-8", false)
 	}
 	r.body = []byte(text)
 	return r
+}
+
+// HTML 以 UTF-8 HTML 返回调用方信任的页面内容。
+func (r *Response) HTML(content interface{}) *Response {
+	return r.ContentType(defaultResponseContentType).Content(content)
 }
 
 // Json 设置 JSON 响应。

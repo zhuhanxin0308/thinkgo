@@ -51,6 +51,24 @@ func TestIssue129TracePreservesInertHTMLContexts(t *testing.T) {
 	}
 }
 
+func TestTraceKeepsImplicitAndExplicitHTMLMediaType(t *testing.T) {
+	const document = "<html><body><p>原始页面</p></body></html>"
+	for _, explicit := range []string{"", "text/html; charset=utf-8; profile=local"} {
+		response := fwcontext.NewResponse().Data(document)
+		if explicit != "" {
+			response.Header("Content-Type", explicit)
+		}
+		want := response.GetHeader("Content-Type")
+		trace := &Trace{Debug: &debug.Debug{Enabled: true}, Type: "html"}
+		result := trace.Handle(newLocalTraceRequest(http.MethodGet, "http://example.com/page"), func(*fwcontext.Request) *fwcontext.Response {
+			return response
+		})
+		if got := result.GetHeader("Content-Type"); got != want || string(result.GetBody()) == document || result.GetHeader("Cache-Control") != "no-store" {
+			t.Fatalf("Trace 注入应保留 HTML 类型并输出调试栏: type=%q want=%q", got, want)
+		}
+	}
+}
+
 func countTraceMarker(t *testing.T, content string) int {
 	t.Helper()
 	document, err := htmlparser.Parse(strings.NewReader(content))
