@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/neo4j/neo4j-go-driver/v5/neo4j"
+	"github.com/zhuhanxin0308/thinkgo/v3/db/internal/operationctx"
 )
 
 const (
@@ -159,7 +160,7 @@ func (c *Neo4jConnection) operationContext(parent context.Context) (context.Cont
 	if timeout <= 0 {
 		timeout = defaultNeo4jOpTimeout
 	}
-	ctx, cancel := context.WithTimeout(parent, timeout)
+	ctx, cancel := operationctx.WithDriverDefault(parent, timeout)
 	return ctx, cancel, nil
 }
 

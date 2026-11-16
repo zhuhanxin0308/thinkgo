@@ -37,6 +37,10 @@ func (m *Mongo) connectWith(config db.Config, connect mongoConnectFunc) (db.Conn
 	if err != nil {
 		return nil, err
 	}
+	validated, operationTimeout, err := takeNativeOperationTimeout(validated)
+	if err != nil {
+		return nil, err
+	}
 	uri, err := buildMongoURI(validated)
 	if err != nil {
 		return nil, err
@@ -60,7 +64,7 @@ func (m *Mongo) connectWith(config db.Config, connect mongoConnectFunc) (db.Conn
 	return &mongodriver.MongoConnection{
 		Client:           client,
 		Database:         validated.Database,
-		OperationTimeout: remoteConnectionTimeout,
+		OperationTimeout: operationTimeout,
 	}, nil
 }
 

@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/zhuhanxin0308/thinkgo/v3/db/internal/operationctx"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
@@ -283,7 +284,7 @@ func (c *MongoConnection) operationContext(parent context.Context) (context.Cont
 	if timeout <= 0 {
 		timeout = defaultMongoOpTimeout
 	}
-	ctx, cancel := context.WithTimeout(parent, timeout)
+	ctx, cancel := operationctx.WithDriverDefault(parent, timeout)
 	return ctx, cancel, nil
 }
 

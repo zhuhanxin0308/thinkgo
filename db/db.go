@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/zhuhanxin0308/thinkgo/v3/db/internal/operationctx"
 )
 
 const (
@@ -537,10 +539,7 @@ func (db *DB) executeContext(ctx context.Context, allowLegacy bool, sql string, 
 
 // databaseOperationContext 为未显式设置截止时间的原生 SQL 操作提供默认超时。
 func databaseOperationContext(ctx context.Context) (context.Context, context.CancelFunc) {
-	if _, hasDeadline := ctx.Deadline(); hasDeadline {
-		return ctx, func() {}
-	}
-	return context.WithTimeout(ctx, defaultDatabaseOperationTimeout)
+	return operationctx.WithFrameworkDefault(ctx, defaultDatabaseOperationTimeout)
 }
 
 // redactArgCount 把参数列表降级为数量描述，避免把绑定值（可能含敏感数据）写入日志。
