@@ -176,7 +176,7 @@ func TestQueryChunkCallsBack(t *testing.T) {
 	db := NewDB(&mockConnection{})
 
 	callCount := 0
-	err := db.Name("users").Where("status = ?", 1).Chunk(10, func(rows []map[string]interface{}) bool {
+	err := db.Name("users").Where("status = ?", 1).Order("id ASC").Chunk(10, func(rows []map[string]interface{}) bool {
 		callCount++
 		return false // 只执行一次
 	})
