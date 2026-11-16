@@ -304,49 +304,8 @@ func (r *Route) validateParam(name, value string) bool {
 	return value != ""
 }
 
-func requestPathParts(req *context.Request) ([]string, string, error) {
-	raw := req.Raw()
-	if raw == nil || raw.URL == nil {
-		return nil, "", fmt.Errorf("%w: URL 为空", ErrInvalidRequestPath)
-	}
-	escapedPath := raw.URL.EscapedPath()
-	if escapedPath == "" {
-		escapedPath = "/"
-	}
-	if len(escapedPath) > maxRoutePathLength || !strings.HasPrefix(escapedPath, "/") || strings.Contains(escapedPath, "\\") {
-		return nil, "", fmt.Errorf("%w: %q", ErrInvalidRequestPath, escapedPath)
-	}
-	if strings.Contains(escapedPath, "//") {
-		return nil, "", fmt.Errorf("%w: 路径包含空段", ErrInvalidRequestPath)
-	}
-	if len(escapedPath) > 1 {
-		escapedPath = strings.TrimSuffix(escapedPath, "/")
-	}
-	trimmed := strings.Trim(escapedPath, "/")
-	if trimmed == "" {
-		return []string{}, "/", nil
-	}
-	escapedParts := strings.Split(trimmed, "/")
-	if len(escapedParts) > maxRouteSegments {
-		return nil, "", fmt.Errorf("%w: %v", ErrRouteTooComplex, escapedPath)
-	}
-	parts := make([]string, 0, len(escapedParts))
-	for _, escapedPart := range escapedParts {
-		part, err := url.PathUnescape(escapedPart)
-		if err != nil || part == "" || part == "." || part == ".." || strings.ContainsAny(part, "\\\x00\r\n") {
-			return nil, "", fmt.Errorf("%w: 路径段 %q 非法", ErrInvalidRequestPath, escapedPart)
-		}
-		parts = append(parts, part)
-	}
-	return parts, "/" + strings.Join(parts, "/"), nil
-}
-
 // requestPathPartsWithOptions 解析请求路径，并按 removeSlash 决定是否保留末尾斜杠信息。
 func requestPathPartsWithOptions(req *context.Request, removeSlash bool) ([]string, string, bool, error) {
-	if removeSlash {
-		parts, normalized, err := requestPathParts(req)
-		return parts, normalized, false, err
-	}
 	raw := req.Raw()
 	if raw == nil || raw.URL == nil {
 		return nil, "", false, fmt.Errorf("%w: URL 为空", ErrInvalidRequestPath)
@@ -361,19 +320,19 @@ func requestPathPartsWithOptions(req *context.Request, removeSlash bool) ([]stri
 	if strings.Contains(escapedPath, "//") {
 		return nil, "", false, fmt.Errorf("%w: 路径包含空段", ErrInvalidRequestPath)
 	}
-	trailingSlash := len(escapedPath) > 1 && strings.HasSuffix(escapedPath, "/")
+	trailingSlash := !removeSlash && len(escapedPath) > 1 && strings.HasSuffix(escapedPath, "/")
 	trimmed := strings.Trim(escapedPath, "/")
 	if trimmed == "" {
 		return []string{}, "/", false, nil
 	}
 	escapedParts := strings.Split(trimmed, "/")
 	if len(escapedParts) > maxRouteSegments {
-		return nil, "", false, fmt.Errorf("%w: %v", ErrRouteTooComplex, escapedPath)
+		return nil, "", false, fmt.Errorf("%w: %w: 路径段超过 %d", ErrInvalidRequestPath, ErrRouteTooComplex, maxRouteSegments)
 	}
 	parts := make([]string, 0, len(escapedParts))
 	for _, escapedPart := range escapedParts {
 		part, err := url.PathUnescape(escapedPart)
-		if err != nil || part == "" || part == "." || part == ".." || strings.ContainsAny(part, "\\\x00\r\n") {
+		if err != nil || !validDecodedRoutePathPart(part) {
 			return nil, "", false, fmt.Errorf("%w: 路径段 %q 非法", ErrInvalidRequestPath, escapedPart)
 		}
 		parts = append(parts, part)
@@ -383,6 +342,10 @@ func requestPathPartsWithOptions(req *context.Request, removeSlash bool) ([]stri
 		normalized += "/"
 	}
 	return parts, normalized, trailingSlash, nil
+}
+
+func validDecodedRoutePathPart(part string) bool {
+	return part != "" && part != "." && part != ".." && !strings.ContainsAny(part, "\\\x00\r\n")
 }
 
 func canonicalRoutePath(rawPath string) (string, int, error) {
