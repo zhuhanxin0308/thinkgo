@@ -216,9 +216,11 @@ func (m *csrfMiddleware) handle(req *context.Request, next func(*context.Request
 	if m == nil || req == nil || req.Raw() == nil || next == nil {
 		return csrfErrorResponse(http.StatusInternalServerError, "CSRF 服务不可用")
 	}
-	method := strings.ToUpper(req.Method())
+	// 只有原始方法和分发使用的方法都安全时，才允许跳过令牌校验。
+	_, originalSafe := m.safeMethods[req.Method(true)]
+	_, effectiveSafe := m.safeMethods[req.Method()]
 	cookieToken, found, cookieErr := readCSRFCookie(req.Raw(), m.config.CookieName)
-	if _, safe := m.safeMethods[method]; safe {
+	if originalSafe && effectiveSafe {
 		if errors.Is(cookieErr, ErrDuplicateCSRFCookie) {
 			return csrfErrorResponse(http.StatusBadRequest, "CSRF Cookie 重复")
 		}
