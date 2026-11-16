@@ -1,6 +1,9 @@
 package db
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // CursorPage 表示不依赖总数和 OFFSET 的稳定游标分页结果。
 // NextCursor 只在 HasMore 为 true 时返回，调用方应将其编码后传给下一次请求。
@@ -59,6 +62,10 @@ func (q *Query) SeekPageWithCodec(pageSize int, pkField string, codec CursorCode
 	if err := validateIdentifier(pkField); err != nil {
 		return nil, q.reportError("seek_page", fmt.Errorf("unsafe pk field: %w", err), nil)
 	}
+	cursorField, err := q.resolveCursorResultField(pkField, strings.ContainsRune(pkField, '.') && q.canStreamSQLRows())
+	if err != nil {
+		return nil, q.reportError("seek_page", err, nil)
+	}
 	hasAfter := after != nil
 	if hasAfter && isNilDatabaseDependency(after) {
 		return nil, q.reportError("seek_page", fmt.Errorf("%w: after 游标不能为空", ErrInvalidDatabaseRow), nil)
@@ -84,14 +91,15 @@ func (q *Query) SeekPageWithCodec(pageSize int, pkField string, codec CursorCode
 	if err != nil {
 		return nil, err
 	}
-	if err := validateCursorRows(rows, pkField, after, codec); err != nil {
+	if err := validateCursorRows(rows, cursorField, after, codec); err != nil {
 		return nil, q.reportError("seek_page", err, nil)
 	}
 
 	hasMore := len(rows) > pageSize
 	if hasMore {
 		visible := rows[:pageSize]
-		nextCursor, err := cloneDatabaseValue(visible[len(visible)-1][pkField])
+		value, _ := cursorField.read(visible[len(visible)-1])
+		nextCursor, err := cloneDatabaseValue(value)
 		if err != nil {
 			return nil, q.reportError("seek_page", err, nil)
 		}
@@ -112,6 +120,44 @@ func (q *Query) SeekPageWithCodec(pageSize int, pkField string, codec CursorCode
 	}, nil
 }
 
+type cursorResultField struct {
+	name       string
+	projection string
+}
+
+func (field cursorResultField) read(row map[string]interface{}) (interface{}, bool) {
+	if field.projection != "" {
+		return databaseResultField(row, field.projection)
+	}
+	value, exists := row[field.name]
+	return value, exists
+}
+
+// resolveCursorResultField 确认 SQL 投影确实包含游标列，防止从其他表读取同名字段。
+func (q *Query) resolveCursorResultField(name string, qualifiedSQL bool) (cursorResultField, error) {
+	field := cursorResultField{name: name}
+	if !qualifiedSQL {
+		return field, nil
+	}
+	projection := strings.TrimSpace(q.fields)
+	if projection == "" || projection == "*" {
+		field.projection = name
+		return field, nil
+	}
+	leaf := name[strings.LastIndexByte(name, '.')+1:]
+	for item := range strings.SplitSeq(projection, ",") {
+		column, alias := splitIdentifierAlias(strings.TrimSpace(item))
+		if column == name || len(q.joins) == 0 && column == leaf {
+			field.projection = name
+			if alias != "" {
+				field.projection = alias
+			}
+			return field, nil
+		}
+	}
+	return cursorResultField{}, fmt.Errorf("%w: 投影未包含游标字段 %q", ErrInvalidDatabaseRow, name)
+}
+
 // validateCursorBoundary 验证边界值能被 codec 处理且自比较结果稳定。
 func validateCursorBoundary(value interface{}, codec CursorCodec) error {
 	if value == nil || isNilDatabaseDependency(value) {
@@ -128,7 +174,7 @@ func validateCursorBoundary(value interface{}, codec CursorCodec) error {
 }
 
 // validateCursorRows 验证结果中的游标存在，并且按数据库声明的顺序严格递增。
-func validateCursorRows(rows []map[string]interface{}, pkField string, previous interface{}, codec CursorCodec) error {
+func validateCursorRows(rows []map[string]interface{}, field cursorResultField, previous interface{}, codec CursorCodec) error {
 	if len(rows) == 0 {
 		return nil
 	}
@@ -140,9 +186,9 @@ func validateCursorRows(rows []map[string]interface{}, pkField string, previous 
 
 	var last interface{}
 	for index, row := range rows {
-		current, ok := row[pkField]
+		current, ok := field.read(row)
 		if !ok || current == nil || isNilDatabaseDependency(current) {
-			return fmt.Errorf("%w: 第 %d 行缺少游标字段 %q", ErrInvalidDatabaseRow, index, pkField)
+			return fmt.Errorf("%w: 第 %d 行缺少游标字段 %q", ErrInvalidDatabaseRow, index, field.name)
 		}
 		var err error
 		current, err = cloneDatabaseValue(current)
@@ -178,12 +224,13 @@ func validateCursorRows(rows []map[string]interface{}, pkField string, previous 
 }
 
 // cursorPageLastCursor 返回已经完成校验的最后一个游标，供 ChunkById 保存下一批边界。
-func cursorPageLastCursor(rows []map[string]interface{}, pkField string, previous interface{}, codec CursorCodec) (interface{}, error) {
-	if err := validateCursorRows(rows, pkField, previous, codec); err != nil {
+func cursorPageLastCursor(rows []map[string]interface{}, field cursorResultField, previous interface{}, codec CursorCodec) (interface{}, error) {
+	if err := validateCursorRows(rows, field, previous, codec); err != nil {
 		return nil, err
 	}
 	if len(rows) == 0 {
 		return nil, nil
 	}
-	return cloneDatabaseValue(rows[len(rows)-1][pkField])
+	value, _ := field.read(rows[len(rows)-1])
+	return cloneDatabaseValue(value)
 }
