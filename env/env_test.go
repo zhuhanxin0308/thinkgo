@@ -7,6 +7,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/zhuhanxin0308/thinkgo/v3/config"
 )
 
 // TestGetOSEnvOverridesFile 验证真实进程环境变量优先于 .env 文件值（12-factor 约定）。
@@ -332,6 +334,57 @@ func TestLookupFallsBackToLegacyDatabaseOSKey(t *testing.T) {
 	if got := NewEnv().Get("DATABASE_CONNECTIONS_MYSQL_HOSTNAME"); got != "192.168.3.100" {
 		t.Fatalf("旧式系统数据库键未回退到规范路径，实际为 %q", got)
 	}
+}
+
+func TestLegacyDatabaseProcessKeysOverrideFileAliases(t *testing.T) {
+	const canonical = "DATABASE_CONNECTIONS_MYSQL_HOSTNAME"
+	const legacy = "DATABASE_HOSTNAME"
+	const configPath = "database.connections.mysql.hostname"
+	file := filepath.Join(t.TempDir(), ".env")
+	if err := os.WriteFile(file, []byte("[DATABASE]\nHOSTNAME=db-file.example.test\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	environment := NewEnv()
+	if err := environment.Load(file); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(canonical, "")
+	t.Setenv(legacy, "")
+	if err := os.Unsetenv(canonical); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Unsetenv(legacy); err != nil {
+		t.Fatal(err)
+	}
+
+	check := func(view *Env, want string) {
+		t.Helper()
+		if got, ok := view.Lookup(canonical); !ok || got != want {
+			t.Errorf("Lookup 得到 %q, %v，期望 %q", got, ok, want)
+		}
+		if got, ok := view.All()[canonical]; !ok || got != want {
+			t.Errorf("All 得到 %q, %v，期望 %q", got, ok, want)
+		}
+		configuration := config.NewConfig()
+		if err := configuration.Set(configPath, "initial"); err != nil {
+			t.Fatal(err)
+		}
+		if err := configuration.ApplyEnvironment(view); err != nil {
+			t.Fatal(err)
+		}
+		if got := configuration.GetString(configPath); got != want {
+			t.Errorf("数据库配置主机为 %q，期望 %q", got, want)
+		}
+	}
+	check(environment, "db-file.example.test")
+	t.Setenv(legacy, "db-process.example.test")
+	frozen := environment.Snapshot()
+	check(environment, "db-process.example.test")
+	t.Setenv(legacy, "")
+	check(environment, "")
+	t.Setenv(canonical, "db-canonical.example.test")
+	check(environment, "db-canonical.example.test")
+	check(frozen, "db-process.example.test")
 }
 
 // TestGetDottedNameKeepsOSEnvironmentPrecedence 验证名称规范化后仍保持系统环境变量最高优先级。
