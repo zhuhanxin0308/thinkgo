@@ -3,9 +3,13 @@ package context
 import (
 	"encoding/json"
 	"math"
+	"math/big"
 	"strconv"
 	"strings"
 )
+
+// 整数文本回退到精确解析时限制输入及指数规模，避免构造不成比例的大整数。
+const maxRequestIntegerLiteralBytes = 1024
 
 // ParamInt 将参数无损解析为当前平台的 int。
 func (r *Request) ParamInt(key string, defaultValue int) int {
@@ -119,11 +123,37 @@ func parseExactInt64(value string) (int64, bool) {
 	if parsed, err := strconv.ParseInt(value, 10, 64); err == nil {
 		return parsed, true
 	}
-	parsed, err := strconv.ParseFloat(value, 64)
-	if err != nil {
+	if len(value) > maxRequestIntegerLiteralBytes {
 		return 0, false
 	}
-	return exactFloatToInt64(parsed)
+	// 沿用原来的浮点字面量语法，只使用错误结果，避免以二进制浮点值判断整数性。
+	if _, err := strconv.ParseFloat(value, 64); err != nil {
+		return 0, false
+	}
+	literal := strings.ReplaceAll(value, "_", "")
+	if parsed, err := strconv.ParseInt(literal, 10, 64); err == nil {
+		return parsed, true
+	}
+	exponentMarkers := "eE"
+	unsigned := strings.TrimLeft(literal, "+-")
+	if strings.HasPrefix(unsigned, "0x") || strings.HasPrefix(unsigned, "0X") {
+		exponentMarkers = "pP"
+	}
+	if index := strings.LastIndexAny(literal, exponentMarkers); index >= 0 {
+		exponent, err := strconv.ParseInt(literal[index+1:], 10, 32)
+		// 十六进制的每位最多对应 4 个二进制位，超过此前导或尾随零可补偿的范围即拒绝。
+		maxExponent := int64(4*len(literal) + 64)
+		if err != nil || exponent < -maxExponent || exponent > maxExponent {
+			return 0, false
+		}
+	} else if !strings.Contains(literal, ".") {
+		return 0, false
+	}
+	exact, ok := new(big.Rat).SetString(literal)
+	if !ok || !exact.IsInt() || !exact.Num().IsInt64() {
+		return 0, false
+	}
+	return exact.Num().Int64(), true
 }
 
 func exactFloatToInt64(value float64) (int64, bool) {
