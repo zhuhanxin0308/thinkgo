@@ -2,16 +2,19 @@ package http
 
 import (
 	stdcontext "context"
+	"crypto/rand"
 	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
 	stdlog "log"
+	"math/big"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -237,14 +240,22 @@ func runHTTPServersContext(
 	defer stopSignals()
 
 	tcpServer := newConfiguredHTTPServer(handler, serverConfig, logHTTPError)
-	tcpListener, err := net.Listen("tcp", tcpServer.Addr)
+	tcpListener, http3PacketConn, err := listenConfiguredServerSockets(tcpServer.Addr, serverConfig)
 	if err != nil {
-		return fmt.Errorf("HTTP 服务异常退出: TCP 监听失败: %w", err)
+		return err
 	}
 	// 使用实际监听地址更新 HTTP/3 配置，尤其要覆盖端口为 0 时的动态端口。
 	tcpServer.Addr = tcpListener.Addr().String()
 	var http3Server *boundedHTTP3Server
-	var http3PacketConn net.PacketConn
+	if http3PacketConn != nil {
+		protocolServer := newConfiguredHTTP3Server(handler, serverConfig, tcpServer.Addr)
+		certificate, err := tls.LoadX509KeyPair(serverConfig.CertFile, serverConfig.KeyFile)
+		if err != nil {
+			return errors.Join(fmt.Errorf("HTTP/3 TLS 证书加载失败: %w", err), tcpListener.Close(), http3PacketConn.Close())
+		}
+		protocolServer.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{certificate}}
+		http3Server = newBoundedHTTP3Server(protocolServer, serverConfig)
+	}
 	resultChannel := make(chan serverResult, 2)
 	serverCount := 1
 	go func() {
@@ -257,21 +268,8 @@ func runHTTPServersContext(
 		resultChannel <- serverResult{name: "HTTP", err: normalizeServerError(err)}
 	}()
 
-	if serverConfig.EnableHTTP3 {
+	if http3Server != nil {
 		serverCount++
-		protocolServer := newConfiguredHTTP3Server(handler, serverConfig, tcpServer.Addr)
-		certificate, err := tls.LoadX509KeyPair(serverConfig.CertFile, serverConfig.KeyFile)
-		if err != nil {
-			_ = tcpListener.Close()
-			return errors.Join(fmt.Errorf("HTTP/3 TLS 证书加载失败: %w", err), tcpServer.Close())
-		}
-		protocolServer.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{certificate}}
-		http3Server = newBoundedHTTP3Server(protocolServer, serverConfig)
-		http3PacketConn, err = net.ListenPacket("udp", tcpServer.Addr)
-		if err != nil {
-			_ = tcpListener.Close()
-			return errors.Join(fmt.Errorf("HTTP/3 服务异常退出: UDP 监听失败: %w", err), tcpServer.Close(), http3Server.Close())
-		}
 		go func() {
 			err := http3Server.Serve(http3PacketConn)
 			resultChannel <- serverResult{name: "HTTP/3", err: normalizeServerError(err)}
@@ -322,6 +320,57 @@ func runHTTPServersContext(
 		}
 	}
 	return errors.Join(runErr, shutdownErr)
+}
+
+func listenConfiguredServerSockets(address string, config serverConf) (net.Listener, net.PacketConn, error) {
+	tcp, udp, err := listenServerSockets(address, config.EnableHTTP3)
+	if err == nil || !config.EnableHTTP3 || config.Port != 0 {
+		return tcp, udp, err
+	}
+	var listenErr *net.OpError
+	if !errors.As(err, &listenErr) || listenErr.Net != "udp" {
+		return nil, nil, err
+	}
+	return retryDynamicHTTP3Sockets(config.Host, err)
+}
+
+func listenServerSockets(address string, enableHTTP3 bool) (net.Listener, net.PacketConn, error) {
+	tcp, err := net.Listen("tcp", address)
+	if err != nil {
+		return nil, nil, fmt.Errorf("HTTP 服务异常退出: TCP 监听失败: %w", err)
+	}
+	if !enableHTTP3 {
+		return tcp, nil, nil
+	}
+	udp, err := net.ListenPacket("udp", tcp.Addr().String())
+	if err != nil {
+		return nil, nil, errors.Join(fmt.Errorf("HTTP/3 服务异常退出: UDP 监听失败: %w", err), tcp.Close())
+	}
+	return tcp, udp, nil
+}
+
+// retryDynamicHTTP3Sockets 在系统分配的 TCP 端口无法绑定 UDP 时，从
+// IANA 动态端口范围选取候选，避开两个协议连续分配到对方保留区间的情形。
+func retryDynamicHTTP3Sockets(host string, lastErr error) (net.Listener, net.PacketConn, error) {
+	const (
+		firstDynamicPort = 49152
+		lastDynamicPort  = 65535
+		maxAttempts      = 16
+	)
+	portCount := big.NewInt(lastDynamicPort - firstDynamicPort + 1)
+	for range maxAttempts {
+		offset, err := rand.Int(rand.Reader, portCount)
+		if err != nil {
+			return nil, nil, errors.Join(lastErr, fmt.Errorf("选择 HTTP/3 动态端口失败: %w", err))
+		}
+		port := firstDynamicPort + int(offset.Int64())
+		tcp, udp, err := listenServerSockets(net.JoinHostPort(host, strconv.Itoa(port)), true)
+		if err == nil {
+			return tcp, udp, nil
+		}
+		lastErr = err
+	}
+	return nil, nil, lastErr
 }
 
 func validateServerTLS(serverConfig serverConf) error {
