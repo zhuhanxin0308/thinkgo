@@ -96,11 +96,6 @@ func mysqlBenchmarkEnvironment(b testing.TB) db.Config {
 		}
 		values[name] = value
 	}
-	params := map[string]string{"tls": "false"}
-	// 仅允许基准进程显式打开客户端参数插值，便于与默认预编译路径做 A/B 对照。
-	if strings.EqualFold(strings.TrimSpace(os.Getenv("THINKGO_BENCH_MYSQL_INTERPOLATE_PARAMS")), "true") {
-		params["interpolateParams"] = "true"
-	}
 	maxOpenConns := mysqlBenchmarkPoolLimit(b, "THINKGO_BENCH_MYSQL_MAX_OPEN_CONNS", defaultMySQLBenchmarkMaxOpenConns)
 	maxIdleConns := mysqlBenchmarkPoolLimit(b, "THINKGO_BENCH_MYSQL_MAX_IDLE_CONNS", defaultMySQLBenchmarkMaxIdleConns)
 	if maxIdleConns > maxOpenConns {
@@ -113,7 +108,7 @@ func mysqlBenchmarkEnvironment(b testing.TB) db.Config {
 		Username:     values["THINKGO_BENCH_MYSQL_USER"],
 		Password:     values["THINKGO_BENCH_MYSQL_PASSWORD"],
 		Database:     values["THINKGO_BENCH_MYSQL_DATABASE"],
-		Params:       params,
+		Params:       map[string]string{"tls": "false"},
 		Charset:      "utf8mb4",
 		MaxOpenConns: maxOpenConns,
 		MaxIdleConns: maxIdleConns,
