@@ -40,6 +40,41 @@ func TestNamedRouteURLRejectsSegmentsThatCannotRoundTrip(t *testing.T) {
 	}
 }
 
+func TestNamedRouteURLChecksDotSegmentsAfterAppendingExtension(t *testing.T) {
+	for _, extension := range []string{"html", "json"} {
+		t.Run(extension, func(t *testing.T) {
+			router := NewRouter()
+			item, err := router.Get("/files/:name/:format?", "Document@Show")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if extension == "json" {
+				if err := item.WithExtension(extension); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := item.WithName("document"); err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range []string{".", ".."} {
+				path, err := router.URL("document", map[string]interface{}{"name": name})
+				if err != nil || path != "/files/"+name+"."+extension {
+					t.Fatalf("缺少可选段时，后缀应使末段有效: %q, %v", path, err)
+				}
+				request := fwcontext.MustNewRequest(httptest.NewRequest(http.MethodGet, "http://example.test"+path, nil))
+				matched, params, err := router.Match(request)
+				if err != nil || matched != item || params["name"] != name {
+					t.Fatalf("带后缀的点参数无法往返: %q, %v, %v", path, params, err)
+				}
+				path, err = router.URL("document", map[string]interface{}{"name": name, "format": "raw"})
+				if !errors.Is(err, ErrInvalidRouteParameter) || path != "" {
+					t.Fatalf("中间点段应保持拒绝: %q, %v", path, err)
+				}
+			}
+		})
+	}
+}
+
 // TestDynamicRouteUnicodeFold 验证索引与线性匹配共享 Unicode 折叠语义，并保留参数原文。
 func TestDynamicRouteUnicodeFold(t *testing.T) {
 	for _, pair := range [][2]string{{"s", "ſ"}, {"σ", "ς"}, {"K", "K"}} {

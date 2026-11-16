@@ -32,7 +32,7 @@ func (r *Router) URL(name string, params map[string]interface{}) (string, error)
 	pathParts := make([]string, 0, len(registered.pathParts))
 	for _, part := range registered.pathParts {
 		if part.param == "" {
-			pathParts = append(pathParts, url.PathEscape(part.literal))
+			pathParts = append(pathParts, part.literal)
 			continue
 		}
 		value, exists := params[part.param]
@@ -50,14 +50,11 @@ func (r *Router) URL(name string, params map[string]interface{}) (string, error)
 			}
 			return "", fmt.Errorf("%w: 参数 %q 类型或值非法", ErrInvalidRouteParameter, part.param)
 		}
-		if !validDecodedRoutePathPart(text) {
-			return "", fmt.Errorf("%w: 参数 %q 无法作为请求路径段", ErrInvalidRouteParameter, part.param)
-		}
 		if !registered.validateParam(part.param, text) {
 			return "", fmt.Errorf("%w: 参数 %q 不满足路由约束", ErrInvalidRouteParameter, part.param)
 		}
 		consumed[part.param] = true
-		pathParts = append(pathParts, url.PathEscape(text))
+		pathParts = append(pathParts, text)
 	}
 
 	if registered.ext != "" && (len(pathParts) > 0 || registered.extensionRequired) {
@@ -66,6 +63,12 @@ func (r *Router) URL(name string, params map[string]interface{}) (string, error)
 		} else {
 			pathParts[len(pathParts)-1] += "." + registered.ext
 		}
+	}
+	for index, part := range pathParts {
+		if !validDecodedRoutePathPart(part) {
+			return "", fmt.Errorf("%w: 第 %d 个请求路径段无效", ErrInvalidRouteParameter, index+1)
+		}
+		pathParts[index] = url.PathEscape(part)
 	}
 	builtPath := "/" + joinEscapedPathParts(pathParts)
 	if len(pathParts) == 0 {
