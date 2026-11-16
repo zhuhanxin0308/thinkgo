@@ -139,15 +139,13 @@ func (q *Query) resolveCursorResultField(name string, qualifiedSQL bool) (cursor
 	if !qualifiedSQL {
 		return field, nil
 	}
-	projection := strings.TrimSpace(q.fields)
-	if projection == "" || projection == "*" {
-		field.projection = name
-		return field, nil
-	}
-	leaf := name[strings.LastIndexByte(name, '.')+1:]
+	projection := q.selectProjection()
+	separator := strings.LastIndexByte(name, '.')
+	qualifier, leaf := name[:separator], name[separator+1:]
 	for item := range strings.SplitSeq(projection, ",") {
 		column, alias := splitIdentifierAlias(strings.TrimSpace(item))
-		if column == name || len(q.joins) == 0 && column == leaf {
+		if column == "*" || column == qualifier+".*" ||
+			column == name || len(q.joins) == 0 && column == leaf {
 			field.projection = name
 			if alias != "" {
 				field.projection = alias

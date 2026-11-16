@@ -43,6 +43,25 @@ func TestQualifiedSQLCursorUsesProjectedColumnAcrossRoutes(t *testing.T) {
 	if _, err := joined.Field("orders.id").SeekPage(1, "users.id", nil); !errors.Is(err, ErrInvalidDatabaseRow) {
 		t.Fatalf("不能将另一张表的同名列当作游标: %v", err)
 	}
+	for _, query := range []*Query{joined, joined.Field(" * ")} {
+		if _, err := query.SeekPage(1, "orders.id", nil); !errors.Is(err, ErrInvalidDatabaseRow) {
+			t.Fatalf("默认 JOIN 投影不能把主表主键当作关联表游标: %v", err)
+		}
+		if err := query.ChunkById(1, "orders.id", func([]map[string]any) bool {
+			t.Error("缺少游标的分批查询不能调用业务回调")
+			return false
+		}); !errors.Is(err, ErrInvalidDatabaseRow) {
+			t.Fatalf("分批查询必须拒绝缺少的关联表游标: %v", err)
+		}
+		page, err := query.SeekPage(1, "users.id", nil)
+		if err != nil || page.NextCursor != int64(1) {
+			t.Fatalf("默认 JOIN 投影仍应读取主表的游标: %+v, %v", page, err)
+		}
+	}
+	page, err := joined.Field("users.id, orders.id AS order_cursor").SeekPage(1, "orders.id", nil)
+	if err != nil || page.NextCursor != int64(101) {
+		t.Fatalf("显式投影应读取关联表游标: %+v, %v", page, err)
+	}
 	for _, query := range []*Query{database.Table("users"), database.Table("users").Field("id")} {
 		page, err := query.SeekPage(1, "users.id", nil)
 		if err != nil || page.NextCursor != int64(1) {
