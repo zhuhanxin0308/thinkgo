@@ -160,11 +160,18 @@ func TestApplicationServiceForceReplacementPublishesAfterInitialization(t *testi
 		t.Fatal(err)
 	}
 	started, release := make(chan struct{}), make(chan struct{})
-	next := &stagedApplicationService{initialize: func() error {
-		close(started)
-		<-release
-		return nil
-	}}
+	next := &stagedApplicationService{
+		initialize: func() error {
+			close(started)
+			<-release
+			return nil
+		},
+		boot: func() {
+			if old.closed.Load() != 1 {
+				t.Error("新服务 Boot 前，旧服务应已完成释放")
+			}
+		},
+	}
 	replacement := make(chan error, 1)
 	go func() { replacement <- app.Register(next, true) }()
 	select {
@@ -247,6 +254,75 @@ func TestApplicationServiceForceReplacementKeepsNewServiceIfOldCloseFails(t *tes
 	}
 	if err := app.Close(); err != nil || old.closed.Load() != 1 || next.closed.Load() != 1 {
 		t.Fatalf("关闭时只应释放当前服务: %v", err)
+	}
+}
+
+func TestApplicationServiceLateInitializationIsSerialized(t *testing.T) {
+	app := newStagedServiceTestApp(t)
+	if err := app.Initialize(); err != nil {
+		t.Fatal(err)
+	}
+	firstStarted, firstRelease := make(chan struct{}), make(chan struct{})
+	secondRegistered, secondInitialized := make(chan struct{}), make(chan struct{})
+	first := &stagedApplicationService{initialize: func() error {
+		close(firstStarted)
+		<-firstRelease
+		return nil
+	}}
+	second := &alternateStagedApplicationService{&stagedApplicationService{
+		register:   func() error { close(secondRegistered); return nil },
+		initialize: func() error { close(secondInitialized); return nil },
+	}}
+	firstDone, secondDone := make(chan error, 1), make(chan error, 1)
+	go func() { firstDone <- app.Register(first) }()
+	<-firstStarted
+	go func() { secondDone <- app.Register(second) }()
+	<-secondRegistered
+	select {
+	case <-secondInitialized:
+		t.Error("后到服务的初始化不能与已有生命周期回调并行")
+	case <-time.After(30 * time.Millisecond):
+	}
+	close(firstRelease)
+	if err := <-firstDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-secondDone; err != nil || app.GetService(second) != second {
+		t.Fatalf("串行初始化结束后应发布后到服务: %v", err)
+	}
+}
+
+func TestApplicationServiceForceReplacementDoesNotCloseDependencyDuringInitialization(t *testing.T) {
+	app := newStagedServiceTestApp(t)
+	dependency := &stagedApplicationService{}
+	childStarted, childRelease := make(chan struct{}), make(chan struct{})
+	child := &alternateStagedApplicationService{&stagedApplicationService{initialize: func() error {
+		close(childStarted)
+		<-childRelease
+		if dependency.closed.Load() != 0 {
+			return errors.New("依赖在初始化期间被关闭")
+		}
+		return nil
+	}}}
+	for _, instance := range []interface{}{dependency, child} {
+		if err := app.Register(instance); err != nil {
+			t.Fatal(err)
+		}
+	}
+	initializeDone := make(chan error, 1)
+	go func() { initializeDone <- app.Initialize() }()
+	<-childStarted
+	next := &stagedApplicationService{}
+	err := app.Register(next, true)
+	if !errors.Is(err, ErrApplicationServiceRegistrationInProgress) || app.GetService(dependency) != dependency {
+		t.Errorf("初始化阶段的替换应返回可重试错误并保留依赖: %v", err)
+	}
+	close(childRelease)
+	if err := <-initializeDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := app.Register(next, true); err != nil || app.GetService(next) != next {
+		t.Fatalf("初始化完成且尚未 Boot 时应可重试替换: %v", err)
 	}
 }
 

@@ -72,6 +72,7 @@ type applicationServiceProvider struct {
 
 // Register 注册 ThinkPHP 风格应用服务。force 允许在 Boot 前替换同类型实例。
 // 已进入初始化阶段的旧实例仍在候选实例初始化成功后才被替换。
+// 应用正在执行首次初始化期间，可在该阶段结束后重试替换。
 // 注册过程中由回调建立的资源由服务负责管理。
 func (app *App) Register(service interface{}, force ...bool) error {
 	if app == nil {

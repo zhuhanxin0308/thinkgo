@@ -27,9 +27,9 @@ func (app *App) registerApplicationServiceProvider(candidate, previous *applicat
 			lifecycle.lock.Unlock()
 			return fmt.Errorf("%w: 应用服务 %T 缺少生命周期记录", ErrInvalidProvider, previous.service)
 		}
-		if existing.initializing {
+		if lifecycle.initializing || existing.initializing {
 			lifecycle.lock.Unlock()
-			return fmt.Errorf("%w: %T 尚在初始化", ErrApplicationServiceRegistrationInProgress, previous.service)
+			return fmt.Errorf("%w: 应用正在初始化，暂不能替换 %T", ErrApplicationServiceRegistrationInProgress, previous.service)
 		}
 		if previous.service == candidate.service {
 			lifecycle.lock.Unlock()
@@ -41,6 +41,7 @@ func (app *App) registerApplicationServiceProvider(candidate, previous *applicat
 		lifecycle.providers = append(lifecycle.providers, existing)
 	}
 	published := false
+	awaitingPhase := false
 	lifecycle.registering++
 	lifecycle.lock.Unlock()
 	defer func() {
@@ -48,7 +49,11 @@ func (app *App) registerApplicationServiceProvider(candidate, previous *applicat
 		if previous == nil && !published {
 			lifecycle.removeRegistrationLocked(existing)
 		}
-		lifecycle.registering--
+		if awaitingPhase {
+			lifecycle.applicationPhases--
+		} else {
+			lifecycle.registering--
+		}
 		lifecycle.condition.Broadcast()
 		lifecycle.lock.Unlock()
 	}()
@@ -60,6 +65,24 @@ func (app *App) registerApplicationServiceProvider(candidate, previous *applicat
 		}
 		return wrapped
 	}
+	if previous == nil {
+		published = app.publishApplicationService(candidate, previous, existing, false)
+		if published {
+			return nil
+		}
+	}
+
+	// Register 回调不占阶段锁。转入阶段队列后，当前初始化可以结束，
+	// Boot 和 Shutdown 则等到候选初始化及旧实例退出完成后再获取阶段锁。
+	lifecycle.lock.Lock()
+	awaitingPhase = true
+	lifecycle.registering--
+	lifecycle.applicationPhases++
+	lifecycle.condition.Broadcast()
+	lifecycle.lock.Unlock()
+	lifecycle.phaseMu.Lock()
+	defer lifecycle.phaseMu.Unlock()
+
 	published = app.publishApplicationService(candidate, previous, existing, false)
 	if !published {
 		if err := safeProviderInitialize(candidate, app); err != nil {

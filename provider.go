@@ -62,6 +62,7 @@ type providerLifecycle struct {
 	providers          []*providerRegistration
 	identities         map[providerIdentity]struct{}
 	registering        int
+	applicationPhases  int
 	closing            bool
 	registrationClosed bool
 	booting            bool
@@ -303,8 +304,6 @@ func (app *App) bootProviders() error {
 			return initializeErr
 		}
 	}
-	lifecycle.phaseMu.Lock()
-	defer lifecycle.phaseMu.Unlock()
 	lifecycle.lock.Lock()
 	lifecycle.initializeLocked()
 	if lifecycle.closed || lifecycle.closing {
@@ -318,9 +317,14 @@ func (app *App) bootProviders() error {
 	}
 	lifecycle.registrationClosed = true
 	lifecycle.booting = true
-	for lifecycle.registering > 0 {
+	for lifecycle.registering > 0 || lifecycle.applicationPhases > 0 {
 		lifecycle.condition.Wait()
 	}
+	lifecycle.lock.Unlock()
+
+	lifecycle.phaseMu.Lock()
+	defer lifecycle.phaseMu.Unlock()
+	lifecycle.lock.Lock()
 	initializeErr := error(nil)
 	if initializeStarted {
 		lifecycle.lock.Unlock()
@@ -422,17 +426,20 @@ func (app *App) dispatchAppInit() error {
 
 func (app *App) shutdownProviders() error {
 	lifecycle := &app.providers
-	lifecycle.phaseMu.Lock()
-	defer lifecycle.phaseMu.Unlock()
 	lifecycle.lock.Lock()
 	lifecycle.initializeLocked()
 	// 先阻止新的 Register，再等待已经进入 Register 的 Provider 完成；这些 Provider
 	// 仍然需要经过 Initialize，不能直接进入 Shutdown。
 	lifecycle.closing = true
 	lifecycle.condition.Broadcast()
-	for lifecycle.registering > 0 || lifecycle.booting {
+	for lifecycle.registering > 0 || lifecycle.applicationPhases > 0 || lifecycle.booting {
 		lifecycle.condition.Wait()
 	}
+	lifecycle.lock.Unlock()
+
+	lifecycle.phaseMu.Lock()
+	defer lifecycle.phaseMu.Unlock()
+	lifecycle.lock.Lock()
 	shouldInitializePending := lifecycle.initialized
 	lifecycle.lock.Unlock()
 
