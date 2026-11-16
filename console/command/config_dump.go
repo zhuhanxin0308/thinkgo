@@ -79,7 +79,13 @@ func redactConfigDumpData(key string, value interface{}) (interface{}, error) {
 	if err := decoder.Decode(&normalized); err != nil {
 		return nil, err
 	}
-	return redactConfigDumpValue(key, normalized), nil
+	// 按 Config.Get 使用的层级判断，禁止组合别名跨越两个不同的键命中。
+	for segment := range strings.SplitSeq(key, ".") {
+		if isConfigDumpSensitiveKey(segment) {
+			return configDumpRedactedValue, nil
+		}
+	}
+	return redactConfigDumpValue("", normalized), nil
 }
 
 // redactConfigDumpValue 按字段名判断是否脱敏，普通值保持原样。
@@ -124,8 +130,6 @@ func isConfigDumpSensitiveKey(key string) bool {
 		"private_key",
 		"privatekey",
 		"signing_key",
-		"sign_key",
-		"signkey",
 		"encryption_key",
 		"client_secret",
 		"secret",
@@ -133,10 +137,6 @@ func isConfigDumpSensitiveKey(key string) bool {
 		"token",
 		"api_key",
 		"apikey",
-		"app_key",
-		"appkey",
-		"mch_key",
-		"mchkey",
 		"access_key",
 		"accesskey",
 		"connection_string",
@@ -144,6 +144,12 @@ func isConfigDumpSensitiveKey(key string) bool {
 	}
 	for _, fragment := range sensitiveFragments {
 		if normalizedKey == fragment || strings.Contains(normalizedKey, fragment) {
+			return true
+		}
+	}
+	boundedKey := "_" + normalizedKey + "_"
+	for _, alias := range []string{"_sign_key_", "_signkey_", "_app_key_", "_appkey_", "_mch_key_", "_mchkey_"} {
+		if strings.Contains(boundedKey, alias) {
 			return true
 		}
 	}

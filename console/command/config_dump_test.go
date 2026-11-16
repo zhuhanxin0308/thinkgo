@@ -90,7 +90,10 @@ func TestConfigDumpRedactsCommonCredentialAliases(t *testing.T) {
 	payment := map[string]interface{}{
 		"app_key": "hidden-app-key", "mch_key": "hidden-merchant-key",
 		"sign-key": "hidden-sign-key", "author": "visible-author",
-		"primary_key": "visible-record-id",
+		"primary_key":     "visible-record-id",
+		"assign_key":      "visible-assignment",
+		"design_key":      "visible-design",
+		"client_sign_key": "hidden-client-sign-key",
 	}
 	redis := map[string]interface{}{
 		"auth": "hidden-auth", "pwd": "hidden-pwd", "tls_cert": "hidden-pem", "salt": "hidden-salt",
@@ -101,9 +104,15 @@ func TestConfigDumpRedactsCommonCredentialAliases(t *testing.T) {
 	if err := configuration.Set("redis", redis); err != nil {
 		t.Fatal(err)
 	}
+	if err := configuration.Set("app.key_field", "visible-schema-key"); err != nil {
+		t.Fatal(err)
+	}
+	if err := configuration.Set("credentials.user", "hidden-credential-user"); err != nil {
+		t.Fatal(err)
+	}
 	command := &ConfigDump{Command: console.Command{App: configDumpTestApp(t, configuration)}}
 	command.Configure()
-	for _, key := range []string{"", "payment.app_key", "redis.auth"} {
+	for _, key := range []string{"", "payment.app_key", "redis.auth", "credentials.user"} {
 		input := console.NewInput(key)
 		if err := input.Parse(command.GetArgumentDefinitions(), command.GetOptionDefinitions()); err != nil {
 			t.Fatal(err)
@@ -116,9 +125,24 @@ func TestConfigDumpRedactsCommonCredentialAliases(t *testing.T) {
 		if strings.Contains(output, "hidden-") || !strings.Contains(output, configDumpRedactedValue) {
 			t.Fatalf("命令导出包含凭据或缺少脱敏标记: %q", output)
 		}
-		if key == "" && (!strings.Contains(output, "visible-author") || !strings.Contains(output, "visible-record-id")) {
-			t.Fatalf("普通业务字段应可查看: %q", output)
+		if key == "" {
+			for _, value := range []string{"visible-author", "visible-record-id", "visible-assignment", "visible-design", "visible-schema-key"} {
+				if !strings.Contains(output, value) {
+					t.Fatalf("普通业务字段 %q 应可查看: %q", value, output)
+				}
+			}
 		}
+	}
+	input := console.NewInput("app.key_field")
+	if err := input.Parse(command.GetArgumentDefinitions(), command.GetOptionDefinitions()); err != nil {
+		t.Fatal(err)
+	}
+	var stdout bytes.Buffer
+	if err := command.Execute(input, console.NewOutputWithWriters(&stdout, &bytes.Buffer{}, false)); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(stdout.String()); got != `"visible-schema-key"` {
+		t.Fatalf("直接查询应保留路径层级: %q", got)
 	}
 }
 
