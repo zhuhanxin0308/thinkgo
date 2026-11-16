@@ -160,6 +160,50 @@ func TestHttpResolvesApplicationFromProjectConfigSnapshot(t *testing.T) {
 	}
 }
 
+// TestNativeHTTPAcceptsTypedProjectOverrides 验证宿主设置的类型化映射与 JSON 配置等价。
+func TestNativeHTTPAcceptsTypedProjectOverrides(t *testing.T) {
+	base := t.TempDir()
+	writeNativeHTTPConfig(t, base, `{"app_env":"test","default_app":"index","server":{"host":"127.0.0.1","port":8080}}`)
+	application := framework.NewConsoleAppUninitialized(base)
+	t.Cleanup(func() { _ = application.Close() })
+	if err := application.RegisterApplications(
+		nativeHTTPGlobalLoader,
+		framework.ApplicationDefinition{Name: "index", Register: nativeHTTPApplicationLoader("index")},
+		framework.ApplicationDefinition{Name: "admin", Register: nativeHTTPApplicationLoader("admin")},
+		framework.ApplicationDefinition{Name: "blocked", Register: nativeHTTPApplicationLoader("blocked")},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := application.Initialize(); err != nil {
+		t.Fatal(err)
+	}
+	if err := application.ApplyProjectApplicationOverrides(map[string]interface{}{
+		"app_map":       map[string]string{"backend": "admin"},
+		"domain_bind":   map[string]string{"admin.example.com": "admin"},
+		"deny_app_list": []string{"blocked"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	kernel, err := NewHttp(application)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		url, body string
+		status    int
+	}{
+		{"http://example.com/backend/", "admin", stdhttp.StatusOK},
+		{"http://admin.example.com/", "admin", stdhttp.StatusOK},
+		{"http://example.com/blocked/", "", stdhttp.StatusNotFound},
+	} {
+		recorder := httptest.NewRecorder()
+		kernel.ServeHTTP(recorder, httptest.NewRequest(stdhttp.MethodGet, test.url, nil))
+		if recorder.Code != test.status || test.body != "" && recorder.Body.String() != test.body {
+			t.Errorf("%s: 响应=%d %q", test.url, recorder.Code, recorder.Body.String())
+		}
+	}
+}
+
 // TestNativeApplicationEventsMatchThinkPHPMultiAppOrder 验证 HttpRun 只触发
 // 项目级监听器，而应用级监听器从路由阶段开始生效并能接收 HttpEnd。
 func TestNativeApplicationEventsMatchThinkPHPMultiAppOrder(t *testing.T) {

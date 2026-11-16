@@ -296,10 +296,11 @@ func (h *Http) responseForPublicFile(request *fwcontext.Request) *fwcontext.Resp
 	if staticPath == "/" {
 		staticPath = "/index.html"
 	}
-	if !h.servePublicFile(writer, raw, staticPath) {
+	status := h.servePublicFile(writer, raw, staticPath)
+	if status == 0 {
 		return nil
 	}
-	return fwcontext.NewCommittedResponse(http.StatusOK)
+	return fwcontext.NewCommittedResponse(status)
 }
 
 func (h *Http) responseForRecoveredRequest(request *fwcontext.Request, recovered interface{}) *fwcontext.Response {

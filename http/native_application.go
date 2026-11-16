@@ -4,9 +4,12 @@ import (
 	stdcontext "context"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	stdhttp "net/http"
+	"net/netip"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -374,39 +377,56 @@ func parseApplicationExpress(raw interface{}) (bool, error) {
 }
 
 func applicationStringMap(raw interface{}, field string) (map[string]string, error) {
-	if raw == nil {
+	var result map[string]string
+	switch values := raw.(type) {
+	case nil:
 		return map[string]string{}, nil
-	}
-	values, ok := raw.(map[string]interface{})
-	if !ok {
+	case map[string]string:
+		result = make(map[string]string, len(values))
+		maps.Copy(result, values)
+	case map[string]interface{}:
+		result = make(map[string]string, len(values))
+		for key, rawValue := range values {
+			value, ok := rawValue.(string)
+			if !ok {
+				return nil, fmt.Errorf("%w: %s 的键和值必须是不含首尾空白的字符串", errInvalidApplication, field)
+			}
+			result[key] = value
+		}
+	default:
 		return nil, fmt.Errorf("%w: %s 必须是对象", errInvalidApplication, field)
 	}
-	result := make(map[string]string, len(values))
-	for key, rawValue := range values {
-		value, ok := rawValue.(string)
-		if !ok || strings.TrimSpace(value) != value || strings.TrimSpace(key) != key {
+	for key, value := range result {
+		if strings.TrimSpace(value) != value || strings.TrimSpace(key) != key {
 			return nil, fmt.Errorf("%w: %s 的键和值必须是不含首尾空白的字符串", errInvalidApplication, field)
 		}
-		result[key] = value
 	}
 	return result, nil
 }
 
 func applicationStringList(raw interface{}, field string) ([]string, error) {
-	if raw == nil {
+	var result []string
+	switch list := raw.(type) {
+	case nil:
 		return nil, nil
-	}
-	list, ok := raw.([]interface{})
-	if !ok {
+	case []string:
+		result = slices.Clone(list)
+	case []interface{}:
+		result = make([]string, 0, len(list))
+		for _, rawValue := range list {
+			value, ok := rawValue.(string)
+			if !ok {
+				return nil, fmt.Errorf("%w: %s 必须是字符串数组", errInvalidApplication, field)
+			}
+			result = append(result, value)
+		}
+	default:
 		return nil, fmt.Errorf("%w: %s 必须是数组", errInvalidApplication, field)
 	}
-	result := make([]string, 0, len(list))
-	for _, rawValue := range list {
-		value, ok := rawValue.(string)
-		if !ok || strings.TrimSpace(value) != value {
+	for _, value := range result {
+		if strings.TrimSpace(value) != value {
 			return nil, fmt.Errorf("%w: %s 必须是字符串数组", errInvalidApplication, field)
 		}
-		result = append(result, value)
 	}
 	return result, nil
 }
@@ -425,7 +445,10 @@ func normalizeApplicationDomainPattern(pattern string) (string, string, error) {
 	if strings.Contains(pattern, "*") {
 		return "", "", fmt.Errorf("域名绑定 %q 的通配符位置非法", pattern)
 	}
-	if strings.Contains(pattern, ".") {
+	if address, err := netip.ParseAddr(pattern); err == nil && address.Is6() {
+		return address.String(), "exact", nil
+	}
+	if strings.Contains(pattern, ".") || strings.HasPrefix(pattern, "[") {
 		host, err := normalizeApplicationHost(pattern)
 		return host, "exact", err
 	}
@@ -464,6 +487,11 @@ func normalizeApplicationHost(host string) (string, error) {
 		} else {
 			return "", fmt.Errorf("%w: Host 格式非法", errInvalidAppRequest)
 		}
+		address, err := netip.ParseAddr(host)
+		if err != nil || !address.Is6() {
+			return "", fmt.Errorf("%w: Host 中的 IPv6 地址非法", errInvalidAppRequest)
+		}
+		return strings.ToLower(address.String()), nil
 	} else if strings.Count(host, ":") == 1 {
 		if parsedHost, _, err := net.SplitHostPort(host); err == nil {
 			host = parsedHost
