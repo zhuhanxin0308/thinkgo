@@ -1,7 +1,9 @@
 package log
 
 import (
+	"encoding/json"
 	"regexp"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -10,7 +12,6 @@ import (
 const visibleErrorCredentialRunes = 4
 
 var sensitiveErrorFieldPattern = regexp.MustCompile(`(?i)(proxy-authorization|authorization|set-cookie|cookie|password|passwd|secret|session|token|api[-_]?key|refresh[-_]?token|private[-_]?key|signing[-_]?key|encryption[-_]?key|access[-_]?key|credential|client[-_]?secret)(["']?[\t ]*[:=][\t ]*)`)
-var maskedHTTPLineBoundary = regexp.MustCompile(`(?i)\[REDACTED\](\\r\\n|\\n|\\r)(proxy-authorization|authorization|set-cookie|cookie)["']?[\t ]*[:=]`)
 
 // redactErrorCredentials 按字段类型识别凭据边界，避免把认证方案或首项 Cookie 当成完整凭据。
 func redactErrorCredentials(message string) string {
@@ -28,6 +29,7 @@ func redactErrorCredentialsWithMask(message string, mask func(string) string) st
 	}
 	var result strings.Builder
 	position := 0
+	jsonEnd := 0
 	for _, match := range matches {
 		if match[0] < position {
 			continue
@@ -35,6 +37,11 @@ func redactErrorCredentialsWithMask(message string, mask func(string) string) st
 		result.WriteString(message[position:match[1]])
 		field := strings.ToLower(message[match[2]:match[3]])
 		value := message[match[1]:]
+		if length := jsonScalarCredentialLength(message, match, value, &jsonEnd); length > 0 {
+			result.WriteString(strconv.Quote(maskErrorField(field, value[:length], mask)))
+			position = match[1] + length
+			continue
+		}
 		length, quoted := errorCredentialLength(value, field)
 		content := value[:length]
 		if quoted {
@@ -49,12 +56,57 @@ func redactErrorCredentialsWithMask(message string, mask func(string) string) st
 				result.WriteByte(value[0])
 			}
 		} else {
-			result.WriteString(maskErrorField(field, content, mask))
+			if !isSensitiveHTTPErrorField(field) && strings.ContainsAny(content, ",;&") {
+				// 模糊分隔符可能跟在短凭据后，不能按含分隔符的长度保留前缀。
+				result.WriteString(logRedactedPlaceholder)
+			} else {
+				result.WriteString(maskErrorField(field, content, mask))
+			}
 		}
 		position = match[1] + length
 	}
 	result.WriteString(message[position:])
 	return result.String()
+}
+
+// jsonScalarCredentialLength 只信任已验证对象中的非引号标量边界。
+func jsonScalarCredentialLength(message string, match []int, value string, jsonEnd *int) int {
+	keyEnd := match[3]
+	if message[keyEnd] != '"' || strings.TrimSpace(message[keyEnd+1:match[1]]) != ":" {
+		return 0
+	}
+	valueEnd := strings.IndexAny(value, ",}")
+	if valueEnd <= 0 {
+		return 0
+	}
+	token := strings.TrimRightFunc(value[:valueEnd], unicode.IsSpace)
+	if token == "" || strings.ContainsRune(`"{[`, rune(token[0])) || !json.Valid([]byte(token)) {
+		return 0
+	}
+	keyStart := strings.LastIndexByte(message[:match[2]], '"')
+	if keyStart < 0 || !json.Valid([]byte(message[keyStart:keyEnd+1])) {
+		return 0
+	}
+	beforeKey := strings.TrimRightFunc(message[:keyStart], unicode.IsSpace)
+	if beforeKey == "" || !strings.ContainsRune("{,", rune(beforeKey[len(beforeKey)-1])) {
+		return 0
+	}
+	if match[1]+len(token) > *jsonEnd {
+		objectStart := strings.LastIndexByte(beforeKey, '{')
+		if objectStart < 0 {
+			return 0
+		}
+		decoder := json.NewDecoder(strings.NewReader(message[objectStart:]))
+		var object json.RawMessage
+		if err := decoder.Decode(&object); err != nil {
+			return 0
+		}
+		*jsonEnd = objectStart + int(decoder.InputOffset())
+		if match[1]+len(token) > *jsonEnd {
+			return 0
+		}
+	}
+	return len(token)
 }
 
 // errorCredentialLength 保留有闭合引号的字段边界；不明确的 HTTP 敏感头延伸到行末。
@@ -68,23 +120,21 @@ func errorCredentialLength(value, field string) (int, bool) {
 		}
 		return len(value), true
 	}
-	if field == "authorization" || field == "proxy-authorization" || field == "cookie" || field == "set-cookie" {
-		end := len(value)
+	if isSensitiveHTTPErrorField(field) {
 		if index := strings.IndexAny(value, "\r\n"); index >= 0 {
-			end = index
+			return index, false
 		}
-		// 已脱敏的日志可能含有转义换行。只有遮蔽标记之后的已知敏感头可形成边界，
-		// 后续头的值仍会单独脱敏。
-		if boundary := maskedHTTPLineBoundary.FindStringIndex(value[:end]); boundary != nil {
-			end = boundary[0] + len(logRedactedPlaceholder)
-		}
-		return end, false
+		return len(value), false
 	}
 	// 逗号、分号和 & 可以出现在未经引用的凭据中，不能用作字段边界。
 	if end := strings.IndexFunc(value, unicode.IsSpace); end >= 0 {
 		return end, false
 	}
 	return len(value), false
+}
+
+func isSensitiveHTTPErrorField(field string) bool {
+	return field == "authorization" || field == "proxy-authorization" || field == "cookie" || field == "set-cookie"
 }
 
 // errorQuoteEnd 跳过转义字符，只接受真正闭合的单引号或双引号。

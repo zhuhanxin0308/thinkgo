@@ -15,3 +15,11 @@ func safeExceptionLogText(value interface{}) string {
 func sanitizeExceptionLogText(value string) string {
 	return normalizeExceptionText(frameworkLog.SanitizeErrorText(value))
 }
+
+func (h *Handle) reportLogMessage(value string) string {
+	if _, builtIn := h.Log.(*frameworkLog.Log); builtIn {
+		// 内置日志器在入队时处理凭据和控制字符，保留原换行供这一阶段识别字段边界。
+		return limitExceptionText(value)
+	}
+	return sanitizeExceptionLogText(value)
+}

@@ -14,8 +14,9 @@ func TestErrorTextCredentialPrefixes(t *testing.T) {
 		name, input, want string
 	}{
 		{"普通密码", "password=abcdefgh host=db", "password=abcd[REDACTED] host=db"},
-		{"分隔符开头的密码", "password=;hunter2 status=failed", "password=;hun[REDACTED] status=failed"},
-		{"分隔符在密码内部", "password=abcd;tail,more&end safe=yes", "password=abcd[REDACTED] safe=yes"},
+		{"分隔符开头的密码", "password=;hunter2 status=failed", "password=[REDACTED] status=failed"},
+		{"分隔符在密码内部", "password=abcd;tail,more&end safe=yes", "password=[REDACTED] safe=yes"},
+		{"分隔符不计入短值长度", "password=abcd, status=failed", "password=[REDACTED] status=failed"},
 		{"兼容复合键", "user_password=abcdefgh someToken=ijklmnop", "user_password=abcd[REDACTED] someToken=ijkl[REDACTED]"},
 		{"短密码", "password=abc", "password=[REDACTED]"},
 		{"恰好四字", "token=abcd", "token=[REDACTED]"},
@@ -73,6 +74,27 @@ func TestPublicErrorMasksCredentialDelimitersAndTheirSuffixes(t *testing.T) {
 				!strings.Contains(output, "=[REDACTED] code=500") {
 				t.Errorf("公开错误泄露含分隔符的凭据: %q", output)
 			}
+		}
+	}
+}
+
+func TestJSONNumericCredentialBoundaryPreservesSafeFields(t *testing.T) {
+	const expected = `{"token":"[REDACTED]","status":500}`
+	for _, input := range []string{`{"token":1234,"status":500}`, `记录：{"token":1234,"status":500}`} {
+		for _, sanitize := range []func(string) string{SanitizeErrorText, SanitizeErrorTextFully} {
+			if output := sanitize(input); strings.Contains(output, "1234") || !strings.Contains(output, expected) {
+				t.Errorf("JSON 的短数字凭据或后续字段处理不正确: %q", output)
+			}
+		}
+	}
+}
+
+func TestCredentialPlaceholderInQuotedDigestCannotEndTheValue(t *testing.T) {
+	input := `Authorization: Digest nonce="pref[REDACTED]\nCookie:private-tail=abcdefgh"`
+	for _, sanitize := range []func(string) string{SanitizeErrorText, SanitizeErrorTextFully} {
+		output := sanitize(input)
+		if strings.Contains(output, "private-tail") || strings.Contains(output, "abcdefgh") {
+			t.Errorf("真实凭据中的占位符或字面换行不能分割 HTTP 头: %q", output)
 		}
 	}
 }

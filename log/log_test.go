@@ -491,7 +491,7 @@ func TestLogRedactsMessageCredentialsBeforeDriversAndTextOutput(t *testing.T) {
 		}
 		for _, output := range []string{entries[0].Message, entries[0].FormatEntry(), (&LogEntry{Message: message}).FormatEntry()} {
 			if strings.Contains(output, "long-test-password") || strings.Contains(output, "synthetic-token-tail") ||
-				!strings.Contains(output, "password=long[REDACTED] token=;syn[REDACTED] safe=yes") {
+				!strings.Contains(output, "password=long[REDACTED] token=[REDACTED] safe=yes") {
 				t.Fatalf("日志消息泄露凭据或改变已知的安全字段: %q", output)
 			}
 		}

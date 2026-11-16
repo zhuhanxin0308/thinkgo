@@ -280,11 +280,7 @@ func sanitizeExceptionText(text string) string {
 
 // normalizeExceptionText 统一处理异常文本的长度、编码和控制字符，避免结构化脱敏后的占位符再次被改写。
 func normalizeExceptionText(text string) string {
-	if len(text) > maxExceptionLogTextBytes {
-		text = strings.ToValidUTF8(text[:maxExceptionLogTextBytes], "�") + "…"
-	} else {
-		text = strings.ToValidUTF8(text, "�")
-	}
+	text = limitExceptionText(text)
 	text = strings.NewReplacer("\r", `\r`, "\n", `\n`, "\t", `\t`).Replace(text)
 	return strings.Map(func(character rune) rune {
 		if character < 0x20 || character == 0x7f {
@@ -292,6 +288,13 @@ func normalizeExceptionText(text string) string {
 		}
 		return character
 	}, text)
+}
+
+func limitExceptionText(text string) string {
+	if len(text) > maxExceptionLogTextBytes {
+		return strings.ToValidUTF8(text[:maxExceptionLogTextBytes], "�") + "…"
+	}
+	return strings.ToValidUTF8(text, "�")
 }
 
 // Report 按异常类型选择日志级别，并与 Render 保持彼此独立。
@@ -319,7 +322,7 @@ func (h *Handle) Report(err interface{}) {
 		return
 	}
 
-	h.Log.ErrorCtx(safeExceptionLogText(err), map[string]interface{}{
+	h.Log.ErrorCtx(safeExceptionTextWith(err, h.reportLogMessage), map[string]interface{}{
 		"stack": string(debug.Stack()),
 	})
 }
@@ -335,10 +338,10 @@ func (h *Handle) reportHTTPException(err *HttpException) {
 	ctx := map[string]interface{}{"status": err.StatusCode}
 	if err.StatusCode >= http.StatusInternalServerError {
 		ctx["stack"] = string(debug.Stack())
-		h.Log.ErrorCtx(sanitizeExceptionLogText(err.Message), ctx)
+		h.Log.ErrorCtx(h.reportLogMessage(err.Message), ctx)
 		return
 	}
-	h.Log.WarningCtx(sanitizeExceptionLogText(err.Message), ctx)
+	h.Log.WarningCtx(h.reportLogMessage(err.Message), ctx)
 }
 
 func (h *Handle) reportValidateException(err *ValidateException) {
@@ -346,7 +349,7 @@ func (h *Handle) reportValidateException(err *ValidateException) {
 		return
 	}
 
-	h.Log.WarningCtx(sanitizeExceptionLogText(err.Message), map[string]interface{}{
+	h.Log.WarningCtx(h.reportLogMessage(err.Message), map[string]interface{}{
 		"field":  err.Field,
 		"status": http.StatusUnprocessableEntity,
 	})
@@ -373,10 +376,10 @@ func (h *Handle) reportBusinessException(err *BusinessException) {
 	}
 	if status >= http.StatusInternalServerError {
 		ctx["stack"] = string(debug.Stack())
-		h.Log.ErrorCtx(sanitizeExceptionLogText(err.Message), ctx)
+		h.Log.ErrorCtx(h.reportLogMessage(err.Message), ctx)
 		return
 	}
-	h.Log.WarningCtx(sanitizeExceptionLogText(err.Message), ctx)
+	h.Log.WarningCtx(h.reportLogMessage(err.Message), ctx)
 }
 
 // renderHttpException 渲染 HTTP 异常，并在非本地调试场景隐藏 5xx 详情。
