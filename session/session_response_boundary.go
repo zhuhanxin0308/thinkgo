@@ -1,6 +1,25 @@
 package session
 
-import "errors"
+import (
+	"errors"
+	"net/http"
+)
+
+// corruptSessionCookieError 保留失败原因，并允许错误响应按原作用域删除对应 Cookie。
+type corruptSessionCookieError struct {
+	cause   error
+	session *Session
+}
+
+func (e *corruptSessionCookieError) Error() string { return e.cause.Error() }
+func (e *corruptSessionCookieError) Unwrap() error { return e.cause }
+
+func (e *corruptSessionCookieError) ClearSessionCookie(writer http.ResponseWriter) error {
+	if err := e.session.SetResponseWriter(writer); err != nil {
+		return err
+	}
+	return e.session.writeSessionCookie("", -1)
+}
 
 // saveLocked 在调用者持有 saveMu 时稳定持久化请求级 Session 快照。
 func (s *Session) saveLocked() error {

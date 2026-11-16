@@ -32,7 +32,17 @@ func (s *Session) Handle(req *context.Request, next func(*context.Request) *cont
 			status = http.StatusBadRequest
 			message = "会话 Cookie 非法"
 		}
-		return sessionErrorResponse(status, message)
+		response := sessionErrorResponse(status, message)
+		var recovery interface {
+			ClearSessionCookie(http.ResponseWriter) error
+		}
+		if errors.As(err, &recovery) {
+			adapter := &ResponseAdapter{response: response}
+			if clearErr := recovery.ClearSessionCookie(adapter); clearErr != nil || adapter.Commit() != nil {
+				return sessionErrorResponse(http.StatusInternalServerError, "会话 Cookie 清除失败")
+			}
+		}
+		return response
 	}
 	req.WithSession(requestSession)
 	commit := &sessionCommitCoordinator{requestSession: requestSession}

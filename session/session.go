@@ -210,6 +210,11 @@ func (s *Session) newRequestSession(req *http.Request, writer http.ResponseWrite
 		mutations:      make(map[string]sessionMutation),
 	}
 	if err = requestSession.bootstrap(requestedID); err != nil {
+		if recovery, ok := err.(*corruptSessionCookieError); ok && writer != nil {
+			if clearErr := recovery.ClearSessionCookie(writer); clearErr != nil {
+				err = errors.Join(err, clearErr)
+			}
+		}
 		return nil, err
 	}
 	return requestSession, nil
@@ -618,7 +623,12 @@ func (s *Session) bootstrapID(id string, markInvalid bool) error {
 	}
 	envelope, err := decodeSessionEnvelope(content, s.config.MaxDataBytes)
 	if err != nil {
-		return s.reportIDError("解析 Session 存储失败", err, id)
+		reported := s.reportIDError("解析 Session 存储失败", err, id)
+		// 显式提交的会话 ID 可能与浏览器的 Cookie 不同，只清除指向坏记录的 Cookie。
+		if cookieID, found, readErr := s.cookie.Get(s.config.Name); readErr == nil && found && cookieID == id {
+			return &corruptSessionCookieError{cause: reported, session: s}
+		}
+		return reported
 	}
 	if envelope.Revoked || sessionEnvelopeExpired(envelope, s.nowTime()) {
 		s.invalidCookie = true
@@ -779,19 +789,12 @@ func (s *Session) flushCookie(id string, remove bool) error {
 	if id == "" {
 		return ErrSessionCookie
 	}
-	options := cookie.CookieOptions{
-		Path: s.config.CookiePath, Domain: s.config.Domain, Secure: s.config.Secure,
-		HttpOnly: true, SameSite: s.config.SameSite, Expire: s.config.Expire,
-	}
+	value, expire := id, s.config.Expire
 	if remove {
-		options.Expire = -1
+		value, expire = "", -1
 	}
-	value := id
-	if remove {
-		value = ""
-	}
-	if err := s.cookie.Set(s.config.Name, value, options); err != nil {
-		return s.reportError("写入 Session Cookie 失败", errors.Join(ErrSessionCookie, err), nil)
+	if err := s.writeSessionCookie(value, expire); err != nil {
+		return err
 	}
 	s.mu.Lock()
 	if s.id == id {
@@ -799,6 +802,17 @@ func (s *Session) flushCookie(id string, remove bool) error {
 		s.invalidCookie = false
 	}
 	s.mu.Unlock()
+	return nil
+}
+
+func (s *Session) writeSessionCookie(value string, expire int) error {
+	options := cookie.CookieOptions{
+		Path: s.config.CookiePath, Domain: s.config.Domain, Secure: s.config.Secure,
+		HttpOnly: true, SameSite: s.config.SameSite, Expire: expire,
+	}
+	if err := s.cookie.Set(s.config.Name, value, options); err != nil {
+		return s.reportError("写入 Session Cookie 失败", errors.Join(ErrSessionCookie, err), nil)
+	}
 	return nil
 }
 

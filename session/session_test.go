@@ -410,8 +410,13 @@ func TestCorruptBackendDataIsReported(t *testing.T) {
 	manager := newTestSessionManager(t, driver, map[string]interface{}{"name": "SID"}, nil)
 	raw := httptest.NewRequest(http.MethodGet, "/", nil)
 	raw.AddCookie(&http.Cookie{Name: "SID", Value: corruptSessionID})
-	if _, err := manager.NewRequestSession(raw, httptest.NewRecorder()); !errors.Is(err, ErrCorruptSession) {
+	writer := httptest.NewRecorder()
+	if _, err := manager.NewRequestSession(raw, writer); !errors.Is(err, ErrCorruptSession) {
 		t.Fatalf("损坏 Session 应返回 ErrCorruptSession，实际为 %v", err)
+	}
+	deleted := writer.Result().Cookies()
+	if len(deleted) != 1 || deleted[0].Name != "SID" || deleted[0].MaxAge >= 0 {
+		t.Fatalf("直接使用 Session 的 HTTP 调用应同时得到删除 Cookie: %v", deleted)
 	}
 }
 

@@ -119,8 +119,9 @@ func TestRejectUnknownIDPreservesLazyAndStoredSessions(t *testing.T) {
 				t.Fatalf("admission error=%v want=%v", err, sample.wantErr)
 			}
 			if err != nil {
-				if s != nil || len(recorder.Header()) != 0 {
-					t.Fatal("corrupt storage became an anonymous successful session")
+				deleted := recorder.Result().Cookies()
+				if s != nil || len(deleted) != 1 || deleted[0].Name != "SID" || deleted[0].MaxAge >= 0 {
+					t.Fatal("坏记录应中断当前会话并清除对应 Cookie")
 				}
 				return
 			}
