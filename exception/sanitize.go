@@ -38,7 +38,7 @@ func sanitizeXMLBody(body string) (string, bool) {
 		if text.Len() == 0 {
 			return nil
 		}
-		sanitized := sanitizeExceptionText(text.String())
+		sanitized := sanitizeXMLText(text.String())
 		text.Reset()
 		return encoder.EncodeToken(xml.CharData(sanitized))
 	}
@@ -82,7 +82,7 @@ func sanitizeXMLBody(body string) (string, bool) {
 				if isSensitiveKey(attr.Name.Local) {
 					attr.Value = redactedPlaceholder
 				} else {
-					attr.Value = sanitizeExceptionText(attr.Value)
+					attr.Value = sanitizeXMLText(attr.Value)
 				}
 				attributes = append(attributes, attr)
 			}
@@ -132,6 +132,15 @@ func sanitizeXMLBody(body string) (string, bool) {
 		return "", false
 	}
 	return output.String(), true
+}
+
+func sanitizeXMLText(value string) string {
+	sanitized := sanitizeExceptionText(value)
+	// XML 实体展开可能把凭据中间的字符变为空白，识别到凭据后隐藏整个值。
+	if strings.Contains(sanitized, redactedPlaceholder) {
+		return redactedPlaceholder
+	}
+	return sanitized
 }
 
 // diagnosticXMLName 保留命名空间之间的区分，防止编码器重新暴露原始 URI。

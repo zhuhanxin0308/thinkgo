@@ -57,6 +57,15 @@ func TestXMLRedactsSplitTextAndExpandedNamespaces(t *testing.T) {
 	}
 }
 
+func TestXMLRedactsCompleteValuesWithDecodedCredentialSeparators(t *testing.T) {
+	const body = `<root note="token=first&#9;hidden-attribute"><message>password=first&#32;hidden-element</message><name>still visible</name></root>`
+	output, ok := sanitizeXMLBody(body)
+	if !ok || strings.Contains(output, "hidden-") || strings.Contains(output, "first") ||
+		strings.Count(output, redactedPlaceholder) != 2 || !strings.Contains(output, "still visible") {
+		t.Fatalf("XML 解析实体后必须隐藏含凭据的完整值: %q", output)
+	}
+}
+
 // TestXMLHidesMixedContentAndNamespaceCredentials 验证混合正文和命名空间别名不会暴露原值。
 func TestXMLHidesMixedContentAndNamespaceCredentials(t *testing.T) {
 	const mixed = "<message>password=<value>mixed-secret</value></message>"
