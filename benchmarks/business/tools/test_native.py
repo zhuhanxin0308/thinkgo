@@ -8,7 +8,9 @@ import pathlib
 import secrets
 import signal
 import subprocess
+import sys
 import tempfile
+import time
 import unittest
 import urllib.error
 from unittest import mock
@@ -196,6 +198,69 @@ class NativeTest(unittest.TestCase):
             self.assertIn(option, command)
 
 
+class ProcessGroupTest(unittest.TestCase):
+    def test_close_attempts_all_processes_and_reports_failures(self):
+        finished = mock.Mock()
+        first = mock.Mock()
+        second = mock.Mock()
+        first.stop.side_effect = PermissionError("无法停止应用")
+        second.stop.side_effect = subprocess.TimeoutExpired("worker", 1)
+        applications = {"healthy": finished, "broken": first}
+        infrastructure = {"worker": second}
+        with self.assertRaises(ExceptionGroup) as failure:
+            Environment.stop_processes(applications, infrastructure)
+        self.assertEqual(failure.exception.exceptions, (first.stop.side_effect, second.stop.side_effect))
+        finished.stop.assert_called_once_with()
+        self.assertEqual(applications, {})
+        self.assertEqual(infrastructure, {})
+
+    def test_stop_closes_workers_after_the_leader_exits(self):
+        with tempfile.TemporaryDirectory() as directory:
+            folder = pathlib.Path(directory)
+            marker = folder / "worker.pid"
+            script = (
+                "import os, pathlib, subprocess, sys\n"
+                "worker = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(20)'])\n"
+                "pathlib.Path(sys.argv[1]).write_text(str(worker.pid))\n"
+                "os._exit(0)"
+            )
+            process = native.Process([sys.executable, "-c", script, marker], folder, os.environ,
+                                     folder / "process.log", [min(os.sched_getaffinity(0))])
+            worker = None
+            try:
+                deadline = time.monotonic() + 5
+                while True:
+                    try:
+                        process.check()
+                    except RuntimeError:
+                        break
+                    self.assertLess(time.monotonic(), deadline, "组长应主动退出")
+                    time.sleep(0.01)
+                worker = int(marker.read_text())
+                self.assertEqual(os.getpgid(worker), process.pid)
+                process.stop()
+                # 在子进程被 systemd 回收之前，僵尸状态也表示不再运行。
+                stat = pathlib.Path(f"/proc/{worker}/stat")
+                deadline = time.monotonic() + 3
+                while True:
+                    try:
+                        if stat.read_text().rpartition(") ")[2].split()[0] == "Z":
+                            break
+                    except FileNotFoundError:
+                        break
+                    self.assertLess(time.monotonic(), deadline, "已退出组长的工作进程仍在运行")
+                    time.sleep(0.01)
+                self.assertTrue(process.log.closed)
+            finally:
+                if worker is not None:
+                    try:
+                        if os.getpgid(worker) == process.pid:
+                            os.kill(worker, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                process.stop()
+
+
 class PostgresStartupTest(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -346,7 +411,7 @@ class ReadinessIntegrationTest(unittest.TestCase):
             # 仅中断本测试专属数据库，真实验证下次启动会等待崩溃恢复完成。
             postgres = environment.infrastructure["postgres"]
             os.killpg(postgres.pid, signal.SIGKILL)
-            crash_status = postgres.child.wait(timeout=native.STOP_SECONDS)
+            crash_status = postgres.wait(timeout=native.STOP_SECONDS)
             self.assertEqual(crash_status, -signal.SIGKILL)
         finally:
             environment.close()
