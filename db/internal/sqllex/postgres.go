@@ -88,3 +88,14 @@ func identifierByte(value byte) bool {
 	return value >= 'a' && value <= 'z' || value >= 'A' && value <= 'Z' ||
 		value >= '0' && value <= '9' || value == '_' || value == '$' || value >= utf8.RuneSelf
 }
+
+// PostgresQuestionOperator 区分 SQL 正文中的 PostgreSQL 问号操作符和绑定参数。
+func PostgresQuestionOperator(text string, index int) bool {
+	if index < 0 || index >= len(text) || text[index] != '?' {
+		return false
+	}
+	if index+1 < len(text) && (text[index+1] == '|' || text[index+1] == '&') {
+		return true
+	}
+	return index > 0 && text[index-1] == '@'
+}

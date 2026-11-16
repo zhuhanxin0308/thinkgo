@@ -32,3 +32,12 @@ func TestRebindNumberedRetainsSQLServerBracketIdentifiers(t *testing.T) {
 		t.Fatalf("Rebind = %q; want %q", got, want)
 	}
 }
+
+// TestSQLServerRebindKeepsLiteralBackslashes 验证以反斜杠结尾的字面量不会吞掉后续绑定。
+func TestSQLServerRebindKeepsLiteralBackslashes(t *testing.T) {
+	const query = `SELECT 'C:\' AS dir, ?|? AS combined`
+	const want = `SELECT 'C:\' AS dir, @p1|@p2 AS combined`
+	if got := (&Sqlsrv{}).Rebind(query); got != want {
+		t.Fatalf("SQL Server 重绑定错误: %q，期望 %q", got, want)
+	}
+}
