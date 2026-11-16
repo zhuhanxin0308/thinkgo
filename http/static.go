@@ -99,13 +99,15 @@ func (h *Http) openPublicFile(urlPath string) (*os.File, os.FileInfo, bool) {
 	if !publicStaticRelativePath(strings.TrimPrefix(cleanPath, "/")) {
 		return nil, nil, false
 	}
-	if h.reserveStaticPrefixProbe(cleanPath, time.Now()) {
+	probeAt := time.Now()
+	if h.reserveStaticPrefixProbe(cleanPath, probeAt) {
 		return nil, nil, false
 	}
 
 	publicPath := h.app.ProjectPublicPath()
 	publicAbsolute, err := filepath.Abs(publicPath)
 	if err != nil {
+		h.clearStaticPrefixProbe(cleanPath, probeAt)
 		return nil, nil, false
 	}
 	targetCandidate := filepath.Join(publicAbsolute, filepath.FromSlash(strings.TrimPrefix(cleanPath, "/")))
@@ -115,7 +117,9 @@ func (h *Http) openPublicFile(urlPath string) (*os.File, os.FileInfo, bool) {
 	file, info, err := regularfile.Open(targetCandidate)
 	if err != nil {
 		if os.IsNotExist(err) {
-			h.rememberStaticPrefixMiss(cleanPath, publicAbsolute, time.Now())
+			h.rememberStaticPrefixMiss(cleanPath, publicAbsolute, probeAt)
+		} else {
+			h.clearStaticPrefixProbe(cleanPath, probeAt)
 		}
 		return nil, nil, false
 	}
@@ -161,17 +165,23 @@ func (h *Http) reserveStaticPrefixProbe(cleanPath string, now time.Time) bool {
 	return false
 }
 
-func (h *Http) rememberStaticPrefixMiss(cleanPath, publicAbsolute string, now time.Time) {
+func (h *Http) rememberStaticPrefixMiss(cleanPath, publicAbsolute string, probeAt time.Time) {
 	prefix := staticPathPrefix(cleanPath)
 	if h == nil || prefix == "" || publicAbsolute == "" {
 		return
 	}
 	if _, err := os.Lstat(filepath.Join(publicAbsolute, filepath.FromSlash(prefix))); !os.IsNotExist(err) {
+		// 缺失的子文件不能为已存在的一级目录续期。
+		h.clearStaticPrefixProbe(cleanPath, probeAt)
 		return
 	}
 
+	now := time.Now()
 	h.staticMissMu.Lock()
 	defer h.staticMissMu.Unlock()
+	if h.staticMisses[prefix].After(probeAt) {
+		return
+	}
 	if h.staticMisses == nil {
 		h.staticMisses = make(map[string]time.Time)
 	}
@@ -186,6 +196,16 @@ func (h *Http) rememberStaticPrefixMiss(cleanPath, publicAbsolute string, now ti
 		}
 	}
 	h.staticMisses[prefix] = now
+}
+
+// clearStaticPrefixProbe 只清除本次探测占用的时间戳，避免覆盖其他请求的新结果。
+func (h *Http) clearStaticPrefixProbe(cleanPath string, probeAt time.Time) {
+	prefix := staticPathPrefix(cleanPath)
+	h.staticMissMu.Lock()
+	defer h.staticMissMu.Unlock()
+	if h.staticMisses[prefix] == probeAt {
+		delete(h.staticMisses, prefix)
+	}
 }
 
 func (h *Http) forgetStaticPrefixMiss(cleanPath string) {

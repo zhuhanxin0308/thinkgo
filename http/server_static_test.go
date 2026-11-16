@@ -141,6 +141,76 @@ func TestStaticMissingPrefixCacheExpires(t *testing.T) {
 	_ = file.Close()
 }
 
+func TestStaticMissingChildDoesNotRenewAnExistingPrefixMiss(t *testing.T) {
+	root := t.TempDir()
+	handler := newTestHTTPHandler(t, newTestHTTPApp(t, root, map[string]interface{}{"enable": false}))
+	const prefix = "assets"
+	const missing = "/assets/missing.js"
+	const available = "/assets/ready.js"
+	const content = "console.log(1)"
+	if file, _, ok := handler.openPublicFile(missing); ok || file != nil {
+		t.Fatal("尚未创建的目录应建立负缓存")
+	}
+	dir := filepath.Join(root, "public", prefix)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "ready.js"), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		handler.staticMissMu.Lock()
+		handler.staticMisses[prefix] = time.Now().Add(-staticMissCacheTTL)
+		handler.staticMissMu.Unlock()
+		miss := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "http://example.test"+missing, nil)
+		if status := handler.servePublicFile(miss, req, missing); status != 0 {
+			t.Fatalf("牵涉的子文件应仍然缺失: %d", status)
+		}
+		ready := httptest.NewRecorder()
+		req = httptest.NewRequest(http.MethodGet, "http://example.test"+available, nil)
+		if status := handler.servePublicFile(ready, req, available); status != http.StatusOK ||
+			ready.Body.String() != content || ready.Header().Get("Content-Type") == "" {
+			t.Fatalf("首个子文件未命中后应立即访问同目录内的有效资源: %d, %q", status, ready.Body.String())
+		}
+	}
+}
+
+func TestStaticPrefixProbeKeepsNewerNegativeCacheDecisions(t *testing.T) {
+	root := t.TempDir()
+	handler := newTestHTTPHandler(t, newTestHTTPApp(t, root, map[string]interface{}{"enable": false}))
+	const path = "/assets/missing"
+	const prefix = "assets"
+	probeAt := time.Now()
+	handler.staticMisses[prefix] = probeAt.Add(-staticMissCacheTTL)
+	const workers = 12
+	start := make(chan struct{})
+	results := make(chan bool, workers)
+	for range workers {
+		go func() {
+			<-start
+			results <- handler.reserveStaticPrefixProbe(path, probeAt)
+		}()
+	}
+	close(start)
+	var probes int
+	for range workers {
+		if !<-results {
+			probes++
+		}
+	}
+	if probes != 1 {
+		t.Fatalf("同一轮过期后只能有一个探测请求，实际为 %d", probes)
+	}
+	newer := probeAt.Add(2 * time.Millisecond)
+	handler.staticMisses[prefix] = newer
+	handler.clearStaticPrefixProbe(path, probeAt)
+	handler.rememberStaticPrefixMiss(path, root, probeAt)
+	if got := handler.staticMisses[prefix]; got != newer {
+		t.Fatalf("旧探测不能改写新一轮负缓存: %v", got)
+	}
+}
+
 // TestHTTPServerHelpers 验证服务错误归一化、未启动服务关闭和 TLS 预检失败路径。
 func TestHTTPServerHelpers(t *testing.T) {
 	if normalizeServerError(nil) != nil || normalizeServerError(http.ErrServerClosed) != nil {
