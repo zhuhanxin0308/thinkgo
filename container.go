@@ -28,6 +28,8 @@ var (
 	ErrContainerScopeClosed = errors.New("container scope is closed")
 	// ErrScopedDependencyCaptured 表示长生命周期单例试图持有请求或任务作用域服务。
 	ErrScopedDependencyCaptured = errors.New("singleton cannot capture scoped dependency")
+	// ErrContainerBuildAborted 表示构建工厂所在的 goroutine 在返回前退出，等待者可以重新解析服务。
+	ErrContainerBuildAborted = errors.New("container service build exited before returning")
 )
 
 type binding struct {
@@ -406,27 +408,34 @@ func reflectArgument(parameter interface{}, targetType reflect.Type) (reflect.Va
 
 // buildSingleton 提交构建结果前核对绑定代际，阻止删除或重绑定后的旧结果复活。
 func (c *Container) buildSingleton(abstract string, registered binding, scope *resolution, active *buildState, params ...interface{}) (instance interface{}, err error) {
+	state := c.sharedState()
+	returned := false
+	defer func() {
+		// Goexit 会运行 defer，但不会让工厂调用返回。
+		if !returned {
+			err = fmt.Errorf("build singleton %s failed: %w", abstract, ErrContainerBuildAborted)
+		}
+		state.lock.Lock()
+		defer state.lock.Unlock()
+		currentBinding, exists := state.bindings[abstract]
+		if err == nil && (!exists || currentBinding.generation != active.generation) {
+			err = bindingChangedError(abstract)
+		}
+		active.err = err
+		if err == nil {
+			active.instance = instance
+			state.instances[abstract] = instance
+		}
+		if current, ok := state.building[abstract]; ok && current == active {
+			delete(state.building, abstract)
+		}
+		close(active.done)
+	}()
 	instance, err = c.build(registered, scope, params...)
+	returned = true
 	if err != nil {
 		err = fmt.Errorf("build singleton %s failed: %w", abstract, err)
 	}
-
-	state := c.sharedState()
-	state.lock.Lock()
-	currentBinding, exists := state.bindings[abstract]
-	if err == nil && (!exists || currentBinding.generation != active.generation) {
-		err = bindingChangedError(abstract)
-	}
-	active.err = err
-	if err == nil {
-		active.instance = instance
-		state.instances[abstract] = instance
-	}
-	if current, ok := state.building[abstract]; ok && current == active {
-		delete(state.building, abstract)
-	}
-	close(active.done)
-	state.lock.Unlock()
 	return instance, err
 }
 
