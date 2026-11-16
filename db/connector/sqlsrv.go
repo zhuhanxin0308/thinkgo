@@ -33,7 +33,7 @@ func buildSqlsrvDSN(config db.Config) string {
 	dsn := url.URL{
 		Scheme:   "sqlserver",
 		User:     url.UserPassword(config.Username, config.Password),
-		Host:     joinHostPort(config.Hostname, config.Hostport),
+		Host:     sqlURLHostPort(config.Hostname, config.Hostport),
 		RawQuery: query.Encode(),
 	}
 	return dsn.String()
