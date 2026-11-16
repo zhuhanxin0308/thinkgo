@@ -656,16 +656,10 @@ func firstCountValue(rows []map[string]interface{}) (int64, error) {
 	if len(rows) == 0 {
 		return 0, nil
 	}
-	if val, ok := rows[0]["tg_count"]; ok {
+	if val, ok := aggregateResultValue(rows[0], "tg_count"); ok {
 		return parseCountValue(val)
 	}
-	if len(rows[0]) != 1 {
-		return 0, fmt.Errorf("%w: Count 结果缺少唯一计数列", ErrInvalidDatabaseRow)
-	}
-	for _, val := range rows[0] {
-		return parseCountValue(val)
-	}
-	return 0, fmt.Errorf("%w: Count 结果为空", ErrInvalidDatabaseRow)
+	return 0, fmt.Errorf("%w: Count 结果缺少唯一计数列", ErrInvalidDatabaseRow)
 }
 
 // querySQLInTx 在事务内执行原生 SQL 查询，并转换为行数据映射切片。
