@@ -55,7 +55,7 @@ func TestRequireRejectsNilNextWithoutPanic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("创建认证主体失败: %v", err)
 	}
-	request.Set(requestIdentityKey, identity)
+	requestIdentityKey.Store(request, identity)
 	response := Require(rbac, "users.read")(request, nil)
 	if response.GetStatus() != http.StatusInternalServerError {
 		t.Fatalf("缺少下游处理器应返回 500，实际为 %d", response.GetStatus())
@@ -132,9 +132,55 @@ func TestRequireDistinguishesUnauthenticatedAndForbidden(t *testing.T) {
 		t.Fatalf("缺少主体应返回 401，实际为 %d", response.GetStatus())
 	}
 	identity, _ := NewIdentity("user", []string{"reader"}, nil, nil)
-	request.Set(requestIdentityKey, identity)
+	requestIdentityKey.Store(request, identity)
 	if response := Require(rbac, "users.write")(request, func(*fwcontext.Request) *fwcontext.Response { return nil }); response.GetStatus() != http.StatusForbidden {
 		t.Fatalf("权限不足应返回 403，实际为 %d", response.GetStatus())
+	}
+}
+
+func TestRequestMiddlewareDataCannotSetAuthenticationIdentity(t *testing.T) {
+	const formerKey = "__thinkgo.auth.identity"
+	rbac, err := NewRBAC(map[string][]string{"admin": {"users.write"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	forged := Identity{Subject: "forged", Roles: []string{"admin"}}
+	request := fwcontext.MustNewRequest(httptest.NewRequest(http.MethodGet, "/users", nil))
+	request.Set(formerKey, forged)
+	response := Require(rbac, "users.write")(request, func(*fwcontext.Request) *fwcontext.Response {
+		return fwcontext.NewResponse().Code(http.StatusOK)
+	})
+	if response.GetStatus() != http.StatusUnauthorized {
+		t.Errorf("普通请求数据不能授权，实际状态 %d", response.GetStatus())
+	}
+
+	user := Identity{Subject: "real", Roles: []string{"reader"}}
+	store, err := NewStaticTokenStore(map[string]Identity{"token": user})
+	if err != nil {
+		t.Fatal(err)
+	}
+	authenticator, err := Bearer(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := httptest.NewRequest(http.MethodGet, "/users", nil)
+	raw.Header.Set("Authorization", "Bearer token")
+	request = fwcontext.MustNewRequest(raw)
+	response = Authenticate(authenticator)(request, func(current *fwcontext.Request) *fwcontext.Response {
+		if current.GetData(formerKey) != nil {
+			t.Error("认证主体不能通过通用数据接口读取")
+		}
+		current.Set(formerKey, forged)
+		resolved, found := IdentityFromRequest(current)
+		if !found || resolved.Subject != user.Subject {
+			t.Errorf("普通请求数据覆盖了认证主体: %#v", resolved)
+		}
+		return Require(rbac, "users.write")(current, func(*fwcontext.Request) *fwcontext.Response {
+			return fwcontext.NewResponse().Code(http.StatusOK)
+		})
+	})
+	if response.GetStatus() != http.StatusForbidden {
+		t.Errorf("普通请求数据不能提升权限，实际状态 %d", response.GetStatus())
 	}
 }
 
@@ -161,7 +207,7 @@ func TestAuthenticationDependenciesRejectTypedNilAndInvalidIdentity(t *testing.T
 	var nilRBAC *RBAC
 	request := fwcontext.MustNewRequest(httptest.NewRequest(http.MethodGet, "/", nil))
 	identity, _ := NewIdentity("user", nil, nil, nil)
-	request.Set(requestIdentityKey, identity)
+	requestIdentityKey.Store(request, identity)
 	if response := Require(nilRBAC, "users.read")(request, func(*fwcontext.Request) *fwcontext.Response { return nil }); response.GetStatus() != http.StatusForbidden {
 		t.Fatalf("类型化 nil 授权器应返回 403，实际为 %d", response.GetStatus())
 	}

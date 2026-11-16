@@ -65,12 +65,16 @@ func TestRouterGroupIsScopedAndMiddlewareRemovalFailsClosed(t *testing.T) {
 	})
 
 	err := router.DomainGroup("api.example.com", "/api", func(group *Group) error {
+		group, err := group.WithNamedMiddleware("group-auth", groupMiddleware)
+		if err != nil {
+			return err
+		}
 		registered, registerErr := group.Get("/users", "User@Index", routeMiddleware)
 		if registerErr != nil {
 			return registerErr
 		}
-		return registered.WithoutMiddleware(groupMiddleware)
-	}, groupMiddleware)
+		return registered.WithoutNamedMiddleware("group-auth")
+	})
 	if err != nil {
 		t.Fatalf("注册域名分组失败: %v", err)
 	}

@@ -142,7 +142,7 @@ func rebindNumbered(query, prefix, dialect string) string {
 						index++
 						continue
 					}
-					if isPostgresQuestionOperator(query, index) {
+					if sqllex.PostgresQuestionOperator(query, index) {
 						output.WriteByte('?')
 						continue
 					}
@@ -152,6 +152,13 @@ func rebindNumbered(query, prefix, dialect string) string {
 				output.WriteString(strconv.Itoa(parameter))
 				continue
 			case '\'':
+				if dialect == "oracle" {
+					if end, _ := sqllex.OracleAlternativeStringEnd(query, index); end != index {
+						output.WriteString(query[index:end])
+						index = end - 1
+						continue
+					}
+				}
 				if postgres {
 					end, _ := sqllex.PostgresStringEnd(query, index)
 					output.WriteString(query[index:end])
@@ -202,12 +209,6 @@ func rebindNumbered(query, prefix, dialect string) string {
 			} else if state == stateBacktick {
 				closing = '`'
 			}
-			if current == '\\' && index+1 < len(query) && !postgres {
-				output.WriteByte(current)
-				index++
-				output.WriteByte(query[index])
-				continue
-			}
 			if current == closing {
 				if index+1 < len(query) && query[index+1] == closing {
 					output.WriteByte(current)
@@ -243,17 +244,6 @@ func rebindNumbered(query, prefix, dialect string) string {
 		output.WriteByte(current)
 	}
 	return output.String()
-}
-
-// isPostgresQuestionOperator 识别可直接出现在 SQL 正文中的 PostgreSQL 问号操作符。
-func isPostgresQuestionOperator(query string, index int) bool {
-	if index < 0 || index >= len(query) || query[index] != '?' {
-		return false
-	}
-	if index+1 < len(query) && (query[index+1] == '|' || query[index+1] == '&') {
-		return true
-	}
-	return index > 0 && query[index-1] == '@'
 }
 
 func builderDollarDelimiter(text string) string {

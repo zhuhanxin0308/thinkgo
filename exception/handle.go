@@ -874,8 +874,7 @@ func isDisplayableRequestBody(mediaType string) bool {
 	return strings.HasPrefix(mediaType, "text/") ||
 		isJSONMediaType(mediaType) ||
 		mediaType == "application/x-www-form-urlencoded" ||
-		mediaType == "application/xml" ||
-		strings.HasSuffix(mediaType, "+xml")
+		isXMLMediaType(mediaType)
 }
 
 func sanitizeRequestURL(r *http.Request) string {
@@ -956,6 +955,15 @@ func sanitizeRequestBody(body string, contentType string) string {
 		}
 		return "[INVALID FORM BODY OMITTED]"
 	}
+	if isXMLMediaType(mediaType) {
+		if sanitizedXML, ok := sanitizeXMLBody(body); ok {
+			return sanitizedXML
+		}
+		return "[INVALID XML BODY OMITTED]"
+	}
+	return "[TEXT BODY OMITTED]"
+}
 
-	return strings.ToValidUTF8(frameworkLog.SanitizeErrorTextFully(body), "�")
+func isXMLMediaType(mediaType string) bool {
+	return mediaType == "application/xml" || mediaType == "text/xml" || strings.HasSuffix(mediaType, "+xml")
 }

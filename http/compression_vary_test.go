@@ -82,7 +82,7 @@ func TestHeadLengthFollowsCompressionOfTheEquivalentGet(t *testing.T) {
 		if _, err := router.Rule(test.path, func(*fwcontext.Request) *fwcontext.Response {
 			response := fwcontext.NewResponse().Content(test.body)
 			if test.noTransform {
-				response.CacheControl("private, no-transform")
+				response.Cookie("preference", "sample").CacheControl("private, no-store, no-transform")
 			}
 			return response
 		}, "GET|HEAD"); err != nil {
@@ -112,6 +112,10 @@ func TestHeadLengthFollowsCompressionOfTheEquivalentGet(t *testing.T) {
 			assertIssue151HEAD(t, head, http.StatusOK)
 			if get.Code != http.StatusOK || (get.Header().Get("Content-Encoding") == "gzip") != test.compressed {
 				t.Fatalf("GET 未得到预期表示: %d, %v", get.Code, get.Header())
+			}
+			if test.path == "/no-transform" && (get.Header().Get("Set-Cookie") == "" ||
+				get.Header().Get("Content-Encoding") != "" || get.Body.String() != long) {
+				t.Fatal("含 Cookie 的 no-transform 响应应保留原正文和 Cookie")
 			}
 			want := strconv.Itoa(get.Body.Len())
 			if test.compressed {

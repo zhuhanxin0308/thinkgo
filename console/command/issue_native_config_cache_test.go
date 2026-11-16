@@ -12,6 +12,7 @@ import (
 	"github.com/zhuhanxin0308/thinkgo/v3"
 	"github.com/zhuhanxin0308/thinkgo/v3/config"
 	"github.com/zhuhanxin0308/thinkgo/v3/console"
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/dotenvtest"
 )
 
 // TestOptimizeNativeConfigCachesAreConsumedAfterRestart 从正式命令生成快照，
@@ -280,7 +281,7 @@ func writeNativeConfigCacheFile(t *testing.T, path, content string) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("创建配置文件目录失败: %v", err)
 	}
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+	if err := dotenvtest.WriteFile(path, []byte(content)); err != nil {
 		t.Fatalf("写入配置文件失败: %v", err)
 	}
 }

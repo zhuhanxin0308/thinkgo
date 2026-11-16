@@ -2,13 +2,20 @@ package route
 
 import (
 	"fmt"
-	"reflect"
+	"slices"
+	"strings"
 
 	"github.com/zhuhanxin0308/thinkgo/v3/context"
 	"github.com/zhuhanxin0308/thinkgo/v3/middleware"
 )
 
-// WithoutMiddleware 仅在目标函数指针唯一时移除，歧义时失败关闭。
+type routeMiddleware struct {
+	name    string
+	handler middleware.Handler
+}
+
+// WithoutMiddleware 无法从 Go 函数值确认注册身份，非空请求会返回错误。
+// Deprecated: 注册命名中间件并使用 WithoutNamedMiddleware。
 func (r *Route) WithoutMiddleware(targets ...middleware.Handler) error {
 	router, err := r.mutableRouter()
 	if err != nil {
@@ -20,32 +27,88 @@ func (r *Route) WithoutMiddleware(targets ...middleware.Handler) error {
 	if err = validateMiddleware(targets); err != nil {
 		return err
 	}
+	router.mu.RLock()
+	defer router.mu.RUnlock()
+	if router.frozen {
+		return ErrRouterFrozen
+	}
+	return fmt.Errorf("%w: 无法确认函数的注册身份，请按名称移除", ErrInvalidRouteMiddleware)
+}
+
+// WithoutNamedMiddleware 按注册名称原子移除当前路由的中间件，保留其余中间件的顺序。
+func (r *Route) WithoutNamedMiddleware(names ...string) error {
+	router, err := r.mutableRouter()
+	if err != nil || len(names) == 0 {
+		return err
+	}
 	router.mu.Lock()
 	defer router.mu.Unlock()
 	if router.frozen {
 		return ErrRouterFrozen
 	}
-	working := append([]middleware.Handler(nil), r.middlewares...)
-	for _, target := range targets {
-		pointer := reflect.ValueOf(target).Pointer()
-		matchedIndex := -1
-		for index, candidate := range working {
-			if reflect.ValueOf(candidate).Pointer() != pointer {
-				continue
-			}
-			if matchedIndex >= 0 {
-				return fmt.Errorf("%w: 中间件函数身份存在歧义", ErrInvalidRouteMiddleware)
-			}
-			matchedIndex = index
+	working := slices.Clone(r.middlewares)
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		index := namedMiddlewareIndex(working, name)
+		if !isValidRouteName(name) || index < 0 {
+			return fmt.Errorf("%w: 找不到待移除的中间件 %q", ErrInvalidRouteMiddleware, name)
 		}
-		if matchedIndex < 0 {
-			return fmt.Errorf("%w: 待移除中间件不存在", ErrInvalidRouteMiddleware)
-		}
-		working = append(working[:matchedIndex], working[matchedIndex+1:]...)
+		working = slices.Delete(working, index, index+1)
 	}
 	r.middlewares = working
 	r.middlewarePipeline = buildMiddlewarePipeline(working)
 	return nil
+}
+
+// WithNamedMiddleware 在冻结前以唯一名称为当前路由追加中间件。
+func (r *Route) WithNamedMiddleware(name string, handler middleware.Handler) error {
+	router, err := r.mutableRouter()
+	if err != nil {
+		return err
+	}
+	router.mu.Lock()
+	defer router.mu.Unlock()
+	if router.frozen {
+		return ErrRouterFrozen
+	}
+	entries, err := appendNamedMiddleware(r.middlewares, name, handler)
+	if err != nil {
+		return err
+	}
+	r.middlewares = entries
+	r.middlewarePipeline = buildMiddlewarePipeline(entries)
+	return nil
+}
+
+// WithNamedMiddleware 派生继承命名中间件的分组，原分组仍可独立注册路由。
+func (g *Group) WithNamedMiddleware(name string, handler middleware.Handler) (*Group, error) {
+	if g == nil || g.router == nil {
+		return nil, ErrInvalidRoute
+	}
+	g.router.mu.RLock()
+	defer g.router.mu.RUnlock()
+	if g.router.frozen {
+		return nil, ErrRouterFrozen
+	}
+	entries, err := appendNamedMiddleware(slices.Clone(g.middlewares), name, handler)
+	if err != nil {
+		return nil, err
+	}
+	next := *g
+	next.middlewares = entries
+	return &next, nil
+}
+
+func appendNamedMiddleware(entries []routeMiddleware, name string, handler middleware.Handler) ([]routeMiddleware, error) {
+	name = strings.TrimSpace(name)
+	if !isValidRouteName(name) || handler == nil || namedMiddlewareIndex(entries, name) >= 0 {
+		return nil, fmt.Errorf("%w: 中间件名称 %q 无效或已使用，处理函数不能为空", ErrInvalidRouteMiddleware, name)
+	}
+	return append(entries, routeMiddleware{name: name, handler: handler}), nil
+}
+
+func namedMiddlewareIndex(entries []routeMiddleware, name string) int {
+	return slices.IndexFunc(entries, func(entry routeMiddleware) bool { return entry.name == name })
 }
 
 // WithMiddleware 在路由冻结前追加中间件。
@@ -65,7 +128,7 @@ func (r *Route) WithMiddleware(handlers ...middleware.Handler) error {
 	if router.frozen {
 		return ErrRouterFrozen
 	}
-	r.middlewares = append(r.middlewares, handlers...)
+	r.middlewares = mergeMiddleware(r.middlewares, handlers)
 	r.middlewarePipeline = buildMiddlewarePipeline(r.middlewares)
 	return nil
 }
@@ -79,7 +142,14 @@ func (r *Route) Middlewares() []middleware.Handler {
 		r.router.mu.RLock()
 		defer r.router.mu.RUnlock()
 	}
-	return append([]middleware.Handler(nil), r.middlewares...)
+	if len(r.middlewares) == 0 {
+		return nil
+	}
+	handlers := make([]middleware.Handler, len(r.middlewares))
+	for index, entry := range r.middlewares {
+		handlers[index] = entry.handler
+	}
+	return handlers
 }
 
 // HasMiddleware 判断路由是否配置中间件，避免热路径为确认空管道复制中间件切片。
@@ -113,13 +183,13 @@ func (r *Route) ExecuteMiddleware(request *context.Request, destination func(*co
 }
 
 // buildMiddlewarePipeline 在路由注册或修改时一次性装配管道，运行期间只读共享。
-func buildMiddlewarePipeline(handlers []middleware.Handler) *middleware.Pipeline {
+func buildMiddlewarePipeline(handlers []routeMiddleware) *middleware.Pipeline {
 	if len(handlers) == 0 {
 		return nil
 	}
 	pipeline := middleware.NewPipeline()
-	for _, handler := range handlers {
-		pipeline.Pipe(handler)
+	for _, entry := range handlers {
+		pipeline.Pipe(entry.handler)
 	}
 	return pipeline
 }
@@ -133,9 +203,11 @@ func validateMiddleware(handlers []middleware.Handler) error {
 	return nil
 }
 
-func mergeMiddleware(parent, current []middleware.Handler) []middleware.Handler {
-	merged := make([]middleware.Handler, 0, len(parent)+len(current))
+func mergeMiddleware(parent []routeMiddleware, current []middleware.Handler) []routeMiddleware {
+	merged := make([]routeMiddleware, 0, len(parent)+len(current))
 	merged = append(merged, parent...)
-	merged = append(merged, current...)
+	for _, handler := range current {
+		merged = append(merged, routeMiddleware{handler: handler})
+	}
 	return merged
 }

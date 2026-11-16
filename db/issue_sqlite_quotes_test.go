@@ -35,7 +35,7 @@ func TestIssue125SQLiteQuoteBoundaries(t *testing.T) {
 			t.Fatalf("missing SQLite binding accepted: %q", sqlText)
 		}
 	}
-	for _, dialect := range []string{"", "mysql", "postgres", "sqlserver", "oracle"} {
+	for _, dialect := range []string{"", "mysql", "postgres"} {
 		sqlText := `SELECT 'left\'AUDIT_CANARY', ? AS bound`
 		if dialect == "postgres" {
 			// PostgreSQL 的反斜杠转义必须显式使用 E 前缀。

@@ -21,12 +21,31 @@ func TestLogRedactsKeyMaterialAndCredentials(t *testing.T) {
 			"access_key":       "access-secret",
 			"clientSecret":     "client-secret",
 			"credential_value": "credential-secret",
+			"credential":       "credential-sample-secret",
+			"credentials":      "credentials-sample-secret",
+			"credential_bundle": map[string]any{
+				"value": "credential-bundle-sample-secret",
+			},
+			"pass": "pass-sample-secret",
+			"client": map[string]any{
+				"DB.Credentials": "nested-sample-secret",
+				"compass":        "direction-visible",
+				"pass_rate":      "rate-visible",
+			},
 		},
 	}
 	formatted := entry.FormatEntry()
-	for _, secret := range []string{"private-secret", "signing-secret", "encryption-secret", "access-secret", "client-secret", "credential-secret"} {
+	for _, secret := range []string{
+		"private-secret", "signing-secret", "encryption-secret", "access-secret", "client-secret", "credential-secret",
+		"credential-sample-secret", "credentials-sample-secret", "credential-bundle-sample-secret", "pass-sample-secret", "nested-sample-secret",
+	} {
 		if strings.Contains(formatted, secret) {
 			t.Fatalf("密钥或凭据值不应出现在日志中 %q，实际为 %s", secret, formatted)
+		}
+	}
+	for _, public := range []string{"direction-visible", "rate-visible"} {
+		if !strings.Contains(formatted, public) {
+			t.Fatalf("普通字段不应被短凭据别名误判: %q", public)
 		}
 	}
 }
@@ -57,7 +76,7 @@ func TestLogTypedContextSnapshotAndDeepRedaction(t *testing.T) {
 			"region":    []string{"cn-east"},
 		},
 	}
-	logger.InfoCtx("typed context", map[string]interface{}{"credentials": credentials})
+	logger.InfoCtx("typed context", map[string]interface{}{"request_details": credentials})
 
 	credentials.Username = "mutated-user"
 	credentials.Password = "mutated-password"

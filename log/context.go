@@ -43,7 +43,6 @@ var sensitiveLogKeyParts = [...]string{
 	"encryptionkey",
 	"access_key",
 	"accesskey",
-	"credential_value",
 	"client_secret",
 	"clientsecret",
 }

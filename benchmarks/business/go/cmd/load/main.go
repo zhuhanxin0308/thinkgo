@@ -30,6 +30,8 @@ func run(ctx context.Context, arguments []string, stdout, stderr io.Writer, look
 	flags := flag.NewFlagSet("load", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	var secretEnvironment, output string
+	var checkConfig bool
+	flags.BoolVar(&checkConfig, "check-config", false, "只校验配置，不发送请求或写入结果")
 	flags.StringVar(&configuration.URL, "url", configuration.URL, "被测应用的 loopback HTTP 根地址")
 	flags.StringVar(&configuration.Scenario, "scenario", configuration.Scenario, "catalog/detail/order/ticket/mixed，混合权重由四个业务权重参数指定")
 	flags.Float64Var(&configuration.Rate, "rate", configuration.Rate, "每秒计划请求数；正数为开放负载，0为闭环")
@@ -38,14 +40,19 @@ func run(ctx context.Context, arguments []string, stdout, stderr io.Writer, look
 	flags.DurationVar(&configuration.Duration, "duration", configuration.Duration, "正式发送窗口，不包含在途请求排空")
 	flags.DurationVar(&configuration.Timeout, "timeout", configuration.Timeout, "单次请求从发送到读取正文的超时")
 	flags.Uint64Var(&configuration.Seed, "seed", configuration.Seed, "可复现业务请求种子")
+	flags.Int64Var(&configuration.DatasetSeed, "dataset-seed", configuration.DatasetSeed, "种子数据生成商品价格使用的种子")
 	flags.StringVar(&configuration.RunID, "run-id", "", "本轮唯一标识，用于生成订单幂等键；必填")
 	flags.StringVar(&secretEnvironment, "secret-env", defaultSecretEnvironment, "认证密钥所在环境变量名称，密钥不写入结果")
-	flags.StringVar(&output, "output", "", "完整结果文件路径，支持.json/.json.gz且不覆盖已有文件；必填")
+	flags.StringVar(&output, "output", "", "测量结果文件路径，支持.json/.json.gz且不覆盖已有文件")
 	flags.IntVar(&configuration.TenantCount, "tenant-count", configuration.TenantCount, "种子数据中的租户数量")
 	flags.IntVar(&configuration.UsersPerTenant, "users-per-tenant", configuration.UsersPerTenant, "每租户用户数量")
 	flags.IntVar(&configuration.ProductsPerTenant, "products-per-tenant", configuration.ProductsPerTenant, "每租户商品数量")
 	flags.IntVar(&configuration.TicketsPerTenant, "tickets-per-tenant", configuration.TicketsPerTenant, "每租户工单数量")
 	flags.IntVar(&configuration.Categories, "categories", configuration.Categories, "每租户分类数量")
+	flags.IntVar(&configuration.CatalogPageSize, "catalog-page-size", configuration.CatalogPageSize, "数据集的目录分页大小")
+	flags.Int64Var(&configuration.MaximumPriceCents, "maximum-price-cents", configuration.MaximumPriceCents, "数据集的目录最高价格")
+	flags.IntVar(&configuration.MaximumOrderItems, "maximum-order-items", configuration.MaximumOrderItems, "数据集限制的单笔订单商品数")
+	flags.IntVar(&configuration.MaximumItemQuantity, "maximum-item-quantity", configuration.MaximumItemQuantity, "数据集限制的单项商品数量")
 	flags.IntVar(&configuration.InactiveProductModulus, "inactive-product-modulus", configuration.InactiveProductModulus, "种子数据中商品下架模数")
 	flags.IntVar(&configuration.HotProductsPerTenant, "hot-products-per-tenant", configuration.HotProductsPerTenant, "每租户热点活动商品数量")
 	flags.IntVar(&configuration.CacheHitWeight, "cache-hit-weight", configuration.CacheHitWeight, "详情访问热点商品的百分比，并非实际缓存命中率")
@@ -60,14 +67,17 @@ func run(ctx context.Context, arguments []string, stdout, stderr io.Writer, look
 		}
 		return 2
 	}
-	if flags.NArg() != 0 || output == "" || secretEnvironment == "" {
-		fmt.Fprintln(stderr, "必须指定-output，不接受位置参数，-secret-env不能为空")
+	if flags.NArg() != 0 || !checkConfig && output == "" || secretEnvironment == "" {
+		fmt.Fprintln(stderr, "启动测量须指定-output，不接受位置参数，-secret-env不能为空")
 		return 2
 	}
 	configuration.Secret = lookup(secretEnvironment)
 	if err := configuration.Validate(); err != nil {
 		fmt.Fprintln(stderr, err)
 		return 2
+	}
+	if checkConfig {
+		return 0
 	}
 	// 在发起业务写入前检查结果路径，避免重复命令运行后才发现无法保存。
 	if _, err := os.Lstat(output); err == nil || !errors.Is(err, os.ErrNotExist) {
