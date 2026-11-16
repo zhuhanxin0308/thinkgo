@@ -97,6 +97,11 @@ func normalizeLocalConfig(configuration LocalConfig) (LocalConfig, error) {
 	if err := validateVisibility(configuration.Visibility); err != nil {
 		return LocalConfig{}, err
 	}
+	switch configuration.Links {
+	case "", "disallow", "skip":
+	default:
+		return LocalConfig{}, fmt.Errorf("%w: local.links 仅接受 disallow 或 skip", ErrInvalidConfiguration)
+	}
 	configuration.Permissions = withDefaultPermissions(configuration.Permissions)
 	return configuration, nil
 }
@@ -119,27 +124,29 @@ func withDefaultPermissions(permissions Permissions) Permissions {
 
 func parsePermissions(configuration map[string]interface{}) (Permissions, error) {
 	permissions := Permissions{}
-	for groupName, destination := range map[string]struct {
+	destinations := map[string]struct {
 		public  *fs.FileMode
 		private *fs.FileMode
 	}{
 		"file": {public: &permissions.FilePublic, private: &permissions.FilePrivate},
 		"dir":  {public: &permissions.DirectoryPublic, private: &permissions.DirectoryPrivate},
-	} {
-		rawGroup, exists := configuration[groupName]
+	}
+	for groupName, rawGroup := range configuration {
+		destination, exists := destinations[groupName]
 		if !exists {
-			continue
+			return Permissions{}, fmt.Errorf("%w: 未知权限组 permissions.%s", ErrInvalidConfiguration, groupName)
 		}
 		group, ok := rawGroup.(map[string]interface{})
 		if !ok {
 			return Permissions{}, fmt.Errorf("%w: permissions.%s 必须是对象", ErrInvalidConfiguration, groupName)
 		}
-		for visibility, target := range map[string]*fs.FileMode{
+		targets := map[string]*fs.FileMode{
 			VisibilityPublic: destination.public, VisibilityPrivate: destination.private,
-		} {
-			rawMode, configured := group[visibility]
-			if !configured {
-				continue
+		}
+		for visibility, rawMode := range group {
+			target, exists := targets[visibility]
+			if !exists {
+				return Permissions{}, fmt.Errorf("%w: 未知权限字段 permissions.%s.%s", ErrInvalidConfiguration, groupName, visibility)
 			}
 			mode, err := parseFileMode(rawMode)
 			if err != nil {

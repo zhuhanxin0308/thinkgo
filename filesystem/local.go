@@ -1,6 +1,7 @@
 package filesystem
 
 import (
+	"bytes"
 	"crypto/md5"  // #nosec G501 -- ThinkPHP/Flysystem 文件校验兼容算法，不用于密码、签名或认证。
 	"crypto/sha1" // #nosec G505 -- ThinkPHP/Flysystem 可选文件校验算法，不用于密码、签名或认证。
 	"crypto/sha256"
@@ -132,9 +133,9 @@ func (disk *Local) Write(filePath string, contents string, options ...map[string
 	return disk.writeReader(filePath, strings.NewReader(contents), options)
 }
 
-// WriteBytes 是 Go 二进制业务代码的便捷入口，公开 Write 的语义保持不变。
+// WriteBytes 同步原子写入二进制数据。调用返回前，调用方须保持 contents 不变。
 func (disk *Local) WriteBytes(filePath string, contents []byte, options ...map[string]interface{}) error {
-	return disk.writeReader(filePath, strings.NewReader(string(contents)), options)
+	return disk.writeReader(filePath, bytes.NewReader(contents), options)
 }
 
 // WriteStream 写入流，并与 Flysystem 一致在可定位流上从起点开始读取。

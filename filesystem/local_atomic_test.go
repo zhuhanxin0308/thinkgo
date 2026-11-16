@@ -1,6 +1,7 @@
 package filesystem
 
 import (
+	"bytes"
 	"errors"
 	"io"
 	"os"
@@ -9,6 +10,57 @@ import (
 	"sync"
 	"testing"
 )
+
+func TestLocalWriteBytesPreservesBinaryContentAndAtomicFailure(t *testing.T) {
+	disk, rootPath := newAtomicTestDisk(t)
+	contents := []byte{0x00, 0xff, 0x0a, 0xfe}
+	want := bytes.Clone(contents)
+	if err := disk.WriteBytes("data.bin", contents); err != nil {
+		t.Fatal(err)
+	}
+	contents[0] = 0x42
+	failure := errors.New("二进制写入失败")
+	disk.operations.copy = partialCopyFailure(failure)
+	if err := disk.WriteBytes("data.bin", contents); !errors.Is(err, failure) {
+		t.Fatalf("写入失败应返回底层错误: %v", err)
+	}
+	if err := disk.WriteBytes("new.bin", contents); !errors.Is(err, failure) {
+		t.Fatalf("新文件失败应返回底层错误: %v", err)
+	}
+	if got, err := disk.ReadBytes("data.bin"); err != nil || !bytes.Equal(got, want) {
+		t.Fatalf("已发布的二进制字节变化: %x, %v", got, err)
+	}
+	if exists, err := disk.FileExists("new.bin"); err != nil || exists {
+		t.Fatalf("失败的新文件不应发布: %v, %v", exists, err)
+	}
+	assertNoLocalTemporaryFiles(t, rootPath)
+}
+
+func BenchmarkLocalWriteBytes(b *testing.B) {
+	for _, tc := range []struct {
+		name string
+		size int
+	}{
+		{"4KiB", 4 << 10},
+		{"1MiB", 1 << 20},
+		{"8MiB", 8 << 20},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			disk, err := NewLocal(LocalConfig{Root: b.TempDir()})
+			if err != nil {
+				b.Fatal(err)
+			}
+			b.Cleanup(func() { _ = disk.Close() })
+			contents := make([]byte, tc.size)
+			b.SetBytes(int64(tc.size))
+			for b.Loop() {
+				if err := disk.WriteBytes("test.bin", contents); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
 
 // TestLocalAtomicWritePreservesPublishedTargets 验证写入流失败时，旧文件不会被截断，
 // 新文件也不会以半成品形式暴露。
