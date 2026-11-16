@@ -55,8 +55,8 @@ func TestIssue127StandardHandlerUsesAuthorizedMethod(t *testing.T) {
 			}{
 				{"head", http.MethodHead, "/api/spec", "", http.StatusOK},
 				{"anonymous-get", http.MethodGet, "/api/spec", "", http.StatusUnauthorized},
-				{"override-head", http.MethodGet, "/api/spec", http.MethodHead, http.StatusOK},
-				{"unconditional-head", http.MethodGet, "/api/unconditional", http.MethodHead, http.StatusOK},
+				{"get-cannot-override-head", http.MethodGet, "/api/spec", http.MethodHead, http.StatusUnauthorized},
+				{"head-cannot-override-get", http.MethodHead, "/api/unconditional", http.MethodGet, http.StatusOK},
 			} {
 				t.Run(test.name, func(t *testing.T) {
 					req := httptest.NewRequest(test.method, "http://127.0.0.1"+test.path, nil)
@@ -101,18 +101,18 @@ func TestIssue127MethodAdapterPreservesContextAndOrigin(t *testing.T) {
 	}
 	if err := matched.WithMiddleware(func(req *fwcontext.Request, next func(*fwcontext.Request) *fwcontext.Response) *fwcontext.Response {
 		resp := next(req)
-		if req.Method(true) != http.MethodGet {
+		if req.Method(true) != http.MethodPost {
 			t.Errorf("审计原始方法被改写: %s", req.Method(true))
 		}
 		return resp
 	}); err != nil {
 		t.Fatal(err)
 	}
-	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1/method", nil).WithContext(ctx)
+	req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1/method", nil).WithContext(ctx)
 	req.Header.Set("X-HTTP-Method-Override", http.MethodPatch)
 	recorder := httptest.NewRecorder()
 	newTestHTTPHandler(t, app).ServeHTTP(recorder, req)
-	if recorder.Code != http.StatusAccepted || req.Method != http.MethodGet || req.Header.Get("X-Handler-Only") != "" {
+	if recorder.Code != http.StatusAccepted || req.Method != http.MethodPost || req.Header.Get("X-Handler-Only") != "" {
 		t.Fatalf("请求快照/响应错误: status=%d method=%q headers=%v", recorder.Code, req.Method, req.Header)
 	}
 }

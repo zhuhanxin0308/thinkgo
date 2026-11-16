@@ -62,10 +62,9 @@ func TestEffectiveHEADIsSharedByEveryHandlerType(t *testing.T) {
 						name, raw, override, set, effective string
 					}{
 						{name: "raw HEAD", raw: http.MethodHead, effective: http.MethodHead},
-						{name: "GET override", raw: http.MethodGet, override: http.MethodHead, effective: http.MethodHead},
-						{name: "POST override", raw: http.MethodPost, override: http.MethodHead, effective: http.MethodHead},
 						{name: "middleware HEAD", raw: http.MethodGet, set: http.MethodHead, effective: http.MethodHead},
-						{name: "raw HEAD overridden GET", raw: http.MethodHead, override: http.MethodGet, effective: http.MethodGet},
+						{name: "POST middleware HEAD", raw: http.MethodPost, set: http.MethodHead, effective: http.MethodHead},
+						{name: "raw HEAD ignores GET header", raw: http.MethodHead, override: http.MethodGet, effective: http.MethodHead},
 						{name: "raw HEAD middleware GET", raw: http.MethodHead, set: http.MethodGet, effective: http.MethodGet},
 					} {
 						t.Run(test.name, func(t *testing.T) {
@@ -95,6 +94,7 @@ func TestEffectiveHEADIsSharedByEveryHandlerType(t *testing.T) {
 					}
 					control := httptest.NewRequest(http.MethodGet, path, nil)
 					control.Header.Set("Accept-Encoding", "gzip")
+					control.Header.Set("X-HTTP-Method-Override", http.MethodHead)
 					recorder := httptest.NewRecorder()
 					host.ServeHTTP(recorder, control)
 					body := recorder.Body.Bytes()
@@ -122,6 +122,7 @@ func TestEffectiveHEADSuppressesEntityVariantsAndErrors(t *testing.T) {
 				t.Fatal(err)
 			}
 			app := newTestHTTPApp(t, basePath, map[string]interface{}{"enable": compression, "min_size": 1})
+			mustHTTPMiddleware(t, app).Pipe(issue151MethodMiddleware)
 			tests := []struct {
 				name   string
 				status int
@@ -169,7 +170,9 @@ func TestEffectiveHEADSuppressesEntityVariantsAndErrors(t *testing.T) {
 				t.Run(test.name, func(t *testing.T) {
 					for _, rawMethod := range []string{http.MethodHead, http.MethodGet} {
 						req := httptest.NewRequest(rawMethod, "http://127.0.0.1/api/entity/"+strconv.Itoa(index), nil)
-						req.Header.Set("X-HTTP-Method-Override", http.MethodHead)
+						if rawMethod == http.MethodGet {
+							req.Header.Set("X-Test-Set-Method", http.MethodHead)
+						}
 						req.Header.Set("Accept-Encoding", "gzip")
 						recorder := httptest.NewRecorder()
 						host.ServeHTTP(recorder, req)

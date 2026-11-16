@@ -165,7 +165,8 @@ func MustNewRequest(raw *http.Request, options ...RequestOption) *Request {
 	return req
 }
 
-// Method 获取当前请求方法；origin=true 返回覆盖前的原始方法。
+// Method 获取当前请求方法。客户端只能通过请求头将原始 POST 覆写为 PUT、PATCH 或 DELETE。
+// origin=true 返回覆写前的原始方法。
 func (r *Request) Method(origin ...bool) string {
 	original := http.MethodGet
 	if r != nil && r.raw != nil && strings.TrimSpace(r.raw.Method) != "" {
@@ -183,9 +184,12 @@ func (r *Request) Method(origin ...bool) string {
 	if method != "" {
 		return method
 	}
-	if r.raw != nil {
-		if override := strings.TrimSpace(r.raw.Header.Get("X-HTTP-Method-Override")); override != "" {
-			return strings.ToUpper(override)
+	if r.raw != nil && original == http.MethodPost {
+		if values := r.raw.Header.Values("X-HTTP-Method-Override"); len(values) == 1 {
+			switch override := strings.ToUpper(strings.TrimSpace(values[0])); override {
+			case http.MethodPut, http.MethodPatch, http.MethodDelete:
+				return override
+			}
 		}
 	}
 	return original
