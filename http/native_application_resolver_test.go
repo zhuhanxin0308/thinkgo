@@ -128,6 +128,31 @@ func TestApplicationResolverDomainBindings(t *testing.T) {
 	}
 }
 
+// TestApplicationResolverBindsIPv6Exactly 验证 IPv6 主机按地址匹配，并优先于通配绑定。
+func TestApplicationResolverBindsIPv6Exactly(t *testing.T) {
+	for _, pattern := range []string{"2001:db8::1", "[2001:db8::1]", "[2001:db8::1]:8080"} {
+		t.Run(pattern, func(t *testing.T) {
+			resolver, err := newApplicationResolver(nativeResolverApplications("index", "admin"), map[string]interface{}{
+				"default_app": "index",
+				"domain_bind": map[string]interface{}{pattern: "admin", "*": "index"},
+			}, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, test := range []struct{ host, want string }{
+				{"[2001:0db8:0000::1]:8080", "admin"},
+				{"[2001:db8::2]", "index"},
+			} {
+				request := httptest.NewRequest(stdhttp.MethodGet, "http://"+test.host+"/", nil)
+				resolution, err := resolver.resolve(request)
+				if err != nil || resolution.name != test.want {
+					t.Fatalf("IPv6 主机 %q 命中错误应用: %#v %v", test.host, resolution, err)
+				}
+			}
+		})
+	}
+}
+
 // TestApplicationResolverRejectsInvalidConfiguration 验证启动阶段拒绝所有
 // 会造成应用越权、歧义映射或类型漂移的多应用配置。
 func TestApplicationResolverRejectsInvalidConfiguration(t *testing.T) {

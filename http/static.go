@@ -20,18 +20,24 @@ const (
 	maxStaticMissCacheEntries       = 256
 )
 
-// servePublicFile 使用已完成真实路径校验的文件句柄响应，避免 ServeFile 再次按不可信路径打开文件。
-func (h *Http) servePublicFile(writer http.ResponseWriter, req *http.Request, urlPath string) bool {
+// servePublicFile 通过已验证的文件句柄响应并返回已发送状态，非静态请求返回零。
+func (h *Http) servePublicFile(writer http.ResponseWriter, req *http.Request, urlPath string) int {
 	if req == nil || req.URL == nil || containsEncodedPathSeparator(req.URL.EscapedPath()) {
-		return false
+		return 0
 	}
 	file, info, ok := h.openPublicFile(urlPath)
 	if !ok {
-		return false
+		return 0
 	}
 	defer file.Close()
+	statusWriter, tracked := writer.(interface{ Status() int })
+	if !tracked {
+		// 直接调用 Run 可能提供普通 ResponseWriter，需要在此捕获条件响应状态。
+		tracker := newStatusTrackingResponseWriter(writer)
+		writer, statusWriter = tracker, tracker
+	}
 	http.ServeContent(writer, req, info.Name(), info.ModTime(), file)
-	return true
+	return statusWriter.Status()
 }
 
 func containsEncodedPathSeparator(escapedPath string) bool {

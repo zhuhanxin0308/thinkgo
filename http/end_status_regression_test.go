@@ -7,10 +7,50 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	fwcontext "github.com/zhuhanxin0308/thinkgo/v3/context"
 	"github.com/zhuhanxin0308/thinkgo/v3/event"
 )
+
+// TestRunReportsStaticConditionalStatus 验证直调 Run 时静态响应与 HttpEnd 使用已发送状态。
+func TestRunReportsStaticConditionalStatus(t *testing.T) {
+	base := t.TempDir()
+	app := newTestHTTPApp(t, base, map[string]interface{}{"enable": false})
+	public := filepath.Join(base, "public")
+	if err := os.MkdirAll(public, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(public, "static.txt"), []byte("abcdef"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var endStatus int
+	if err := app.Event().Listen(event.EventHttpEnd, &event.SimpleListener{Handler: func(current event.Event) error {
+		endStatus = current.(*event.HttpEndEvent).StatusCode
+		return nil
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	host := newTestHTTPHandler(t, app)
+	for _, test := range []struct {
+		header, value, body string
+		status              int
+	}{
+		{"Range", "bytes=0-1", "ab", http.StatusPartialContent},
+		{"If-Modified-Since", time.Now().Add(time.Hour).UTC().Format(http.TimeFormat), "", http.StatusNotModified},
+	} {
+		raw := httptest.NewRequest(http.MethodGet, "http://127.0.0.1/static.txt", nil)
+		raw.Header.Set(test.header, test.value)
+		writer := httptest.NewRecorder()
+		request := fwcontext.MustNewRequest(raw, fwcontext.WithResponseWriter(writer))
+		response := host.Run(request)
+		host.End(response)
+		if writer.Code != test.status || writer.Body.String() != test.body || !response.Committed() ||
+			response.GetStatus() != test.status || endStatus != test.status {
+			t.Errorf("%s 状态不一致: 线路=%d 响应=%d 事件=%d 期望=%d", test.header, writer.Code, response.GetStatus(), endStatus, test.status)
+		}
+	}
+}
 
 // TestEndReportsFinalTransmissionStatus 验证文件和流式发送形成的最终状态同步到结束事件与终结回调。
 func TestEndReportsFinalTransmissionStatus(t *testing.T) {
