@@ -137,6 +137,7 @@ func NewDefaultAuditor() *Auditor {
 		checkFunc{name: "configuration.production", run: checkProductionConfiguration},
 		checkFunc{name: "database.connectivity", run: checkDatabaseConnectivity},
 		checkFunc{name: "database.startup_policy", run: checkDatabaseStartupPolicy},
+		checkFunc{name: "database.tls", run: checkDatabaseTLS},
 		checkFunc{name: "filesystem.runtime", run: checkRuntimeFilesystem},
 		checkFunc{name: "http.hosts", run: checkAllowedHosts},
 		checkFunc{name: "http.operational_access", run: checkOperationalAccess},
@@ -267,7 +268,7 @@ func checkAllowedHosts(_ context.Context, app *framework.App) Result {
 	if err != nil {
 		return fail(err.Error())
 	}
-	hosts, err := stringList(configuration.Get("app.server.allowed_hosts"))
+	hosts, err := allowedHostList(configuration.Get("app.server.allowed_hosts"))
 	if err != nil || len(hosts) == 0 {
 		return fail("app.server.allowed_hosts 必须是非空字符串列表")
 	}
@@ -487,6 +488,16 @@ func applicationConfig(app *framework.App) (*config.Config, error) {
 		return nil, fmt.Errorf("应用配置不可用: %w", err)
 	}
 	return configuration, nil
+}
+
+func allowedHostList(value interface{}) ([]string, error) {
+	if text, ok := value.(string); ok {
+		if strings.TrimSpace(text) == "" {
+			return nil, nil
+		}
+		value = strings.Split(text, ",")
+	}
+	return stringList(value)
 }
 
 func stringList(value interface{}) ([]string, error) {

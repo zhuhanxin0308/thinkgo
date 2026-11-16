@@ -189,6 +189,7 @@ func TestDefaultAuditorExposesStableCoverage(t *testing.T) {
 		"configuration.production",
 		"database.connectivity",
 		"database.startup_policy",
+		"database.tls",
 		"filesystem.runtime",
 		"http.hosts",
 		"http.operational_access",
@@ -208,5 +209,54 @@ func TestDefaultAuditorExposesStableCoverage(t *testing.T) {
 	warningOnly := Report{Results: []Result{{Name: "warning", Level: LevelWarn, Message: "review"}}}
 	if warningOnly.Failed(false) || !warningOnly.Failed(true) {
 		t.Fatal("严格模式必须把警告升级为部署阻断")
+	}
+}
+
+func TestDefaultAuditorEnforcesPostgreSQLTLSForNamedConnections(t *testing.T) {
+	for _, tc := range []struct {
+		name, policy string
+		params       interface{}
+		level        Level
+	}{
+		{name: "默认 verify-full", level: LevelPass},
+		{name: "显式 verify-full", params: map[string]interface{}{"sslmode": "verify-full"}, level: LevelPass},
+		{name: "禁用 TLS", params: map[string]interface{}{"sslmode": "disable"}, level: LevelFail},
+		{name: "允许降级明文", params: map[string]interface{}{"sslmode": "prefer"}, level: LevelFail},
+		{name: "仅加密", params: map[string]interface{}{"sslmode": "require"}, level: LevelFail},
+		{name: "仅校验证书链", params: map[string]interface{}{"sslmode": "verify-ca"}, level: LevelFail},
+		{name: "显式空值", params: map[string]interface{}{"sslmode": ""}, level: LevelFail},
+		{name: "非字符串覆盖", params: map[string]interface{}{"sslmode": false}, level: LevelFail},
+		{name: "禁止输出参数值", params: map[string]interface{}{"sslmode": "secret-marker"}, level: LevelFail},
+		{name: "禁用数据库", policy: "disabled", params: map[string]interface{}{"sslmode": "disable"}, level: LevelPass},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			app, configuration := newDeployTestApp(t)
+			if err := configuration.Set("app.database_startup_policy", tc.policy); err != nil {
+				t.Fatal(err)
+			}
+			if err := configuration.Set("database", map[string]interface{}{
+				"default": "primary",
+				"connections": map[string]interface{}{
+					"primary":   map[string]interface{}{"type": "sqlite"},
+					"reporting": map[string]interface{}{"type": "pgsql", "params": tc.params},
+				},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			for _, check := range NewDefaultAuditor().checks {
+				if check.Name() != "database.tls" {
+					continue
+				}
+				result := check.Run(context.Background(), app)
+				if result.Level != tc.level {
+					t.Fatalf("TLS 检查结果为 %#v，期望 %s", result, tc.level)
+				}
+				if tc.level == LevelFail && (!strings.Contains(result.Message, "reporting") || !strings.Contains(result.Message, "verify-full") || strings.Contains(result.Message, "secret-marker")) {
+					t.Fatalf("TLS 门禁应指出命名连接和要求，且不输出参数值: %#v", result)
+				}
+				return
+			}
+			t.Fatal("默认发布审计未注册 database.tls")
+		})
 	}
 }

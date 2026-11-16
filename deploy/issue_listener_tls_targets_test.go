@@ -80,7 +80,7 @@ func TestTLSTargetUnionAllowsEmptySourceButRejectsInvalidDeclarations(t *testing
 	for _, values := range []map[string]interface{}{
 		{"domain": "http://insecure.example.test"},
 		{"domain": 42},
-		{"allowed_hosts": "app.example.test"},
+		{"allowed_hosts": "app.example.test,"},
 		{"allowed_hosts": []string{""}},
 		{"allowed_hosts": []string{"*"}},
 	} {
@@ -91,6 +91,36 @@ func TestTLSTargetUnionAllowsEmptySourceButRejectsInvalidDeclarations(t *testing
 		for _, configurations := range [][]*config.Config{{host, invalid}, {invalid, host}} {
 			_, err := configuredTLSTargets(configurations...)
 			assertTLSValidationCode(t, err, TLSValidationTarget)
+		}
+	}
+}
+
+func TestAllowedHostsCSVPassesHostAndTLSTargetChecks(t *testing.T) {
+	app, configuration := newDeployTestApp(t)
+	for _, tc := range []struct {
+		value string
+		valid bool
+	}{
+		{"api.example.test", true},
+		{" api.example.test , admin.example.test ", true},
+		{"api.example.test,,admin.example.test", false},
+		{"api.example.test,", false},
+		{"*", false},
+		{"api.example.test\rbroken", false},
+		{"", false},
+	} {
+		if err := configuration.Set("app.server.allowed_hosts", tc.value); err != nil {
+			t.Fatal(err)
+		}
+		if result := checkAllowedHosts(context.Background(), app); (result.Level == LevelPass) != tc.valid {
+			t.Errorf("Host 白名单 %q 检查结果为 %#v，期望通过=%v", tc.value, result, tc.valid)
+		}
+		targets, err := configuredTLSTargets(configuration)
+		if (err == nil) != tc.valid {
+			t.Errorf("TLS 目标 %q 检查结果为 %v，期望通过=%v", tc.value, err, tc.valid)
+		}
+		if strings.Contains(tc.value, " , ") && !reflect.DeepEqual(targets, []string{"api.example.test", "admin.example.test"}) {
+			t.Errorf("TLS 目标未逐项解析: %v", targets)
 		}
 	}
 }

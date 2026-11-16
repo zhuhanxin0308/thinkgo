@@ -364,7 +364,7 @@ func configuredTLSTargets(configurations ...*config.Config) ([]string, error) {
 			}
 		}
 		if rawHosts := configuration.Get("app.server.allowed_hosts"); rawHosts != nil {
-			hosts, err := stringList(rawHosts)
+			hosts, err := allowedHostList(rawHosts)
 			if err != nil {
 				return nil, newTLSValidationError(TLSValidationTarget, "TLS Host 白名单格式非法", err)
 			}
