@@ -158,6 +158,10 @@ func (c *SQLConnection) selectRowsContext(ctx context.Context, request SelectReq
 		return nil, err
 	}
 	query := c.Builder.Rebind(c.Builder.Select(request.Table(), fields, where, request.Order(), request.Limit(), request.Offset()))
+	if fields == "*" && strings.EqualFold(sqlBuilderDialect(c.Builder), "postgres") {
+		// PostgreSQL 命名预编译语句会固定结果类型，DDL 后需要重新解析星号。
+		return c.DB.QueryContext(ctx, query, args...)
+	}
 	return c.queryRowsContext(ctx, query, args...)
 }
 
