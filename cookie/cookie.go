@@ -27,6 +27,8 @@ const (
 	minCookieSecretBytes    = 32
 	maxCookieSecretBytes    = 4096
 	maxCookieNameBytes      = 256
+	legacyCookieSignature   = "v1"
+	cookieSignatureVersion  = "v2"
 )
 
 var (
@@ -332,7 +334,7 @@ func (c *Cookie) BuildHeader(name, value string, options ...CookieOptions) (stri
 	now := time.Now()
 	encodedValue := value
 	if c.config.Secret != "" {
-		encodedValue, err = signCookieValue(finalName, value, c.config.Secret, now)
+		encodedValue, err = signCookieValue(finalName, value, c.config.Secret, c.signingAge(opts.Expire), now)
 		if err != nil {
 			return "", err
 		}
@@ -412,7 +414,7 @@ func (c *Cookie) Get(name string) (string, bool, error) {
 	if c.config.Secret == "" {
 		return matched.Value, true, nil
 	}
-	value, err := unsignCookieValue(finalName, matched.Value, c.config.Secret, c.effectiveSignMaxAge(), time.Now())
+	value, err := unsignCookieValue(finalName, matched.Value, c.config.Secret, c.config.SignMaxAge, c.signingAge(c.config.Expire), time.Now())
 	if err != nil {
 		return "", false, err
 	}
@@ -455,12 +457,15 @@ func (c *Cookie) defaultOptions() CookieOptions {
 	}
 }
 
-func (c *Cookie) effectiveSignMaxAge() int {
-	maxAge := c.config.SignMaxAge
-	if c.config.Expire > 0 && c.config.Expire < maxAge {
-		maxAge = c.config.Expire
+// signingAge 将单次 Cookie 生命周期限制在配置的签名上限以内。
+func (c *Cookie) signingAge(expire int) int {
+	if expire < 0 {
+		return 0
 	}
-	return maxAge
+	if expire > 0 {
+		return min(expire, c.config.SignMaxAge)
+	}
+	return c.config.SignMaxAge
 }
 
 func mergeCookieOptions(base, override CookieOptions) CookieOptions {
@@ -564,22 +569,35 @@ func sameSiteMode(value string) http.SameSite {
 	}
 }
 
-func signCookieValue(name, value, secret string, now time.Time) (string, error) {
-	if name == "" || len(secret) < minCookieSecretBytes || !utf8.ValidString(value) {
+func signCookieValue(name, value, secret string, age int, now time.Time) (string, error) {
+	if name == "" || len(secret) < minCookieSecretBytes || !utf8.ValidString(value) || age < 0 || age > maxCookieAgeSeconds {
 		return "", ErrInvalidCookieSignature
 	}
-	payload := base64.RawURLEncoding.EncodeToString([]byte(value))
-	timestamp := strconv.FormatInt(now.Unix(), 10)
-	mac := hmac.New(sha256.New, []byte(secret))
-	_, _ = mac.Write([]byte(name + "\x00v1\x00" + payload + "\x00" + timestamp))
-	signature := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
-	return "v1." + payload + "." + timestamp + "." + signature, nil
+	fields := []string{cookieSignatureVersion, base64.RawURLEncoding.EncodeToString([]byte(value)), strconv.FormatInt(now.Unix(), 10), strconv.Itoa(age)}
+	signature := base64.RawURLEncoding.EncodeToString(cookieSignatureMAC(name, secret, fields))
+	return strings.Join(fields, ".") + "." + signature, nil
 }
 
-func unsignCookieValue(name, signed, secret string, maxAge int, now time.Time) (string, error) {
-	parts := strings.Split(signed, ".")
-	if len(parts) != 4 || parts[0] != "v1" || name == "" || len(secret) < minCookieSecretBytes || maxAge <= 0 {
+func cookieSignatureMAC(name, secret string, fields []string) []byte {
+	mac := hmac.New(sha256.New, []byte(secret))
+	_, _ = mac.Write([]byte(name + "\x00" + strings.Join(fields, "\x00")))
+	return mac.Sum(nil)
+}
+
+func unsignCookieValue(name, signed, secret string, maxAge, legacyMaxAge int, now time.Time) (string, error) {
+	parts := strings.SplitN(signed, ".", 6)
+	legacy := len(parts) == 4 && parts[0] == legacyCookieSignature
+	current := len(parts) == 5 && parts[0] == cookieSignatureVersion
+	if (!legacy && !current) || name == "" || len(secret) < minCookieSecretBytes || maxAge <= 0 || legacyMaxAge <= 0 {
 		return "", ErrInvalidCookieSignature
+	}
+	age := legacyMaxAge
+	if current {
+		signedAge, err := strconv.Atoi(parts[3])
+		if err != nil || signedAge < 0 || signedAge > maxCookieAgeSeconds || strconv.Itoa(signedAge) != parts[3] {
+			return "", ErrInvalidCookieSignature
+		}
+		age = min(maxAge, signedAge)
 	}
 	timestamp, err := strconv.ParseInt(parts[2], 10, 64)
 	if err != nil {
@@ -589,20 +607,20 @@ func unsignCookieValue(name, signed, secret string, maxAge int, now time.Time) (
 	if signedAt.After(now.Add(maxCookieClockSkew)) {
 		return "", ErrInvalidCookieSignature
 	}
-	if now.Sub(signedAt) > time.Duration(maxAge)*time.Second {
-		return "", ErrExpiredCookieSignature
-	}
-	providedSignature, err := base64.RawURLEncoding.DecodeString(parts[3])
+	signature := parts[len(parts)-1]
+	providedSignature, err := base64.RawURLEncoding.DecodeString(signature)
 	if err != nil || len(providedSignature) != sha256.Size {
 		return "", ErrInvalidCookieSignature
 	}
-	if base64.RawURLEncoding.EncodeToString(providedSignature) != parts[3] {
+	if base64.RawURLEncoding.EncodeToString(providedSignature) != signature {
 		return "", ErrInvalidCookieSignature
 	}
-	mac := hmac.New(sha256.New, []byte(secret))
-	_, _ = mac.Write([]byte(name + "\x00v1\x00" + parts[1] + "\x00" + parts[2]))
-	if !hmac.Equal(providedSignature, mac.Sum(nil)) {
+	if !hmac.Equal(providedSignature, cookieSignatureMAC(name, secret, parts[:len(parts)-1])) {
 		return "", ErrInvalidCookieSignature
+	}
+	elapsed, lifetime := now.Sub(signedAt), time.Duration(age)*time.Second
+	if elapsed > lifetime || current && (age == 0 || elapsed == lifetime) {
+		return "", ErrExpiredCookieSignature
 	}
 	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil || !utf8.Valid(payload) {
