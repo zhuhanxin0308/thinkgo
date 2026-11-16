@@ -98,6 +98,8 @@ func (provider *Provider) Initialize(app *framework.App) (initializeErr error) {
 	}
 	if len(parsed.Headers) > 0 {
 		exporterOptions = append(exporterOptions, otlptracehttp.WithHeaders(parsed.Headers))
+	} else if err := validateEnvironmentAcceptEncoding(); err != nil {
+		return err
 	}
 	exporter, err := otlptracehttp.New(ctx, exporterOptions...)
 	if err != nil {

@@ -225,6 +225,12 @@ func TestRouteAndTelemetryChecksDistinguishWarningFailureAndPass(t *testing.T) {
 	if result := checkTelemetry(context.Background(), telemetryApp); result.Level != LevelPass {
 		t.Fatalf("HTTPS OTLP 服务应通过: %#v", result)
 	}
+	unsetEndpointApp, unsetEndpointConfig := newDeployTestApp(t)
+	unsetEndpointConfig.Set("telemetry.enable", true)
+	unsetEndpointApp.Instance(string(framework.ServiceTelemetry), tracing)
+	if result := checkTelemetry(context.Background(), unsetEndpointApp); result.Level != LevelFail || !strings.Contains(result.Message, "telemetry.endpoint") {
+		t.Fatalf("启用 OTLP 时发布检查必须明确指出缺少端点: %#v", result)
+	}
 	configuration.Set("telemetry.endpoint", "http://collector.internal")
 	if result := checkTelemetry(context.Background(), telemetryApp); result.Level != LevelWarn {
 		t.Fatalf("明文 OTLP 端点应告警: %#v", result)

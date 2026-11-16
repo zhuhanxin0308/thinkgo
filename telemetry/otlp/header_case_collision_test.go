@@ -18,7 +18,8 @@ func TestOTLPRejectsCaseInsensitiveHeaderCollisions(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, raw := range []interface{}{values, string(encoded)} {
+			typed := map[string]string{names[0]: values[names[0]].(string), names[1]: values[names[1]].(string)}
+			for _, raw := range []interface{}{values, string(encoded), typed} {
 				config := enabledTelemetryValues()
 				config["headers"] = raw
 				for range 10 {
