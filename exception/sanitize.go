@@ -32,6 +32,15 @@ func sanitizeXMLBody(body string) (string, bool) {
 	decoder := xml.NewDecoder(strings.NewReader(body))
 	var output strings.Builder
 	encoder := xml.NewEncoder(&output)
+	var text strings.Builder
+	flushText := func() error {
+		if text.Len() == 0 {
+			return nil
+		}
+		sanitized := sanitizeExceptionText(text.String())
+		text.Reset()
+		return encoder.EncodeToken(xml.CharData(sanitized))
+	}
 	depth, seenRoot := 0, false
 	for {
 		token, err := decoder.Token()
@@ -43,14 +52,19 @@ func sanitizeXMLBody(body string) (string, bool) {
 		}
 		switch node := token.(type) {
 		case xml.StartElement:
+			if flushText() != nil {
+				return "", false
+			}
 			if depth == 0 {
 				if seenRoot {
 					return "", false
 				}
 				seenRoot = true
 			}
+			node.Name.Space = sanitizeExceptionText(node.Name.Space)
 			for index := range node.Attr {
 				attr := &node.Attr[index]
+				attr.Name.Space = sanitizeExceptionText(attr.Name.Space)
 				if isSensitiveKey(attr.Name.Local) {
 					attr.Value = redactedPlaceholder
 				} else {
@@ -66,6 +80,11 @@ func sanitizeXMLBody(body string) (string, bool) {
 			token = node
 			depth++
 		case xml.EndElement:
+			if flushText() != nil {
+				return "", false
+			}
+			node.Name.Space = sanitizeExceptionText(node.Name.Space)
+			token = node
 			depth--
 		case xml.CharData:
 			if depth == 0 {
@@ -74,7 +93,9 @@ func sanitizeXMLBody(body string) (string, bool) {
 				}
 				continue
 			}
-			token = xml.CharData(sanitizeExceptionText(string(node)))
+			// 相邻正文可能被 CDATA 等结构拆片，合并后再识别凭据。
+			text.Write(node)
+			continue
 		default:
 			// 注释、处理指令和文档声明可能含自由文本，不进入诊断输出。
 			continue

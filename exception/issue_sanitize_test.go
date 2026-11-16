@@ -47,6 +47,16 @@ func TestDebugRequestBodyRedactsXMLAndHidesOpaqueText(t *testing.T) {
 	}
 }
 
+// TestXMLRedactsSplitTextAndExpandedNamespaces 验证解析器分片和命名空间不能重新拼出秘密。
+func TestXMLRedactsSplitTextAndExpandedNamespaces(t *testing.T) {
+	const body = `<p:root xmlns:p="https://example.test/?token=namespace-secret" p:note="visible"><p:message>password=<![CDATA[split-secret]]></p:message></p:root>`
+	output, ok := sanitizeXMLBody(body)
+	if !ok || strings.Contains(output, "namespace-secret") || strings.Contains(output, "split-secret") ||
+		!strings.Contains(output, "visible") || !strings.Contains(output, redactedPlaceholder) {
+		t.Fatalf("XML 解析分片或扩展命名空间未脱敏: %q", output)
+	}
+}
+
 func TestIssue41KeyMaterialIsSensitive(t *testing.T) {
 	for _, key := range []string{"private_key", "private-key", "privateKey", "signing.key", "encryption_key", "credential", "client_secret", "access-key", "API_KEY"} {
 		t.Run(key, func(t *testing.T) {
