@@ -2,6 +2,7 @@ package driver
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -512,5 +513,40 @@ func TestFileRejectsPreexistingSymlink(t *testing.T) {
 	}
 	if len(content) != 0 {
 		t.Fatalf("拒绝符号链接后不应写入目标文件，实际大小: %d", len(content))
+	}
+}
+
+// TestFileRejectsDanglingSymlinkWithoutCreatingTarget 验证拒绝悬空链接时不会创建外部文件。
+func TestFileRejectsDanglingSymlinkWithoutCreatingTarget(t *testing.T) {
+	now := time.Date(2026, 1, 2, 12, 0, 0, 0, time.UTC)
+	for _, batch := range []bool{false, true} {
+		t.Run(fmt.Sprintf("批量=%t", batch), func(t *testing.T) {
+			directory := t.TempDir()
+			target := filepath.Join(t.TempDir(), "outside.log")
+			link := filepath.Join(directory, now.Format("2006-01-02")+".log")
+			if err := os.Symlink(target, link); err != nil {
+				if runtime.GOOS == "windows" {
+					t.Skipf("当前 Windows 环境不允许创建符号链接: %v", err)
+				}
+				t.Fatal(err)
+			}
+			driver, err := NewFileWithOptions(directory, FileOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = driver.Close() })
+			entry := &log.LogEntry{Time: now, Level: "info", Message: "不应创建外部文件"}
+			if batch {
+				err = driver.SaveEntries([]*log.LogEntry{entry})
+			} else {
+				err = driver.WriteEntry(entry)
+			}
+			if !errors.Is(err, errUnsafeLogFilePath) {
+				t.Errorf("悬空符号链接必须被拒绝: %v", err)
+			}
+			if _, err := os.Stat(target); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("拒绝写入后出现了外部文件: %v", err)
+			}
+		})
 	}
 }
