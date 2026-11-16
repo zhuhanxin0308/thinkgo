@@ -1,6 +1,9 @@
 package db
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 // Refresh 按原始主键重新加载记录，丢弃未保存的修改并重新建立字段快照。
 // 回滚后可通过原非事务模型调用；仍绑定已结束事务的句柄必须重新解析模型。
@@ -55,6 +58,9 @@ func (mq *ModelQuery) findRecordRow() (map[string]any, map[string]any, error) {
 	if err != nil || row == nil {
 		return nil, nil, err
 	}
+	if len(mq.relations) == 0 && !mq.model.hasGetters() && reusableModelRow(row) {
+		return row, row, nil
+	}
 	raw, err := cloneDatabaseMap(row)
 	if err != nil {
 		return nil, nil, err
@@ -77,6 +83,9 @@ func (mq *ModelQuery) selectRecordRows() ([]map[string]any, []map[string]any, er
 
 // prepareRecordRows 在关联和获取器处理前保留原始字段，游标同样使用原始数据库值。
 func (mq *ModelQuery) prepareRecordRows(rows []map[string]any) ([]map[string]any, []map[string]any, error) {
+	if len(mq.relations) == 0 && !mq.model.hasGetters() && reusableModelRows(rows) {
+		return rows, rows, nil
+	}
 	raw := make([]map[string]any, len(rows))
 	for i, row := range rows {
 		var err error
@@ -94,4 +103,29 @@ func (mq *ModelQuery) prepareRecordRows(rows []map[string]any) ([]map[string]any
 		mq.model.applyGetters(row)
 	}
 	return rows, raw, nil
+}
+
+func reusableModelRows(rows []map[string]any) bool {
+	for _, row := range rows {
+		if !reusableModelRow(row) {
+			return false
+		}
+	}
+	return true
+}
+
+// reusableModelRow 仅复用驱动的标准标量。扫描到目标和绑定记录身份时仍会隔离字节切片。
+func reusableModelRow(row map[string]any) bool {
+	// 原快照最多为每个数据库值访问外层接口和内层值两个节点。
+	if len(row) > (maxDatabaseValueNodes-1)/2 {
+		return false
+	}
+	for _, value := range row {
+		switch value.(type) {
+		case nil, int64, float64, bool, string, []byte, time.Time:
+		default:
+			return false
+		}
+	}
+	return true
 }
