@@ -204,7 +204,7 @@ func TestStaticPrefixProbeKeepsNewerNegativeCacheDecisions(t *testing.T) {
 	}
 	newer := probeAt.Add(2 * time.Millisecond)
 	handler.staticMisses[prefix] = newer
-	handler.clearStaticPrefixProbe(path, probeAt)
+	handler.clearStaticPrefixProbe(path, probeAt, false)
 	handler.rememberStaticPrefixMiss(path, root, probeAt)
 	if got := handler.staticMisses[prefix]; got != newer {
 		t.Fatalf("旧探测不能改写新一轮负缓存: %v", got)
@@ -221,11 +221,33 @@ func TestExpiredStaticProbeCannotRecreateClearedNegativeCache(t *testing.T) {
 	if handler.reserveStaticPrefixProbe(path, newer) {
 		t.Fatal("新一轮探测应确认目录已经出现")
 	}
-	handler.clearStaticPrefixProbe(path, newer)
+	handler.clearStaticPrefixProbe(path, newer, true)
 	// 旧请求的 Lstat 结果在新探测清除负缓存后才准备发布。
 	handler.cacheStaticPrefixMiss(prefix, older, newer.Add(time.Millisecond))
 	if _, exists := handler.staticMisses[prefix]; exists {
 		t.Fatal("已经过期的 Lstat 结果不能恢复已确认失效的缓存")
+	}
+}
+
+func TestSuccessfulStaticProbeClearsEarlierColdMiss(t *testing.T) {
+	handler := &Http{staticMisses: make(map[string]time.Time)}
+	const path = "/assets/ready.js"
+	const prefix = "assets"
+	earlier := time.Now()
+	later := earlier.Add(time.Millisecond)
+	if handler.reserveStaticPrefixProbe(path, earlier) || handler.reserveStaticPrefixProbe(path, later) {
+		t.Fatal("冷缓存下两个请求都能探测静态目录")
+	}
+	handler.cacheStaticPrefixMiss(prefix, earlier, later)
+	// 较新的请求已通过打开目标文件确认目录存在。
+	handler.clearStaticPrefixProbe(path, later, true)
+	if _, exists := handler.staticMisses[prefix]; exists {
+		t.Fatal("成功探测应使更早的冷缓存结果失效")
+	}
+	handler.cacheStaticPrefixMiss(prefix, later, later)
+	handler.clearStaticPrefixProbe(path, earlier, true)
+	if got := handler.staticMisses[prefix]; got != later {
+		t.Fatalf("较旧的成功探测不得丢弃后到的负缓存: %v", got)
 	}
 }
 

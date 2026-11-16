@@ -107,7 +107,7 @@ func (h *Http) openPublicFile(urlPath string) (*os.File, os.FileInfo, bool) {
 	publicPath := h.app.ProjectPublicPath()
 	publicAbsolute, err := filepath.Abs(publicPath)
 	if err != nil {
-		h.clearStaticPrefixProbe(cleanPath, probeAt)
+		h.clearStaticPrefixProbe(cleanPath, probeAt, false)
 		return nil, nil, false
 	}
 	targetCandidate := filepath.Join(publicAbsolute, filepath.FromSlash(strings.TrimPrefix(cleanPath, "/")))
@@ -119,12 +119,12 @@ func (h *Http) openPublicFile(urlPath string) (*os.File, os.FileInfo, bool) {
 		if os.IsNotExist(err) {
 			h.rememberStaticPrefixMiss(cleanPath, publicAbsolute, probeAt)
 		} else {
-			h.clearStaticPrefixProbe(cleanPath, probeAt)
+			h.clearStaticPrefixProbe(cleanPath, probeAt, false)
 		}
 		return nil, nil, false
 	}
 	// 打开的文件已证明一级目录存在；清除本轮占用后再决定是否可服务文件。
-	h.clearStaticPrefixProbe(cleanPath, probeAt)
+	h.clearStaticPrefixProbe(cleanPath, probeAt, true)
 	publicReal, err := filepath.EvalSymlinks(publicAbsolute)
 	if err != nil {
 		_ = file.Close()
@@ -173,7 +173,7 @@ func (h *Http) rememberStaticPrefixMiss(cleanPath, publicAbsolute string, probeA
 	}
 	if _, err := os.Lstat(filepath.Join(publicAbsolute, filepath.FromSlash(prefix))); !os.IsNotExist(err) {
 		// 缺失的子文件不能为已存在的一级目录续期。
-		h.clearStaticPrefixProbe(cleanPath, probeAt)
+		h.clearStaticPrefixProbe(cleanPath, probeAt, err == nil)
 		return
 	}
 
@@ -203,12 +203,13 @@ func (h *Http) cacheStaticPrefixMiss(prefix string, probeAt, now time.Time) {
 	h.staticMisses[prefix] = probeAt
 }
 
-// clearStaticPrefixProbe 只清除本次探测占用的时间戳，避免覆盖其他请求的新结果。
-func (h *Http) clearStaticPrefixProbe(cleanPath string, probeAt time.Time) {
+// clearStaticPrefixProbe 清除本次占用；已确认目录存在时也作废更早的缺失结果。
+func (h *Http) clearStaticPrefixProbe(cleanPath string, probeAt time.Time, prefixExists bool) {
 	prefix := staticPathPrefix(cleanPath)
 	h.staticMissMu.Lock()
 	defer h.staticMissMu.Unlock()
-	if h.staticMisses[prefix] == probeAt {
+	at := h.staticMisses[prefix]
+	if at == probeAt || prefixExists && at.Before(probeAt) {
 		delete(h.staticMisses, prefix)
 	}
 }
