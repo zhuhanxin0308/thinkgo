@@ -12,3 +12,7 @@ func restrictSessionPath(path string, directory bool) error {
 	}
 	return os.Chmod(path, mode)
 }
+
+func restrictFileSessionDirectory(directory *os.Root, _ string, _ os.FileInfo) error {
+	return directory.Chmod(".", 0o700)
+}

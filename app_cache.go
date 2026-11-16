@@ -3,7 +3,6 @@ package framework
 import (
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -15,6 +14,7 @@ import (
 	"github.com/zhuhanxin0308/thinkgo/v3/cache"
 	cacheDriver "github.com/zhuhanxin0308/thinkgo/v3/cache/driver"
 	redisDriver "github.com/zhuhanxin0308/thinkgo/v3/cache/driver/redis"
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/apppath"
 )
 
 const (
@@ -306,11 +306,11 @@ func parseAppCacheStore(resolvePath func(string) (string, error), name string, s
 
 // validateAppCachePathWithinRuntime 在创建目录前解析已有路径组件，阻止相对配置通过符号链接逃出应用 runtime。
 func validateAppCachePathWithinRuntime(runtimePath, cachePath string) error {
-	runtimeReal, err := resolveExistingStoragePath(runtimePath)
+	runtimeReal, err := apppath.ResolveExisting(runtimePath)
 	if err != nil {
 		return fmt.Errorf("解析应用 runtime 失败: %w", err)
 	}
-	cacheReal, err := resolveExistingStoragePath(cachePath)
+	cacheReal, err := apppath.ResolveExisting(cachePath)
 	if err != nil {
 		return fmt.Errorf("解析缓存目录失败: %w", err)
 	}
@@ -323,38 +323,6 @@ func validateAppCachePathWithinRuntime(runtimePath, cachePath string) error {
 		return fmt.Errorf("缓存目录必须位于应用 runtime 内: %q", cachePath)
 	}
 	return nil
-}
-
-// resolveExistingStoragePath 解析路径中最后一个已存在组件的真实位置，并保留尚不存在的尾部。
-func resolveExistingStoragePath(path string) (string, error) {
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return "", err
-	}
-	current := filepath.Clean(abs)
-	missing := make([]string, 0)
-	for {
-		_, statErr := os.Lstat(current)
-		if statErr == nil {
-			realPath, evalErr := filepath.EvalSymlinks(current)
-			if evalErr != nil {
-				return "", evalErr
-			}
-			for index := len(missing) - 1; index >= 0; index-- {
-				realPath = filepath.Join(realPath, missing[index])
-			}
-			return filepath.Clean(realPath), nil
-		}
-		if !errors.Is(statErr, os.ErrNotExist) {
-			return "", statErr
-		}
-		parent := filepath.Dir(current)
-		if parent == current {
-			return filepath.Clean(abs), nil
-		}
-		missing = append(missing, filepath.Base(current))
-		current = parent
-	}
 }
 
 // validateAppRedisPrefix 要求应用配置默认使用非空 namespace；全库清理只能显式授权。
