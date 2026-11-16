@@ -9,7 +9,7 @@ import (
 )
 
 func TestDebugRedactsCredentialAliasesAcrossRequestFormats(t *testing.T) {
-	aliases := []string{"pwd", "db_pass", "passphrase", "MasterKey", "user_otp", "pin", "CSRF", "key", "X-Auth", "X-Pwd"}
+	aliases := []string{"pwd", "db_pass", "passphrase", "MasterKey", "user_otp", "pin", "CSRF", "key", "X-Auth", "X-Pwd", "pass", "user_pass", "login-pass", "auth", "account.auth"}
 	headers := make(http.Header)
 	form := url.Values{"shipping": {"visible"}}
 	input := map[string]string{"shipping": "visible"}

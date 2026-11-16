@@ -17,6 +17,11 @@ func CredentialAlias(key string) bool {
 		strings.Contains(compact, "masterkey") || strings.Contains(compact, "credential") {
 		return true
 	}
+	// pass 和 auth 也用于指标和状态名称，仅按完整的凭据末段匹配。
+	switch key[strings.LastIndexAny(key, "-_.")+1:] {
+	case "pass", "auth":
+		return true
+	}
 	for part := range strings.FieldsFuncSeq(key, func(r rune) bool { return r == '-' || r == '_' || r == '.' }) {
 		switch part {
 		case "pwd", "otp", "totp", "hotp", "pin", "csrf":
