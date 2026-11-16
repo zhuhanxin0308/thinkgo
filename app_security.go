@@ -3,6 +3,7 @@ package framework
 import (
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -80,11 +81,21 @@ func createAppSession(app *App, raw map[string]interface{}, cookieFactory *cooki
 			return nil, err
 		}
 	case "file":
+		explicitAbsolute := filepath.IsAbs(config.StoragePath)
 		config.StoragePath, err = app.resolveStoragePath(config.StoragePath)
 		if err != nil {
 			return nil, fmt.Errorf("解析 Session 存储路径失败: %w", err)
 		}
-		backend, err = sessionDriver.NewFile(config.StoragePath)
+		if explicitAbsolute {
+			backend, err = sessionDriver.NewFile(config.StoragePath)
+		} else {
+			runtimePath := app.ApplicationRuntimePath()
+			relative, relErr := filepath.Rel(runtimePath, config.StoragePath)
+			if relErr != nil {
+				return nil, fmt.Errorf("%w: %w", sessionDriver.ErrInvalidSessionPath, relErr)
+			}
+			backend, err = sessionDriver.NewFileInRoot(runtimePath, relative)
+		}
 		if err != nil {
 			return nil, err
 		}

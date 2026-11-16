@@ -4,12 +4,45 @@ package driver
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
+
+func TestFileSessionRootWindowsRestrictsOnlyTheVerifiedDirectory(t *testing.T) {
+	root := t.TempDir()
+	store, err := NewFileInRoot(root, "session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertRestrictedSessionDACL(t, store.path)
+	expected, err := os.Stat(store.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := filepath.Join(root, "other")
+	if err := os.Mkdir(other, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	before, err := windows.GetNamedSecurityInfo(other, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := restrictFileSessionDirectory(nil, other, expected); err == nil {
+		t.Fatal("目录身份不一致时必须拒绝写入 DACL")
+	}
+	after, err := windows.GetNamedSecurityInfo(other, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.String() != after.String() {
+		t.Fatal("拒绝后替代目录的 DACL 必须保持一致")
+	}
+}
 
 // TestWindowsSessionDACLRetriesTransientPermissionContention 验证 DACL 写入仅对可识别的瞬态竞争做有界退避。
 func TestWindowsSessionDACLRetriesTransientPermissionContention(t *testing.T) {
