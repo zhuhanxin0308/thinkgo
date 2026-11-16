@@ -329,6 +329,13 @@ func ownedMergeStaticRouteMatch(router *Router, request *fwcontext.Request) (*Ro
 		return nil, nil, nil
 	}
 	if router.autoRoute && isSafeAutoRouteParts(requestParts) {
+		if !router.removeSlash {
+			for _, candidateMethod := range methods {
+				if ownedMergeStaticMatch(router, candidateMethod, requestParts, !trailingSlash, host) != nil {
+					return nil, nil, nil
+				}
+			}
+		}
 		if automatic := router.resolveAutoRoute(normalizedPath, requestParts); automatic != nil {
 			return automatic, nil, nil
 		}

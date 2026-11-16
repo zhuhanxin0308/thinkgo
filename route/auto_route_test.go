@@ -19,6 +19,43 @@ func TestAutoRouteDisabledByDefault(t *testing.T) {
 	}
 }
 
+// TestAutoRouteDoesNotBypassExplicitTrailingSlash 验证严格斜杠匹配不能绕到无保护的自动动作。
+func TestAutoRouteDoesNotBypassExplicitTrailingSlash(t *testing.T) {
+	for _, test := range []struct {
+		pattern, explicitPath, alternatePath string
+	}{
+		{"/admin", "/admin", "/admin/"},
+		{"/teams/:name", "/teams/owner", "/teams/owner/"},
+	} {
+		t.Run(test.pattern, func(t *testing.T) {
+			router := NewRouter()
+			if err := router.SetRemoveSlash(false); err != nil {
+				t.Fatal(err)
+			}
+			if err := router.EnableAutoRoute(true); err != nil {
+				t.Fatal(err)
+			}
+			explicit, err := router.Get(test.pattern, "Private@Index")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, request := range []struct {
+				path string
+				want *Route
+			}{{test.explicitPath, explicit}, {test.alternatePath, nil}} {
+				matched, _, err := router.Match(context.MustNewRequest(newTestHTTPRequest(http.MethodGet, request.path)))
+				if err != nil || matched != request.want {
+					t.Fatalf("路径 %q 匹配了错误的路由: %#v %v", request.path, matched, err)
+				}
+			}
+			matched, _, err := router.Match(context.MustNewRequest(newTestHTTPRequest(http.MethodGet, "/public/")))
+			if err != nil || matched == nil || matched.Handler() != "public/index" {
+				t.Fatalf("没有对应显式路由的自动调度应可用: %#v %v", matched, err)
+			}
+		})
+	}
+}
+
 // TestAutoRouteResolvesControllerAction 验证自动路由将 /user/edit 保留为 user/edit 调度。
 func TestAutoRouteResolvesControllerAction(t *testing.T) {
 	router := NewRouter()

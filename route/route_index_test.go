@@ -397,6 +397,14 @@ func linearRouteMatch(router *Router, req *fwcontext.Request) (*Route, map[strin
 		return nil, nil, nil
 	}
 	if router.autoRoute && isSafeAutoRouteParts(requestParts) {
+		if !router.removeSlash {
+			for _, candidateMethod := range methods {
+				dynamic, _ := linearDynamicMatch(router.dynamicRoutes[candidateMethod], requestParts, !trailingSlash, host)
+				if dynamic != nil || ownedMergeStaticMatch(router, candidateMethod, requestParts, !trailingSlash, host) != nil {
+					return nil, nil, nil
+				}
+			}
+		}
 		// ThinkPHP 自动调度不先按 HTTP 方法裁剪控制器动作。
 		if automatic := router.resolveAutoRoute(normalizedPath, requestParts); automatic != nil {
 			return automatic, nil, nil

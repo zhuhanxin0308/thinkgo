@@ -31,15 +31,8 @@ func (r *Router) Match(req *context.Request) (*Route, map[string]string, error) 
 	}
 	host := normalizeRequestHost(req.Host())
 
-	methods := []string{method}
-	methods = append(methods, anyMethod)
-	for _, candidateMethod := range methods {
-		if matched := r.matchStatic(candidateMethod, requestParts, trailingSlash, host); matched != nil {
-			return matched, nil, nil
-		}
-		if matched, params := r.matchDynamic(candidateMethod, requestParts, trailingSlash, host); matched != nil {
-			return matched, params, nil
-		}
+	if matched, params := r.matchExplicit(method, requestParts, trailingSlash, host); matched != nil {
+		return matched, params, nil
 	}
 
 	if matched := r.matchMissRoute(method); matched != nil {
@@ -54,6 +47,12 @@ func (r *Router) Match(req *context.Request) (*Route, map[string]string, error) 
 	}
 
 	if r.autoRoute && isSafeAutoRouteParts(requestParts) {
+		if !r.removeSlash {
+			// 严格斜杠不匹配仍保留显式路由对该路径的保护，避免绕到自动动作。
+			if matched, _ := r.matchExplicit(method, requestParts, !trailingSlash, host); matched != nil {
+				return nil, nil, nil
+			}
+		}
 		// ThinkPHP 的 URL 自动调度不按请求方法限制控制器动作；鉴权和方法约束
 		// 应由显式路由或中间件声明，未知控制器最终由 HTTP 分发层转换为 404。
 		if automatic := r.resolveAutoRoute(normalizedPath, requestParts); automatic != nil {
@@ -61,6 +60,18 @@ func (r *Router) Match(req *context.Request) (*Route, map[string]string, error) 
 		}
 	}
 	return nil, nil, nil
+}
+
+func (r *Router) matchExplicit(method string, parts []string, trailingSlash bool, host string) (*Route, map[string]string) {
+	for _, candidateMethod := range [...]string{method, anyMethod} {
+		if matched := r.matchStatic(candidateMethod, parts, trailingSlash, host); matched != nil {
+			return matched, nil
+		}
+		if matched, params := r.matchDynamic(candidateMethod, parts, trailingSlash, host); matched != nil {
+			return matched, params
+		}
+	}
+	return nil, nil
 }
 
 func (r *Router) matchMissRoute(method string) *Route {
