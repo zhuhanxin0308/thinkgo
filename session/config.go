@@ -10,6 +10,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/zhuhanxin0308/thinkgo/v3/session/internal/sessionkey"
 )
 
 const (
@@ -224,6 +226,12 @@ func validateSessionConfig(config Config) error {
 	}
 	if len(config.Prefix) > maxSessionKeyBytes || hasSessionControl(config.Prefix) {
 		return invalidSessionConfig("prefix", "过长或包含控制字符")
+	}
+	if config.DriverType != "cache" {
+		const maxPrefixBytes = sessionkey.MaxBytes - sessionIDHexLength
+		if len(config.Prefix) > maxPrefixBytes || !sessionkey.ValidCharacters(config.Prefix) {
+			return invalidSessionConfig("prefix", fmt.Sprintf("最多 %d 字节，仅允许英文字母、数字、连字符和下划线", maxPrefixBytes))
+		}
 	}
 	if strings.TrimSpace(config.StoragePath) == "" || hasSessionControl(config.StoragePath) {
 		return invalidSessionConfig("storage_path", "不能为空或包含控制字符")
