@@ -10,6 +10,7 @@ import (
 
 	fwcontext "github.com/zhuhanxin0308/thinkgo/v3/context"
 	"github.com/zhuhanxin0308/thinkgo/v3/event"
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/dotenvtest"
 	"github.com/zhuhanxin0308/thinkgo/v3/middleware"
 	fwroute "github.com/zhuhanxin0308/thinkgo/v3/route"
 	frameworkVersion "github.com/zhuhanxin0308/thinkgo/v3/version"
@@ -302,10 +303,10 @@ func TestAppPublicMethodsMatchThinkPHP(t *testing.T) {
 // 当前环境文件后加载并覆盖相同键。
 func TestAppLoadsBaseAndNamedEnvironmentLikeThinkPHP(t *testing.T) {
 	basePath := t.TempDir()
-	if err := os.WriteFile(filepath.Join(basePath, ".env.base"), []byte("APP_NAME=base\nSHARED=base\n"), 0o600); err != nil {
+	if err := dotenvtest.WriteFile(filepath.Join(basePath, ".env.base"), []byte("APP_NAME=base\nSHARED=base\n")); err != nil {
 		t.Fatalf("写入公共环境文件失败: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(basePath, ".env.testing"), []byte("SHARED=testing\n"), 0o600); err != nil {
+	if err := dotenvtest.WriteFile(filepath.Join(basePath, ".env.testing"), []byte("SHARED=testing\n")); err != nil {
 		t.Fatalf("写入当前环境文件失败: %v", err)
 	}
 	app := NewConsoleAppUninitialized(basePath).

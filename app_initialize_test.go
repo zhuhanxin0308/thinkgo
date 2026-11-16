@@ -16,6 +16,7 @@ import (
 	"github.com/zhuhanxin0308/thinkgo/v3/config"
 	"github.com/zhuhanxin0308/thinkgo/v3/db"
 	frameworkenv "github.com/zhuhanxin0308/thinkgo/v3/env"
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/dotenvtest"
 )
 
 // TestApplicationURLHelpersNormalizeAndValidateInputs 验证 URL 拼接不会产生双斜杠、协议绕过或控制字符注入。
@@ -246,7 +247,7 @@ func TestInitializeAppliesUnifiedEnvironmentConfig(t *testing.T) {
 		"[CACHE]",
 		"STORES_FILE_PATH = " + overriddenCachePath,
 	}, "\n")
-	if err := os.WriteFile(filepath.Join(basePath, ".env"), []byte(environmentContent), 0o600); err != nil {
+	if err := dotenvtest.WriteFile(filepath.Join(basePath, ".env"), []byte(environmentContent)); err != nil {
 		t.Fatalf("写入统一环境配置失败: %v", err)
 	}
 
@@ -283,7 +284,7 @@ func TestEnvironmentExampleMatchesDeclaredConfigStructure(t *testing.T) {
 		t.Fatalf("读取环境变量模板失败: %v", err)
 	}
 	environmentPath := filepath.Join(t.TempDir(), ".env")
-	if err := os.WriteFile(environmentPath, example, 0o600); err != nil {
+	if err := dotenvtest.WriteFile(environmentPath, example); err != nil {
 		t.Fatalf("创建隔离环境文件失败: %v", err)
 	}
 	if err := environment.Load(environmentPath); err != nil {
@@ -610,7 +611,7 @@ func TestInitializeReportsInvalidSecurityModuleConfiguration(t *testing.T) {
 func TestInitializeReportsEnvironmentLoadError(t *testing.T) {
 	basePath := t.TempDir()
 	writeTestAppConfigFiles(t, basePath)
-	if err := os.WriteFile(filepath.Join(basePath, ".env"), []byte("INVALID LINE"), 0o600); err != nil {
+	if err := dotenvtest.WriteFile(filepath.Join(basePath, ".env"), []byte("INVALID LINE")); err != nil {
 		t.Fatalf("写入损坏环境文件失败: %v", err)
 	}
 
@@ -689,7 +690,7 @@ func TestEnvironmentUsesUnifiedEnvironmentPrecedence(t *testing.T) {
 
 	basePath := t.TempDir()
 	writeTestAppConfigFiles(t, basePath)
-	if err := os.WriteFile(filepath.Join(basePath, ".env"), []byte("[APP]\nAPP_ENV=staging\n"), 0o600); err != nil {
+	if err := dotenvtest.WriteFile(filepath.Join(basePath, ".env"), []byte("[APP]\nAPP_ENV=staging\n")); err != nil {
 		t.Fatalf("写入环境文件失败: %v", err)
 	}
 	app := mustBuildTestConsoleApp(t, basePath)

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/zhuhanxin0308/thinkgo/v3/config"
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/dotenvtest"
 )
 
 // TestGetOSEnvOverridesFile 验证真实进程环境变量优先于 .env 文件值（12-factor 约定）。
@@ -60,7 +61,7 @@ func TestFileValuesReturnsOnlyLoadedFileValues(t *testing.T) {
 	t.Setenv(fileKey, "process-value")
 	t.Setenv(processOnlyKey, "process-only")
 	path := filepath.Join(t.TempDir(), ".env")
-	if err := os.WriteFile(path, []byte("thinkgo_file_values_example=file-value\n"), 0o600); err != nil {
+	if err := dotenvtest.WriteFile(path, []byte("thinkgo_file_values_example=file-value\n")); err != nil {
 		t.Fatal(err)
 	}
 	environment := NewEnv()
@@ -156,7 +157,7 @@ func TestLoadMissingFileIsOptional(t *testing.T) {
 func TestLoadRejectsMalformedLineWithoutPartialMutation(t *testing.T) {
 	file := filepath.Join(t.TempDir(), ".env")
 	content := "VALID_KEY=before\nMALFORMED_LINE\nAFTER_KEY=after\n"
-	if err := os.WriteFile(file, []byte(content), 0o600); err != nil {
+	if err := dotenvtest.WriteFile(file, []byte(content)); err != nil {
 		t.Fatalf("写入测试 .env 失败: %v", err)
 	}
 
@@ -186,7 +187,7 @@ func TestLoadRejectsInvalidKeyAndUnclosedQuote(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			file := filepath.Join(t.TempDir(), ".env")
-			if err := os.WriteFile(file, []byte(test.content), 0o600); err != nil {
+			if err := dotenvtest.WriteFile(file, []byte(test.content)); err != nil {
 				t.Fatalf("写入测试 .env 失败: %v", err)
 			}
 			if err := NewEnv().Load(file); err == nil || !strings.Contains(err.Error(), "1") {
@@ -242,7 +243,7 @@ func TestLoadValidFileCommitsAllValues(t *testing.T) {
 		"TOKEN=header.payload=signature",
 		"EMPTY=",
 	}, "\n")
-	if err := os.WriteFile(file, []byte(content), 0o600); err != nil {
+	if err := dotenvtest.WriteFile(file, []byte(content)); err != nil {
 		t.Fatalf("写入测试 .env 失败: %v", err)
 	}
 
@@ -277,7 +278,7 @@ func TestLoadSupportsThinkPHPSections(t *testing.T) {
 		"USERNAME =  root",
 		"PASSWORD =  123456 ",
 	}, "\n")
-	if err := os.WriteFile(file, []byte(content), 0o600); err != nil {
+	if err := dotenvtest.WriteFile(file, []byte(content)); err != nil {
 		t.Fatalf("写入段落环境配置失败: %v", err)
 	}
 	for _, key := range []string{"DATABASE1_USERNAME", "DATABASE1_PASSWORD", "DATABASE2_USERNAME", "DATABASE2_PASSWORD"} {
@@ -325,7 +326,7 @@ func TestLoadMapsLegacyDatabaseFieldsToDefaultMySQL(t *testing.T) {
 		"MAX_OPEN_CONNS=32",
 		"PARAMS={\"tls\":\"false\"}",
 	}, "\n")
-	if err := os.WriteFile(file, []byte(content), 0o600); err != nil {
+	if err := dotenvtest.WriteFile(file, []byte(content)); err != nil {
 		t.Fatalf("写入旧式数据库环境配置失败: %v", err)
 	}
 	environment := NewEnv()
@@ -353,7 +354,7 @@ func TestLoadMapsLegacyDatabaseFieldsToDefaultMySQL(t *testing.T) {
 func TestLoadRejectsLegacyDatabaseCollision(t *testing.T) {
 	file := filepath.Join(t.TempDir(), ".env")
 	content := "[DATABASE]\nTYPE=mysql\nCONNECTIONS_MYSQL_TYPE=mysql\n"
-	if err := os.WriteFile(file, []byte(content), 0o600); err != nil {
+	if err := dotenvtest.WriteFile(file, []byte(content)); err != nil {
 		t.Fatalf("写入冲突数据库环境配置失败: %v", err)
 	}
 	if err := NewEnv().Load(file); !errors.Is(err, ErrEnvDuplicateKey) {
@@ -374,7 +375,7 @@ func TestLegacyDatabaseProcessKeysOverrideFileAliases(t *testing.T) {
 	const legacy = "DATABASE_HOSTNAME"
 	const configPath = "database.connections.mysql.hostname"
 	file := filepath.Join(t.TempDir(), ".env")
-	if err := os.WriteFile(file, []byte("[DATABASE]\nHOSTNAME=db-file.example.test\n"), 0o600); err != nil {
+	if err := dotenvtest.WriteFile(file, []byte("[DATABASE]\nHOSTNAME=db-file.example.test\n")); err != nil {
 		t.Fatal(err)
 	}
 	environment := NewEnv()
@@ -435,7 +436,7 @@ func TestGetDottedNameKeepsOSEnvironmentPrecedence(t *testing.T) {
 func TestLoadRejectsDuplicateExpandedSectionKey(t *testing.T) {
 	file := filepath.Join(t.TempDir(), ".env")
 	content := "APP_DEBUG=false\n[app]\ndebug=true\n"
-	if err := os.WriteFile(file, []byte(content), 0o600); err != nil {
+	if err := dotenvtest.WriteFile(file, []byte(content)); err != nil {
 		t.Fatalf("写入重复段落环境键失败: %v", err)
 	}
 
@@ -458,7 +459,7 @@ func TestLoadRejectsMalformedSection(t *testing.T) {
 	tests := []string{"[]\nKEY=value\n", "[APP\nKEY=value\n", "[APP-ENV]\nKEY=value\n"}
 	for _, content := range tests {
 		file := filepath.Join(t.TempDir(), ".env")
-		if err := os.WriteFile(file, []byte(content), 0o600); err != nil {
+		if err := dotenvtest.WriteFile(file, []byte(content)); err != nil {
 			t.Fatalf("写入非法段落环境配置失败: %v", err)
 		}
 		if err := NewEnv().Load(file); err == nil || !strings.Contains(err.Error(), "1") {
@@ -470,7 +471,7 @@ func TestLoadRejectsMalformedSection(t *testing.T) {
 // TestLoadRejectsDuplicateCaseInsensitiveKeys 验证不同大小写的重复环境键不会静默覆盖。
 func TestLoadRejectsDuplicateCaseInsensitiveKeys(t *testing.T) {
 	file := filepath.Join(t.TempDir(), ".env")
-	if err := os.WriteFile(file, []byte("APP_MODE=first\napp_mode=second\n"), 0o600); err != nil {
+	if err := dotenvtest.WriteFile(file, []byte("APP_MODE=first\napp_mode=second\n")); err != nil {
 		t.Fatalf("写入重复环境键失败: %v", err)
 	}
 	e := NewEnv()
@@ -486,7 +487,7 @@ func TestLoadRejectsDuplicateCaseInsensitiveKeys(t *testing.T) {
 func TestLoadRejectsOversizedFile(t *testing.T) {
 	file := filepath.Join(t.TempDir(), ".env")
 	content := strings.Repeat("A", int(maxEnvFileBytes)+1)
-	if err := os.WriteFile(file, []byte(content), 0o600); err != nil {
+	if err := dotenvtest.WriteFile(file, []byte(content)); err != nil {
 		t.Fatalf("写入超大环境文件失败: %v", err)
 	}
 	if err := NewEnv().Load(file); !errors.Is(err, ErrEnvFileTooLarge) {
@@ -547,7 +548,7 @@ func TestLoadDirectoryReturnsReadError(t *testing.T) {
 // TestZeroValueEnvCanLoad 验证导出类型的零值也能安全加载配置。
 func TestZeroValueEnvCanLoad(t *testing.T) {
 	file := filepath.Join(t.TempDir(), ".env")
-	if err := os.WriteFile(file, []byte("ZERO_VALUE=ready\n"), 0o600); err != nil {
+	if err := dotenvtest.WriteFile(file, []byte("ZERO_VALUE=ready\n")); err != nil {
 		t.Fatalf("写入测试 .env 失败: %v", err)
 	}
 
