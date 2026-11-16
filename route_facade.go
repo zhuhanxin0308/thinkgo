@@ -436,7 +436,30 @@ func (r *RuleItem) Middleware(handlers ...middleware.Handler) *RuleItem {
 	return r
 }
 
-// WithoutMiddleware 移除路由中间件并返回当前规则。
+// NamedMiddleware 为当前规则的各方法追加同名中间件。
+func (r *RuleItem) NamedMiddleware(name string, handler middleware.Handler) *RuleItem {
+	if r == nil || len(r.rules) == 0 {
+		panic(frameworkRoute.ErrInvalidRoute)
+	}
+	for _, rule := range r.rules {
+		mustRouteConfiguration(rule.WithNamedMiddleware(name, handler))
+	}
+	return r
+}
+
+// WithoutNamedMiddleware 按注册名称移除当前规则的中间件。
+func (r *RuleItem) WithoutNamedMiddleware(names ...string) *RuleItem {
+	if r == nil || len(r.rules) == 0 {
+		panic(frameworkRoute.ErrInvalidRoute)
+	}
+	for _, rule := range r.rules {
+		mustRouteConfiguration(rule.WithoutNamedMiddleware(names...))
+	}
+	return r
+}
+
+// WithoutMiddleware 保留旧入口，无法确认函数身份时触发注册错误。
+// Deprecated: 使用 NamedMiddleware 和 WithoutNamedMiddleware。
 func (r *RuleItem) WithoutMiddleware(handlers ...middleware.Handler) *RuleItem {
 	if r == nil || len(r.rules) == 0 {
 		panic(frameworkRoute.ErrInvalidRoute)
@@ -532,6 +555,13 @@ func (g *RuleGroup) Resource(rule, controller string) *Resource {
 	resource, err := g.require().Resource(rule, controller)
 	mustRouteConfiguration(err)
 	return &Resource{resource: resource}
+}
+
+// NamedMiddleware 返回继承命名中间件的注册分组。
+func (g *RuleGroup) NamedMiddleware(name string, handler middleware.Handler) *RuleGroup {
+	group, err := g.require().WithNamedMiddleware(name, handler)
+	mustRouteConfiguration(err)
+	return &RuleGroup{route: g.route, group: group}
 }
 
 // Group 创建嵌套路由分组。

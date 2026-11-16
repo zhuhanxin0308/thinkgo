@@ -10,7 +10,6 @@ import (
 	"unicode"
 
 	"github.com/zhuhanxin0308/thinkgo/v3/context"
-	"github.com/zhuhanxin0308/thinkgo/v3/middleware"
 )
 
 // Match 在冻结后的只读索引中匹配请求，并区分未找到、方法不允许和非法请求路径。
@@ -241,9 +240,8 @@ func automaticOptionsRoute() *Route {
 		handler: func(_ *context.Request) *context.Response {
 			return context.NewResponse().Header("Allow", allow).NoContent()
 		},
-		middlewares: []middleware.Handler{},
-		patterns:    make(map[string]string),
-		compiled:    make(map[string]*regexp.Regexp),
+		patterns: make(map[string]string),
+		compiled: make(map[string]*regexp.Regexp),
 	}
 }
 
@@ -714,7 +712,6 @@ func (r *Router) resolveAutoRoute(path string, parts []string) *Route {
 		handler:         handler,
 		auto:            true,
 		controllerLayer: r.controllerLayer,
-		middlewares:     []middleware.Handler{},
 		patterns:        make(map[string]string),
 		compiled:        make(map[string]*regexp.Regexp),
 	}
