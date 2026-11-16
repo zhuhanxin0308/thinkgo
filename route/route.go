@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"reflect"
 	"regexp"
-	"sort"
 	"strings"
 	"sync"
 
@@ -58,6 +57,7 @@ type Route struct {
 	domain             string
 	ext                string
 	extensionRequired  bool
+	literalExtension   bool
 	jsonContract       bool
 	pathParts          []routePart
 	trailingSlash      bool
@@ -538,13 +538,18 @@ func (r *Router) Freeze() error {
 		if registered.ext == "" && r.defaultExtension != "" && !registered.jsonContract {
 			registered.ext = r.defaultExtension
 		}
+		registered.literalExtension = registered.hasLiteralExtension(r.caseSensitive)
 		if isStaticRouteParts(parts) {
 			if _, ok := staticRoutes[registered.method]; !ok {
 				staticRoutes[registered.method] = make(map[string][]*Route)
 			}
-			key := r.pathPartsKey(routePartsWithExtension(parts, registered.ext))
+			extension := registered.ext
+			if registered.literalExtension {
+				extension = ""
+			}
+			key := r.pathPartsKey(routePartsWithExtension(parts, extension))
 			staticRoutes[registered.method][key] = append(staticRoutes[registered.method][key], registered)
-			if registered.ext != "" {
+			if extension != "" {
 				// 前缀请求的后缀可位于未消费的末段，保留无后缀索引供匹配器验证。
 				baseKey := r.pathPartsKey(routePartsWithExtension(parts, ""))
 				staticRoutes[registered.method][baseKey] = append(staticRoutes[registered.method][baseKey], registered)
@@ -554,9 +559,7 @@ func (r *Router) Freeze() error {
 		dynamicRoutes[registered.method] = append(dynamicRoutes[registered.method], registered)
 	}
 	for method := range dynamicRoutes {
-		sort.SliceStable(dynamicRoutes[method], func(left, right int) bool {
-			return routeSpecificity(dynamicRoutes[method][left]) > routeSpecificity(dynamicRoutes[method][right])
-		})
+		sortRoutes(dynamicRoutes[method])
 	}
 	r.staticRoutes = staticRoutes
 	r.dynamicRoutes = dynamicRoutes

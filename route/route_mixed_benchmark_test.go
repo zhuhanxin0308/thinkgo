@@ -31,15 +31,24 @@ func TestStaticPrefixIndexPreservesRequiredExtensionAndExactMatch(t *testing.T) 
 			if err := detailed.WithExtension("json"); err != nil {
 				t.Fatal(err)
 			}
+			literal, err := router.Get("/api/list.json", "API@LiteralList")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := literal.WithExtension("json"); err != nil {
+				t.Fatal(err)
+			}
 			for _, test := range []struct {
 				path       string
 				want       *Route
 				prefixOnly bool
 			}{
 				{path: "/api/list/.json", want: detailed},
-				{path: "/api/list.json", want: detailed},
+				{path: "/api/list.json", want: literal},
 				{path: "/api/list/page.json", want: detailed, prefixOnly: true},
 				{path: "/api/list/page", want: broad, prefixOnly: true},
+				{path: "/api/list.json/page.json", want: literal, prefixOnly: true},
+				{path: "/api/list.json/page", want: broad, prefixOnly: true},
 			} {
 				want := test.want
 				if complete && test.prefixOnly {

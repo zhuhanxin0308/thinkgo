@@ -226,6 +226,35 @@ func TestLiveMySQLQueryAndTransactionContract(t *testing.T) {
 // TestLivePostgreSQLQueryAndTransactionContract 验证真实 PostgreSQL 的 RETURNING、批量写入、类型映射、流式读取与事务语义。
 func TestLivePostgreSQLQueryAndTransactionContract(t *testing.T) {
 	assertLiveSQLQueryAndTransactionContract(t, "pgsql")
+	t.Run("wildcard follows live schema", func(t *testing.T) {
+		database := connectLiveSQL(t, "pgsql")
+		table := liveSQLTableName()
+		if _, err := database.Execute("CREATE TABLE " + table + " (id BIGINT PRIMARY KEY)"); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if _, err := database.Execute("DROP TABLE IF EXISTS " + table); err != nil {
+				t.Error(err)
+			}
+		})
+		if _, err := database.Execute("INSERT INTO "+table+" (id) VALUES (?)", int64(1)); err != nil {
+			t.Fatal(err)
+		}
+		ctx := t.Context()
+		if _, err := database.GetSchemaInfo(ctx, table, true); err != nil {
+			t.Fatal(err)
+		}
+		query := database.Table(table).Where("id", 1).WithContext(ctx)
+		if rows, err := query.Select(); err != nil || len(rows) != 1 || len(rows[0]) != 1 {
+			t.Fatalf("DDL 前的投影应包含一列: %v %v", rows, err)
+		}
+		if _, err := database.Execute("ALTER TABLE " + table + " ADD COLUMN role TEXT DEFAULT 'reader'"); err != nil {
+			t.Fatal(err)
+		}
+		if rows, err := query.Select(); err != nil || len(rows) != 1 || rows[0]["role"] != "reader" {
+			t.Fatalf("同一连接应直接读取 DDL 后的列: %v %v", rows, err)
+		}
+	})
 }
 
 // TestLivePostgreSQLGeneratedColumnSchema 验证序列列和身份列都能被识别为自动生成。

@@ -78,7 +78,7 @@ func insertDynamicRoute(root *routeTrieNode, registered *Route, caseSensitive bo
 	if root == nil || registered == nil {
 		return
 	}
-	if registered.ext != "" {
+	if registered.ext != "" && !registered.literalExtension {
 		if root.extensions == nil {
 			root.extensions = make(map[string]struct{})
 		}
@@ -145,12 +145,7 @@ func (node *routeTrieNode) finalize() {
 
 func sortRoutes(routes []*Route) {
 	sort.SliceStable(routes, func(left, right int) bool {
-		leftScore := routeSpecificity(routes[left])
-		rightScore := routeSpecificity(routes[right])
-		if leftScore != rightScore {
-			return leftScore > rightScore
-		}
-		return routes[left].order < routes[right].order
+		return routeComesBefore(routes[left], routes[right])
 	})
 }
 
