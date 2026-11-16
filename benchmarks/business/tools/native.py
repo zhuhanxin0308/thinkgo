@@ -23,6 +23,7 @@ READINESS_PROBE_SECONDS = 1
 READINESS_POLL_SECONDS = 0.1
 PSQL_CONNECTION_FAILURE = 2
 STOP_SECONDS = 15
+PROCESS_POLL_SECONDS = 0.01
 PHP_CONTRACT_SCHEMA_VERSION = 1
 PHP_CONTRACT_SOURCE_FILES = ("dataset.json", "queries.json")
 PHP_CONTRACT_DIGEST_PREFIX = b"thinkgo-contract-v1\0"
@@ -218,31 +219,75 @@ class Process:
         self.stop_signal = stop_signal
         launched = ["taskset", "--cpu-list", ",".join(map(str, cpus)), *self.command]
         try:
-            self.child = subprocess.Popen(launched, cwd=cwd, env=environment, stdout=self.log,
-                                          stderr=subprocess.STDOUT, start_new_session=True)
+            self._child = subprocess.Popen(launched, cwd=cwd, env=environment, stdout=self.log,
+                                           stderr=subprocess.STDOUT, start_new_session=True)
         except BaseException:
             self.log.close()
             raise
 
     @property
     def pid(self):
-        return self.child.pid
+        return self._child.pid
+
+    def exit_status(self):
+        if self._child.returncode is not None:
+            return self._child.returncode
+        # 只观察退出，留住组长 PID，直到整个进程组完成清理。
+        status = os.waitid(os.P_PID, self.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+        if status is None:
+            return None
+        return status.si_status if status.si_code == os.CLD_EXITED else -status.si_status
 
     def check(self):
-        status = self.child.poll()
+        status = self.exit_status()
         if status is not None:
             tail = self.log_path.read_text(errors="replace")[-6000:]
             raise RuntimeError(f"进程提前退出({status}): {self.command}\n{tail}")
 
-    def stop(self):
-        if self.child.poll() is None:
-            os.killpg(self.child.pid, self.stop_signal)
+    def wait(self, timeout):
+        deadline = time.monotonic() + timeout
+        while (status := self.exit_status()) is None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(self.command, timeout)
+            time.sleep(min(remaining, PROCESS_POLL_SECONDS))
+        return status
+
+    def group_running(self):
+        group = str(self.pid)
+        for entry in pathlib.Path("/proc").iterdir():
+            if not entry.name.isdecimal():
+                continue
             try:
-                self.child.wait(timeout=STOP_SECONDS)
-            except subprocess.TimeoutExpired:
-                os.killpg(self.child.pid, signal.SIGKILL)
-                self.child.wait(timeout=STOP_SECONDS)
-        self.log.close()
+                fields = (entry / "stat").read_text(errors="replace").rpartition(") ")[2].split(maxsplit=4)
+            except (FileNotFoundError, ProcessLookupError, PermissionError):
+                continue
+            # stat 在进程名称之后依次是状态、父进程、进程组和会话。
+            if len(fields) >= 4 and fields[2] == fields[3] == group and fields[0] not in {"Z", "X"}:
+                return True
+        return False
+
+    def stop(self):
+        if self.log.closed:
+            return
+        try:
+            for signum in (self.stop_signal, signal.SIGKILL):
+                try:
+                    os.killpg(self.pid, signum)
+                except ProcessLookupError:
+                    break
+                deadline = time.monotonic() + STOP_SECONDS
+                while self.group_running():
+                    if time.monotonic() >= deadline:
+                        break
+                    time.sleep(PROCESS_POLL_SECONDS)
+                else:
+                    break
+            else:
+                raise subprocess.TimeoutExpired(self.command, 2 * STOP_SECONDS)
+            self._child.wait(timeout=STOP_SECONDS)
+        finally:
+            self.log.close()
 
 
 def wait_for(check, process):
@@ -494,10 +539,21 @@ class Environment:
             raise ServiceNotReady(str(error)) from error
 
     def stop_app(self):
-        for name in reversed(list(self.application)):
-            self.application.pop(name).stop()
+        self.stop_processes(self.application)
 
     def close(self):
-        self.stop_app()
-        for name in reversed(list(self.infrastructure)):
-            self.infrastructure.pop(name).stop()
+        self.stop_processes(self.application, self.infrastructure)
+
+    @staticmethod
+    def stop_processes(*groups):
+        failures = []
+        for processes in groups:
+            for name in reversed(list(processes)):
+                try:
+                    processes.pop(name).stop()
+                except BaseException as error:
+                    failures.append(error)
+        if len(failures) == 1:
+            raise failures[0]
+        if failures:
+            raise BaseExceptionGroup("关闭受管进程失败", failures)
