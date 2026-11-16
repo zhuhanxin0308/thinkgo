@@ -538,14 +538,18 @@ func (r *Router) Freeze() error {
 		if registered.ext == "" && r.defaultExtension != "" && !registered.jsonContract {
 			registered.ext = r.defaultExtension
 		}
-		registered.useLiteralExtension()
+		registered.literalExtension = registered.hasLiteralExtension(r.caseSensitive)
 		if isStaticRouteParts(parts) {
 			if _, ok := staticRoutes[registered.method]; !ok {
 				staticRoutes[registered.method] = make(map[string][]*Route)
 			}
-			key := r.pathPartsKey(routePartsWithExtension(parts, registered.ext))
+			extension := registered.ext
+			if registered.literalExtension {
+				extension = ""
+			}
+			key := r.pathPartsKey(routePartsWithExtension(parts, extension))
 			staticRoutes[registered.method][key] = append(staticRoutes[registered.method][key], registered)
-			if !registered.extensionRequired && registered.ext != "" {
+			if !registered.extensionRequired && extension != "" {
 				baseKey := r.pathPartsKey(routePartsWithExtension(parts, ""))
 				staticRoutes[registered.method][baseKey] = append(staticRoutes[registered.method][baseKey], registered)
 			}

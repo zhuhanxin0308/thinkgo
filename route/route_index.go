@@ -78,7 +78,7 @@ func insertDynamicRoute(root *routeTrieNode, registered *Route, caseSensitive bo
 	if root == nil || registered == nil {
 		return
 	}
-	if registered.ext != "" {
+	if registered.ext != "" && !registered.literalExtension {
 		if root.extensions == nil {
 			root.extensions = make(map[string]struct{})
 		}
@@ -300,9 +300,6 @@ func routeComesBefore(left, right *Route) bool {
 	rightScore := routeSpecificity(right)
 	if leftScore != rightScore {
 		return leftScore > rightScore
-	}
-	if left.literalExtension != right.literalExtension {
-		return left.literalExtension
 	}
 	return left.order < right.order
 }
