@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"reflect"
 	"strconv"
+	"strings"
 )
 
 func isNumericRangeRule(rule string) bool {
@@ -98,7 +99,7 @@ func assignScalar(target reflect.Value, raw any) bool {
 func scalarNumber(raw any) (string, bool) {
 	if number, ok := raw.(json.Number); ok {
 		text := string(number)
-		return text, len(text) > 0 && (text[0] == '-' || text[0] >= '0' && text[0] <= '9') && json.Valid([]byte(text))
+		return text, isJSONNumberToken(text)
 	}
 	value := reflect.ValueOf(raw)
 	if !value.IsValid() {
@@ -118,4 +119,10 @@ func scalarNumber(raw any) (string, bool) {
 	default:
 		return "", false
 	}
+}
+
+// isJSONNumberToken 验证独立的 JSON 数值原文，拒绝 JSON 文档才允许的外围空白。
+func isJSONNumberToken(text string) bool {
+	return len(text) > 0 && (text[0] == '-' || text[0] >= '0' && text[0] <= '9') &&
+		text == strings.TrimSpace(text) && json.Valid([]byte(text))
 }

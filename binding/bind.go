@@ -183,7 +183,7 @@ func (state *bindState) parameter(plan *node, values []string, path string) (any
 		return state.parameter(plan.elem, values, path)
 	}
 	if plan.number {
-		if len(values) == 1 && json.Valid([]byte(values[0])) && len(values[0]) > 0 && (values[0][0] == '-' || values[0][0] >= '0' && values[0][0] <= '9') {
+		if len(values) == 1 && isJSONNumberToken(values[0]) {
 			return json.Number(values[0]), true
 		}
 		state.fail(path, "type", "参数必须是 JSON 数值")
@@ -232,7 +232,7 @@ func (state *bindState) parameter(plan *node, values []string, path string) (any
 			return json.Number(strconv.FormatUint(value, 10)), true
 		}
 	case reflect.Float32, reflect.Float64:
-		if json.Valid([]byte(text)) {
+		if isJSONNumberToken(text) {
 			return json.Number(text), true
 		}
 	}
