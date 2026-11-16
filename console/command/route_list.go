@@ -63,13 +63,13 @@ func (c *RouteList) Execute(input *console.Input, output *console.Output) error 
 	if input.GetOption("more") == "true" {
 		output.Info(fmt.Sprintf("%-30s %-30s %-10s %-20s %-20s %-32s %s", "Rule", "Route", "Method", "Name", "Domain", "Option", "Pattern"))
 		for _, row := range rows {
-			output.Writeln(fmt.Sprintf("%-30s %-30s %-10s %-20s %-20s %-32s %s", row.rule, row.handler, row.method, row.name, row.domain, row.option, row.pattern))
+			output.WritelnEscaped(fmt.Sprintf("%-30s %-30s %-10s %-20s %-20s %-32s %s", row.rule, row.handler, row.method, row.name, row.domain, row.option, row.pattern))
 		}
 		return nil
 	}
 	output.Info(fmt.Sprintf("%-30s %-30s %-10s %s", "Rule", "Route", "Method", "Name"))
 	for _, row := range rows {
-		output.Writeln(fmt.Sprintf("%-30s %-30s %-10s %s", row.rule, row.handler, row.method, row.name))
+		output.WritelnEscaped(fmt.Sprintf("%-30s %-30s %-10s %s", row.rule, row.handler, row.method, row.name))
 	}
 	return nil
 }
