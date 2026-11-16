@@ -71,6 +71,8 @@ ThinkGo 默认关闭自动路由、开启强制路由。`config/route.json` 中�
 
 已有项目显式配置的 `url_route_must=false` 或注册期调用 `EnableAutoRoute(true)` 仍是主动启用自动调度，不会被自动重写。采用安全默认策略时，应删除旧的显式 `false` 或改为 `true`，并核对路由加载器。完整行为与边界见[自动路由](docs/路由/自动路由.md)。本节描述当前源码策略，已发布版本以对应版本实现为准。
 
+SPA 入口只回退 GET 和 HEAD 的非 API 请求，且请求路径末段必须没有扩展名。静态资源仍按文件提供，缺失资源返回 404。要让 `/release/3.0.8` 等带扩展名的业务路径返回页面，请显式注册对应路由。
+
 ## 浏览器会话安全
 
 `browser_cookie` 应用默认启用 CSRF 和安全响应头；启用 Session 时也会推导这一 profile。认证成功后使用 `Session.SetAuthenticated` 轮换 ID，再处理持久化结果。生产或预发环境可显式设置 `app.security_strict=true`，检查 Cookie 属性和未知会话 ID 策略。升级时核对 CSRF 密钥、客户端令牌提交和 CSP 所需资源，完整配置见[严格安全检查](docs/security/strict-security.md)和[会话认证轮换](docs/security/session-identity.md)。
