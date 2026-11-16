@@ -70,7 +70,7 @@ func (producer *Producer) Enqueue(ctx context.Context, task queue.Task, options 
 		if err != nil {
 			return queue.Info{}, err
 		}
-		resolvedOptions = append(resolvedOptions, backend.TaskID(id), backend.Timeout(signedBackendTimeout(options.EffectiveTimeout())))
+		resolvedOptions = append(resolvedOptions, backend.TaskID(id))
 	}
 	info, err := producer.client.EnqueueContext(ctx, backendTaskValue, resolvedOptions...)
 	if err != nil {

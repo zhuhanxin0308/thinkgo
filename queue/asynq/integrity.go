@@ -249,10 +249,6 @@ func signedScheduleOptions(options queue.EnqueueOptions) queue.EnqueueOptions {
 	return options
 }
 
-func signedBackendTimeout(timeout time.Duration) time.Duration {
-	return ((timeout + time.Second - 1) / time.Second) * time.Second
-}
-
 func (policy *VerificationPolicy) verify(task *backend.Task, now time.Time) (queue.Task, signedMetadata, error) {
 	invalid := func() (queue.Task, signedMetadata, error) {
 		return queue.Task{}, signedMetadata{}, ErrTaskUnauthenticated

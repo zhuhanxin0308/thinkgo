@@ -46,6 +46,42 @@ func TestProducerPersistsOptionsAndRejectsDuplicates(t *testing.T) {
 	}
 }
 
+func TestProducerPersistsFractionalTimeoutAtBackendPrecision(t *testing.T) {
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	producer, err := NewProducerFromRedisClient(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = producer.Close() })
+	inspector := backend.NewInspectorFromRedisClient(client)
+	task, err := queue.NewTask("timeout.rounding", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct{ timeout, want time.Duration }{
+		{0, (queue.EnqueueOptions{}).EffectiveTimeout()},
+		{500 * time.Millisecond, time.Second},
+		{time.Second, time.Second},
+		{1500 * time.Millisecond, 2 * time.Second},
+	} {
+		t.Run(test.timeout.String(), func(t *testing.T) {
+			info, err := producer.Enqueue(t.Context(), task, queue.EnqueueOptions{Timeout: test.timeout})
+			if err != nil {
+				t.Fatal(err)
+			}
+			stored, err := inspector.GetTaskInfo(info.Queue, info.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stored.Timeout != test.want {
+				t.Fatalf("后端保存的任务超时错误: %s，期望 %s", stored.Timeout, test.want)
+			}
+		})
+	}
+}
+
 // TestWorkerProcessesThroughExactQueueRouter 验证工作进程从 Redis 取任务并经过框架精确路由处理。
 func TestWorkerProcessesThroughExactQueueRouter(t *testing.T) {
 	server := miniredis.RunT(t)
