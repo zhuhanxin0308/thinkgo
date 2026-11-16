@@ -23,6 +23,8 @@ const (
 	DefaultSessionName         = "PHPSESSID"
 	sessionEnvelopeVersion     = 1
 	maxSaveStabilizationPasses = 16
+	sessionIDRandomBytes       = 16
+	sessionIDHexLength         = sessionIDRandomBytes * 2
 )
 
 var (
@@ -880,7 +882,7 @@ func sessionEnvelopeExpired(envelope sessionEnvelope, now time.Time) bool {
 }
 
 func newSessionID() (string, error) {
-	random := make([]byte, 16)
+	random := make([]byte, sessionIDRandomBytes)
 	if _, err := io.ReadFull(rand.Reader, random); err != nil {
 		return "", err
 	}
@@ -888,7 +890,7 @@ func newSessionID() (string, error) {
 }
 
 func isSafeSessionID(id string) bool {
-	if len(id) != 32 {
+	if len(id) != sessionIDHexLength {
 		return false
 	}
 	for _, character := range id {

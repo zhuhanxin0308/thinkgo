@@ -58,7 +58,7 @@ func TestRejectUnknownIDAdmissionAndPersistence(t *testing.T) {
 			t.Run(fmt.Sprintf("strict=%t/explicit=%t", strict, explicit), func(t *testing.T) {
 				backend := newCountingDriver()
 				manager := newTestSessionManager(t, backend, map[string]interface{}{
-					"name": "SID", "prefix": "tenant:", "reject_unknown_id": strict,
+					"name": "SID", "type": "cache", "prefix": "tenant:", "reject_unknown_id": strict,
 				}, nil)
 				s, recorder, err := strictIDRequest(t, manager, explicit, strictTestExternalID)
 				if err != nil {
