@@ -58,7 +58,7 @@ const traceStylesheetContent = `
 .tg-badge { display: inline-block; padding: 2px 6px; border-radius: 3px; font-size: 11px; color: #fff; }
 .tg-badge-info { background: #2196F3; }
 .tg-badge-error { background: #F44336; }
-pre { margin: 0; white-space: pre-wrap; word-break: break-all; }
+#tg-debug-bar pre { margin: 0; white-space: pre-wrap; word-break: break-all; }
 `
 
 const traceScriptContent = `
@@ -229,7 +229,11 @@ func (t *Trace) traceType() string {
 }
 
 func shouldSkipTraceOutput(req *context.Request, resp *context.Response) bool {
-	if req == nil || resp == nil || resp.GetStatus() == http.StatusNoContent {
+	if req == nil || resp == nil {
+		return true
+	}
+	status := resp.GetStatus()
+	if status == http.StatusNoContent || status == http.StatusPartialContent || resp.GetHeader("Content-Range") != "" {
 		return true
 	}
 	if req.IsAjax() || strings.Contains(strings.ToLower(req.ContentType()), "json") {
