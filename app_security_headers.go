@@ -98,7 +98,7 @@ func securityHeaderInt(values map[string]interface{}, key string, fallback int) 
 		}
 		return int(value), nil
 	case json.Number:
-		parsed, err := strconv.ParseInt(value.String(), 10, 32)
+		parsed, err := strconv.ParseInt(value.String(), 10, strconv.IntSize)
 		if err != nil {
 			return 0, fmt.Errorf("security_headers.%s 必须是整数", key)
 		}
