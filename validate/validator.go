@@ -73,6 +73,7 @@ type validationOptions struct {
 	strictFields bool
 	location     *time.Location
 	language     *lang.Lang
+	messages     map[string]string
 	locale       string
 	localeSet    bool
 }
@@ -111,6 +112,15 @@ func CollectAllErrors() Option {
 func DisallowUnknownFields() Option {
 	return func(options *validationOptions) error {
 		options.strictFields = true
+		return nil
+	}
+}
+
+// WithMessages 为本次验证替换自定义消息，创建选项时复制调用方映射。
+func WithMessages(messages map[string]string) Option {
+	snapshot := cloneStringMap(messages)
+	return func(options *validationOptions) error {
+		options.messages = snapshot
 		return nil
 	}
 }
@@ -263,6 +273,9 @@ func (v *Validator) Validate(data map[string]interface{}, optionFunctions ...Opt
 	}
 	if options.language != nil {
 		config.language = options.language
+	}
+	if options.messages != nil {
+		config.messages = options.messages
 	}
 	config.locale = options.locale
 	result := Result{violations: make([]Violation, 0)}

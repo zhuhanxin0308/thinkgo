@@ -1,6 +1,7 @@
 package framework
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -123,5 +124,48 @@ func TestControllerValidationUsesRequestLanguage(t *testing.T) {
 	}
 	if result, err := validator.Validate(nil); err != nil || result.FirstError() != "姓名 is required" {
 		t.Fatalf("控制器污染了共享验证器默认语言: result=%v err=%v", result.Errors(), err)
+	}
+}
+
+func TestControllerValidationMessagesAreRequestLocal(t *testing.T) {
+	app := NewAppUninitialized(t.TempDir())
+	t.Cleanup(func() { _ = app.Close() })
+	const defaultMessage = "姓名是必填项"
+	validator := validate.NewValidator().
+		SetRules(map[string]string{"name|姓名": "required"}).
+		SetMessages(map[string]string{"name.required": defaultMessage}).
+		AddScene("create", []string{"name"})
+	if err := app.Instance(app.ParseClass("validate", "Accounts"), validator); err != nil {
+		t.Fatal(err)
+	}
+	check := func(definition interface{}, want string, arguments ...interface{}) {
+		t.Helper()
+		controller := &Controller{App: app}
+		actual := captureControllerValidationPanic(func() { controller.Validate(nil, definition, arguments...) })
+		failure, ok := actual.(*exception.ValidateException)
+		if !ok || failure.GetError() != want {
+			t.Errorf("验证消息跨请求污染: 期望 %q，实际 %#v", want, actual)
+		}
+	}
+	definitions := []interface{}{validator, "Accounts.create"}
+	for _, definition := range definitions {
+		check(definition, "请求 A", map[string]string{"name.required": "请求 A"})
+		check(definition, defaultMessage)
+		check(definition, "请求 C", map[string]string{"name.required": "请求 C"})
+		check(definition, defaultMessage)
+	}
+	var workers sync.WaitGroup
+	for index := range 32 {
+		workers.Go(func() {
+			message := fmt.Sprintf("请求 %d", index)
+			for _, definition := range definitions {
+				check(definition, message, map[string]string{"name.required": message})
+				check(definition, defaultMessage)
+			}
+		})
+	}
+	workers.Wait()
+	if result, err := validator.Validate(nil); err != nil || result.FirstError() != defaultMessage {
+		t.Fatalf("共享验证器默认消息已改变: %q, %v", result.FirstError(), err)
 	}
 }

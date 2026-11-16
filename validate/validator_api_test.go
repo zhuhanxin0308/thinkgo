@@ -12,6 +12,21 @@ import (
 	"github.com/zhuhanxin0308/thinkgo/v3/lang"
 )
 
+func TestWithMessagesKeepsAnIndependentInvocationSnapshot(t *testing.T) {
+	validator := NewValidator().
+		SetRules(map[string]string{"name|姓名": "required"}).
+		SetMessages(map[string]string{"name.required": "默认提示"})
+	input := map[string]string{"required": "{:field}的请求提示"}
+	option := WithMessages(input)
+	input["required"] = "另一次调用的修改"
+	if result, err := validator.Validate(nil, option); err != nil || result.FirstError() != "姓名的请求提示" {
+		t.Fatalf("本次调用未保留自己的消息快照: %q, %v", result.FirstError(), err)
+	}
+	if result, err := validator.Validate(nil); err != nil || result.FirstError() != "默认提示" {
+		t.Fatalf("共享默认消息被修改: %q, %v", result.FirstError(), err)
+	}
+}
+
 // TestValidateReturnsIsolatedConcurrentResults 验证共享验证器的每次调用都返回独立结果。
 func TestValidateReturnsIsolatedConcurrentResults(t *testing.T) {
 	validator := NewValidator().

@@ -217,11 +217,10 @@ func (c *Controller) resolveControllerValidator(definition interface{}, argument
 		return nil, nil, err
 	}
 	if len(messages) > 0 {
-		setter, ok := validator.(controllerValidatorMessageSetter)
-		if !ok {
+		if _, ok := validator.(controllerValidatorMessageSetter); !ok {
 			return nil, nil, fmt.Errorf("验证器 %T 不支持自定义消息", validator)
 		}
-		setter.SetMessages(messages)
+		options = append(options, validate.WithMessages(messages))
 	}
 	if controllerValidationBatch(c, arguments) {
 		options = append(options, validate.CollectAllErrors())
