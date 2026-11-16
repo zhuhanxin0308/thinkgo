@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/zhuhanxin0308/thinkgo/v3/cookie"
+	"github.com/zhuhanxin0308/thinkgo/v3/session/internal/retention"
 )
 
 const (
@@ -535,7 +536,7 @@ func (s *Session) GC() (int, error) {
 	}
 	lifetime := time.Duration(s.config.Expire) * time.Second
 	if lifetime <= 0 {
-		lifetime = 24 * time.Hour
+		lifetime = retention.IdleLifetime
 	}
 	return collector.GC(lifetime)
 }
