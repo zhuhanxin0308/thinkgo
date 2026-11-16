@@ -54,6 +54,8 @@ var (
 	ErrConfigJSONTooDeep = errors.New("config JSON is too deep")
 	// ErrConfigInvalidPath 表示点路径包含空路径段。
 	ErrConfigInvalidPath = errors.New("invalid config path")
+	// ErrConfigUnsupportedValue 表示程序式配置值无法安全隔离。
+	ErrConfigUnsupportedValue = errors.New("unsupported config snapshot value")
 	// ErrConfigInvalidNamespace 表示配置命名空间不是单一的安全路径段。
 	ErrConfigInvalidNamespace = errors.New("invalid config namespace")
 	// ErrConfigPermissionsTooOpen 表示 Unix 配置文件可被组或其他用户改写。
@@ -340,7 +342,7 @@ func normalizeConfigValue(value interface{}, depth int, path string) (interface{
 	}
 }
 
-// Get 使用点路径读取配置；map 和 slice 始终在锁内生成递归快照。
+// Get 使用点路径读取配置；可变值始终在锁内生成递归快照。
 func (c *Config) Get(name string, def ...interface{}) interface{} {
 	rawName := strings.TrimSpace(name)
 	if rawName == "" {
@@ -572,56 +574,12 @@ func deepCopyValue(value interface{}) interface{} {
 	case []bool:
 		return append([]bool(nil), typed...)
 	default:
-		cloned := deepCopyCollection(reflect.ValueOf(value))
-		if !cloned.IsValid() {
-			return nil
+		cloned, err := copyTypedConfigValue(value, 0)
+		if err != nil {
+			// 写入边界已拒绝不可复制的值，内部快照必须保持此约束。
+			panic(err)
 		}
-		return cloned.Interface()
-	}
-}
-
-// deepCopyCollection 保留强类型集合的原始类型并递归复制 map、slice 和 array 成员。
-func deepCopyCollection(value reflect.Value) reflect.Value {
-	if !value.IsValid() {
-		return value
-	}
-
-	switch value.Kind() {
-	case reflect.Interface:
-		if value.IsNil() {
-			return reflect.Zero(value.Type())
-		}
-		cloned := deepCopyCollection(value.Elem())
-		result := reflect.New(value.Type()).Elem()
-		result.Set(cloned)
-		return result
-	case reflect.Map:
-		if value.IsNil() {
-			return reflect.Zero(value.Type())
-		}
-		result := reflect.MakeMapWithSize(value.Type(), value.Len())
-		iterator := value.MapRange()
-		for iterator.Next() {
-			result.SetMapIndex(iterator.Key(), deepCopyCollection(iterator.Value()))
-		}
-		return result
-	case reflect.Slice:
-		if value.IsNil() {
-			return reflect.Zero(value.Type())
-		}
-		result := reflect.MakeSlice(value.Type(), value.Len(), value.Cap())
-		for index := 0; index < value.Len(); index++ {
-			result.Index(index).Set(deepCopyCollection(value.Index(index)))
-		}
-		return result
-	case reflect.Array:
-		result := reflect.New(value.Type()).Elem()
-		for index := 0; index < value.Len(); index++ {
-			result.Index(index).Set(deepCopyCollection(value.Index(index)))
-		}
-		return result
-	default:
-		return value
+		return cloned
 	}
 }
 
@@ -864,8 +822,14 @@ func normalizeConfigInputValue(value interface{}, depth int, path string) (inter
 			result[index] = normalized
 		}
 		return result, nil
-	default:
+	case map[string]string, []string, []int, []int64, []float64, []bool:
 		return deepCopyValue(value), nil
+	default:
+		copied, err := copyTypedConfigValue(value, depth)
+		if err != nil {
+			return nil, fmt.Errorf("%w at %s", err, path)
+		}
+		return copied, nil
 	}
 }
 
