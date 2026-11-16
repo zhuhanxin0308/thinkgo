@@ -53,7 +53,7 @@ type Http struct {
 	routeFreezeState    atomic.Uint32
 	routeFreezeErr      error
 	spaIndexMu          sync.RWMutex
-	spaIndexCache       []byte
+	spaIndexCache       string
 	spaIndexCached      bool
 	spaIndexAt          time.Time
 	staticMissMu        sync.RWMutex
@@ -451,9 +451,7 @@ func (h *Http) routeRequest(req *context.Request) *context.Response {
 		if (method == http.MethodGet || method == http.MethodHead) &&
 			!isAPIPath(requestPath) && path.Ext(strings.TrimRight(requestPath, "/")) == "" {
 			if content, ok := h.spaIndexContent(); ok {
-				return context.NewResponse().
-					Header("Content-Type", "text/html; charset=utf-8").
-					Content(string(content))
+				return context.NewResponse().HTML(content)
 			}
 		}
 		return context.NewResponse().Code(http.StatusNotFound).Content("404 Not Found")

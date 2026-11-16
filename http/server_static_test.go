@@ -16,7 +16,7 @@ import (
 	"time"
 )
 
-// TestSPAIndexCacheReloadAndIsolation 验证 SPA 缓存返回副本，并在检查窗口后重新读取同尺寸内容。
+// TestSPAIndexCacheReloadAndIsolation 验证旧快照在本次缓存重新加载后仍保持原内容。
 func TestSPAIndexCacheReloadAndIsolation(t *testing.T) {
 	basePath := t.TempDir()
 	publicDir := filepath.Join(basePath, "public")
@@ -29,13 +29,12 @@ func TestSPAIndexCacheReloadAndIsolation(t *testing.T) {
 	}
 	handler := newTestHTTPHandler(t, newTestHTTPApp(t, basePath, map[string]interface{}{"enable": false}))
 	first, ok := handler.spaIndexContent()
-	if !ok || string(first) != "first!" {
+	if !ok || first != "first!" {
 		t.Fatalf("读取首版 SPA 入口失败: %q", first)
 	}
-	first[0] = 'x'
 	second, ok := handler.spaIndexContent()
-	if !ok || string(second) != "first!" {
-		t.Fatalf("调用方修改不应污染 SPA 缓存: %q", second)
+	if !ok || second != first {
+		t.Fatalf("缓存命中应返回相同内容: %q", second)
 	}
 
 	if err := os.WriteFile(indexPath, []byte("second"), 0o600); err != nil {
@@ -45,7 +44,7 @@ func TestSPAIndexCacheReloadAndIsolation(t *testing.T) {
 	handler.spaIndexAt = time.Now().Add(-spaIndexCacheTTL)
 	handler.spaIndexMu.Unlock()
 	reloaded, ok := handler.spaIndexContent()
-	if !ok || string(reloaded) != "second" {
+	if !ok || reloaded != "second" || first != "first!" {
 		t.Fatalf("过期缓存应重新读取内容，实际为 %q", reloaded)
 	}
 
@@ -58,6 +57,32 @@ func TestSPAIndexCacheReloadAndIsolation(t *testing.T) {
 	if _, ok := handler.spaIndexContent(); ok {
 		t.Fatal("超过上限的 SPA 入口必须被拒绝")
 	}
+}
+
+func TestSPAIndexCacheHitDoesNotCopyTheDocument(t *testing.T) {
+	basePath := t.TempDir()
+	publicDir := filepath.Join(basePath, "public")
+	if err := os.MkdirAll(publicDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := strings.Repeat("<main>页面</main>", 4096)
+	if err := os.WriteFile(filepath.Join(publicDir, "index.html"), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	handler := newTestHTTPHandler(t, newTestHTTPApp(t, basePath, map[string]interface{}{"enable": false}))
+	synctest.Test(t, func(t *testing.T) {
+		if _, ok := handler.spaIndexContent(); !ok {
+			t.Fatal("预热 SPA 缓存失败")
+		}
+		allocations := testing.AllocsPerRun(20, func() {
+			if snapshot, ok := handler.spaIndexContent(); !ok || len(snapshot) != len(content) {
+				t.Fatal("缓存命中内容不完整")
+			}
+		})
+		if allocations != 0 {
+			t.Fatalf("SPA 缓存命中每次分配 %.1f 次", allocations)
+		}
+	})
 }
 
 // TestSPAIndexNegativeCache 验证缺失入口在短暂检查窗口内不会被每个未命中请求重复访问文件系统。
@@ -80,7 +105,7 @@ func TestSPAIndexNegativeCache(t *testing.T) {
 		}
 		time.Sleep(spaIndexCacheTTL)
 		content, ok := handler.spaIndexContent()
-		if !ok || string(content) != "created" {
+		if !ok || content != "created" {
 			t.Fatalf("负缓存过期后应重新读取入口，实际为 %q", content)
 		}
 	})

@@ -51,12 +51,12 @@ func containsEncodedPathSeparator(escapedPath string) bool {
 	return strings.Contains(lowerPath, "%2f") || strings.Contains(lowerPath, "%5c")
 }
 
-// spaIndexContent 读取受 public 根目录约束且大小有限的 SPA 入口。
-func (h *Http) spaIndexContent() ([]byte, bool) {
+// spaIndexContent 返回受 public 根目录约束的不可变 SPA 入口快照。
+func (h *Http) spaIndexContent() (string, bool) {
 	now := time.Now()
 	h.spaIndexMu.RLock()
 	if !h.spaIndexAt.IsZero() && now.Sub(h.spaIndexAt) < spaIndexCacheTTL {
-		content := append([]byte(nil), h.spaIndexCache...)
+		content := h.spaIndexCache
 		cached := h.spaIndexCached
 		h.spaIndexMu.RUnlock()
 		return content, cached
@@ -66,7 +66,7 @@ func (h *Http) spaIndexContent() ([]byte, bool) {
 	h.spaIndexMu.Lock()
 	defer h.spaIndexMu.Unlock()
 	if !h.spaIndexAt.IsZero() && now.Sub(h.spaIndexAt) < spaIndexCacheTTL {
-		return append([]byte(nil), h.spaIndexCache...), h.spaIndexCached
+		return h.spaIndexCache, h.spaIndexCached
 	}
 	// SPA 缓存窗口结束即应重新探测入口，不能再受通用缺失前缀缓存延迟。
 	h.forgetStaticPrefixMiss("/index.html")
@@ -75,23 +75,23 @@ func (h *Http) spaIndexContent() ([]byte, bool) {
 		if file != nil {
 			_ = file.Close()
 		}
-		h.spaIndexCache = nil
+		h.spaIndexCache = ""
 		h.spaIndexCached = false
 		h.spaIndexAt = now
-		return nil, false
+		return "", false
 	}
 	defer file.Close()
 	content, err := io.ReadAll(io.LimitReader(file, maxSPAIndexBytes+1))
 	if err != nil || int64(len(content)) > maxSPAIndexBytes {
-		h.spaIndexCache = nil
+		h.spaIndexCache = ""
 		h.spaIndexCached = false
 		h.spaIndexAt = now
-		return nil, false
+		return "", false
 	}
-	h.spaIndexCache = append(h.spaIndexCache[:0], content...)
+	h.spaIndexCache = string(content)
 	h.spaIndexCached = true
 	h.spaIndexAt = now
-	return append([]byte(nil), h.spaIndexCache...), true
+	return h.spaIndexCache, true
 }
 
 func (h *Http) openPublicFile(urlPath string) (*os.File, os.FileInfo, bool) {
