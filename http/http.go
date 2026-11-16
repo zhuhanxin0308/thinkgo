@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path"
 	"reflect"
 	"strings"
 	"sync"
@@ -442,7 +443,9 @@ func (h *Http) routeRequest(req *context.Request) *context.Response {
 		req.SetRoute(key, value)
 	}
 	if matched == nil {
-		if (req.Method() == http.MethodGet || req.Method() == http.MethodHead) && !isAPIPath(req.Path()) {
+		method, requestPath := req.Method(), req.Path()
+		if (method == http.MethodGet || method == http.MethodHead) &&
+			!isAPIPath(requestPath) && path.Ext(strings.TrimRight(requestPath, "/")) == "" {
 			if content, ok := h.spaIndexContent(); ok {
 				return context.NewResponse().
 					Header("Content-Type", "text/html; charset=utf-8").

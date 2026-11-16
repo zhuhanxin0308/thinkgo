@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -67,23 +68,22 @@ func TestSPAIndexNegativeCache(t *testing.T) {
 		t.Fatalf("创建 public 目录失败: %v", err)
 	}
 	handler := newTestHTTPHandler(t, newTestHTTPApp(t, basePath, map[string]interface{}{"enable": false}))
-	if _, ok := handler.spaIndexContent(); ok {
-		t.Fatal("缺失的 SPA 入口不应被视为可用")
-	}
-	if err := os.WriteFile(filepath.Join(publicDir, "index.html"), []byte("created"), 0o600); err != nil {
-		t.Fatalf("创建 SPA 入口失败: %v", err)
-	}
-	if _, ok := handler.spaIndexContent(); ok {
-		t.Fatal("负缓存有效期内不应重复访问刚创建的入口")
-	}
-
-	handler.spaIndexMu.Lock()
-	handler.spaIndexAt = time.Now().Add(-spaIndexCacheTTL)
-	handler.spaIndexMu.Unlock()
-	content, ok := handler.spaIndexContent()
-	if !ok || string(content) != "created" {
-		t.Fatalf("负缓存过期后应重新读取入口，实际为 %q", content)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		if _, ok := handler.spaIndexContent(); ok {
+			t.Fatal("缺失的 SPA 入口不应被视为可用")
+		}
+		if err := os.WriteFile(filepath.Join(publicDir, "index.html"), []byte("created"), 0o600); err != nil {
+			t.Fatalf("创建 SPA 入口失败: %v", err)
+		}
+		if _, ok := handler.spaIndexContent(); ok {
+			t.Fatal("负缓存有效期内不应重复访问刚创建的入口")
+		}
+		time.Sleep(spaIndexCacheTTL)
+		content, ok := handler.spaIndexContent()
+		if !ok || string(content) != "created" {
+			t.Fatalf("负缓存过期后应重新读取入口，实际为 %q", content)
+		}
+	})
 }
 
 // TestStaticPathContainmentHelpers 验证相对路径判断和不存在文件安全失败。
