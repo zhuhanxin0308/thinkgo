@@ -1,10 +1,14 @@
 package framework
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
 )
+
+// ErrApplicationServiceRegistrationInProgress 表示同类型服务仍在注册或替换。
+var ErrApplicationServiceRegistrationInProgress = errors.New("应用服务正在注册")
 
 // Service 是应用服务基类，对应 ThinkPHP 的 think\Service。
 // 业务服务嵌入该类型后即可在无参数 Register、Boot 中取得当前 App。
@@ -66,8 +70,10 @@ type applicationServiceProvider struct {
 	service interface{}
 }
 
-// Register 注册 ThinkPHP 风格应用服务；可选 force 参数强制重新注册同类型服务。
-// 底层 Provider API 继续保留给框架扩展。
+// Register 注册 ThinkPHP 风格应用服务。force 允许在 Boot 前替换同类型实例。
+// 已进入初始化阶段的旧实例仍在候选实例初始化成功后才被替换。
+// 首次初始化与替换争用生命周期阶段时，可在该阶段结束后重试替换。
+// 注册过程中由回调建立的资源由服务负责管理。
 func (app *App) Register(service interface{}, force ...bool) error {
 	if app == nil {
 		return ErrNilApplication
@@ -82,33 +88,28 @@ func (app *App) Register(service interface{}, force ...bool) error {
 		return err
 	}
 	forceRegister := len(force) == 1 && force[0]
+	serviceType := reflect.TypeOf(service)
 	app.applicationServiceMu.Lock()
-	if !forceRegister {
-		if registered := findApplicationService(app.applicationServices, service); registered != nil {
-			app.applicationServiceMu.Unlock()
-			return nil
-		}
-	}
-	app.applicationServices = append(app.applicationServices, service)
-	registrationIndex := len(app.applicationServices) - 1
-	app.applicationServiceMu.Unlock()
-
-	if err := app.RegisterProvider(&applicationServiceProvider{service: service}); err != nil {
-		app.applicationServiceMu.Lock()
-		if registrationIndex < len(app.applicationServices) && app.applicationServices[registrationIndex] == service {
-			app.applicationServices = append(app.applicationServices[:registrationIndex], app.applicationServices[registrationIndex+1:]...)
-		} else {
-			for index := len(app.applicationServices) - 1; index >= 0; index-- {
-				if app.applicationServices[index] == service {
-					app.applicationServices = append(app.applicationServices[:index], app.applicationServices[index+1:]...)
-					break
-				}
-			}
-		}
+	if _, inFlight := app.applicationServiceInFlight[serviceType]; inFlight {
 		app.applicationServiceMu.Unlock()
-		return err
+		return fmt.Errorf("%w: %T", ErrApplicationServiceRegistrationInProgress, service)
 	}
-	return nil
+	previous := findApplicationService(app.applicationServices, service)
+	if previous != nil && !forceRegister {
+		app.applicationServiceMu.Unlock()
+		return nil
+	}
+	if app.applicationServiceInFlight == nil {
+		app.applicationServiceInFlight = make(map[reflect.Type]struct{})
+	}
+	app.applicationServiceInFlight[serviceType] = struct{}{}
+	app.applicationServiceMu.Unlock()
+	defer func() {
+		app.applicationServiceMu.Lock()
+		delete(app.applicationServiceInFlight, serviceType)
+		app.applicationServiceMu.Unlock()
+	}()
+	return app.registerApplicationServiceProvider(&applicationServiceProvider{service: service}, previous)
 }
 
 // GetService 返回首个同类型应用服务，对应 ThinkPHP App::getService。
@@ -120,27 +121,20 @@ func (app *App) GetService(service interface{}) interface{} {
 	app.applicationServiceMu.RLock()
 	registered := findApplicationService(app.applicationServices, service)
 	app.applicationServiceMu.RUnlock()
-	return registered
-}
-
-func findApplicationService(services []interface{}, target interface{}) interface{} {
-	targetName := ""
-	if name, ok := target.(string); ok {
-		targetName = strings.TrimSpace(name)
-	} else {
-		targetType := reflect.TypeOf(target)
-		if targetType == nil {
-			return nil
-		}
-		targetName = targetType.String()
-	}
-	if targetName == "" {
+	if registered == nil {
 		return nil
 	}
-	for _, service := range services {
-		serviceType := reflect.TypeOf(service)
-		if serviceType != nil && serviceType.String() == targetName {
-			return service
+	return registered.service
+}
+
+func findApplicationService(services []*applicationServiceProvider, target interface{}) *applicationServiceProvider {
+	targetType := reflect.TypeOf(target)
+	name, byName := target.(string)
+	name = strings.TrimSpace(name)
+	for _, current := range services {
+		serviceType := reflect.TypeOf(current.service)
+		if serviceType == targetType || byName && serviceType.String() == name {
+			return current
 		}
 	}
 	return nil

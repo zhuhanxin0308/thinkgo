@@ -62,6 +62,7 @@ type providerLifecycle struct {
 	providers          []*providerRegistration
 	identities         map[providerIdentity]struct{}
 	registering        int
+	applicationPhases  int
 	closing            bool
 	registrationClosed bool
 	booting            bool
@@ -156,13 +157,7 @@ func (app *App) initializeProviders() error {
 		lifecycle.initializing = true
 		lifecycle.lock.Unlock()
 
-		initializeErrors := app.initializePendingProviders()
-		lifecycle.lock.Lock()
-		lifecycle.initializeErr = initializeErrors
-		lifecycle.initializing = false
-		lifecycle.initialized = true
-		lifecycle.condition.Broadcast()
-		lifecycle.lock.Unlock()
+		_ = app.initializePendingProviders(true)
 	})
 	lifecycle.lock.Lock()
 	defer lifecycle.lock.Unlock()
@@ -181,7 +176,7 @@ func (lifecycle *providerLifecycle) providerWasInitialized(provider ServiceProvi
 }
 
 // initializePendingProviders 在阶段锁内串行完成所有已注册但尚未尝试初始化的 Provider。
-func (app *App) initializePendingProviders() error {
+func (app *App) initializePendingProviders(finishInitialPhase bool) error {
 	lifecycle := &app.providers
 	initializeErrors := make([]error, 0)
 	for {
@@ -197,11 +192,19 @@ func (app *App) initializePendingProviders() error {
 			registration.initializing = true
 			pending = append(pending, registration)
 		}
-		lifecycle.lock.Unlock()
-
 		if len(pending) == 0 {
-			return errors.Join(initializeErrors...)
+			initializeErr := errors.Join(initializeErrors...)
+			if finishInitialPhase {
+				// 检查完待处理 Provider 后，在同一锁内结束初始化阶段。
+				lifecycle.initializeErr = initializeErr
+				lifecycle.initializing = false
+				lifecycle.initialized = true
+				lifecycle.condition.Broadcast()
+			}
+			lifecycle.lock.Unlock()
+			return initializeErr
 		}
+		lifecycle.lock.Unlock()
 		for _, registration := range pending {
 			var initializeErr error
 			if _, ok := registration.provider.(ServiceProviderInitializer); ok {
@@ -301,8 +304,6 @@ func (app *App) bootProviders() error {
 			return initializeErr
 		}
 	}
-	lifecycle.phaseMu.Lock()
-	defer lifecycle.phaseMu.Unlock()
 	lifecycle.lock.Lock()
 	lifecycle.initializeLocked()
 	if lifecycle.closed || lifecycle.closing {
@@ -316,13 +317,18 @@ func (app *App) bootProviders() error {
 	}
 	lifecycle.registrationClosed = true
 	lifecycle.booting = true
-	for lifecycle.registering > 0 {
+	for lifecycle.registering > 0 || lifecycle.applicationPhases > 0 {
 		lifecycle.condition.Wait()
 	}
-	initializeErr := error(nil)
-	if initializeStarted {
+	lifecycle.lock.Unlock()
+
+	lifecycle.phaseMu.Lock()
+	defer lifecycle.phaseMu.Unlock()
+	lifecycle.lock.Lock()
+	initializeErr := lifecycle.initializeErr
+	if initializeStarted && initializeErr == nil {
 		lifecycle.lock.Unlock()
-		initializeErr = app.initializePendingProviders()
+		initializeErr = app.initializePendingProviders(false)
 		lifecycle.lock.Lock()
 	}
 	providers := lifecycle.snapshotProvidersLocked()
@@ -420,23 +426,26 @@ func (app *App) dispatchAppInit() error {
 
 func (app *App) shutdownProviders() error {
 	lifecycle := &app.providers
-	lifecycle.phaseMu.Lock()
-	defer lifecycle.phaseMu.Unlock()
 	lifecycle.lock.Lock()
 	lifecycle.initializeLocked()
 	// 先阻止新的 Register，再等待已经进入 Register 的 Provider 完成；这些 Provider
 	// 仍然需要经过 Initialize，不能直接进入 Shutdown。
 	lifecycle.closing = true
 	lifecycle.condition.Broadcast()
-	for lifecycle.registering > 0 || lifecycle.booting {
+	for lifecycle.registering > 0 || lifecycle.applicationPhases > 0 || lifecycle.booting {
 		lifecycle.condition.Wait()
 	}
+	lifecycle.lock.Unlock()
+
+	lifecycle.phaseMu.Lock()
+	defer lifecycle.phaseMu.Unlock()
+	lifecycle.lock.Lock()
 	shouldInitializePending := lifecycle.initialized
 	lifecycle.lock.Unlock()
 
 	var initializeErr error
 	if shouldInitializePending {
-		initializeErr = app.initializePendingProviders()
+		initializeErr = app.initializePendingProviders(false)
 	}
 
 	lifecycle.lock.Lock()

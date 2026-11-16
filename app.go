@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -102,7 +103,8 @@ type App struct {
 	serviceMutationMu          sync.Mutex
 	resources                  serviceResources
 	applicationServiceMu       sync.RWMutex
-	applicationServices        []interface{}
+	applicationServices        []*applicationServiceProvider
+	applicationServiceInFlight map[reflect.Type]struct{}
 	providers                  providerLifecycle
 	lifecycle                  appLifecycle
 	sessionEnabled             bool
