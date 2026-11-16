@@ -115,7 +115,7 @@ END;`
 		return "", "", err
 	}
 	if link != "" || owner == "" || name == "" {
-		return "", "", errors.New("Oracle 主键回传要求可解析的本地表")
+		return "", "", errors.New("主键回传要求可解析的 Oracle 本地表")
 	}
 	return owner, name, nil
 }
