@@ -17,6 +17,7 @@ import (
 
 const (
 	maxNumericValueBytes = 1024
+	maxNumericExponent   = 8192
 	// maxValidationIndirectionDepth 统一限制所有规则的指针和接口解引用深度。
 	maxValidationIndirectionDepth = 32
 )
@@ -242,6 +243,13 @@ func parseNumericString(value string) (*big.Rat, bool) {
 	if value == "" || len(value) > maxNumericValueBytes || strings.TrimSpace(value) != value || !decimalRegex.MatchString(value) {
 		return nil, false
 	}
+	if index := strings.IndexAny(value, "eE"); index >= 0 {
+		exponent, err := strconv.Atoi(value[index+1:])
+		// 在 big.Rat 展开十进制指数前限制计算规模。
+		if err != nil || exponent < -maxNumericExponent || exponent > maxNumericExponent {
+			return nil, false
+		}
+	}
 	parsed, valid := new(big.Rat).SetString(value)
 	return parsed, valid
 }
@@ -320,7 +328,7 @@ func isCollectionValue(value interface{}) bool {
 
 func valueLength(value interface{}) (int, bool) {
 	reflected, valid := indirectValidationValue(reflect.ValueOf(value))
-	if !valid {
+	if !valid || reflected.Type() == reflect.TypeFor[json.Number]() {
 		return 0, false
 	}
 	switch reflected.Kind() {
