@@ -3,13 +3,17 @@ package db
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/zhuhanxin0308/thinkgo/v3/db/internal/contract"
 )
 
-type oracleTypeQuery func(context.Context, string, ...any) *sql.Row
+type oracleReturningSession interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
 
 func (c *SQLConnection) insertOracleReturning(ctx context.Context, transaction *sql.Tx, request InsertRequest, data map[string]any) (InsertResult, error) {
 	primary := request.PrimaryKey()
@@ -24,9 +28,10 @@ func (c *SQLConnection) insertOracleReturning(ctx context.Context, transaction *
 	}
 
 	execute := c.execContext
-	var queryType oracleTypeQuery
+	var session oracleReturningSession
 	if transaction != nil {
-		execute, queryType = transaction.ExecContext, transaction.QueryRowContext
+		session = transaction
+		execute = transaction.ExecContext
 	}
 	output.Dest = contract.OracleExplicitKeyDestination(data, primary)
 	if output.Dest == nil {
@@ -37,10 +42,11 @@ func (c *SQLConnection) insertOracleReturning(ctx context.Context, transaction *
 				return InsertResult{}, err
 			}
 			defer func() { _ = pinned.Close() }()
-			execute, queryType = pinned.ExecContext, pinned.QueryRowContext
+			session = pinned
+			execute = pinned.ExecContext
 		}
 		var err error
-		output.Dest, err = c.oracleCatalogKeyDestination(ctx, queryType, request.Table(), primary)
+		output.Dest, err = c.oracleCatalogKeyDestination(ctx, session, request.Table(), primary)
 		if err != nil {
 			return InsertResult{}, err
 		}
@@ -63,15 +69,25 @@ func (c *SQLConnection) insertOracleReturning(ctx context.Context, transaction *
 	return result, result.Validate()
 }
 
-func (c *SQLConnection) oracleCatalogKeyDestination(ctx context.Context, queryRow oracleTypeQuery, table, primary string) (any, error) {
+func (c *SQLConnection) oracleCatalogKeyDestination(ctx context.Context, session oracleReturningSession, table, primary string) (any, error) {
 	namespace, name, err := splitSchemaTable(table)
 	if err != nil {
 		return nil, err
 	}
 	const catalog = `SELECT data_type FROM all_tab_columns
 WHERE owner = NVL(?, SYS_CONTEXT('USERENV', 'CURRENT_SCHEMA')) AND table_name = ? AND column_name = ?`
+	query := c.Builder.Rebind(catalog)
+	column := strings.ToUpper(primary)
 	var columnType string
-	if err := queryRow(ctx, c.Builder.Rebind(catalog), strings.ToUpper(namespace), strings.ToUpper(name), strings.ToUpper(primary)).Scan(&columnType); err != nil {
+	err = session.QueryRowContext(ctx, query, strings.ToUpper(namespace), strings.ToUpper(name), column).Scan(&columnType)
+	if errors.Is(err, sql.ErrNoRows) {
+		// Oracle 负责按当前模式解析私有与公共同义词及其引用链。
+		namespace, name, err = c.resolveOracleReturningTable(ctx, session, table)
+		if err == nil {
+			err = session.QueryRowContext(ctx, query, namespace, name, column).Scan(&columnType)
+		}
+	}
+	if err != nil {
 		return nil, fmt.Errorf("%w: 查询 Oracle 主键 %s.%s 类型失败: %w", ErrInsertIDUnavailable, table, primary, err)
 	}
 	switch strings.ToUpper(strings.TrimSpace(columnType)) {
@@ -82,4 +98,24 @@ WHERE owner = NVL(?, SYS_CONTEXT('USERENV', 'CURRENT_SCHEMA')) AND table_name = 
 	default:
 		return nil, fmt.Errorf("%w: Oracle 不支持回传主键 %s.%s 的类型 %q", ErrInsertIDUnavailable, table, primary, columnType)
 	}
+}
+
+func (c *SQLConnection) resolveOracleReturningTable(ctx context.Context, session oracleReturningSession, table string) (string, string, error) {
+	// NAME_RESOLVE 的 context 0 代表表名解析，未使用的输出由 PL/SQL 局部变量接收。
+	const resolve = `DECLARE
+    unused_part VARCHAR2(128);
+    unused_type NUMBER;
+    unused_object NUMBER;
+BEGIN
+    SYS.DBMS_UTILITY.NAME_RESOLVE(?, 0, ?, ?, unused_part, ?, unused_type, unused_object);
+END;`
+	var owner, name, link string
+	if _, err := session.ExecContext(ctx, c.Builder.Rebind(resolve), c.Builder.QuoteIdentifier(table),
+		sql.Out{Dest: &owner}, sql.Out{Dest: &name}, sql.Out{Dest: &link}); err != nil {
+		return "", "", err
+	}
+	if link != "" || owner == "" || name == "" {
+		return "", "", errors.New("Oracle 主键回传要求可解析的本地表")
+	}
+	return owner, name, nil
 }

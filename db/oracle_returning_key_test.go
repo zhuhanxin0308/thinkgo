@@ -19,7 +19,10 @@ type oracleReturningTestDriver struct {
 	*pinnedSQLDriver
 	columnType string
 	returned   any
+	synonym    string
+	dbLink     string
 	lookups    int
+	resolves   int
 	inserts    int
 }
 
@@ -45,15 +48,32 @@ func (connection *oracleReturningTestConn) ResetSession(context.Context) error {
 }
 
 func (connection *oracleReturningTestConn) QueryContext(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
-	if !strings.Contains(strings.ToLower(query), "all_tab_columns") || len(args) != 3 || args[0].Value != "APP" || args[1].Value != "ACCOUNTS" || args[2].Value != "ACCOUNT_ID" {
+	if !strings.Contains(strings.ToLower(query), "all_tab_columns") || len(args) != 3 || args[0].Value != "APP" || args[2].Value != "ACCOUNT_ID" {
 		return nil, fmt.Errorf("列类型查询未按模式、表和主键绑定: %s %#v", query, args)
 	}
-	connection.resolved = true
 	connection.recording.lookups++
+	if connection.recording.synonym != "" && args[1].Value == "ACCOUNTS" {
+		return &hardeningSQLRows{columns: []string{"data_type"}, rows: [][]driver.Value{}}, nil
+	}
+	if args[1].Value != "ACCOUNTS" && (args[1].Value != connection.recording.synonym || connection.recording.resolves == 0) {
+		return nil, fmt.Errorf("读取了非目标表的列类型: %#v", args)
+	}
+	connection.resolved = true
 	return &hardeningSQLRows{columns: []string{"data_type"}, values: []driver.Value{connection.recording.columnType}}, nil
 }
 
 func (connection *oracleReturningTestConn) ExecContext(_ context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
+	if strings.Contains(query, "NAME_RESOLVE") {
+		connection.recording.resolves++
+		if len(args) != 4 || args[0].Value != `"APP"."ACCOUNTS"` {
+			return nil, fmt.Errorf("同义词解析未使用已引用的同名对象: %s %#v", query, args)
+		}
+		for index, value := range []string{"APP", connection.recording.synonym, connection.recording.dbLink} {
+			output := args[index+1].Value.(sql.Out)
+			*output.Dest.(*string) = value
+		}
+		return driver.RowsAffected(0), nil
+	}
 	connection.recording.inserts++
 	if connection.recording.columnType != "" && !connection.resolved {
 		return nil, errors.New("同一 Oracle 会话上未先解析主键类型")
@@ -173,5 +193,28 @@ func TestOracleReturningReportsPartialWriteWhenStringOutputIsMissing(t *testing.
 	requireInsertIDPartial(t, err, ErrInsertIDUnavailable)
 	if id != nil || recording.inserts != 1 || recording.lookups != 0 {
 		t.Fatalf("写入后的缺失主键应继续保留写入结果: %v，查询 %d 次，写入 %d 次", id, recording.lookups, recording.inserts)
+	}
+}
+
+func TestOracleReturningResolvesSynonymBeforeWriting(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		dbLink string
+	}{
+		{name: "本地同义词"},
+		{name: "远程同义词", dbLink: "REMOTE"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			database, recording := newOracleReturningTestDB(t, "VARCHAR2", "000-synonym")
+			recording.synonym, recording.dbLink = "KEY_SOURCE", test.dbLink
+			id, err := NewModel(database, "app.accounts").PrimaryKey("account_id").InsertGetId(map[string]any{"name": "Ada"})
+			if test.dbLink != "" {
+				if id != nil || !errors.Is(err, ErrInsertIDUnavailable) || recording.lookups != 1 || recording.resolves != 1 || recording.inserts != 0 {
+					t.Fatalf("数据库链接不能进入写入: %v %v，%+v", id, err, recording)
+				}
+			} else if err != nil || id != "000-synonym" || recording.lookups != 2 || recording.resolves != 1 || recording.inserts != 1 {
+				t.Fatalf("本地同义词未正确回传: %v %v，%+v", id, err, recording)
+			}
+		})
 	}
 }
