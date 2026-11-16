@@ -25,7 +25,7 @@ func TestRebindNumberedPostgresLexicalBoundaries(t *testing.T) {
 		{"unclosed comment", `SELECT 1 /*/ ?`, `SELECT 1 /*/ ?`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if got := rebindNumbered(test.query, "$", "postgres"); got != test.want {
+			if got := (&Pgsql{}).Rebind(test.query); got != test.want {
 				t.Fatalf("Rebind(%q) = %q; want %q", test.query, got, test.want)
 			}
 		})
@@ -50,7 +50,7 @@ func FuzzPostgresRebindLexicalIsolation(f *testing.F) {
 		for _, literal := range literals {
 			query := "SELECT " + literal + ", ARRAY[?, ?], ?"
 			want := "SELECT " + literal + ", ARRAY[$1, $2], $3"
-			if got := rebindNumbered(query, "$", "postgres"); got != want {
+			if got := (&Pgsql{}).Rebind(query); got != want {
 				t.Fatalf("literal was not isolated: got=%q want=%q", got, want)
 			}
 		}

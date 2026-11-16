@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"reflect"
 	"strconv"
 	"strings"
 )
@@ -48,11 +49,15 @@ func (q *Query) aggregate(fn, field string) (float64, error) {
 		return 0, nil
 	}
 
-	val := rows[0]["tp_aggregate"]
+	val, found := aggregateResultValue(rows[0], cloned.aggregateExpression.Alias)
+	if !found {
+		return 0, q.reportError("aggregate", fmt.Errorf("%w: 聚合结果缺少唯一聚合列", ErrInvalidDatabaseRow), nil)
+	}
 	if val == nil {
 		return 0, nil
 	}
 
+	var decimalText string
 	switch v := val.(type) {
 	case float64:
 		if math.IsNaN(v) || math.IsInf(v, 0) {
@@ -86,23 +91,36 @@ func (q *Query) aggregate(fn, field string) (float64, error) {
 	case uint64:
 		return float64(v), nil
 	case []byte:
-		parsed, err := strconv.ParseFloat(strings.TrimSpace(string(v)), 64)
-		if err == nil && !math.IsNaN(parsed) && !math.IsInf(parsed, 0) {
-			return parsed, nil
-		}
-	case string:
-		parsed, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
-		if err == nil && !math.IsNaN(parsed) && !math.IsInf(parsed, 0) {
-			return parsed, nil
-		}
+		decimalText = strings.TrimSpace(string(v))
 	case json.Number:
-		parsed, err := strconv.ParseFloat(string(v), 64)
+		decimalText = v.String()
+	default:
+		// Oracle 等驱动可通过具名字符串交付十进制数。
+		if value := reflect.ValueOf(val); value.Kind() == reflect.String {
+			decimalText = strings.TrimSpace(value.String())
+		}
+	}
+	if decimalText != "" {
+		parsed, err := strconv.ParseFloat(decimalText, 64)
 		if err == nil && !math.IsNaN(parsed) && !math.IsInf(parsed, 0) {
 			return parsed, nil
 		}
 	}
 
 	return 0, fmt.Errorf("%w: 无法解析 %T(%v)", ErrInvalidAggregateValue, val, val)
+}
+
+// aggregateResultValue 优先使用声明的列名，兼容驱动以不同大小写返回的唯一结果列。
+func aggregateResultValue(row map[string]interface{}, alias string) (interface{}, bool) {
+	if value, found := row[alias]; found {
+		return value, true
+	}
+	if len(row) == 1 {
+		for _, value := range row {
+			return value, true
+		}
+	}
+	return nil, false
 }
 
 // Value 获取单条记录的单个字段值。

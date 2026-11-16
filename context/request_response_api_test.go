@@ -558,11 +558,11 @@ func TestResponseMetadataAPIs(t *testing.T) {
 	}
 }
 
-// TestResponseContentMatchesThinkPHPDefaultHeaders 验证基础响应默认使用 ThinkPHP 的 HTML 类型。
-func TestResponseContentMatchesThinkPHPDefaultHeaders(t *testing.T) {
+// TestResponseContentDefaultHeaders 验证基础响应默认使用纯文本，JSON 会替换其类型。
+func TestResponseContentDefaultHeaders(t *testing.T) {
 	response := NewResponse().Content("plain")
 	headers := response.Headers()
-	if headers.Get("Content-Type") != "text/html; charset=utf-8" {
+	if headers.Get("Content-Type") != "text/plain; charset=utf-8" {
 		t.Fatalf("基础响应 Content-Type 错误: %q", headers.Get("Content-Type"))
 	}
 	if headers.Get("X-Content-Type-Options") != "" {

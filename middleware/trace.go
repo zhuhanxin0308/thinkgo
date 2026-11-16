@@ -184,7 +184,8 @@ func (t *Trace) Handle(req *context.Request, next func(*context.Request) *contex
 	if traceType == "console" {
 		output = buildConsoleTrace(info)
 	}
-	resp.Content(content[:position] + output + content[position:])
+	resp.Header("Content-Type", resp.GetHeader("Content-Type")).
+		Content(content[:position] + output + content[position:])
 	return resp
 }
 

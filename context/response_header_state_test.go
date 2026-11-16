@@ -35,13 +35,14 @@ func TestResponseSingleHeaderConstructionAllocations(t *testing.T) {
 // TestResponseHeaderStateKeepsEntityDefaults 验证不同实体入口仍保留既有默认类型和显式空值语义。
 func TestResponseHeaderStateKeepsEntityDefaults(t *testing.T) {
 	const htmlContentType = "text/html; charset=utf-8"
+	const textContentType = "text/plain; charset=utf-8"
 	cases := []struct {
 		name        string
 		response    *Response
 		contentType string
 	}{
 		{"default", NewResponse(), htmlContentType},
-		{"content", NewResponse().Content("hello"), htmlContentType},
+		{"content", NewResponse().Content("hello"), textContentType},
 		{"data", NewResponse().Data([]byte("hello")), htmlContentType},
 		{"json", NewResponse().Json(struct{ OK bool }{true}), "application/json; charset=utf-8"},
 		{"jsonp", NewResponse().Jsonp("callback", true), "application/javascript; charset=utf-8"},
@@ -52,8 +53,8 @@ func TestResponseHeaderStateKeepsEntityDefaults(t *testing.T) {
 		{"chunk", NewResponse().Chunk([][]byte{[]byte("hello")}), htmlContentType},
 		{"no_content", NewResponse().NoContent(), htmlContentType},
 		{"committed", NewCommittedResponse(http.StatusAccepted), htmlContentType},
-		{"content_zero", (&Response{}).Content("hello"), htmlContentType},
-		{"content_empty", NewResponse().Header("Content-Type", "").Content("hello"), htmlContentType},
+		{"content_zero", (&Response{}).Content("hello"), textContentType},
+		{"content_empty", NewResponse().Header("Content-Type", "").Content("hello"), textContentType},
 		{"content_custom", NewResponse().Header("Content-Type", "text/plain").Content("hello"), "text/plain"},
 		{"empty", NewResponse().Header("Content-Type", ""), ""},
 	}
@@ -86,18 +87,18 @@ func TestResponseContentTypeTransitions(t *testing.T) {
 		t.Fatalf("覆盖后的 Content-Type 仍保留旧值: %#v", got)
 	}
 	response.Header(http.Header{"Content-Type": []string{"", "tail"}}).Content("hello")
-	if got := response.Headers().Values("Content-Type"); !reflect.DeepEqual(got, []string{"text/html; charset=utf-8"}) {
+	if got := response.Headers().Values("Content-Type"); !reflect.DeepEqual(got, []string{"text/plain; charset=utf-8"}) {
 		t.Fatalf("Content 必须替换空首项和旧多值: %#v", got)
 	}
 	response.Header(http.Header{"Content-Type": nil})
-	if got := response.GetHeader("Content-Type"); got != "text/html; charset=utf-8" {
+	if got := response.GetHeader("Content-Type"); got != "text/plain; charset=utf-8" {
 		t.Fatalf("空头值集合应保持已有头部: %q", got)
 	}
 	if initial.Get("Content-Type") != "text/html; charset=utf-8" || len(multiple.Values("Content-Type")) != 3 {
 		t.Fatal("后续响应修改污染了先前快照")
 	}
 	multiple["Content-Type"][0] = "mutated snapshot"
-	if response.GetHeader("Content-Type") != "text/html; charset=utf-8" {
+	if response.GetHeader("Content-Type") != "text/plain; charset=utf-8" {
 		t.Fatal("外部快照可反向修改响应头")
 	}
 }

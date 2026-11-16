@@ -154,7 +154,7 @@ func (r *Route) View(rule string, arguments ...interface{}) *RuleItem {
 		if err != nil {
 			panic(fmt.Errorf("渲染视图路由 %q 失败: %w", rule, err))
 		}
-		return frameworkContext.NewResponse().Content(content)
+		return frameworkContext.NewResponse().HTML(content)
 	})
 }
 

@@ -156,8 +156,8 @@ func TestThinkPHPRouteFacadeSupportsView(t *testing.T) {
 		t.Fatalf("视图路由处理器类型错误: %T", matched.Handler())
 	}
 	response := handler(request)
-	if response.GetStatus() != http.StatusOK || string(response.GetBody()) != "hello ThinkPHP" {
-		t.Fatalf("视图路由响应错误: status=%d body=%q", response.GetStatus(), string(response.GetBody()))
+	if response.GetStatus() != http.StatusOK || response.GetHeader("Content-Type") != "text/html; charset=utf-8" || string(response.GetBody()) != "hello ThinkPHP" {
+		t.Fatalf("视图路由响应错误: status=%d type=%q body=%q", response.GetStatus(), response.GetHeader("Content-Type"), response.GetBody())
 	}
 }
 

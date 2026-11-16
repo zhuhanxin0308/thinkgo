@@ -122,13 +122,11 @@ func rebindNumbered(query, prefix, dialect string) string {
 		stateBacktick
 		stateBracket
 		stateLineComment
-		stateBlockComment
 		stateDollarQuote
 	)
 	state := stateNormal
 	dollarDelimiter := ""
 	parameter := 0
-	blockDepth := 0
 	postgres := dialect == "postgres"
 	var output strings.Builder
 	output.Grow(len(query) + 8)
@@ -185,11 +183,9 @@ func rebindNumbered(query, prefix, dialect string) string {
 				}
 			case '/':
 				if index+1 < len(query) && query[index+1] == '*' {
-					state = stateBlockComment
-					blockDepth = 1
-					// 一次消费整个起始符，禁止用其中的 * 与后续 / 重叠闭合。
-					output.WriteString("/*")
-					index++
+					end, _ := sqllex.BlockCommentEnd(query, index, dialect)
+					output.WriteString(query[index:end])
+					index = end - 1
 					continue
 				}
 			case '$':
@@ -235,23 +231,6 @@ func rebindNumbered(query, prefix, dialect string) string {
 		case stateLineComment:
 			if current == '\n' || current == '\r' {
 				state = stateNormal
-			}
-		case stateBlockComment:
-			if postgres && current == '/' && index+1 < len(query) && query[index+1] == '*' {
-				blockDepth++
-				output.WriteString("/*")
-				index++
-				continue
-			}
-			if current == '*' && index+1 < len(query) && query[index+1] == '/' {
-				output.WriteByte(current)
-				index++
-				output.WriteByte(query[index])
-				blockDepth--
-				if blockDepth == 0 {
-					state = stateNormal
-				}
-				continue
 			}
 		case stateDollarQuote:
 			if strings.HasPrefix(query[index:], dollarDelimiter) {

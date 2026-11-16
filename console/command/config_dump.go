@@ -12,6 +12,8 @@ import (
 
 const configDumpRedactedValue = "[REDACTED]"
 
+var configDumpKeyNormalizer = strings.NewReplacer("-", "_", ".", "_")
+
 // ConfigDump command
 type ConfigDump struct {
 	console.Command
@@ -77,7 +79,13 @@ func redactConfigDumpData(key string, value interface{}) (interface{}, error) {
 	if err := decoder.Decode(&normalized); err != nil {
 		return nil, err
 	}
-	return redactConfigDumpValue(key, normalized), nil
+	// 按 Config.Get 使用的层级判断，禁止组合别名跨越两个不同的键命中。
+	for segment := range strings.SplitSeq(key, ".") {
+		if isConfigDumpSensitiveKey(segment) {
+			return configDumpRedactedValue, nil
+		}
+	}
+	return redactConfigDumpValue("", normalized), nil
 }
 
 // redactConfigDumpValue 按字段名判断是否脱敏，普通值保持原样。
@@ -110,7 +118,7 @@ func isConfigDumpSensitiveKey(key string) bool {
 	if key == "" {
 		return false
 	}
-	normalizedKey := strings.NewReplacer("-", "_", ".", "_").Replace(key)
+	normalizedKey := configDumpKeyNormalizer.Replace(key)
 
 	sensitiveFragments := []string{
 		"authorization",
@@ -139,18 +147,16 @@ func isConfigDumpSensitiveKey(key string) bool {
 			return true
 		}
 	}
-	for _, part := range strings.FieldsFunc(normalizedKey, func(current rune) bool {
-		return current == '_'
-	}) {
-		if part == "pass" {
+	boundedKey := "_" + normalizedKey + "_"
+	for _, alias := range []string{"_sign_key_", "_signkey_", "_app_key_", "_appkey_", "_mch_key_", "_mchkey_"} {
+		if strings.Contains(boundedKey, alias) {
 			return true
 		}
 	}
-	// dsn/uri/url 仅按完整键片段匹配，避免把 security、duration 等普通字段误判。
-	for _, part := range strings.FieldsFunc(normalizedKey, func(current rune) bool {
-		return current == '_' || current == '-' || current == '.'
-	}) {
-		if part == "dsn" || part == "uri" || part == "url" {
+	// 短格式别名按完整片段匹配，避免误遮蔽 author、duration 等字段。
+	for part := range strings.SplitSeq(normalizedKey, "_") {
+		switch part {
+		case "auth", "pwd", "pass", "salt", "cert", "dsn", "uri", "url":
 			return true
 		}
 	}
