@@ -161,6 +161,15 @@ func TestBuildRecoversAfterLockOwnerIsKilled(t *testing.T) {
 	if !reader.Scan() || reader.Text() != readyMessage {
 		t.Fatalf("构建子进程未进入编译: %q %v", reader.Text(), reader.Err())
 	}
+	legacyPath := filepath.Join(base, distributionLegacyLockPath)
+	legacy, err := os.OpenFile(legacyPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err == nil {
+		_ = legacy.Close()
+		t.Fatal("新版构建先启动时，旧版仍然取得了构建锁")
+	}
+	if !errors.Is(err, os.ErrExist) {
+		t.Fatalf("旧版应明确遇到占用的构建锁: %v", err)
+	}
 	wait, stopWaiting := context.WithTimeout(ctx, 100*time.Millisecond)
 	defer stopWaiting()
 	if err := buildDistribution(wait, base, target, func(context.Context, string, string, buildTarget) error {
@@ -180,6 +189,9 @@ func TestBuildRecoversAfterLockOwnerIsKilled(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("进程被终止后应能立即重新构建: %v", err)
+	}
+	if _, err := os.Lstat(legacyPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("正常退出的新版必须释放旧版兼容标记: %v", err)
 	}
 	path := filepath.Join(base, "dist", target.directory(), target.binary())
 	data, err := os.ReadFile(path)

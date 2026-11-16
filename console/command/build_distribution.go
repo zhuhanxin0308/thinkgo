@@ -18,6 +18,7 @@ type distributionCompiler func(context.Context, string, string, buildTarget) err
 
 const (
 	distributionGuardPath      = "dist/.build.guard"
+	distributionMarkerPath     = "dist/.build.owner"
 	distributionLegacyLockPath = "dist/.build.lock"
 )
 
@@ -39,19 +40,54 @@ func buildDistribution(ctx context.Context, base string, target buildTarget, com
 	}
 	// 使用稳定文件上的内核锁覆盖编译和产物发布，进程退出时由系统释放。
 	err = winfile.TryWithGuard(ctx, filepath.Join(base, distributionGuardPath), func() error {
-		_, err := root.Lstat(distributionLegacyLockPath)
-		if err == nil {
-			return fmt.Errorf("发现旧版构建锁 %s，请先停止旧版构建，再删除该文件并重试", distributionLegacyLockPath)
-		}
-		if !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("无法检查旧版构建锁: %w", err)
-		}
-		return buildLockedDistribution(ctx, base, root, target, compile)
+		return withLegacyBuildMarker(root, func() error {
+			return buildLockedDistribution(ctx, base, root, target, compile)
+		})
 	})
 	if errors.Is(err, winfile.ErrGuardInUse) {
 		return fmt.Errorf("另一个构建正在执行: %w", err)
 	}
 	return err
+}
+
+// withLegacyBuildMarker 仅在持有新版内核锁时使用，通过原子的兼容标记阻止旧版并发进入。
+func withLegacyBuildMarker(root *os.Root, operation func() error) (result error) {
+	owner, err := root.Lstat(distributionMarkerPath)
+	if errors.Is(err, os.ErrNotExist) {
+		file, createErr := root.OpenFile(distributionMarkerPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if createErr != nil {
+			return createErr
+		}
+		owner, err = file.Stat()
+		err = errors.Join(err, file.Close())
+	}
+	if err != nil {
+		return err
+	}
+	if !owner.Mode().IsRegular() {
+		return winfile.ErrUnsafeGuard
+	}
+	// 同一文件的硬链接可在崩溃后辨认，且创建时不会覆盖旧进程已经取得的锁。
+	if err := root.Link(distributionMarkerPath, distributionLegacyLockPath); err != nil && !errors.Is(err, os.ErrExist) {
+		return fmt.Errorf("无法发布旧版兼容构建锁: %w", err)
+	}
+	current, err := root.Lstat(distributionLegacyLockPath)
+	if err != nil {
+		return err
+	}
+	if !os.SameFile(owner, current) {
+		return fmt.Errorf("发现旧版构建锁 %s，请先停止旧版构建，再删除该文件并重试", distributionLegacyLockPath)
+	}
+	defer func() {
+		marker, err := root.Lstat(distributionLegacyLockPath)
+		if err == nil && os.SameFile(owner, marker) {
+			err = root.Remove(distributionLegacyLockPath)
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			result = errors.Join(result, err)
+		}
+	}()
+	return operation()
 }
 
 func buildLockedDistribution(ctx context.Context, base string, root *os.Root, target buildTarget, compile distributionCompiler) (returnErr error) {
