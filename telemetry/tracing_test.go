@@ -79,6 +79,11 @@ func TestTracingCreatesServerSpanAndExtractsRemoteParent(t *testing.T) {
 	if current.Parent().TraceID().String() != "4bf92f3577b34da6a3ce929d0e0e4736" {
 		t.Fatalf("远程 TraceID 未传播: %s", current.Parent().TraceID())
 	}
+	for _, attr := range current.Attributes() {
+		if attr.Key == "url.path" || attr.Key == "server.address" {
+			t.Errorf("请求原始地址不应进入 Span: %s", attr.Key)
+		}
+	}
 	if current.Status().Code.String() != "Error" || len(current.Events()) == 0 {
 		t.Fatalf("服务端错误未记录到 Span: status=%v events=%v", current.Status(), current.Events())
 	}
