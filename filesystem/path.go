@@ -10,8 +10,9 @@ import (
 )
 
 var (
-	// ErrInvalidPath 表示业务路径包含越界父目录或 Unicode 控制字符。
-	ErrInvalidPath = errors.New("文件系统路径无效")
+	// ErrInvalidPath 表示业务路径越界、含控制字符或无法唯一映射到本地文件。
+	ErrInvalidPath      = errors.New("文件系统路径无效")
+	errWindowsPathAlias = fmt.Errorf("%w: Windows 路径段无效", ErrInvalidPath)
 	// ErrSymbolicLink 对应 LocalFilesystemAdapter 默认的 DISALLOW_LINKS。
 	ErrSymbolicLink = errors.New("文件系统不允许符号链接")
 	// ErrURLNotSupported 表示当前磁盘没有配置 URL 前缀。
@@ -39,7 +40,7 @@ func normalizePath(path string) (string, error) {
 			parts = parts[:len(parts)-1]
 		default:
 			if runtime.GOOS == "windows" && !validWindowsPathSegment(part) {
-				return "", fmt.Errorf("%w: Windows 路径段 %q 无效", ErrInvalidPath, part)
+				return "", fmt.Errorf("%w: %q", errWindowsPathAlias, part)
 			}
 			parts = append(parts, part)
 		}

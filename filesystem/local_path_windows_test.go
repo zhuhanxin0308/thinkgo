@@ -42,3 +42,20 @@ func TestLocalRejectsWindowsPathAliases(t *testing.T) {
 		})
 	}
 }
+
+// TestPolicyUploadPreservesFilenameRejectionForAliases 验证路径安全拦截保留旧的上传错误分类。
+func TestPolicyUploadPreservesFilenameRejectionForAliases(t *testing.T) {
+	disk, _ := policyTestDisk(t)
+	options := policyTestOptions(t, 10, map[string][]string{"txt": {"text/plain"}})
+	for _, target := range []string{"bad.txt.", "bad.txt "} {
+		file := policyTestFile(t, "valid.txt", []byte("hello"), false)
+		key, err := disk.PutFileAs("", file, target, options)
+		if key != "" || !errors.Is(err, ErrInvalidPath) || !errors.Is(err, ErrUploadTypeNotAllowed) {
+			t.Fatalf("别名 %q 应同时保留路径和文件名策略错误: %q %v", target, key, err)
+		}
+	}
+	file := policyTestFile(t, "valid.txt", []byte("hello"), false)
+	if _, err := disk.PutFileAs("", file, "../bad.txt", options); !errors.Is(err, ErrInvalidPath) || errors.Is(err, ErrUploadTypeNotAllowed) {
+		t.Fatalf("越界路径应保留原有分类: %v", err)
+	}
+}

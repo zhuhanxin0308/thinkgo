@@ -180,8 +180,11 @@ func (disk *Local) putFileWithPolicy(directory string, file *multipart.FileHeade
 	if !generated || algorithm == "" {
 		var err error
 		key, err = normalizeFilePath(strings.Trim(directory+"/"+name, "/"))
+		if errors.Is(err, errWindowsPathAlias) {
+			return "", errors.Join(ErrUploadTypeNotAllowed, err)
+		}
 		if err != nil {
-			return "", errors.Join(ErrUploadRejected, err)
+			return "", err
 		}
 		if !policyDestination(key) || policy.allowed[uploadExtension(key)] == nil {
 			return "", ErrUploadTypeNotAllowed
