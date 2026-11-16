@@ -25,6 +25,13 @@ func TestRegistryPreservesExactJSONNumbersAcrossPublicInputs(t *testing.T) {
 		if err := registry.AddSchema("RecordID", &openapi3.SchemaRef{Value: schema}); err != nil {
 			t.Fatal(err)
 		}
+		property := openapi3.NewIntegerSchema()
+		property.Default = int64(9007199254740997)
+		metadata := openapi3.NewObjectSchema()
+		metadata.AdditionalProperties.Schema = &openapi3.SchemaRef{Value: property}
+		if err := registry.AddSchema("Metadata", &openapi3.SchemaRef{Value: metadata}); err != nil {
+			t.Fatal(err)
+		}
 		media := &openapi3.MediaType{Example: map[string]any{"stored": json.Number("9007199254740993")}}
 		response := openapi3.NewResponse().WithDescription("ok")
 		response.Content = openapi3.Content{"application/json": media}
@@ -46,6 +53,7 @@ func TestRegistryPreservesExactJSONNumbersAcrossPublicInputs(t *testing.T) {
 			`"default":9007199254740993`,
 			`"example":9223372036854775807`,
 			`"enum":[9007199254740993,9223372036854775807]`,
+			`"additionalProperties":{"default":9007199254740997`,
 			`"stored":9007199254740993`,
 		} {
 			if !strings.Contains(string(document), fragment) {

@@ -32,6 +32,11 @@ func restoreExactOpenAPILiterals(target reflect.Value, exact any) {
 		}
 		restoreExactOpenAPILiterals(target.Elem(), exact)
 	case reflect.Struct:
+		if target.Type() == reflect.TypeFor[openapi3.BoolSchema]() {
+			// schema 与布尔值共用同一 JSON 位置，内联时没有额外的字段名。
+			restoreExactOpenAPILiterals(target.FieldByName("Schema"), exact)
+			return
+		}
 		restoreOpenAPILiteralFields(target, schemaObject(exact))
 	case reflect.Map:
 		restoreOpenAPILiteralMap(target, schemaObject(exact))
