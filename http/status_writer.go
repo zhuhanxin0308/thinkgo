@@ -122,7 +122,7 @@ func (w *statusTrackingResponseWriter) commitFinal(statusCode int) {
 		return
 	}
 	// 最终提交前才读取有效方法，包含中间件 SetMethod；之后实体策略保持不变。
-	w.suppressBody = w.bodySuppressed()
+	w.suppressBody = w.BodySuppressed()
 	w.method = nil
 	if err := w.runBeforeCommitHooks(); err != nil {
 		w.commitFailure(err)
@@ -210,8 +210,8 @@ func (w *statusTrackingResponseWriter) SuppressBody(suppress bool) {
 	}
 }
 
-// bodySuppressed 供压缩层在创建编码器前读取同一实体策略；提交后只返回冻结值。
-func (w *statusTrackingResponseWriter) bodySuppressed() bool {
+// BodySuppressed 供响应和压缩层读取同一实体策略；提交后只返回冻结值。
+func (w *statusTrackingResponseWriter) BodySuppressed() bool {
 	return w != nil && (w.suppressBody || w.method != nil && w.method.Method() == http.MethodHead)
 }
 

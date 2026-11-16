@@ -344,13 +344,14 @@ func (h *Http) serveHTTP(originalWriter http.ResponseWriter, raw *http.Request, 
 	if h.srvConf.EnableTLS && h.srvConf.EnableHTTP3 {
 		state.writer.Header().Set("Alt-Svc", fmt.Sprintf(`h3=":%d"; ma=2592000`, h.srvConf.Port))
 	}
-	if h.compressConf.Enable && raw.Method != http.MethodHead {
+	if h.compressConf.Enable {
 		state.compressionWriter = newConfiguredCompressionResponseWriter(
 			state.writer,
 			raw,
 			h.compressConf.MinSize,
 			h.compressConf.Levels,
 		)
+		state.compressionWriter.bodyPolicy = state.statusWriter
 		state.writer = state.compressionFacade.adapt(state.compressionWriter, originalWriter)
 	}
 	if raw.Method == http.MethodHead {
@@ -377,9 +378,6 @@ func (h *Http) serveHTTP(originalWriter http.ResponseWriter, raw *http.Request, 
 	}
 	state.req = req
 	state.statusWriter.method = req
-	if state.compressionWriter != nil {
-		state.compressionWriter.bodyPolicy = state.statusWriter
-	}
 	h.rememberRequestTask(req, task, true)
 	if application, exists := resolvedApplication(raw); exists {
 		req.SetApplicationContext(application)

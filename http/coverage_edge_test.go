@@ -105,16 +105,16 @@ func TestCompressionWriterHandlesHeadFlushAndOptionalInterfaces(t *testing.T) {
 	req.Header.Set("Accept-Encoding", "gzip")
 	recorder := httptest.NewRecorder()
 	writer := NewCompressionResponseWriter(recorder, req, -1, map[string]int{"GZIP": 1, "gzip": 9})
-	if writer.encoding != "" || writer.minSize != 0 || len(writer.levels) != 0 {
-		t.Fatalf("HEAD 或重复压缩配置处理错误: encoding=%q min=%d levels=%#v", writer.encoding, writer.minSize, writer.levels)
+	if writer.minSize != 0 || len(writer.levels) != 0 {
+		t.Fatalf("重复压缩配置处理错误: min=%d levels=%#v", writer.minSize, writer.levels)
 	}
 	writer.WriteHeader(stdhttp.StatusCreated)
 	writer.WriteHeader(stdhttp.StatusForbidden)
 	if _, err := writer.Write([]byte("head-body")); err != nil {
 		t.Fatalf("HEAD 响应写入失败: %v", err)
 	}
-	if err := writer.Close(); err != nil || recorder.Code != stdhttp.StatusCreated {
-		t.Fatalf("HEAD 响应关闭或状态码错误: code=%d err=%v", recorder.Code, err)
+	if err := writer.Close(); err != nil || recorder.Code != stdhttp.StatusCreated || recorder.Header().Get("Content-Encoding") != "" {
+		t.Fatalf("HEAD 应按原状态码提交且不启用压缩: code=%d header=%v err=%v", recorder.Code, recorder.Header(), err)
 	}
 
 	flushRequest := httptest.NewRequest(stdhttp.MethodGet, "http://example.com", nil)

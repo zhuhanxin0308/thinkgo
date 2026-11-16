@@ -90,11 +90,18 @@ func (r *Response) sendFile(w http.ResponseWriter) error {
 }
 
 // sendOpenedDownload 接管已经核验的句柄；成功、写入失败和取消错误均关闭同一文件。
-func (r *Response) sendOpenedDownload(w http.ResponseWriter, file *os.File, info os.FileInfo) (resultErr error) {
+func (r *Response) sendOpenedDownload(w http.ResponseWriter, file io.ReadCloser, info os.FileInfo) (resultErr error) {
 	defer func() { resultErr = errors.Join(resultErr, file.Close()) }()
 	r.writeHeaders(w)
 	if err := r.saveSession(w); err != nil {
 		return errors.Join(r.err, err)
+	}
+	if policy := findResponseBodyPolicy(w); policy != nil && policy.BodySuppressed() {
+		// 文件响应的长度由已核验文件决定，与普通 GET 的覆盖规则一致。
+		w.Header().Del("Content-Length")
+		setHeadContentLength(w, policy, r.status, info.Size(), nil)
+		w.WriteHeader(r.status)
+		return r.err
 	}
 	w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
 	w.WriteHeader(r.status)

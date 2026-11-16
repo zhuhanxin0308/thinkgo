@@ -76,6 +76,15 @@ func TestEffectiveHEADIsSharedByEveryHandlerType(t *testing.T) {
 							recorder := httptest.NewRecorder()
 							host.ServeHTTP(recorder, req)
 							assertIssue151HEAD(t, recorder, http.StatusOK)
+							if handler.name == "callback" {
+								expectedLength := strconv.Itoa(len(issue151Payload))
+								if compression {
+									expectedLength = ""
+								}
+								if recorder.Result().Header.Get("Content-Length") != expectedLength {
+									t.Fatalf("HEAD 只应提交确定会用于 GET 表示的长度: %v", recorder.Header())
+								}
+							}
 							if req.Method != test.raw || recorder.Header().Get("X-Origin-Method") != test.raw || recorder.Header().Get("X-Effective-Method") != test.effective {
 								t.Fatalf("方法审计或有效路由方法变化: raw=%q headers=%v", req.Method, recorder.Header())
 							}
