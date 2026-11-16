@@ -40,7 +40,7 @@ func buildDistribution(ctx context.Context, base string, target buildTarget, com
 	}
 	// 使用稳定文件上的内核锁覆盖编译和产物发布，进程退出时由系统释放。
 	err = winfile.TryWithGuard(ctx, filepath.Join(base, distributionGuardPath), func() error {
-		return withLegacyBuildMarker(root, func() error {
+		return withLegacyBuildMarker(root, root.Link, func() error {
 			return buildLockedDistribution(ctx, base, root, target, compile)
 		})
 	})
@@ -51,7 +51,7 @@ func buildDistribution(ctx context.Context, base string, target buildTarget, com
 }
 
 // withLegacyBuildMarker 仅在持有新版内核锁时使用，通过原子的兼容标记阻止旧版并发进入。
-func withLegacyBuildMarker(root *os.Root, operation func() error) (result error) {
+func withLegacyBuildMarker(root *os.Root, link func(string, string) error, operation func() error) (result error) {
 	owner, err := root.Lstat(distributionMarkerPath)
 	if errors.Is(err, os.ErrNotExist) {
 		file, createErr := root.OpenFile(distributionMarkerPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
@@ -68,19 +68,26 @@ func withLegacyBuildMarker(root *os.Root, operation func() error) (result error)
 		return winfile.ErrUnsafeGuard
 	}
 	// 同一文件的硬链接可在崩溃后辨认，且创建时不会覆盖旧进程已经取得的锁。
-	if err := root.Link(distributionMarkerPath, distributionLegacyLockPath); err != nil && !errors.Is(err, os.ErrExist) {
-		return fmt.Errorf("无法发布旧版兼容构建锁: %w", err)
+	if err := link(distributionMarkerPath, distributionLegacyLockPath); err != nil && !errors.Is(err, os.ErrExist) {
+		// 无硬链接的文件系统使用原子空目录。旧版只会创建普通锁文件。
+		if createErr := root.Mkdir(distributionLegacyLockPath, 0o700); createErr != nil && !errors.Is(createErr, os.ErrExist) {
+			return fmt.Errorf("无法发布旧版兼容构建锁: %w", errors.Join(err, createErr))
+		}
 	}
 	current, err := root.Lstat(distributionLegacyLockPath)
 	if err != nil {
 		return err
 	}
-	if !os.SameFile(owner, current) {
+	if current.IsDir() {
+		if err := validateEmptyBuildMarker(root, current); err != nil {
+			return err
+		}
+	} else if !os.SameFile(owner, current) {
 		return fmt.Errorf("发现旧版构建锁 %s，请先停止旧版构建，再删除该文件并重试", distributionLegacyLockPath)
 	}
 	defer func() {
 		marker, err := root.Lstat(distributionLegacyLockPath)
-		if err == nil && os.SameFile(owner, marker) {
+		if err == nil && os.SameFile(current, marker) {
 			err = root.Remove(distributionLegacyLockPath)
 		}
 		if !errors.Is(err, os.ErrNotExist) {
@@ -88,6 +95,21 @@ func withLegacyBuildMarker(root *os.Root, operation func() error) (result error)
 		}
 	}()
 	return operation()
+}
+
+// validateEmptyBuildMarker 仅接续持有内核锁时观察到的原始空目录。
+func validateEmptyBuildMarker(root *os.Root, marker os.FileInfo) error {
+	directory, err := root.Open(distributionLegacyLockPath)
+	if err != nil {
+		return err
+	}
+	opened, statErr := directory.Stat()
+	entries, readErr := directory.ReadDir(1)
+	closeErr := directory.Close()
+	if statErr != nil || !os.SameFile(marker, opened) || len(entries) != 0 || !errors.Is(readErr, io.EOF) {
+		return errors.Join(winfile.ErrUnsafeGuard, statErr, readErr, closeErr)
+	}
+	return closeErr
 }
 
 func buildLockedDistribution(ctx context.Context, base string, root *os.Root, target buildTarget, compile distributionCompiler) (returnErr error) {

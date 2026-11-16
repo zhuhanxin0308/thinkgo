@@ -111,6 +111,56 @@ func TestBuildLegacyLockRequiresMigration(t *testing.T) {
 	}
 }
 
+// TestBuildMarkerSupportsFilesystemsWithoutLinks 验证原子目录标记可阻挡旧版并在退出后恢复。
+func TestBuildMarkerSupportsFilesystemsWithoutLinks(t *testing.T) {
+	root, err := os.OpenRoot(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	if err := root.Mkdir("dist", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	noLinks := func(string, string) error { return errors.ErrUnsupported }
+	check := func() error {
+		info, err := root.Lstat(distributionLegacyLockPath)
+		if err != nil || !info.IsDir() {
+			t.Fatalf("不支持硬链接时应持有目录标记: %v", err)
+		}
+		if old, err := root.OpenFile(distributionLegacyLockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600); err == nil {
+			_ = old.Close()
+			t.Fatal("旧版不应取得已由目录标记占用的构建锁")
+		}
+		return nil
+	}
+	if err := withLegacyBuildMarker(root, noLinks, check); err != nil {
+		t.Fatal(err)
+	}
+	// 强制退出会留下空目录标记，下一次持有内核锁的构建可直接接替。
+	if err := root.Mkdir(distributionLegacyLockPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := withLegacyBuildMarker(root, noLinks, check); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := root.Lstat(distributionLegacyLockPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("新版正常退出后应释放目录标记: %v", err)
+	}
+	if err := root.Mkdir(distributionLegacyLockPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	nested := filepath.Join(distributionLegacyLockPath, "user-file")
+	if err := root.WriteFile(nested, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := withLegacyBuildMarker(root, noLinks, check); !errors.Is(err, winfile.ErrUnsafeGuard) {
+		t.Fatalf("占用的非空目录应明确阻断: %v", err)
+	}
+	if data, err := root.ReadFile(nested); err != nil || string(data) != "keep" {
+		t.Fatalf("未知目录中的文件必须保留: %v", err)
+	}
+}
+
 // TestBuildRecoversAfterLockOwnerIsKilled 通过两个真实进程验证构建互斥与崩溃恢复。
 func TestBuildRecoversAfterLockOwnerIsKilled(t *testing.T) {
 	const crashTestBase = "THINKGO_BUILD_CRASH_TEST_BASE"
