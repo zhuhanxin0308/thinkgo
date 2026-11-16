@@ -334,3 +334,106 @@ func newStagedServiceTestApp(t *testing.T) *App {
 	t.Cleanup(func() { _ = app.Close() })
 	return app
 }
+
+func TestApplicationServiceNestedReplacementDoesNotBlockInitialPhase(t *testing.T) {
+	basePath := t.TempDir()
+	writeTestAppConfigFiles(t, basePath)
+	app := NewAppUninitialized(basePath)
+	old := &stagedApplicationService{}
+	if err := app.Register(old); err != nil {
+		t.Fatal(err)
+	}
+	entered, release := make(chan struct{}), make(chan struct{})
+	next := &stagedApplicationService{register: func() error {
+		close(entered)
+		<-release
+		return nil
+	}}
+	nestedResult := make(chan error, 1)
+	outer := &alternateStagedApplicationService{&stagedApplicationService{register: func() error {
+		nestedResult <- app.Register(next, true)
+		return nil
+	}}}
+	registered := make(chan error, 1)
+	go func() { registered <- app.Register(outer) }()
+	<-entered
+	initialized := make(chan error, 1)
+	go func() { initialized <- app.Initialize() }()
+	waitForServiceRegistrationPhase(t, app, func(state *providerLifecycle) bool { return state.initializing })
+	close(release)
+	select {
+	case err := <-nestedResult:
+		if !errors.Is(err, ErrApplicationServiceRegistrationInProgress) {
+			t.Errorf("嵌套替换应返回可重试错误: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("嵌套替换与首次初始化相互等待")
+	}
+	if err := <-registered; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-initialized; err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = app.Close() })
+	if app.GetService(old) != old || old.closed.Load() != 0 {
+		t.Fatal("替换退出后旧服务应保持可用")
+	}
+	if err := app.Register(&stagedApplicationService{}, true); err != nil {
+		t.Fatalf("初始化完成后应能重试替换: %v", err)
+	}
+}
+
+func TestApplicationServiceLateInitializationFailurePreventsConcurrentBoot(t *testing.T) {
+	app := newStagedServiceTestApp(t)
+	other := &alternateStagedApplicationService{&stagedApplicationService{}}
+	if err := app.Register(other); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.Initialize(); err != nil {
+		t.Fatal(err)
+	}
+	wanted := errors.New("迟到应用服务初始化失败")
+	started, release := make(chan struct{}), make(chan struct{})
+	candidate := &stagedApplicationService{initialize: func() error {
+		close(started)
+		<-release
+		return wanted
+	}}
+	registered := make(chan error, 1)
+	go func() { registered <- app.Register(candidate) }()
+	<-started
+	booted := make(chan error, 1)
+	go func() { booted <- app.BootProviders() }()
+	waitForServiceRegistrationPhase(t, app, func(state *providerLifecycle) bool { return state.registrationClosed })
+	close(release)
+	if err := <-registered; !errors.Is(err, wanted) {
+		t.Fatalf("注册应返回原始初始化错误: %v", err)
+	}
+	if err := <-booted; !errors.Is(err, wanted) || other.booted.Load() != 0 {
+		t.Fatalf("等待在途初始化的 Boot 应返回失败且跳过回调: %v", err)
+	}
+	if err := app.BootProviders(); !errors.Is(err, wanted) || app.GetService(candidate) != nil {
+		t.Fatalf("后续 Boot 也应保持失败，且未发布候选: %v", err)
+	}
+}
+
+func waitForServiceRegistrationPhase(t *testing.T, app *App, reached func(*providerLifecycle) bool) {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		app.providers.lock.Lock()
+		ready := reached(&app.providers)
+		app.providers.lock.Unlock()
+		if ready {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatal("等待应用服务生命周期阶段超时")
+		case <-ticker.C:
+		}
+	}
+}

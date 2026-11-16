@@ -72,15 +72,22 @@ func (app *App) registerApplicationServiceProvider(candidate, previous *applicat
 		}
 	}
 
-	// Register 回调不占阶段锁。转入阶段队列后，当前初始化可以结束，
-	// Boot 和 Shutdown 则等到候选初始化及旧实例退出完成后再获取阶段锁。
+	// 首次初始化持有阶段锁时可能在等待外层 Register 回调。初始阶段的替换必须
+	// 在转入阶段队列前取得锁，否则同步嵌套注册会让两者相互等待。
 	lifecycle.lock.Lock()
+	phaseLocked := previous != nil && !lifecycle.initialized
+	if phaseLocked && !lifecycle.phaseMu.TryLock() {
+		lifecycle.lock.Unlock()
+		return fmt.Errorf("%w: 生命周期阶段正在执行，暂不能替换 %T", ErrApplicationServiceRegistrationInProgress, previous.service)
+	}
 	awaitingPhase = true
 	lifecycle.registering--
 	lifecycle.applicationPhases++
 	lifecycle.condition.Broadcast()
 	lifecycle.lock.Unlock()
-	lifecycle.phaseMu.Lock()
+	if !phaseLocked {
+		lifecycle.phaseMu.Lock()
+	}
 	defer lifecycle.phaseMu.Unlock()
 
 	published = app.publishApplicationService(candidate, previous, existing, false)
@@ -88,6 +95,9 @@ func (app *App) registerApplicationServiceProvider(candidate, previous *applicat
 		if err := safeProviderInitialize(candidate, app); err != nil {
 			wrapped := fmt.Errorf("应用服务 %T 初始化失败: %w", candidate.service, errors.Join(err, safeProviderShutdown(candidate, app)))
 			if previous == nil {
+				lifecycle.lock.Lock()
+				lifecycle.initializeErr = errors.Join(lifecycle.initializeErr, wrapped)
+				lifecycle.lock.Unlock()
 				app.recordStartupError(wrapped)
 			}
 			return wrapped

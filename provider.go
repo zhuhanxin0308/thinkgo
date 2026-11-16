@@ -325,8 +325,8 @@ func (app *App) bootProviders() error {
 	lifecycle.phaseMu.Lock()
 	defer lifecycle.phaseMu.Unlock()
 	lifecycle.lock.Lock()
-	initializeErr := error(nil)
-	if initializeStarted {
+	initializeErr := lifecycle.initializeErr
+	if initializeStarted && initializeErr == nil {
 		lifecycle.lock.Unlock()
 		initializeErr = app.initializePendingProviders(false)
 		lifecycle.lock.Lock()
