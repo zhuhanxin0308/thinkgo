@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net"
+	"net/netip"
 	"reflect"
 	"strconv"
 	"strings"
@@ -177,6 +179,18 @@ func validateConnectorConfig(config db.Config, expectedType string, network, req
 		}
 	}
 	return config, nil
+}
+
+func sqlURLHostPort(host, port string) string {
+	literal := host
+	if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+		literal = host[1 : len(host)-1]
+	}
+	if addr, err := netip.ParseAddr(literal); err == nil && addr.Is6() {
+		// 两个 SQL 驱动用 SplitHostPort 解析地址。保留空端口可拆除方括号并沿用驱动默认值。
+		return net.JoinHostPort(literal, port)
+	}
+	return joinHostPort(host, port)
 }
 
 func mustRegisterConnector(name string, connector db.Connector) {

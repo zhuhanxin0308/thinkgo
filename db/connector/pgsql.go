@@ -33,7 +33,7 @@ func buildPgsqlDSN(config db.Config) string {
 	dsn := url.URL{
 		Scheme:   "postgres",
 		User:     url.UserPassword(config.Username, config.Password),
-		Host:     joinHostPort(config.Hostname, config.Hostport),
+		Host:     sqlURLHostPort(config.Hostname, config.Hostport),
 		Path:     config.Database,
 		RawQuery: query.Encode(),
 	}
