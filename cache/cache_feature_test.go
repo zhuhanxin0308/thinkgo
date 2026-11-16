@@ -673,7 +673,7 @@ func TestCacheValidationAndUnsupportedLockDriver(t *testing.T) {
 	if err := manager.Set("key", "value", -time.Second); !errors.Is(err, ErrInvalidCacheTTL) {
 		t.Fatalf("负缓存 TTL 应返回 ErrInvalidCacheTTL，实际为 %v", err)
 	}
-	if err := manager.Set("key", "value", maxCacheTTL+time.Second); !errors.Is(err, ErrInvalidCacheTTL) {
+	if err := manager.Set("key", "value", MaxCacheTTL+time.Second); !errors.Is(err, ErrInvalidCacheTTL) {
 		t.Fatalf("超长缓存 TTL 应返回 ErrInvalidCacheTTL，实际为 %v", err)
 	}
 	if _, err := manager.Inc("counter", -1); !errors.Is(err, ErrInvalidCounterStep) {
