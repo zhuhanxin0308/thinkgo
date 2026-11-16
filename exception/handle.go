@@ -153,7 +153,7 @@ func (h *Handle) Render(w http.ResponseWriter, r *http.Request, recovered interf
 		return h.renderDebugPage(w, r, recovered)
 	}
 	if exposeDetails {
-		return writeTextResponse(w, http.StatusInternalServerError, safeExceptionTextWith(recovered, sanitizeExceptionText))
+		return writeTextResponse(w, http.StatusInternalServerError, safeExceptionText(recovered))
 	}
 	return writeTextResponse(w, http.StatusInternalServerError, internalServerErrorText)
 }
@@ -238,7 +238,7 @@ func isNilValue(value interface{}) bool {
 	}
 }
 
-func safeExceptionTextWith(value interface{}, sanitize func(string) string) (text string) {
+func exceptionValueText(value interface{}) (text string) {
 	typeName := fmt.Sprintf("%T", value)
 	if value == nil || isNilValue(value) {
 		return typeName
@@ -248,7 +248,6 @@ func safeExceptionTextWith(value interface{}, sanitize func(string) string) (tex
 		if recover() != nil {
 			text = typeName
 		}
-		text = sanitize(text)
 	}()
 
 	switch typed := value.(type) {
@@ -322,7 +321,7 @@ func (h *Handle) Report(err interface{}) {
 		return
 	}
 
-	h.Log.ErrorCtx(safeExceptionTextWith(err, h.reportLogMessage), map[string]interface{}{
+	h.reportLogMessage(frameworkLog.LevelError, exceptionValueText(err), map[string]interface{}{
 		"stack": string(debug.Stack()),
 	})
 }
@@ -338,10 +337,10 @@ func (h *Handle) reportHTTPException(err *HttpException) {
 	ctx := map[string]interface{}{"status": err.StatusCode}
 	if err.StatusCode >= http.StatusInternalServerError {
 		ctx["stack"] = string(debug.Stack())
-		h.Log.ErrorCtx(h.reportLogMessage(err.Message), ctx)
+		h.reportLogMessage(frameworkLog.LevelError, err.Message, ctx)
 		return
 	}
-	h.Log.WarningCtx(h.reportLogMessage(err.Message), ctx)
+	h.reportLogMessage(frameworkLog.LevelWarning, err.Message, ctx)
 }
 
 func (h *Handle) reportValidateException(err *ValidateException) {
@@ -349,7 +348,7 @@ func (h *Handle) reportValidateException(err *ValidateException) {
 		return
 	}
 
-	h.Log.WarningCtx(h.reportLogMessage(err.Message), map[string]interface{}{
+	h.reportLogMessage(frameworkLog.LevelWarning, err.Message, map[string]interface{}{
 		"field":  err.Field,
 		"status": http.StatusUnprocessableEntity,
 	})
@@ -376,10 +375,10 @@ func (h *Handle) reportBusinessException(err *BusinessException) {
 	}
 	if status >= http.StatusInternalServerError {
 		ctx["stack"] = string(debug.Stack())
-		h.Log.ErrorCtx(h.reportLogMessage(err.Message), ctx)
+		h.reportLogMessage(frameworkLog.LevelError, err.Message, ctx)
 		return
 	}
-	h.Log.WarningCtx(h.reportLogMessage(err.Message), ctx)
+	h.reportLogMessage(frameworkLog.LevelWarning, err.Message, ctx)
 }
 
 // renderHttpException 渲染 HTTP 异常，并在非本地调试场景隐藏 5xx 详情。

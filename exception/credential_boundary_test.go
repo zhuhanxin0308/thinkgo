@@ -101,3 +101,23 @@ func TestPublicHTTPErrorRejectsPunctuationDelimitedCredentialLeaks(t *testing.T)
 		t.Fatalf("公共响应泄露凭据或丢失安全字段: %s", body)
 	}
 }
+
+func TestExceptionLogRedactsShortCredentialBeforeTruncation(t *testing.T) {
+	const password = "abcd"
+	prefix := strings.Repeat("x", maxExceptionLogTextBytes-len(" password="+password))
+	var output bytes.Buffer
+	driver, err := logDriver.NewConsoleWithWriter(&output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logger := frameworkLog.NewLog(driver)
+	handler := &Handle{Log: logger}
+	handler.Report(errors.New(prefix + " password=" + password + " safe=yes"))
+	if err := logger.Close(); err != nil {
+		t.Fatal(err)
+	}
+	logged := output.String()
+	if strings.Contains(logged, password) || !strings.Contains(logged, "password=") || !strings.Contains(logged, "…") {
+		t.Fatal("截断标记不能使短密码可见，日志仍应显示截断")
+	}
+}
