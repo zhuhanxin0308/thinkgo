@@ -9,6 +9,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -20,16 +21,17 @@ type orderItem struct {
 }
 
 type requestSpec struct {
-	Scenario       string
-	Method         string
-	Path           string
-	Body           []byte
-	Token          string
-	IdempotencyKey string
-	Tenant         int
-	CategoryID     int
-	ResourceID     int64
-	OrderItems     []orderItem
+	Scenario        string
+	Method          string
+	Path            string
+	Body            []byte
+	Token           string
+	IdempotencyKey  string
+	Tenant          int
+	CategoryID      int
+	ResourceID      int64
+	OrderItems      []orderItem
+	catalogHasGoods func() bool
 }
 
 type workload struct {
@@ -40,6 +42,7 @@ type workload struct {
 	weights       map[string]uint64
 	detailCycle   uint64
 	detailHot     uint64
+	catalogGoods  sync.Map
 }
 
 // newWorkload 在计时前缓存所有合法身份；每个请求仅由种子和全局序号决定。
@@ -114,6 +117,9 @@ func (workload *workload) request(sequence uint64) requestSpec {
 	case "catalog":
 		category := random.IntN(configuration.Categories) + 1
 		request.CategoryID = category
+		if configuration.MaximumPriceCents < seededPriceUpperBound {
+			request.catalogHasGoods = workload.catalogAvailability(category)
+		}
 		request.Path = fmt.Sprintf("/api/catalog?category_id=%d&min_price=0&max_price=%d&cursor_price=0&cursor_id=0&limit=%d", category, configuration.MaximumPriceCents, configuration.CatalogPageSize)
 	case "detail":
 		var activeIndex int
@@ -165,6 +171,17 @@ func (workload *workload) request(sequence uint64) requestSpec {
 	}
 	request.Token = workload.tokens[tenant-1][localUser-1]
 	return request
+}
+
+func (workload *workload) catalogAvailability(category int) func() bool {
+	availability, found := workload.catalogGoods.Load(category)
+	if !found {
+		// 同一分类只在第一次收到空页时计算，避免重复扫描占用压测时段。
+		availability, _ = workload.catalogGoods.LoadOrStore(category, sync.OnceValue(func() bool {
+			return catalogHasActiveProducts(workload.configuration, category)
+		}))
+	}
+	return availability.(func() bool)
 }
 
 // activeProductID 按数据集的下架模数，将连续活动序号映射到种子主键。

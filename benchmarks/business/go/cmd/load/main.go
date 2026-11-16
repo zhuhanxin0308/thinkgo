@@ -38,6 +38,7 @@ func run(ctx context.Context, arguments []string, stdout, stderr io.Writer, look
 	flags.DurationVar(&configuration.Duration, "duration", configuration.Duration, "正式发送窗口，不包含在途请求排空")
 	flags.DurationVar(&configuration.Timeout, "timeout", configuration.Timeout, "单次请求从发送到读取正文的超时")
 	flags.Uint64Var(&configuration.Seed, "seed", configuration.Seed, "可复现业务请求种子")
+	flags.Int64Var(&configuration.DatasetSeed, "dataset-seed", configuration.DatasetSeed, "种子数据生成商品价格使用的种子")
 	flags.StringVar(&configuration.RunID, "run-id", "", "本轮唯一标识，用于生成订单幂等键；必填")
 	flags.StringVar(&secretEnvironment, "secret-env", defaultSecretEnvironment, "认证密钥所在环境变量名称，密钥不写入结果")
 	flags.StringVar(&output, "output", "", "完整结果文件路径，支持.json/.json.gz且不覆盖已有文件；必填")

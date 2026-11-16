@@ -91,6 +91,7 @@ def load_command(root, protocol, dataset, url, run_id, scenario, duration, outpu
                  "-tenant-count", dataset["tenant_count"], "-users-per-tenant", dataset["users_per_tenant"],
                  "-products-per-tenant", dataset["products_per_tenant"], "-tickets-per-tenant", dataset["tickets_per_tenant"],
                  "-categories", dataset["categories_per_tenant"],
+                 "-dataset-seed", dataset["seed"],
                  "-catalog-page-size", dataset["catalog_page_size"],
                  "-maximum-price-cents", dataset["maximum_price_cents"],
                  "-maximum-order-items", dataset["maximum_order_items"],

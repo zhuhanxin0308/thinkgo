@@ -62,7 +62,7 @@ class RunTest(unittest.TestCase):
         self.assertNotIn("BENCH_SECRET=", " ".join(closed))
 
     def test_custom_dataset_reaches_load_generator(self):
-        self.dataset.update(inactive_product_modulus=3, hot_products_per_tenant=75, cache_hit_weight=80,
+        self.dataset.update(seed=42, inactive_product_modulus=3, hot_products_per_tenant=75, cache_hit_weight=80,
                             maximum_price_cents=200000, catalog_page_size=10,
                             maximum_order_items=1, maximum_item_quantity=1,
                             mixed_weights={"catalog": 10, "detail": 10, "order": 10, "ticket": 70})
@@ -70,6 +70,7 @@ class RunTest(unittest.TestCase):
                                "mixed", 30, pathlib.Path("custom.json.gz"), 0)
         for option, expected in {"-inactive-product-modulus": "3", "-hot-products-per-tenant": "75",
                                  "-maximum-price-cents": "200000", "-catalog-page-size": "10",
+                                 "-dataset-seed": "42",
                                  "-maximum-order-items": "1", "-maximum-item-quantity": "1",
                                  "-cache-hit-weight": "80", "-catalog-weight": "10", "-detail-weight": "10",
                                  "-order-weight": "10", "-ticket-weight": "70"}.items():

@@ -19,6 +19,7 @@ const (
 	defaultProductsPerTenant = 25000
 	defaultTicketsPerTenant  = 5000
 	defaultCategories        = 32
+	defaultDatasetSeed       = 20261107
 	defaultConcurrency       = 32
 	defaultMaxInflight       = 256
 	defaultErrorSampleLimit  = 20
@@ -60,6 +61,7 @@ type Config struct {
 	Duration               time.Duration   `json:"duration_ns"`
 	Timeout                time.Duration   `json:"timeout_ns"`
 	Seed                   uint64          `json:"seed"`
+	DatasetSeed            int64           `json:"dataset_seed"`
 	RunID                  string          `json:"run_id"`
 	Secret                 string          `json:"-"`
 	TenantCount            int             `json:"tenant_count"`
@@ -83,7 +85,7 @@ func DefaultConfig() Config {
 	return Config{
 		URL: "http://127.0.0.1:8080", Scenario: "mixed", Duration: time.Minute,
 		Timeout: 5 * time.Second, Concurrency: defaultConcurrency, MaxInflight: defaultMaxInflight,
-		Seed: 1, TenantCount: defaultTenants, UsersPerTenant: defaultUsersPerTenant,
+		Seed: 1, DatasetSeed: defaultDatasetSeed, TenantCount: defaultTenants, UsersPerTenant: defaultUsersPerTenant,
 		ProductsPerTenant: defaultProductsPerTenant, TicketsPerTenant: defaultTicketsPerTenant,
 		Categories: defaultCategories, ErrorSampleLimit: defaultErrorSampleLimit,
 		CatalogPageSize: catalogPageSize, MaximumPriceCents: catalogMaximumPrice,
