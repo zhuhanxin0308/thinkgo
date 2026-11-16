@@ -113,7 +113,10 @@ func TestConfigDumpPropagatesDependencyAndSerializationErrors(t *testing.T) {
 		t.Fatal("缺少配置管理器时应返回错误")
 	}
 	appConfig := config.NewConfig()
-	appConfig.Set("unsupported", make(chan int))
+	// 复数可安全保存为配置快照，JSON 导出仍应明确拒绝它。
+	if err := appConfig.Set("unsupported", complex(1, 2)); err != nil {
+		t.Fatal(err)
+	}
 	stdout := &bytes.Buffer{}
 	command := &ConfigDump{Command: console.Command{App: configDumpTestApp(t, appConfig)}}
 	if err := command.Execute(console.NewInput(), console.NewOutputWithWriters(stdout, &bytes.Buffer{}, false)); err == nil {
