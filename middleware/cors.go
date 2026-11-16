@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/zhuhanxin0308/thinkgo/v3/context"
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/httpheader"
 )
 
 const (
@@ -348,7 +349,7 @@ func addVaryValue(resp *context.Response, value string) {
 	if resp == nil || strings.TrimSpace(value) == "" {
 		return
 	}
-	resp.Header("Vary", mergeVaryValues(resp.Headers().Values("Vary"), value))
+	resp.Header("Vary", httpheader.MergeVary(resp.Headers().Values("Vary"), []string{value}))
 }
 
 // addHTTPVaryValue 在原生响应写出前合并缓存协商维度。
@@ -356,29 +357,5 @@ func addHTTPVaryValue(headers http.Header, value string) {
 	if headers == nil || strings.TrimSpace(value) == "" {
 		return
 	}
-	headers.Set("Vary", mergeVaryValues(headers.Values("Vary"), value))
-}
-
-func mergeVaryValues(values []string, value string) string {
-	seen := make(map[string]struct{})
-	merged := make([]string, 0, len(values)+1)
-	for _, headerValue := range values {
-		for _, token := range strings.Split(headerValue, ",") {
-			token = strings.TrimSpace(token)
-			if token == "" {
-				continue
-			}
-			key := strings.ToLower(token)
-			if _, exists := seen[key]; exists {
-				continue
-			}
-			seen[key] = struct{}{}
-			merged = append(merged, token)
-		}
-	}
-	key := strings.ToLower(strings.TrimSpace(value))
-	if _, exists := seen[key]; !exists {
-		merged = append(merged, strings.TrimSpace(value))
-	}
-	return strings.Join(merged, ", ")
+	headers.Set("Vary", httpheader.MergeVary(headers.Values("Vary"), []string{value}))
 }

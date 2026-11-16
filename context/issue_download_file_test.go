@@ -3,12 +3,88 @@ package context
 import (
 	stdcontext "context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 )
+
+type countDownloadReads struct {
+	io.Reader
+	bytesRead int
+	closed    bool
+}
+
+func (source *countDownloadReads) Read(dst []byte) (int, error) {
+	count, err := source.Reader.Read(dst)
+	source.bytesRead += count
+	return count, err
+}
+
+func (source *countDownloadReads) Close() error {
+	source.closed = true
+	return nil
+}
+
+type downloadBodyPolicyWriter struct {
+	*httptest.ResponseRecorder
+	suppressed bool
+	commitErr  error
+}
+
+func (w *downloadBodyPolicyWriter) BodySuppressed() bool { return w.suppressed }
+func (w *downloadBodyPolicyWriter) CommitError() error   { return w.commitErr }
+
+func TestOpenedDownloadSkipsReadingHeadBody(t *testing.T) {
+	const sampleBlock = "有效下载文件数据"
+	payload := strings.Repeat(sampleBlock, 64*1024)
+	path := filepath.Join(t.TempDir(), "report.txt")
+	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, method := range []string{http.MethodGet, http.MethodHead} {
+		t.Run(method, func(t *testing.T) {
+			source := &countDownloadReads{Reader: strings.NewReader(payload)}
+			writer := &downloadBodyPolicyWriter{ResponseRecorder: httptest.NewRecorder(), suppressed: method == http.MethodHead}
+			err := NewResponse().Download(path, "report.txt").sendOpenedDownload(writer, source, info)
+			if err != nil || !source.closed || writer.Code != http.StatusOK ||
+				writer.Header().Get("Content-Length") != strconv.Itoa(len(payload)) ||
+				writer.Header().Get("Content-Disposition") == "" {
+				t.Fatalf("文件传输未保留状态、元数据或关闭语义: %v", err)
+			}
+			expectedBytes := len(payload)
+			if method == http.MethodHead {
+				expectedBytes = 0
+			}
+			if source.bytesRead != expectedBytes || writer.Body.Len() != expectedBytes {
+				t.Errorf("%s 读取 %d 字节，输出 %d 字节，期望 %d", method, source.bytesRead, writer.Body.Len(), expectedBytes)
+			}
+		})
+	}
+}
+
+func TestHeadFastPathsReturnCommitHookError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "report.txt")
+	if err := os.WriteFile(path, []byte("payload"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	failure := errors.New("提交钩子失败")
+	for _, response := range []*Response{NewResponse().Content("payload"), NewResponse().Download(path, "report.txt")} {
+		writer := &downloadBodyPolicyWriter{ResponseRecorder: httptest.NewRecorder(), suppressed: true, commitErr: failure}
+		err := response.Send(writer)
+		if !errors.Is(err, failure) || !IsResponseTransmissionError(err) || writer.Body.Len() != 0 {
+			t.Fatalf("HEAD 应传播提交钩子错误且保持正文为空: %v, %q", err, writer.Body.String())
+		}
+	}
+}
 
 func TestDownloadEntrypointsKeepRegularFileAndErrorContracts(t *testing.T) {
 	root := t.TempDir()

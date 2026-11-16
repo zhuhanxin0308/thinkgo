@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/httpheader"
 	frameworksession "github.com/zhuhanxin0308/thinkgo/v3/session"
 )
 
@@ -660,6 +661,12 @@ func (r *Response) Send(w http.ResponseWriter) error {
 		return r.err
 	}
 
+	if policy := findResponseBodyPolicy(w); policy != nil && policy.BodySuppressed() {
+		if r.body != nil {
+			setHeadContentLength(w, policy, r.status, int64(len(r.body)), r.body)
+		}
+		return r.commitHead(w)
+	}
 	w.WriteHeader(r.status)
 	if len(r.body) == 0 {
 		return r.err
@@ -822,13 +829,18 @@ func (r *Response) writeHeaders(w http.ResponseWriter) {
 	if r.header == nil {
 		return
 	}
+	header := w.Header()
 	if r.header.inlineContentType {
-		w.Header().Set("Content-Type", r.header.contentType)
+		header.Set("Content-Type", r.header.contentType)
 	}
 	for key, values := range r.header.values {
-		w.Header().Del(key)
+		if key == "Vary" {
+			header.Set(key, httpheader.MergeVary(header.Values(key), values))
+			continue
+		}
+		header.Del(key)
 		for _, value := range values {
-			w.Header().Add(key, value)
+			header.Add(key, value)
 		}
 	}
 }

@@ -135,6 +135,7 @@ type CompressionResponseWriter struct {
 	pooledWriter   *pooledCompressionWriter
 	compressionErr error
 	bodyPolicy     *statusTrackingResponseWriter
+	rawHead        bool
 	identityDenied bool
 	rejected       bool
 }
@@ -152,7 +153,7 @@ func newConfiguredCompressionResponseWriter(w http.ResponseWriter, r *http.Reque
 func newCompressionResponseWriter(w http.ResponseWriter, r *http.Request, minSize int, levels map[string]int, cloneLevels bool) *CompressionResponseWriter {
 	encoding := ""
 	identityDenied := false
-	if r != nil && r.Method != http.MethodHead {
+	if r != nil {
 		encoding, identityDenied = negotiateCompressionFields(r.Header.Values("Accept-Encoding"))
 	}
 
@@ -189,6 +190,7 @@ func newCompressionResponseWriter(w http.ResponseWriter, r *http.Request, minSiz
 		minSize:        minSize,
 		levels:         copiedLevels,
 		statusCode:     http.StatusOK,
+		rawHead:        r != nil && r.Method == http.MethodHead,
 	}
 	addVaryHeader(writer.Header(), "Accept-Encoding")
 	return writer
@@ -220,6 +222,15 @@ func (w *CompressionResponseWriter) Write(b []byte) (int, error) {
 		w.WriteHeader(http.StatusOK)
 	}
 	w.ensureContentType(b)
+	if w.bodyPolicy != nil && w.BodySuppressed() {
+		// HEAD 无需等待压缩阈值；提交钩子失败必须在本次 Write 返回。
+		w.buffer.Reset()
+		w.startPlainWriter()
+		if err := w.bodyPolicy.CommitError(); err != nil {
+			return 0, err
+		}
+		return len(b), nil
+	}
 	if w.wroteHeader {
 		return w.Writer.Write(b)
 	}
@@ -364,18 +375,44 @@ func (w *CompressionResponseWriter) flushResponse() error {
 	if f, ok := w.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
 	}
+	if w.bodyPolicy != nil && w.BodySuppressed() {
+		// HEAD 首次刷新也可能才执行提交钩子，应在本次刷新中返回错误。
+		return errors.Join(w.compressionErr, w.bodyPolicy.CommitError())
+	}
 	return w.compressionErr
 }
 
 // shouldBypassCompression 判断当前响应是否应该跳过压缩。
 func (w *CompressionResponseWriter) shouldBypassCompression() bool {
-	if w.bodyPolicy != nil && w.bodyPolicy.bodySuppressed() {
+	return w.BodySuppressed() || w.shouldBypassRepresentation(w.statusCode, w.Header().Get("Content-Type"))
+}
+
+// BodySuppressed 与最终状态写入器使用相同的 HEAD 判定。
+func (w *CompressionResponseWriter) BodySuppressed() bool {
+	return w.rawHead || w.bodyPolicy != nil && w.bodyPolicy.BodySuppressed()
+}
+
+// CanReportHeadLength 判断等价 GET 是否会原样发送已知长度的表示。
+func (w *CompressionResponseWriter) CanReportHeadLength(status int, size int64, sample []byte) bool {
+	if w.identityDenied {
+		coding := strings.TrimSpace(w.Header().Get("Content-Encoding"))
+		return coding != "" && !strings.EqualFold(coding, "identity")
+	}
+	if size == 0 || size < int64(w.minSize) {
 		return true
 	}
+	contentType := w.Header().Get("Content-Type")
+	if contentType == "" && len(sample) > 0 {
+		contentType = http.DetectContentType(sample)
+	}
+	return w.shouldBypassRepresentation(status, contentType)
+}
+
+func (w *CompressionResponseWriter) shouldBypassRepresentation(status int, contentType string) bool {
 	if w.encoding == "" || w.Header().Get("Content-Encoding") != "" {
 		return true
 	}
-	if w.statusCode < http.StatusOK || w.statusCode == http.StatusNoContent || w.statusCode == http.StatusResetContent || w.statusCode == http.StatusNotModified || w.statusCode == http.StatusPartialContent {
+	if status < http.StatusOK || status == http.StatusNoContent || status == http.StatusResetContent || status == http.StatusNotModified || status == http.StatusPartialContent {
 		return true
 	}
 	if w.Header().Get("Content-Range") != "" {
@@ -396,7 +433,7 @@ func (w *CompressionResponseWriter) shouldBypassCompression() bool {
 		}
 	}
 
-	contentType := strings.ToLower(w.Header().Get("Content-Type"))
+	contentType = strings.ToLower(contentType)
 	return (strings.HasPrefix(contentType, "image/") && !strings.HasPrefix(contentType, "image/svg+xml")) ||
 		strings.HasPrefix(contentType, "video/") ||
 		strings.HasPrefix(contentType, "audio/") ||
@@ -414,7 +451,7 @@ func (w *CompressionResponseWriter) startPlainWriter() {
 	contentEncoding := strings.TrimSpace(w.Header().Get("Content-Encoding"))
 	if w.identityDenied && (contentEncoding == "" || strings.EqualFold(contentEncoding, "identity")) &&
 		w.statusCode >= http.StatusOK && w.statusCode != http.StatusNoContent && w.statusCode != http.StatusResetContent && w.statusCode != http.StatusNotModified &&
-		(w.bodyPolicy == nil || !w.bodyPolicy.bodySuppressed()) {
+		!w.BodySuppressed() {
 		// 无法转换的原表示也不能违反协商：发送无实体 406，丢弃原正文及其验证信息。
 		for _, name := range []string{"Content-Type", "Content-Length", "Content-Encoding", "Content-Range", "ETag", "Last-Modified", "Trailer"} {
 			w.Header().Del(name)
@@ -751,7 +788,7 @@ func headerTokenContains(value, target string) bool {
 
 func addVaryHeader(header http.Header, value string) {
 	for _, existing := range header.Values("Vary") {
-		if headerTokenContains(existing, value) {
+		if headerTokenContains(existing, value) || headerTokenContains(existing, "*") {
 			return
 		}
 	}
