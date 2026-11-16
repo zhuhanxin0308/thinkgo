@@ -2,8 +2,10 @@ package db
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -64,6 +66,20 @@ func TestModelScanSQLiteEagerProjections(t *testing.T) {
 	} {
 		if err != nil {
 			t.Fatal(err)
+		}
+	}
+	rows, err := users.With("posts", "roles").Order("id ASC").SelectMaps()
+	if err != nil || len(rows) != 2 || len(rows[0]["posts"].([]map[string]interface{})) != 2 {
+		t.Fatalf("预加载列表失败或有效子行丢失: %#v, %v", rows, err)
+	}
+	empty, err := users.With("posts", "roles").Where("id", 2).FindMap()
+	if err != nil {
+		t.Fatalf("预加载无子记录的父行失败: %v", err)
+	}
+	for _, row := range []map[string]interface{}{rows[1], empty} {
+		encoded, err := json.Marshal(row)
+		if err != nil || !strings.Contains(string(encoded), `"posts":[]`) || !strings.Contains(string(encoded), `"roles":[]`) {
+			t.Fatalf("无关联的模型映射应输出空集合: %s, %v", encoded, err)
 		}
 	}
 	var records []*modelScanRelationsRecord
