@@ -257,6 +257,7 @@ func TestApplyEnvironmentConvertsProgrammaticConfigTypes(t *testing.T) {
 
 // TestApplyEnvironmentRejectsInvalidProgrammaticValues 验证溢出和尾随 JSON 不会进入最终快照。
 func TestApplyEnvironmentRejectsInvalidProgrammaticValues(t *testing.T) {
+	type namedRatio float64
 	tests := []struct {
 		name      string
 		path      string
@@ -266,6 +267,9 @@ func TestApplyEnvironmentRejectsInvalidProgrammaticValues(t *testing.T) {
 		{name: "无符号整数为负数", path: "feature.unsigned", prototype: uint8(1), raw: "-1"},
 		{name: "JSON 整数不能使用小数", path: "feature.limit", prototype: json.Number("10"), raw: "1.5"},
 		{name: "浮点数格式非法", path: "feature.ratio", prototype: float64(1), raw: "one"},
+		{name: "浮点数非有限 NaN", path: "feature.ratio", prototype: float64(1), raw: "NaN"},
+		{name: "浮点数非有限 Inf", path: "feature.ratio", prototype: float32(1), raw: "+Inf"},
+		{name: "命名浮点数非有限", path: "feature.ratio", prototype: namedRatio(1), raw: "-Inf"},
 		{name: "对象包含尾随值", path: "feature.options", prototype: map[string]interface{}{}, raw: `{} {}`},
 		{name: "类型化数组格式非法", path: "feature.names", prototype: []string{}, raw: `[1]`},
 	}

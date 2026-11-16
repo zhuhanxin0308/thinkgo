@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"reflect"
 	"sort"
 	"strconv"
@@ -197,7 +198,7 @@ func parseConfigEnvironmentValue(path, raw string, prototype interface{}) (inter
 		return result.Interface(), nil
 	case reflect.Float32, reflect.Float64:
 		value, err := strconv.ParseFloat(strings.TrimSpace(raw), typeOf.Bits())
-		if err != nil {
+		if err != nil || math.IsNaN(value) || math.IsInf(value, 0) {
 			return nil, configEnvironmentTypeError(path, typeOf.String())
 		}
 		result := reflect.New(typeOf).Elem()
