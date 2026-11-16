@@ -10,11 +10,18 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/winfile"
 )
 
 type distributionCompiler func(context.Context, string, string, buildTarget) error
 
-func buildDistribution(ctx context.Context, base string, target buildTarget, compile distributionCompiler) (returnErr error) {
+const (
+	distributionGuardPath      = "dist/.build.guard"
+	distributionLegacyLockPath = "dist/.build.lock"
+)
+
+func buildDistribution(ctx context.Context, base string, target buildTarget, compile distributionCompiler) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -30,12 +37,24 @@ func buildDistribution(ctx context.Context, base string, target buildTarget, com
 	if err := ensureDistributionDirectory(root, "dist"); err != nil {
 		return err
 	}
-	// 锁覆盖整个项目构建过程，避免并发平台构建互相改写静态业务清单。
-	lock, err := root.OpenFile("dist/.build.lock", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
-	if err != nil {
-		return fmt.Errorf("无法获得构建锁，请确认没有其他构建进程: %w", err)
+	// 使用稳定文件上的内核锁覆盖编译和产物发布，进程退出时由系统释放。
+	err = winfile.TryWithGuard(ctx, filepath.Join(base, distributionGuardPath), func() error {
+		_, err := root.Lstat(distributionLegacyLockPath)
+		if err == nil {
+			return fmt.Errorf("发现旧版构建锁 %s，请先停止旧版构建，再删除该文件并重试", distributionLegacyLockPath)
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("无法检查旧版构建锁: %w", err)
+		}
+		return buildLockedDistribution(ctx, base, root, target, compile)
+	})
+	if errors.Is(err, winfile.ErrGuardInUse) {
+		return fmt.Errorf("另一个构建正在执行: %w", err)
 	}
-	defer func() { returnErr = errors.Join(returnErr, lock.Close(), root.Remove("dist/.build.lock")) }()
+	return err
+}
+
+func buildLockedDistribution(ctx context.Context, base string, root *os.Root, target buildTarget, compile distributionCompiler) (returnErr error) {
 	stageName := filepath.Join("dist", ".stage-"+rand.Text())
 	if err := root.Mkdir(stageName, 0755); err != nil {
 		return err
