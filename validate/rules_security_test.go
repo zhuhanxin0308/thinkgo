@@ -1,9 +1,40 @@
 package validate
 
 import (
+	"encoding/json"
+	"errors"
 	"math"
 	"testing"
 )
+
+func TestValidatorBoundsExponentBeforeExactNumericComparison(t *testing.T) {
+	for _, text := range []string{"1e8193", "1e-8193", "1E+999999", "0e999999", "1e999999999999999999999999"} {
+		number := json.Number(text)
+		validator := NewValidator().SetRules(map[string]string{
+			"number": "number",
+			"upper":  "max:100",
+			"lower":  "min:0",
+			"range":  "between:0,100",
+		})
+		result, err := validator.Validate(map[string]any{
+			"number": number, "upper": number, "lower": &number, "range": number,
+		}, CollectAllErrors())
+		if err != nil || len(result.Violations()) != 4 {
+			t.Fatalf("指数超限后各数值规则都应拒绝 %q: %#v, %v", text, result, err)
+		}
+	}
+	validator := NewValidator().SetRules(map[string]string{"number": "number"})
+	for _, text := range []string{"1e8192", "1E-8192", "1e+00008192", "1e6111", "1e-6176", "5e-324"} {
+		result, err := validator.Validate(map[string]any{"number": json.Number(text)})
+		if err != nil || !result.Valid() {
+			t.Fatalf("应继续支持范围内的指数表示 %q: %#v, %v", text, result, err)
+		}
+	}
+	validator = NewValidator().SetRules(map[string]string{"number": "max:1e8193"})
+	if _, err := validator.Validate(map[string]any{"number": 1}); !errors.Is(err, ErrInvalidRule) {
+		t.Fatalf("非法指数规则参数必须在编译时拒绝: %v", err)
+	}
+}
 
 type validationPanickingStringer struct{}
 
