@@ -166,3 +166,26 @@ func TestRouteListCommandPrintsStableRouteSnapshot(t *testing.T) {
 		t.Fatalf("空输出应返回 ErrInvalidOutput，实际为 %v", err)
 	}
 }
+
+// TestRouteListEscapesRouteControls 验证普通和详细列表均转义路由中的终端控制字符。
+func TestRouteListEscapesRouteControls(t *testing.T) {
+	router := route.NewRouter()
+	if _, err := router.Get("/before\x1b[2J\tafter", "User@Index"); err != nil {
+		t.Fatal(err)
+	}
+	app := buildConsoleTestApp(t, t.TempDir())
+	if err := app.Instance(string(framework.ServiceRoute), router); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{nil, {"--more"}} {
+		command := &RouteList{Command: console.Command{App: app}}
+		var stdout bytes.Buffer
+		input := parseMigrationCommandInput(t, command, args...)
+		if err := command.Execute(input, console.NewOutputWithWriters(&stdout, &bytes.Buffer{}, false)); err != nil {
+			t.Fatal(err)
+		}
+		if got := stdout.String(); strings.ContainsAny(got, "\x1b\t") || !strings.Contains(got, `/before\x1b[2J\tafter`) {
+			t.Fatalf("路由应以安全文本显示，参数 %v，输出 %q", args, got)
+		}
+	}
+}

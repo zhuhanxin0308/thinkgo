@@ -1,6 +1,7 @@
 package http
 
 import (
+	"compress/gzip"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -13,13 +14,24 @@ import (
 // TestCompressionRejectionsCompleteOnTheWire 验证协商拒绝不是传输故障，HTTP/1 与 HTTP/2 均完整结束。
 func TestCompressionRejectionsCompleteOnTheWire(t *testing.T) {
 	for _, http2 := range []bool{false, true} {
-		for _, scenario := range []string{"small", "large", "flush", "empty-flush", "reset-content"} {
+		for _, scenario := range []string{"small", "large", "flush", "empty-flush", "reset-content", "pre-encoded"} {
 			t.Run(scenario+map[bool]string{false: "/http1", true: "/http2"}[http2], func(t *testing.T) {
 				app := newTestHTTPApp(t, t.TempDir(), map[string]interface{}{"enable": true, "min_size": 1024})
 				router := mustHTTPRoute(t, app)
 				var handler interface{} = http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 					writer.Header().Set("Cache-Control", "no-transform")
 					writer.Header().Set("Content-Type", "text/plain")
+					if scenario == "pre-encoded" {
+						writer.Header().Set("Content-Encoding", "gzip")
+						compressed := gzip.NewWriter(writer)
+						if _, err := io.WriteString(compressed, "ok"); err != nil {
+							t.Error(err)
+						}
+						if err := compressed.Close(); err != nil {
+							t.Error(err)
+						}
+						return
+					}
 					if scenario == "empty-flush" {
 						_ = http.NewResponseController(writer).Flush()
 					}
@@ -55,6 +67,9 @@ func TestCompressionRejectionsCompleteOnTheWire(t *testing.T) {
 					t.Fatal(err)
 				}
 				request.Header.Set("Accept-Encoding", "gzip,identity;q=0")
+				if scenario == "pre-encoded" {
+					request.Header.Set("Accept-Encoding", "br,gzip;q=0,identity;q=0")
+				}
 				response, err := server.Client().Do(request)
 				if err != nil {
 					t.Fatalf("合法拒绝响应被中断: %v", err)

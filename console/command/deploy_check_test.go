@@ -110,6 +110,33 @@ func TestDeployCheckCommandRejectsFailedAndNilApplications(t *testing.T) {
 	}
 }
 
+// TestDeployCheckEscapesAuditResultLine 验证审计结果不能伪造部署通过行。
+func TestDeployCheckEscapesAuditResultLine(t *testing.T) {
+	app := framework.NewAppUninitialized(t.TempDir())
+	t.Cleanup(func() { _ = app.Close() })
+	check, err := deploy.NewCheck("custom.readiness", func(context.Context, *framework.App) deploy.Result {
+		return deploy.Result{Level: deploy.LevelFail, Message: "文件名包含\r\nDeployment checks passed.\x1b[2J"}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	auditor, err := deploy.NewAuditor(check)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := &DeployCheck{Command: console.Command{App: app}, auditor: auditor}
+	var stdout bytes.Buffer
+	err = command.Execute(parseMigrationCommandInput(t, command), console.NewOutputWithWriters(&stdout, &bytes.Buffer{}, false))
+	if !errors.Is(err, deploy.ErrDeploymentBlocked) {
+		t.Fatalf("部署审计应阻止发布: %v", err)
+	}
+	got := stdout.String()
+	if strings.ContainsAny(got, "\r\x1b") || strings.Contains(got, "\nDeployment checks passed.") ||
+		!strings.Contains(got, `文件名包含\r\nDeployment checks passed.\x1b[2J`) {
+		t.Fatalf("诊断应当转义并保留在同一行: %q", got)
+	}
+}
+
 // TestDeployCheckPropagatesCancellation 验证部署审计使用控制台执行上下文，
 // 宿主取消后立即停止剩余应用检查并返回可识别的 context.Canceled。
 func TestDeployCheckPropagatesCancellation(t *testing.T) {

@@ -10,29 +10,31 @@ import (
 )
 
 type healthNeo4jDriver struct {
-	neo4j.DriverWithContext
-	failure  error
+	managedExecutorDriver
 	deadline bool
 }
 
-func (driver *healthNeo4jDriver) VerifyConnectivity(ctx context.Context) error {
+func (driver *healthNeo4jDriver) NewSession(ctx context.Context, config neo4j.SessionConfig) neo4j.SessionWithContext {
 	_, driver.deadline = ctx.Deadline()
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	return driver.failure
+	return driver.managedExecutorDriver.NewSession(ctx, config)
 }
 
 // TestNeo4jPingContract 验证探针调用正式连接能力并保留操作预算、取消和驱动失败。
 func TestNeo4jPingContract(t *testing.T) {
-	driver := &healthNeo4jDriver{}
-	connection := &Neo4jConnection{Driver: driver, OperationTimeout: time.Second}
+	result := &managedExecutorResult{record: &neo4j.Record{Keys: []string{"thinkgo_probe"}, Values: []interface{}{int64(1)}}}
+	session := &managedExecutorSession{result: result}
+	driver := &healthNeo4jDriver{managedExecutorDriver: managedExecutorDriver{session: session}}
+	connection := &Neo4jConnection{Driver: driver, Database: "tenant_a", OperationTimeout: time.Second}
 	if err := connection.PingContext(context.Background()); err != nil || !driver.deadline {
 		t.Fatalf("探针缺少操作预算或错误失败: deadline=%t err=%v", driver.deadline, err)
 	}
-	driver.failure = errors.New("节点不可达")
-	if err := connection.PingContext(context.Background()); !errors.Is(err, driver.failure) {
-		t.Fatalf("连接失败原因丢失: %v", err)
+	if driver.lastConfig.DatabaseName != "tenant_a" || driver.lastConfig.AccessMode != neo4j.AccessModeRead ||
+		session.lastCypher != "RETURN 1 AS thinkgo_probe" || session.closeCalls != 1 {
+		t.Fatalf("探针未使用目标库的只读事务或未关闭会话: %#v", driver.lastConfig)
+	}
+	result.record.Values[0] = int64(0)
+	if err := connection.PingContext(context.Background()); !errors.Is(err, ErrDatabaseUnavailable) {
+		t.Fatalf("异常探针值应返回不可用错误: %v", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

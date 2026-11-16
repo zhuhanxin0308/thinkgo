@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/zhuhanxin0308/thinkgo/v3/db"
 	neodriver "github.com/zhuhanxin0308/thinkgo/v3/db/driver/neo4j"
@@ -34,10 +35,14 @@ type connectorNeoProbeSession struct {
 	databaseError    error
 	executeReadCalls int
 	closeCalls       int
+	probeBudget      time.Duration
 }
 
 func (session *connectorNeoProbeSession) ExecuteRead(ctx context.Context, work neo4j.ManagedTransactionWork, _ ...func(*neo4j.TransactionConfig)) (interface{}, error) {
 	session.executeReadCalls++
+	if deadline, ok := ctx.Deadline(); ok {
+		session.probeBudget = time.Until(deadline)
+	}
 	if session.databaseError != nil {
 		return nil, session.databaseError
 	}
@@ -94,22 +99,48 @@ func TestNeoConnectVerifiesConfiguredDatabase(t *testing.T) {
 func TestNeoConnectReturnsOnlyAfterSuccessfulTargetProbe(t *testing.T) {
 	driver := &connectorFakeNeoDriver{}
 	config := db.Config{Type: "neo4j", Database: "tenant_a"}
-	connection, err := connectNeoWithDriver(config, driver, defaultNativeOperationTimeout)
+	operationBudget := 2 * remoteConnectionTimeout
+	connection, err := connectNeoWithDriver(config, driver, operationBudget)
 	if err != nil {
 		t.Fatal(err)
 	}
 	neoConnection, ok := connection.(*neodriver.Neo4jConnection)
-	if !ok || neoConnection.Database != "tenant_a" {
+	if !ok || neoConnection.Database != "tenant_a" || neoConnection.OperationTimeout != operationBudget {
 		t.Fatalf("connector returned wrong connection: %#v", connection)
 	}
 	if driver.verifyCalls != 1 || driver.lastDatabase != "tenant_a" || driver.closeCalls != 0 || driver.session.executeReadCalls != 1 || driver.session.closeCalls != 1 {
 		t.Fatalf("successful target probe lifecycle is wrong: %#v", driver)
+	}
+	if driver.session.probeBudget <= 0 || driver.session.probeBudget > remoteConnectionTimeout {
+		t.Fatalf("应用操作预算不能延长目标库启动探针: %v", driver.session.probeBudget)
 	}
 	if err := connection.Close(); err != nil {
 		t.Fatal(err)
 	}
 	if driver.closeCalls != 1 {
 		t.Fatalf("connection close did not close the driver: %d", driver.closeCalls)
+	}
+}
+
+// TestNeoRuntimePingChecksConfiguredDatabase 验证建连成功后目标库失效仍会让公开健康检查失败。
+func TestNeoRuntimePingChecksConfiguredDatabase(t *testing.T) {
+	driver := &connectorFakeNeoDriver{}
+	connection, err := connectNeoWithDriver(db.Config{Type: "neo4j", Database: "tenant_a"}, driver, defaultNativeOperationTimeout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	database := db.NewDB(connection)
+	t.Cleanup(func() { _ = database.Close() })
+	driver.databaseError = errors.New("目标库已离线")
+	if err := database.PingContext(t.Context()); !errors.Is(err, driver.databaseError) {
+		t.Fatalf("集群仍可连接时，目标库失效也应报告失败: %v", err)
+	}
+	if driver.lastDatabase != "tenant_a" || driver.verifyCalls != 1 || driver.session.closeCalls != 1 {
+		t.Fatalf("探针应访问配置的库并关闭会话: %#v", driver)
+	}
+	driver.databaseError = nil
+	if err := database.PingContext(t.Context()); err != nil || driver.session.executeReadCalls != 1 || driver.session.closeCalls != 1 {
+		t.Fatalf("目标库恢复后探针应成功: %v", err)
 	}
 }
 

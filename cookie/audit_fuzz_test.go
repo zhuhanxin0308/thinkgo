@@ -19,20 +19,20 @@ func FuzzSignedCookieIntegrity(f *testing.F) {
 		}
 		const name, secret = "audit", "synthetic-cookie-fuzz-secret-20260922"
 		now := time.Unix(1790000000, 0)
-		signed, err := signCookieValue(name, value, secret, now)
+		signed, err := signCookieValue(name, value, secret, 60, now)
 		if err != nil {
 			t.Fatal(err)
 		}
-		actual, err := unsignCookieValue(name, signed, secret, 60, now)
+		actual, err := unsignCookieValue(name, signed, secret, 60, 60, now)
 		if err != nil || actual != value {
 			t.Fatalf("签名往返失败: %v", err)
 		}
-		if _, err := unsignCookieValue("other", signed, secret, 60, now); err == nil {
+		if _, err := unsignCookieValue("other", signed, secret, 60, 60, now); err == nil {
 			t.Fatal("跨名称重放被接受")
 		}
 		parts := strings.Split(signed, ".")
 		parts[1] = base64.RawURLEncoding.EncodeToString([]byte(value + "changed"))
-		if _, err := unsignCookieValue(name, strings.Join(parts, "."), secret, 60, now); err == nil {
+		if _, err := unsignCookieValue(name, strings.Join(parts, "."), secret, 60, 60, now); err == nil {
 			t.Fatal("有效编码的载荷篡改被接受")
 		}
 	})

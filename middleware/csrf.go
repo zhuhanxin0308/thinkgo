@@ -356,13 +356,18 @@ func sameCSRFOriginHost(scheme, left, right string) bool {
 	if leftPort == rightPort {
 		return true
 	}
-	defaultPort := ""
-	if strings.EqualFold(scheme, "http") {
-		defaultPort = "80"
-	} else if strings.EqualFold(scheme, "https") {
-		defaultPort = "443"
-	}
+	defaultPort := defaultHTTPOriginPort(scheme)
 	return (leftPort == "" && rightPort == defaultPort) || (rightPort == "" && leftPort == defaultPort)
+}
+
+func defaultHTTPOriginPort(scheme string) string {
+	if strings.EqualFold(scheme, "http") {
+		return "80"
+	}
+	if strings.EqualFold(scheme, "https") {
+		return "443"
+	}
+	return ""
 }
 
 func splitCSRFOriginHost(host string) (string, string) {

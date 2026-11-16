@@ -188,18 +188,23 @@ func (runner *Runner) rollbackLocked(ctx context.Context, store Store, batches i
 		}
 		return history[left].Batch > history[right].Batch
 	})
-	selectedBatches := make(map[int64]struct{}, batches)
 	result := Result{}
-	for _, applied := range history {
-		if _, selected := selectedBatches[applied.Batch]; !selected {
-			if len(selectedBatches) >= batches {
-				continue
+	for index, applied := range history {
+		if index == 0 || applied.Batch != history[index-1].Batch {
+			if batches == 0 {
+				history = history[:index]
+				break
 			}
-			selectedBatches[applied.Batch] = struct{}{}
+			batches--
 			if result.Batch == 0 {
 				result.Batch = applied.Batch
 			}
 		}
+		if err := validateReversibleMigration(definitions[applied.Name]); err != nil {
+			return result, fmt.Errorf("回滚迁移 %s 失败: %w", applied.Name, err)
+		}
+	}
+	for _, applied := range history {
 		current := definitions[applied.Name]
 		if err := store.Revert(ctx, current); err != nil {
 			return result, fmt.Errorf("回滚迁移 %s 失败: %w", applied.Name, err)

@@ -137,6 +137,7 @@ type CompressionResponseWriter struct {
 	bodyPolicy     *statusTrackingResponseWriter
 	rawHead        bool
 	identityDenied bool
+	encodingPrefs  acceptEncodingPreferences
 	rejected       bool
 }
 
@@ -151,10 +152,9 @@ func newConfiguredCompressionResponseWriter(w http.ResponseWriter, r *http.Reque
 }
 
 func newCompressionResponseWriter(w http.ResponseWriter, r *http.Request, minSize int, levels map[string]int, cloneLevels bool) *CompressionResponseWriter {
-	encoding := ""
-	identityDenied := false
+	var preferences acceptEncodingPreferences
 	if r != nil {
-		encoding, identityDenied = negotiateCompressionFields(r.Header.Values("Accept-Encoding"))
+		preferences = parseAcceptEncodingFields(r.Header.Values("Accept-Encoding"))
 	}
 
 	if minSize < 0 {
@@ -185,8 +185,9 @@ func newCompressionResponseWriter(w http.ResponseWriter, r *http.Request, minSiz
 	}
 	writer := &CompressionResponseWriter{
 		ResponseWriter: w,
-		encoding:       encoding,
-		identityDenied: identityDenied,
+		encoding:       preferences.preferredCompression(),
+		identityDenied: preferences.quality("identity") == 0,
+		encodingPrefs:  preferences,
 		minSize:        minSize,
 		levels:         copiedLevels,
 		statusCode:     http.StatusOK,
@@ -394,9 +395,11 @@ func (w *CompressionResponseWriter) BodySuppressed() bool {
 
 // CanReportHeadLength 判断等价 GET 是否会原样发送已知长度的表示。
 func (w *CompressionResponseWriter) CanReportHeadLength(status int, size int64, sample []byte) bool {
+	if w.responseCodingRejected() {
+		return false
+	}
 	if w.identityDenied {
-		coding := strings.TrimSpace(w.Header().Get("Content-Encoding"))
-		return coding != "" && !strings.EqualFold(coding, "identity")
+		return true
 	}
 	if size == 0 || size < int64(w.minSize) {
 		return true
@@ -409,8 +412,13 @@ func (w *CompressionResponseWriter) CanReportHeadLength(status int, size int64, 
 }
 
 func (w *CompressionResponseWriter) shouldBypassRepresentation(status int, contentType string) bool {
-	if w.encoding == "" || w.Header().Get("Content-Encoding") != "" {
+	if w.encoding == "" {
 		return true
+	}
+	for _, line := range w.Header().Values("Content-Encoding") {
+		if strings.TrimSpace(line) != "" {
+			return true
+		}
 	}
 	if status < http.StatusOK || status == http.StatusNoContent || status == http.StatusResetContent || status == http.StatusNotModified || status == http.StatusPartialContent {
 		return true
@@ -448,10 +456,8 @@ func (w *CompressionResponseWriter) startPlainWriter() {
 	if w.wroteHeader {
 		return
 	}
-	contentEncoding := strings.TrimSpace(w.Header().Get("Content-Encoding"))
-	if w.identityDenied && (contentEncoding == "" || strings.EqualFold(contentEncoding, "identity")) &&
-		w.statusCode >= http.StatusOK && w.statusCode != http.StatusNoContent && w.statusCode != http.StatusResetContent && w.statusCode != http.StatusNotModified &&
-		!w.BodySuppressed() {
+	if w.statusCode >= http.StatusOK && w.statusCode != http.StatusNoContent && w.statusCode != http.StatusResetContent && w.statusCode != http.StatusNotModified &&
+		!w.BodySuppressed() && w.responseCodingRejected() {
 		// 无法转换的原表示也不能违反协商：发送无实体 406，丢弃原正文及其验证信息。
 		for _, name := range []string{"Content-Type", "Content-Length", "Content-Encoding", "Content-Range", "ETag", "Last-Modified", "Trailer"} {
 			w.Header().Del(name)
@@ -469,6 +475,27 @@ func (w *CompressionResponseWriter) startPlainWriter() {
 	w.ResponseWriter.WriteHeader(w.statusCode)
 	w.Writer = w.ResponseWriter
 	w.wroteHeader = true
+}
+
+// responseCodingRejected 检查原表示的每层内容编码，未编码响应沿用 identity 规则。
+func (w *CompressionResponseWriter) responseCodingRejected() bool {
+	if w.encodingPrefs.qualities == nil {
+		return false
+	}
+	encoded := false
+	for _, line := range w.Header().Values("Content-Encoding") {
+		for item := range strings.SplitSeq(line, ",") {
+			coding := strings.ToLower(strings.TrimSpace(item))
+			if coding == "" || coding == "identity" {
+				continue
+			}
+			encoded = true
+			if w.encodingPrefs.quality(coding) <= 0 {
+				return true
+			}
+		}
+	}
+	return !encoded && w.identityDenied
 }
 
 // NegotiationError 返回已完成的 406 拒绝原因；它不属于 Write/Flush/Close 的传输错误。
@@ -689,36 +716,40 @@ func (w *CompressionResponseWriter) pushResponse(target string, options *http.Pu
 	return pushThroughResponseWriter(w.ResponseWriter, target, options)
 }
 
-// negotiateCompressionFields 在分配合并缓冲前校验所有字段及分隔逗号的总大小。
-func negotiateCompressionFields(values []string) (string, bool) {
+type acceptEncodingPreferences struct {
+	qualities map[string]float64
+	wildcard  float64
+}
+
+// parseAcceptEncodingFields 在分配合并缓冲前校验所有字段及分隔逗号的总大小。
+func parseAcceptEncodingFields(values []string) acceptEncodingPreferences {
 	if len(values) == 0 || len(values) > maxAcceptEncodingEntries {
-		return "", false
+		return acceptEncodingPreferences{}
 	}
 	if len(values) == 1 {
-		return negotiateCompression(values[0])
+		return parseAcceptEncoding(values[0])
 	}
 	total := len(values) - 1
 	for _, value := range values {
 		if len(value) > maxAcceptEncodingBytes-total {
-			return "", false
+			return acceptEncodingPreferences{}
 		}
 		total += len(value)
 	}
-	return negotiateCompression(strings.Join(values, ","))
+	return parseAcceptEncoding(strings.Join(values, ","))
 }
 
 func negotiateContentEncoding(header string) string {
-	encoding, _ := negotiateCompression(header)
-	return encoding
+	return parseAcceptEncoding(header).preferredCompression()
 }
 
-func negotiateCompression(header string) (string, bool) {
+func parseAcceptEncoding(header string) acceptEncodingPreferences {
 	if len(header) > maxAcceptEncodingBytes {
-		return "", false
+		return acceptEncodingPreferences{}
 	}
 	items := strings.Split(header, ",")
 	if len(items) > maxAcceptEncodingEntries {
-		return "", false
+		return acceptEncodingPreferences{}
 	}
 	qualities := make(map[string]float64)
 	wildcardQuality := -1.0
@@ -760,21 +791,33 @@ func negotiateCompression(header string) (string, bool) {
 		}
 	}
 
+	return acceptEncodingPreferences{qualities: qualities, wildcard: wildcardQuality}
+}
+
+func (p acceptEncodingPreferences) quality(coding string) float64 {
+	if p.qualities == nil {
+		return -1
+	}
+	if quality, exists := p.qualities[coding]; exists {
+		return quality
+	}
+	return p.wildcard
+}
+
+func (p acceptEncodingPreferences) preferredCompression() string {
+	if p.qualities == nil {
+		return ""
+	}
 	selected := ""
 	selectedQuality := 0.0
 	for _, encoding := range []string{"zstd", "br", "gzip", "deflate"} {
-		quality, exists := qualities[encoding]
-		if !exists {
-			quality = wildcardQuality
-		}
+		quality := p.quality(encoding)
 		if quality > selectedQuality {
 			selected = encoding
 			selectedQuality = quality
 		}
 	}
-	identityQuality, explicitIdentity := qualities["identity"]
-	identityDenied := (explicitIdentity && identityQuality == 0) || (!explicitIdentity && wildcardQuality == 0)
-	return selected, identityDenied
+	return selected
 }
 
 func headerTokenContains(value, target string) bool {

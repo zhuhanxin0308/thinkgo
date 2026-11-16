@@ -52,7 +52,7 @@ func (command *DeployCheck) Execute(input *console.Input, output *console.Output
 			return err
 		}
 		for _, result := range report.Results {
-			output.Writeln(fmt.Sprintf("%-4s  %-26s  %s", result.Level, result.Name, result.Message))
+			output.WritelnEscaped(fmt.Sprintf("%-4s  %-26s  %s", result.Level, result.Name, result.Message))
 		}
 		if report.Failed(strict) {
 			blocked = true
