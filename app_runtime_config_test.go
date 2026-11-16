@@ -234,3 +234,28 @@ func TestMiddlewareConfigAppliesAliasesAndPriorityTypes(t *testing.T) {
 		t.Fatalf("合法中间件配置不应产生启动错误: %v", startupErr)
 	}
 }
+
+func TestMiddlewareAliasReportsInvalidTargetTypeBeforeValue(t *testing.T) {
+	for _, tc := range []struct {
+		value interface{}
+		want  string
+	}{
+		{true, `middleware.alias["public"] 必须是已注册别名字符串`},
+		{12, `middleware.alias["public"] 必须是已注册别名字符串`},
+		{nil, `middleware.alias["public"] 必须是已注册别名字符串`},
+		{" ", "包含空别名或空目标"},
+		{"unknown", "未注册或存在循环引用"},
+	} {
+		app := &App{config: config.NewConfig(), middleware: middleware.NewPipeline()}
+		if err := app.config.Set("middleware.alias", map[string]interface{}{"public": tc.value}); err != nil {
+			t.Fatal(err)
+		}
+		app.applyMiddlewareConfig()
+		if err := app.StartupError(); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("别名目标 %T 应报告 %q，实际为 %v", tc.value, tc.want, err)
+		}
+		if app.middleware.ResolveAlias("public") != nil {
+			t.Fatal("非法目标不应注册别名")
+		}
+	}
+}

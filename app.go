@@ -893,6 +893,10 @@ func (app *App) applyMiddlewareAliasesTo(pipeline *middleware.Pipeline, values m
 	for alias, rawTarget := range values {
 		alias = strings.TrimSpace(alias)
 		target, ok := rawTarget.(string)
+		if !ok {
+			app.recordStartupError(fmt.Errorf("middleware.alias[%q] 必须是已注册别名字符串", alias))
+			continue
+		}
 		target = strings.TrimSpace(target)
 		if alias == "" || target == "" {
 			app.recordStartupError(fmt.Errorf("middleware.alias 包含空别名或空目标"))
@@ -900,10 +904,6 @@ func (app *App) applyMiddlewareAliasesTo(pipeline *middleware.Pipeline, values m
 		}
 		if strings.ContainsAny(alias, "\r\n\x00") || strings.ContainsAny(target, "\r\n\x00") {
 			app.recordStartupError(fmt.Errorf("middleware.alias %q 包含控制字符", alias))
-			continue
-		}
-		if !ok {
-			app.recordStartupError(fmt.Errorf("middleware.alias[%q] 必须是已注册别名字符串", alias))
 			continue
 		}
 		pending[alias] = target
