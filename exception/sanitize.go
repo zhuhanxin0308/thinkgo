@@ -2,6 +2,7 @@ package exception
 
 import (
 	"encoding/json"
+	"encoding/xml"
 	"io"
 	"strings"
 )
@@ -24,6 +25,68 @@ func sanitizeJSONBody(body string) (string, bool) {
 		return "", false
 	}
 	return string(sanitizedBody), true
+}
+
+// sanitizeXMLBody 保留 XML 结构，按元素和属性的本地名称识别敏感值。
+func sanitizeXMLBody(body string) (string, bool) {
+	decoder := xml.NewDecoder(strings.NewReader(body))
+	var output strings.Builder
+	encoder := xml.NewEncoder(&output)
+	depth, seenRoot := 0, false
+	for {
+		token, err := decoder.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return "", false
+		}
+		switch node := token.(type) {
+		case xml.StartElement:
+			if depth == 0 {
+				if seenRoot {
+					return "", false
+				}
+				seenRoot = true
+			}
+			for index := range node.Attr {
+				attr := &node.Attr[index]
+				if isSensitiveKey(attr.Name.Local) {
+					attr.Value = redactedPlaceholder
+				} else {
+					attr.Value = sanitizeExceptionText(attr.Value)
+				}
+			}
+			if isSensitiveKey(node.Name.Local) {
+				if decoder.Skip() != nil || encoder.EncodeElement(redactedPlaceholder, node) != nil {
+					return "", false
+				}
+				continue
+			}
+			token = node
+			depth++
+		case xml.EndElement:
+			depth--
+		case xml.CharData:
+			if depth == 0 {
+				if strings.TrimSpace(string(node)) != "" {
+					return "", false
+				}
+				continue
+			}
+			token = xml.CharData(sanitizeExceptionText(string(node)))
+		default:
+			// 注释、处理指令和文档声明可能含自由文本，不进入诊断输出。
+			continue
+		}
+		if encoder.EncodeToken(token) != nil || output.Len() > maxDebugRequestBodyBytes {
+			return "", false
+		}
+	}
+	if !seenRoot || depth != 0 || encoder.Close() != nil || output.Len() > maxDebugRequestBodyBytes {
+		return "", false
+	}
+	return output.String(), true
 }
 
 func sanitizeJSONValue(key string, value interface{}) interface{} {

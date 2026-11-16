@@ -1,13 +1,51 @@
 package exception
 
 import (
+	"encoding/xml"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
 )
+
+// TestDebugRequestBodyRedactsXMLAndHidesOpaqueText 验证调试页不暴露结构化或文本中的凭据。
+func TestDebugRequestBodyRedactsXMLAndHidesOpaqueText(t *testing.T) {
+	const payload = `<?xml version="1.0"?><login xmlns:s="urn:auth" s:access_token="hidden-attribute"><name>public</name><s:Password><![CDATA[hidden-element]]><nested>hidden-child</nested></s:Password><!--hidden-comment--></login>`
+	for _, mediaType := range []string{"application/xml; charset=utf-8", "text/xml", "application/vnd.example+xml"} {
+		t.Run(mediaType, func(t *testing.T) {
+			raw := httptest.NewRequest(http.MethodPost, "http://localhost", strings.NewReader(payload))
+			raw.Header.Set("Content-Type", mediaType)
+			output := debugRequestBody(raw)
+			if strings.Contains(output, "hidden-") || !strings.Contains(output, "<name>public</name>") ||
+				strings.Count(output, redactedPlaceholder) != 2 {
+				t.Fatalf("XML 脱敏结果错误: %q", output)
+			}
+			var element struct{ XMLName xml.Name }
+			if err := xml.Unmarshal([]byte(output), &element); err != nil || element.XMLName.Local != "login" {
+				t.Fatalf("脱敏后的 XML 应保留合法文档结构: %v", err)
+			}
+			if restored, err := io.ReadAll(raw.Body); err != nil || string(restored) != payload {
+				t.Fatalf("调试处理改变了请求体: %v", err)
+			}
+		})
+	}
+	for _, sample := range []struct{ mediaType, body, want string }{
+		{"text/plain", payload, "[TEXT BODY OMITTED]"},
+		{"text/html", payload, "[TEXT BODY OMITTED]"},
+		{"application/xml", "<password>hidden-unclosed", "[INVALID XML BODY OMITTED]"},
+		{"application/xml", "<a></a><password>hidden-second-root</password>", "[INVALID XML BODY OMITTED]"},
+		{"application/xml", "<name>" + strings.Repeat("x", maxDebugRequestBodyBytes) + "</name>", "[INVALID XML BODY OMITTED]"},
+	} {
+		raw := httptest.NewRequest(http.MethodPost, "http://localhost", strings.NewReader(sample.body))
+		raw.Header.Set("Content-Type", sample.mediaType)
+		if output := debugRequestBody(raw); output != sample.want {
+			t.Errorf("正文应合规隐藏，媒体类型 %s，实际长度 %d", sample.mediaType, len(output))
+		}
+	}
+}
 
 func TestIssue41KeyMaterialIsSensitive(t *testing.T) {
 	for _, key := range []string{"private_key", "private-key", "privateKey", "signing.key", "encryption_key", "credential", "client_secret", "access-key", "API_KEY"} {
