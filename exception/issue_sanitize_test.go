@@ -57,6 +57,23 @@ func TestXMLRedactsSplitTextAndExpandedNamespaces(t *testing.T) {
 	}
 }
 
+// TestXMLHidesMixedContentAndNamespaceCredentials 验证混合正文和命名空间别名不会暴露原值。
+func TestXMLHidesMixedContentAndNamespaceCredentials(t *testing.T) {
+	const mixed = "<message>password=<value>mixed-secret</value></message>"
+	if output, ok := sanitizeXMLBody(mixed); !ok || output != "[MIXED XML BODY OMITTED]" {
+		t.Errorf("无法安全归属字段的混合正文应隐藏: %q", output)
+	}
+	const namespace = `<root xmlns:token="urn:namespace-secret" token:note="visible"><token:value>public</token:value></root>`
+	output, ok := sanitizeXMLBody(namespace)
+	if !ok || strings.Contains(output, "namespace-secret") || !strings.Contains(output, "public") || !strings.Contains(output, "visible") {
+		t.Fatalf("命名空间 URI 应隔离并保留其他结构化字段: %q", output)
+	}
+	var parsed struct{ XMLName xml.Name }
+	if err := xml.Unmarshal([]byte(output), &parsed); err != nil {
+		t.Fatalf("脱敏后的诊断 XML 不合法: %v", err)
+	}
+}
+
 func TestIssue41KeyMaterialIsSensitive(t *testing.T) {
 	for _, key := range []string{"private_key", "private-key", "privateKey", "signing.key", "encryption_key", "credential", "client_secret", "access-key", "API_KEY"} {
 		t.Run(key, func(t *testing.T) {

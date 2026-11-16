@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"io"
+	"strconv"
 	"strings"
 )
 
@@ -41,7 +42,11 @@ func sanitizeXMLBody(body string) (string, bool) {
 		text.Reset()
 		return encoder.EncodeToken(xml.CharData(sanitized))
 	}
-	depth, seenRoot := 0, false
+	type elementContent struct{ hasText, hasChild bool }
+	var elements []elementContent
+	seenRoot := false
+	namespaces := make(map[string]string)
+	const omittedMixedXML = "[MIXED XML BODY OMITTED]"
 	for {
 		token, err := decoder.Token()
 		if err == io.EOF {
@@ -55,22 +60,33 @@ func sanitizeXMLBody(body string) (string, bool) {
 			if flushText() != nil {
 				return "", false
 			}
-			if depth == 0 {
+			if len(elements) == 0 {
 				if seenRoot {
 					return "", false
 				}
 				seenRoot = true
+			} else {
+				parent := &elements[len(elements)-1]
+				if parent.hasText {
+					return omittedMixedXML, true
+				}
+				parent.hasChild = true
 			}
-			node.Name.Space = sanitizeExceptionText(node.Name.Space)
-			for index := range node.Attr {
-				attr := &node.Attr[index]
-				attr.Name.Space = sanitizeExceptionText(attr.Name.Space)
+			node.Name = diagnosticXMLName(node.Name, namespaces)
+			attributes := node.Attr[:0]
+			for _, attr := range node.Attr {
+				if attr.Name.Space == "xmlns" || attr.Name.Space == "" && attr.Name.Local == "xmlns" {
+					continue
+				}
+				attr.Name = diagnosticXMLName(attr.Name, namespaces)
 				if isSensitiveKey(attr.Name.Local) {
 					attr.Value = redactedPlaceholder
 				} else {
 					attr.Value = sanitizeExceptionText(attr.Value)
 				}
+				attributes = append(attributes, attr)
 			}
+			node.Attr = attributes
 			if isSensitiveKey(node.Name.Local) {
 				if decoder.Skip() != nil || encoder.EncodeElement(redactedPlaceholder, node) != nil {
 					return "", false
@@ -78,20 +94,28 @@ func sanitizeXMLBody(body string) (string, bool) {
 				continue
 			}
 			token = node
-			depth++
+			elements = append(elements, elementContent{})
 		case xml.EndElement:
 			if flushText() != nil {
 				return "", false
 			}
-			node.Name.Space = sanitizeExceptionText(node.Name.Space)
+			node.Name = diagnosticXMLName(node.Name, namespaces)
 			token = node
-			depth--
+			elements = elements[:len(elements)-1]
 		case xml.CharData:
-			if depth == 0 {
-				if strings.TrimSpace(string(node)) != "" {
+			significant := strings.TrimSpace(string(node)) != ""
+			if len(elements) == 0 {
+				if significant {
 					return "", false
 				}
 				continue
+			}
+			if significant {
+				current := &elements[len(elements)-1]
+				if current.hasChild {
+					return omittedMixedXML, true
+				}
+				current.hasText = true
 			}
 			// 相邻正文可能被 CDATA 等结构拆片，合并后再识别凭据。
 			text.Write(node)
@@ -104,12 +128,25 @@ func sanitizeXMLBody(body string) (string, bool) {
 			return "", false
 		}
 	}
-	if !seenRoot || depth != 0 || encoder.Close() != nil || output.Len() > maxDebugRequestBodyBytes {
+	if !seenRoot || len(elements) != 0 || encoder.Close() != nil || output.Len() > maxDebugRequestBodyBytes {
 		return "", false
 	}
 	return output.String(), true
 }
 
+// diagnosticXMLName 保留命名空间之间的区分，防止编码器重新暴露原始 URI。
+func diagnosticXMLName(name xml.Name, namespaces map[string]string) xml.Name {
+	if name.Space == "" || name.Space == "http://www.w3.org/XML/1998/namespace" {
+		return name
+	}
+	namespace, exists := namespaces[name.Space]
+	if !exists {
+		namespace = "urn:thinkgo:debug:namespace:" + strconv.Itoa(len(namespaces)+1)
+		namespaces[name.Space] = namespace
+	}
+	name.Space = namespace
+	return name
+}
 func sanitizeJSONValue(key string, value interface{}) interface{} {
 	if isSensitiveKey(key) {
 		return redactedPlaceholder
