@@ -79,7 +79,7 @@ func (driver *connectorFakeNeoDriver) Close(context.Context) error {
 func TestNeoConnectVerifiesConfiguredDatabase(t *testing.T) {
 	driver := &connectorFakeNeoDriver{databaseError: errors.New("database not found")}
 	config := db.Config{Type: "neo4j", Database: "tenant_a"}
-	connection, err := connectNeoWithDriver(config, driver)
+	connection, err := connectNeoWithDriver(config, driver, defaultNativeOperationTimeout)
 	if err == nil || connection != nil {
 		t.Fatalf("missing target database must fail: connection=%#v err=%v", connection, err)
 	}
@@ -94,7 +94,7 @@ func TestNeoConnectVerifiesConfiguredDatabase(t *testing.T) {
 func TestNeoConnectReturnsOnlyAfterSuccessfulTargetProbe(t *testing.T) {
 	driver := &connectorFakeNeoDriver{}
 	config := db.Config{Type: "neo4j", Database: "tenant_a"}
-	connection, err := connectNeoWithDriver(config, driver)
+	connection, err := connectNeoWithDriver(config, driver, defaultNativeOperationTimeout)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +115,7 @@ func TestNeoConnectReturnsOnlyAfterSuccessfulTargetProbe(t *testing.T) {
 
 func TestNeoConnectClosesDriverOnConnectivityFailure(t *testing.T) {
 	driver := &connectorFakeNeoDriver{connectivityError: errors.New("offline")}
-	connection, err := connectNeoWithDriver(db.Config{Type: "neo4j", Database: "tenant_a"}, driver)
+	connection, err := connectNeoWithDriver(db.Config{Type: "neo4j", Database: "tenant_a"}, driver, defaultNativeOperationTimeout)
 	if err == nil || connection != nil || driver.closeCalls != 1 || driver.session != nil {
 		t.Fatalf("connectivity failure lifecycle is wrong: connection=%#v driver=%#v err=%v", connection, driver, err)
 	}
