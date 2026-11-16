@@ -27,6 +27,9 @@ const (
 	maximumErrorSamples      = 10000
 	catalogPageSize          = 20
 	catalogMaximumPrice      = 100000000
+	defaultOrderItems        = 8
+	defaultItemQuantity      = 10
+	orderProductCount        = 2
 	inactiveProductEvery     = 10
 	hotProductCount          = 100
 	detailCycleSize          = 10
@@ -64,6 +67,10 @@ type Config struct {
 	ProductsPerTenant      int             `json:"products_per_tenant"`
 	TicketsPerTenant       int             `json:"tickets_per_tenant"`
 	Categories             int             `json:"categories"`
+	CatalogPageSize        int             `json:"catalog_page_size"`
+	MaximumPriceCents      int64           `json:"maximum_price_cents"`
+	MaximumOrderItems      int             `json:"maximum_order_items"`
+	MaximumItemQuantity    int             `json:"maximum_item_quantity"`
 	ErrorSampleLimit       int             `json:"error_sample_limit"`
 	InactiveProductModulus int             `json:"inactive_product_modulus"`
 	HotProductsPerTenant   int             `json:"hot_products_per_tenant"`
@@ -79,6 +86,8 @@ func DefaultConfig() Config {
 		Seed: 1, TenantCount: defaultTenants, UsersPerTenant: defaultUsersPerTenant,
 		ProductsPerTenant: defaultProductsPerTenant, TicketsPerTenant: defaultTicketsPerTenant,
 		Categories: defaultCategories, ErrorSampleLimit: defaultErrorSampleLimit,
+		CatalogPageSize: catalogPageSize, MaximumPriceCents: catalogMaximumPrice,
+		MaximumOrderItems: defaultOrderItems, MaximumItemQuantity: defaultItemQuantity,
 		InactiveProductModulus: inactiveProductEvery, HotProductsPerTenant: hotProductCount,
 		CacheHitWeight: detailHotCount * percentageTotal / detailCycleSize,
 		MixedWeights:   ScenarioWeights{Catalog: 40, Detail: 30, Order: 20, Ticket: 10},
@@ -107,6 +116,10 @@ func (configuration Config) Validate() error {
 	}
 	if configuration.ProductsPerTenant < 1 || configuration.TicketsPerTenant < 1 || configuration.Categories < 1 || configuration.InactiveProductModulus < 2 {
 		return errors.New("商品、工单与分类数量必须为正，下架模数至少为2")
+	}
+	if configuration.CatalogPageSize < 1 || configuration.MaximumPriceCents < 1 ||
+		configuration.MaximumOrderItems < 1 || configuration.MaximumItemQuantity < 1 {
+		return errors.New("目录页大小、价格和订单数量上限必须为正")
 	}
 	activeProducts := configuration.ProductsPerTenant - configuration.ProductsPerTenant/configuration.InactiveProductModulus
 	if configuration.HotProductsPerTenant < 1 || activeProducts <= configuration.HotProductsPerTenant {

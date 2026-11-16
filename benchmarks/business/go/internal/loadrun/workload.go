@@ -114,7 +114,7 @@ func (workload *workload) request(sequence uint64) requestSpec {
 	case "catalog":
 		category := random.IntN(configuration.Categories) + 1
 		request.CategoryID = category
-		request.Path = fmt.Sprintf("/api/catalog?category_id=%d&min_price=0&max_price=%d&cursor_price=0&cursor_id=0&limit=%d", category, catalogMaximumPrice, catalogPageSize)
+		request.Path = fmt.Sprintf("/api/catalog?category_id=%d&min_price=0&max_price=%d&cursor_price=0&cursor_id=0&limit=%d", category, configuration.MaximumPriceCents, configuration.CatalogPageSize)
 	case "detail":
 		var activeIndex int
 		if ordinal%workload.detailCycle < workload.detailHot {
@@ -133,14 +133,19 @@ func (workload *workload) request(sequence uint64) requestSpec {
 		request.Path = "/api/products/" + strconv.FormatInt(request.ResourceID, 10)
 	case "order":
 		first := random.IntN(activeProducts)
-		// 从排除首个索引后的区间抽样，避免大数据规模时两个索引相加溢出。
-		second := random.IntN(activeProducts - 1)
-		if second >= first {
-			second++
+		request.OrderItems = make([]orderItem, min(configuration.MaximumOrderItems, orderProductCount))
+		request.OrderItems[0].ProductID = productOffset + activeProductID(first, configuration.InactiveProductModulus)
+		if len(request.OrderItems) > 1 {
+			// 从排除首个索引后的区间抽样，避免大数据规模时两个索引相加溢出。
+			second := random.IntN(activeProducts - 1)
+			if second >= first {
+				second++
+			}
+			request.OrderItems[1].ProductID = productOffset + activeProductID(second, configuration.InactiveProductModulus)
 		}
-		request.OrderItems = []orderItem{
-			{ProductID: productOffset + activeProductID(first, configuration.InactiveProductModulus), Quantity: int64(random.IntN(maximumOrderQuantity) + 1)},
-			{ProductID: productOffset + activeProductID(second, configuration.InactiveProductModulus), Quantity: int64(random.IntN(maximumOrderQuantity) + 1)},
+		quantityLimit := min(configuration.MaximumItemQuantity, maximumOrderQuantity)
+		for index := range request.OrderItems {
+			request.OrderItems[index].Quantity = int64(random.IntN(quantityLimit) + 1)
 		}
 		request.Method, request.Path = http.MethodPost, "/api/orders"
 		request.Body, _ = json.Marshal(struct {
