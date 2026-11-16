@@ -112,9 +112,9 @@ func sortedMapKeys(data map[string]interface{}) []string {
 }
 
 // rebindNumbered 仅替换 SQL 正文中的问号，保留引用、注释和 dollar quote 内容。
-// postgresSyntax 使用 standard_conforming_strings=on 的 PostgreSQL 词法规则。
+// PostgreSQL 使用 standard_conforming_strings=on 的词法规则。
 // E 字符串支持反斜杠转义；普通字符串和引用标识符不把反斜杠视为引号转义。
-func rebindNumbered(query, prefix string, postgresSyntax ...bool) string {
+func rebindNumbered(query, prefix, dialect string) string {
 	const (
 		stateNormal = iota
 		stateSingle
@@ -122,14 +122,12 @@ func rebindNumbered(query, prefix string, postgresSyntax ...bool) string {
 		stateBacktick
 		stateBracket
 		stateLineComment
-		stateBlockComment
 		stateDollarQuote
 	)
 	state := stateNormal
 	dollarDelimiter := ""
 	parameter := 0
-	blockDepth := 0
-	postgres := len(postgresSyntax) > 0 && postgresSyntax[0]
+	postgres := dialect == "postgres"
 	var output strings.Builder
 	output.Grow(len(query) + 8)
 	for index := 0; index < len(query); index++ {
@@ -178,11 +176,9 @@ func rebindNumbered(query, prefix string, postgresSyntax ...bool) string {
 				}
 			case '/':
 				if index+1 < len(query) && query[index+1] == '*' {
-					state = stateBlockComment
-					blockDepth = 1
-					// 一次消费整个起始符，禁止用其中的 * 与后续 / 重叠闭合。
-					output.WriteString("/*")
-					index++
+					end, _ := sqllex.BlockCommentEnd(query, index, dialect)
+					output.WriteString(query[index:end])
+					index = end - 1
 					continue
 				}
 			case '$':
@@ -234,23 +230,6 @@ func rebindNumbered(query, prefix string, postgresSyntax ...bool) string {
 		case stateLineComment:
 			if current == '\n' || current == '\r' {
 				state = stateNormal
-			}
-		case stateBlockComment:
-			if postgres && current == '/' && index+1 < len(query) && query[index+1] == '*' {
-				blockDepth++
-				output.WriteString("/*")
-				index++
-				continue
-			}
-			if current == '*' && index+1 < len(query) && query[index+1] == '/' {
-				output.WriteByte(current)
-				index++
-				output.WriteByte(query[index])
-				blockDepth--
-				if blockDepth == 0 {
-					state = stateNormal
-				}
-				continue
 			}
 		case stateDollarQuote:
 			if strings.HasPrefix(query[index:], dollarDelimiter) {

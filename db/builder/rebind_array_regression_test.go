@@ -18,7 +18,7 @@ func TestRebindNumberedPostgresArrays(t *testing.T) {
 		{"operators", `SELECT data ?| ARRAY[?, ?], data ?& ARRAY[?], data ?? ?, data @? ?`, `SELECT data ?| ARRAY[$1, $2], data ?& ARRAY[$3], data ? $4, data @? $5`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if got := rebindNumbered(test.query, "$", true); got != test.want {
+			if got := (&Pgsql{}).Rebind(test.query); got != test.want {
 				t.Fatalf("Rebind(%q) = %q; want %q", test.query, got, test.want)
 			}
 		})
@@ -28,7 +28,7 @@ func TestRebindNumberedPostgresArrays(t *testing.T) {
 func TestRebindNumberedRetainsSQLServerBracketIdentifiers(t *testing.T) {
 	query := `SELECT [column?], [escaped]]?] FROM [table] WHERE id = ? AND flag = ?`
 	want := `SELECT [column?], [escaped]]?] FROM [table] WHERE id = @p1 AND flag = @p2`
-	if got := rebindNumbered(query, "@p"); got != want {
+	if got := (&Sqlsrv{}).Rebind(query); got != want {
 		t.Fatalf("Rebind = %q; want %q", got, want)
 	}
 }

@@ -33,7 +33,7 @@ func oracleQuoteFields(fields string) string {
 
 // Rebind 将 ? 占位符转换为 Oracle 的 :1、:2... 风格。
 func (o *Oracle) Rebind(query string) string {
-	return rebindNumbered(query, ":")
+	return rebindNumbered(query, ":", o.DialectName())
 }
 
 // QuoteIdentifier 用双引号引用标识符。
