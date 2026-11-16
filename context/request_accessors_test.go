@@ -6,7 +6,9 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -76,6 +78,72 @@ func TestRequestContextForNilRequest(t *testing.T) {
 	}
 	if _, ok := request.Context().Deadline(); ok {
 		t.Fatal("后台上下文不应伪造截止时间")
+	}
+}
+
+func TestRequestDomainWithoutPortPreservesIPv6Authority(t *testing.T) {
+	req := newRequestForTest(t, httptest.NewRequest(http.MethodGet, "https://[2001:db8::1]:8443/files", nil))
+	if req.Domain() != "https://[2001:db8::1]:8443" || req.Host(true) != "2001:db8::1" {
+		t.Fatal("有端口域名与裸主机访问器不应改变")
+	}
+	for _, tc := range []struct {
+		domain, want, hostname string
+	}{
+		{"", "https://[2001:db8::1]", "2001:db8::1"},
+		{"http://[::1]:8080", "http://[::1]", "::1"},
+		{"https://[::1]", "https://[::1]", "::1"},
+		{"http://127.0.0.1:8080", "http://127.0.0.1", "127.0.0.1"},
+		{"https://api.example.test:8443", "https://api.example.test", "api.example.test"},
+	} {
+		req.SetDomain(tc.domain)
+		got := req.Domain(true)
+		parsed, err := url.Parse(got)
+		if err != nil || got != tc.want || parsed.Hostname() != tc.hostname || parsed.Port() != "" {
+			t.Errorf("去除端口后应保留有效 URL authority，得到 %q，期望 %q，错误 %v", got, tc.want, err)
+		}
+	}
+}
+
+func TestRequestIntegerTextPreservesExactValueAcrossSources(t *testing.T) {
+	large := int64(9007199254740993)
+	raw := httptest.NewRequest(http.MethodPost, "/?query_id=9007199254740993.0", strings.NewReader(`{"body_id":9007199254740993e0}`))
+	raw.Header.Set("Content-Type", "application/json")
+	req := newRequestForTest(t, raw)
+	req.SetRoute("route_id", "-9007199254740993.0")
+	for key, want := range map[string]int64{"query_id": large, "body_id": large, "route_id": -large} {
+		if got := req.ParamInt64(key, -1); got != want {
+			t.Errorf("请求参数 %s 精度丢失，得到 %d，期望 %d", key, got, want)
+		}
+	}
+	for _, tc := range []struct {
+		text string
+		want int64
+	}{
+		{"9007199254740993", large},
+		{"9223372036854775807.0", math.MaxInt64},
+		{"-9223372036854775808e0", math.MinInt64},
+		{"1e2", 100},
+		{"01_2", 12},
+		{"012e0", 12},
+		{"0x1.8p+2", 6},
+		{"1.5", -1},
+		{"0.999999999999999999999", -1},
+		{"9223372036854775808.0", -1},
+		{"-9223372036854775809e0", -1},
+		{"1e-1000000", -1},
+		{"1.0/1", -1},
+	} {
+		req.SetRoute("id", tc.text)
+		if got := req.ParamInt64("id", -1); got != tc.want {
+			t.Errorf("整数文本 %q 得到 %d，期望 %d", tc.text, got, tc.want)
+		}
+	}
+	wantPlatform := 7
+	if strconv.IntSize == 64 {
+		wantPlatform = int(large)
+	}
+	if got := req.ParamInt("query_id", 7); got != wantPlatform {
+		t.Errorf("平台 int 范围错误，得到 %d，期望 %d", got, wantPlatform)
 	}
 }
 

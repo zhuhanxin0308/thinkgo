@@ -166,7 +166,7 @@ func (r *Request) Domain(removePort ...bool) string {
 			return ""
 		}
 		if len(removePort) > 0 && removePort[0] {
-			return parsed.Scheme + "://" + parsed.Hostname()
+			return parsed.Scheme + "://" + requestAuthorityWithoutPort(parsed.Host)
 		}
 		return parsed.Scheme + "://" + parsed.Host
 	}
@@ -175,7 +175,7 @@ func (r *Request) Domain(removePort ...bool) string {
 		return ""
 	}
 	if len(removePort) > 0 && removePort[0] {
-		host = requestHostname(host)
+		host = requestAuthorityWithoutPort(host)
 	}
 	return r.Scheme() + "://" + host
 }

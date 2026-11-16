@@ -56,6 +56,15 @@ func requestHostname(host string) string {
 	return parsed.Hostname()
 }
 
+// requestAuthorityWithoutPort 接收已校验的 URL 主机，保留 IPv6 字面量的方括号。
+func requestAuthorityWithoutPort(host string) string {
+	if strings.HasPrefix(host, "[") {
+		return host[:strings.IndexByte(host, ']')+1]
+	}
+	hostname, _, _ := strings.Cut(host, ":")
+	return hostname
+}
+
 func ensureRequestPathPrefix(value string) string {
 	if value == "" || strings.HasPrefix(value, "/") {
 		return value
