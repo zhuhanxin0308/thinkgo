@@ -18,19 +18,32 @@ func digestLocalModule(directory string) (string, error) {
 	if strings.TrimSpace(directory) == "" {
 		return "", errors.New("模块清单缺少本地替换目录")
 	}
-	files, err := modzip.CheckDir(directory)
+	canonical, err := filepath.EvalSymlinks(directory)
+	if err != nil {
+		return "", err
+	}
+	files, err := modzip.CheckDir(canonical)
 	if err != nil {
 		return "", err
 	}
 	paths := make([]string, 0, len(files.Valid))
+	hasGoMod := false
 	for _, path := range files.Valid {
-		relative, err := filepath.Rel(directory, path)
+		if strings.EqualFold(filepath.Base(path), ".git") {
+			// Git worktree 与子模块用普通文件保存工作树指针。
+			continue
+		}
+		relative, err := filepath.Rel(canonical, path)
 		if err != nil {
 			return "", err
 		}
+		hasGoMod = hasGoMod || relative == "go.mod"
 		paths = append(paths, filepath.ToSlash(relative))
 	}
-	root, err := os.OpenRoot(directory)
+	if !hasGoMod {
+		return "", errors.New("本地替换模块缺少 go.mod")
+	}
+	root, err := os.OpenRoot(canonical)
 	if err != nil {
 		return "", err
 	}

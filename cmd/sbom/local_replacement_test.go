@@ -4,9 +4,56 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
+
+func TestLocalModuleDigestUsesSymlinkTargetAndExcludesGitMarker(t *testing.T) {
+	dir := t.TempDir()
+	for path, content := range map[string]string{
+		"go.mod":    "module example.test/lib\n\ngo 1.20\n",
+		"module.go": "package lib\nconst Message = \"original\"\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, path), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before, err := digestLocalModule(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Run("普通 .git 文件", func(t *testing.T) {
+		gitMarker := filepath.Join(dir, ".git")
+		if err := os.WriteFile(gitMarker, []byte("gitdir: /local/git/worktrees/other\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		after, err := digestLocalModule(dir)
+		if err != nil || before != after {
+			t.Errorf("Git 元数据不应改变源码摘要: %q, %q, %v", before, after, err)
+		}
+	})
+	t.Run("根目录链接", func(t *testing.T) {
+		link := filepath.Join(t.TempDir(), "linked")
+		if err := os.Symlink(dir, link); err != nil {
+			if runtime.GOOS == "windows" {
+				t.Skipf("Windows 未启用目录链接权限: %v", err)
+			}
+			t.Fatal(err)
+		}
+		actual, err := digestLocalModule(link)
+		if err != nil || actual != before {
+			t.Errorf("通过链接计算的摘要应匹配实际源码: %q, %v", actual, err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "module.go"), []byte("package lib\nconst Message = \"changed\"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		after, err := digestLocalModule(link)
+		if err != nil || after == actual {
+			t.Errorf("修改链接目标源码应改变摘要: %q, %v", after, err)
+		}
+	})
+}
 
 func TestLocalReplacementBOMUsesCurrentModuleSource(t *testing.T) {
 	t.Setenv("GOPROXY", "off")
