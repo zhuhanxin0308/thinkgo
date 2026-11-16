@@ -20,6 +20,15 @@ func TestOracleRebindKeepsLiteralBackslashes(t *testing.T) {
 	}
 }
 
+// TestOracleRebindPreservesAlternativeQuotedQuestionMarks 验证替代引号内的问号不会被替换。
+func TestOracleRebindPreservesAlternativeQuotedQuestionMarks(t *testing.T) {
+	const query = `SELECT q'[before' ? after]', ?, NQ'界内' ? 容界', ? FROM dual`
+	const want = `SELECT q'[before' ? after]', :1, NQ'界内' ? 容界', :2 FROM dual`
+	if got := (&Oracle{}).Rebind(query); got != want {
+		t.Fatalf("Oracle 替代字符串的字面量发生变化: %q", got)
+	}
+}
+
 func TestOracleTypedLockCapabilities(t *testing.T) {
 	oracle := &Oracle{}
 	update, err := oracle.Lock(db.LockForUpdate)

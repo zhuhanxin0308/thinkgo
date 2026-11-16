@@ -68,6 +68,27 @@ func TestStandardSQLBackslashKeepsLiteralBoundary(t *testing.T) {
 	}
 }
 
+// TestOracleAlternativeQuotedLiteralsKeepTheirBoundaries 验证 q 和 nq 字面量中的引号与问号保持为数据。
+func TestOracleAlternativeQuotedLiteralsKeepTheirBoundaries(t *testing.T) {
+	for _, literal := range []string{
+		`q'[prefix\'AUDIT_CANARY\'? suffix]'`,
+		`NQ'!first' AUDIT_CANARY ? second!' `,
+		`Q'界first' AUDIT_CANARY ? second界'`,
+	} {
+		query := "SELECT " + literal + ", ? FROM dual"
+		if err := validateRawStatement(query, 1, "oracle"); err != nil {
+			t.Errorf("Oracle 替代引号中的问号不应计为参数: %v", err)
+		}
+		got := redactSQLText(query, "oracle")
+		if strings.Contains(got, "AUDIT_CANARY") || !strings.Contains(got, sqlRedactionMarker) {
+			t.Errorf("Oracle 替代引号内容应全部脱敏: %q", got)
+		}
+	}
+	if err := validateRawStatement(`SELECT q'[unclosed' from dual`, 0, "oracle"); err == nil {
+		t.Error("没有结束标记的 Oracle 替代引号应被拒绝")
+	}
+}
+
 // TestCountSQLPlaceholdersRejectsUnclosedLexicalStates 验证截断引用和注释会被拒绝。
 func TestCountSQLPlaceholdersRejectsUnclosedLexicalStates(t *testing.T) {
 	for _, sqlText := range []string{`name = 'broken`, `id = ? /* broken`, `body = $tag$broken`} {

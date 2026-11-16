@@ -19,6 +19,16 @@ func redactSQLLiteralsAndComments(sqlText string, dialect string) string {
 	for index := 0; index < len(sqlText); {
 		switch sqlText[index] {
 		case '\'':
+			if dialect == "oracle" {
+				if end, closed := sqllex.OracleAlternativeStringEnd(sqlText, index); end != index {
+					result.WriteString("'[" + sqlRedactionMarker + "]")
+					if closed {
+						result.WriteByte('\'')
+					}
+					index = end
+					continue
+				}
+			}
 			if dialect == "postgres" {
 				end, closed := sqllex.PostgresStringEnd(sqlText, index)
 				result.WriteByte('\'')
@@ -220,9 +230,9 @@ func countSQLPlaceholders(sqlText string, dialects ...string) (int, error) {
 	backslashEscapes := sqlBackslashEscapes(dialects...)
 	dialect := ""
 	if len(dialects) > 0 {
-		dialect = dialects[0]
+		dialect = strings.ToLower(strings.TrimSpace(dialects[0]))
 	}
-	postgres := strings.EqualFold(strings.TrimSpace(dialect), "postgres")
+	postgres := dialect == "postgres"
 	const (
 		stateNormal = iota
 		stateSingleQuote
@@ -254,6 +264,15 @@ func countSQLPlaceholders(sqlText string, dialects ...string) (int, error) {
 				}
 				count++
 			case '\'':
+				if dialect == "oracle" {
+					if end, closed := sqllex.OracleAlternativeStringEnd(sqlText, index); end != index {
+						if !closed {
+							return 0, fmt.Errorf("SQL 引用或注释未闭合")
+						}
+						index = end - 1
+						continue
+					}
+				}
 				if postgres {
 					end, closed := sqllex.PostgresStringEnd(sqlText, index)
 					if !closed {

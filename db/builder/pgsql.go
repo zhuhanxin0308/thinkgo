@@ -23,7 +23,7 @@ func pgQuoteFields(fields string) string {
 
 // Rebind 将 ? 占位符转换为 PostgreSQL 的 $1、$2... 风格。
 func (p *Pgsql) Rebind(query string) string {
-	return rebindNumbered(query, "$", true)
+	return rebindNumbered(query, "$", p.DialectName())
 }
 
 // QuoteIdentifier 用双引号引用标识符。

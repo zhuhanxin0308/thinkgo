@@ -28,7 +28,7 @@ func sqlsrvQuoteFields(fields string) string {
 
 // Rebind 将 ? 占位符转换为 SQL Server 的 @p1、@p2... 风格。
 func (s *Sqlsrv) Rebind(query string) string {
-	return rebindNumbered(query, "@p")
+	return rebindNumbered(query, "@p", s.DialectName())
 }
 
 // QuoteIdentifier 用方括号引用标识符。
