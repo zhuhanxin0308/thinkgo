@@ -139,7 +139,7 @@ func TestHEADFastPathsKeepCommitFailureStatusAndLogging(t *testing.T) {
 	}
 }
 
-func TestCompressedHEADWritesReturnCommitErrorsBeforeClosing(t *testing.T) {
+func TestCompressedHEADWritesAndFlushesReturnCommitErrorsBeforeClosing(t *testing.T) {
 	const compressionThreshold = 512
 	app := newTestHTTPApp(t, t.TempDir(), map[string]interface{}{"enable": true, "min_size": compressionThreshold})
 	failure := &testCommitFailure{status: http.StatusConflict}
@@ -171,9 +171,23 @@ func TestCompressedHEADWritesReturnCommitErrorsBeforeClosing(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := router.Head("/standard-flush", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+		wrote, writeErr = 0, http.NewResponseController(w).Flush()
+	})); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := router.Head("/stream-flush", func(*fwcontext.Request) *fwcontext.Response {
+		return fwcontext.NewResponse().Code(http.StatusAccepted).Stream(func(w io.Writer) error {
+			wrote, writeErr = 0, w.(interface{ FlushError() error }).FlushError()
+			return writeErr
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
 	host := newTestHTTPHandler(t, app)
 	for _, method := range []string{http.MethodHead, http.MethodGet} {
-		for _, path := range []string{"/standard", "/stream"} {
+		for _, path := range []string{"/standard", "/stream", "/standard-flush", "/stream-flush"} {
 			t.Run(method+path, func(t *testing.T) {
 				wrote, writeErr = -1, nil
 				req := httptest.NewRequest(method, "http://127.0.0.1"+path, nil)
@@ -182,7 +196,7 @@ func TestCompressedHEADWritesReturnCommitErrorsBeforeClosing(t *testing.T) {
 				host.ServeHTTP(recorder, req)
 				assertIssue151HEAD(t, recorder, http.StatusConflict)
 				if wrote != 0 || !errors.Is(writeErr, failure) {
-					t.Errorf("Write 返回前必须能观察提交失败: bytes=%d err=%v", wrote, writeErr)
+					t.Errorf("Write 或 Flush 返回前必须能观察提交失败: bytes=%d err=%v", wrote, writeErr)
 				}
 			})
 		}

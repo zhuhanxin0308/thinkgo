@@ -375,6 +375,10 @@ func (w *CompressionResponseWriter) flushResponse() error {
 	if f, ok := w.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
 	}
+	if w.bodyPolicy != nil && w.BodySuppressed() {
+		// HEAD 首次刷新也可能才执行提交钩子，应在本次刷新中返回错误。
+		return errors.Join(w.compressionErr, w.bodyPolicy.CommitError())
+	}
 	return w.compressionErr
 }
 
