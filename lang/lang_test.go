@@ -415,7 +415,7 @@ func TestLangLoadAllSupportsTrustedSymlinkRoot(t *testing.T) {
 	}
 }
 
-func newDetectLanguageFixture(t *testing.T, config map[string]interface{}) *Lang {
+func newDetectLanguageFixture(t testing.TB, config map[string]interface{}) *Lang {
 	t.Helper()
 	directory := t.TempDir()
 	for name, body := range map[string]string{
@@ -471,6 +471,48 @@ func TestDetectLanguage(t *testing.T) {
 	})
 	if got := managerNoCookie.DetectLanguage("", "en-us", "ja-jp", ""); got != "ja-jp" {
 		t.Fatalf("关闭 Cookie 检测后应跳过 Cookie 来源，实际为 %q", got)
+	}
+}
+
+func TestDetectAcceptLanguageSelectionCompatibility(t *testing.T) {
+	manager := newDetectLanguageFixture(t, map[string]any{"default_lang": "zh-cn"})
+	for _, test := range []struct{ header, expected string }{
+		{"unknown;q=1, ja-jp;q=0.8, en-us;q=0.8", "ja-jp"},
+		{"en-us;q=0.6;Q=0.9, ja-jp;q=0.5", "ja-jp"},
+		{"ja-jp;q=0, en-au;q=0.3", "en-gb"},
+		{"ja-jp;q=0.8, *;q=0.9", "zh-cn"},
+		{"ja-jp" + strings.Repeat(", en-us", maxAcceptLanguageEntries), "zh-cn"},
+		{"ja-jp," + strings.Repeat(" ", maxAcceptLanguageBytes), "zh-cn"},
+		{"ja-jp" + strings.Repeat(", en-us", maxAcceptLanguageEntries-1), "ja-jp"},
+	} {
+		if actual := manager.DetectLanguage("", "", "", test.header); actual != test.expected {
+			t.Errorf("长度 %d 的语言首选项匹配错误: 得到 %q，期望 %q", len(test.header), actual, test.expected)
+		}
+	}
+}
+
+const weightedLanguageFixture = "xx-zz;q=1, en-au;q=0.4, ja-jp;q=0.9, en-us;q=0.8"
+
+func TestDetectAcceptLanguageAllocationBudget(t *testing.T) {
+	manager := newDetectLanguageFixture(t, map[string]any{"default_lang": "zh-cn"})
+	allocations := testing.AllocsPerRun(30, func() {
+		if actual := manager.DetectLanguage("", "", "", weightedLanguageFixture); actual != "ja-jp" {
+			t.Fatalf("语言匹配错误: %q", actual)
+		}
+	})
+	t.Logf("一次加权语言匹配分配 %.0f 次", allocations)
+	if allocations != 0 {
+		t.Fatalf("小写语言标签的匹配应避免分配候选列表，实际分配 %.0f 次", allocations)
+	}
+}
+
+func BenchmarkDetectWeightedAcceptLanguage(b *testing.B) {
+	manager := newDetectLanguageFixture(b, map[string]any{"default_lang": "zh-cn"})
+	b.ReportAllocs()
+	for b.Loop() {
+		if actual := manager.DetectLanguage("", "", "", weightedLanguageFixture); actual != "ja-jp" {
+			b.Fatalf("语言匹配错误: %q", actual)
+		}
 	}
 }
 
