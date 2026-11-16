@@ -27,6 +27,47 @@ func TestTraceDefaultsToUTC(t *testing.T) {
 	}
 }
 
+// TestTracePreservesPartialHTML 验证范围响应不会因调试输出改变字节或头。
+func TestTracePreservesPartialHTML(t *testing.T) {
+	for _, mode := range []string{"html", "console"} {
+		t.Run(mode, func(t *testing.T) {
+			trace := &Trace{Debug: &debug.Debug{Enabled: true}, Type: mode}
+			const body = "<body>part</body>"
+			rangeValue := fmt.Sprintf("bytes 0-%d/%d", len(body)-1, len(body)+10)
+			for _, status := range []int{http.StatusOK, http.StatusPartialContent} {
+				req := newLocalTraceRequest(http.MethodGet, "http://example.com/page")
+				response := trace.Handle(req, func(*fwcontext.Request) *fwcontext.Response {
+					response := fwcontext.NewResponse().Code(status).ContentType("text/html", "utf-8").Content(body)
+					if status == http.StatusOK {
+						response.Header("Content-Range", rangeValue)
+					}
+					return response
+				})
+				if string(response.GetBody()) != body || response.GetStatus() != status || response.GetHeader("Cache-Control") != "" {
+					t.Errorf("范围响应被调试栏修改: 状态=%d，响应长度=%d", response.GetStatus(), len(response.GetBody()))
+				}
+				if status == http.StatusOK && response.GetHeader("Content-Range") != rangeValue {
+					t.Error("范围响应的 Content-Range 被修改")
+				}
+			}
+		})
+	}
+}
+
+// TestTraceStylesheetScopesPreformattedText 验证调试栏资源不会为业务页面的 pre 应用样式。
+func TestTraceStylesheetScopesPreformattedText(t *testing.T) {
+	trace := &Trace{Debug: &debug.Debug{Enabled: true}}
+	req := newLocalTraceRequest(http.MethodGet, "http://example.com"+traceStylesheetPath)
+	resp := trace.Handle(req, func(*fwcontext.Request) *fwcontext.Response {
+		t.Fatal("样式资源未被 Trace 处理")
+		return nil
+	})
+	css := string(resp.GetBody())
+	if strings.Contains(css, "\npre {") || !strings.Contains(css, "#tg-debug-bar pre {") {
+		t.Fatal("预格式化文本样式必须限定在调试栏")
+	}
+}
+
 // newLocalTraceRequest 构造一个来自本机回环地址的请求，使其满足 Trace 调试条的暴露门禁。
 func newLocalTraceRequest(method, target string) *fwcontext.Request {
 	raw := httptest.NewRequest(method, target, nil)
