@@ -102,6 +102,31 @@ func TestConfigDumpRedactsTypedStringMaps(t *testing.T) {
 	}
 }
 
+func TestConfigDumpKeepsEmptyTypedSliceDistinctFromNull(t *testing.T) {
+	appConfig := config.NewConfig()
+	if err := appConfig.Set("feature.empty", []string{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := appConfig.Set("feature.missing", []string(nil)); err != nil {
+		t.Fatal(err)
+	}
+	cmd := &ConfigDump{Command: console.Command{App: configDumpTestApp(t, appConfig)}}
+	cmd.Configure()
+	for key, want := range map[string]string{"feature.empty": "[]", "feature.missing": "null"} {
+		input := console.NewInput(key)
+		if err := input.Parse(cmd.GetArgumentDefinitions(), cmd.GetOptionDefinitions()); err != nil {
+			t.Fatal(err)
+		}
+		var stdout bytes.Buffer
+		if err := cmd.Execute(input, console.NewOutputWithWriters(&stdout, &bytes.Buffer{}, false)); err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.TrimSpace(stdout.String()); got != want {
+			t.Errorf("导出 %s=%q，期望 %s", key, got, want)
+		}
+	}
+}
+
 // TestConfigDumpPropagatesDependencyAndSerializationErrors 验证缺失执行依赖及
 // 不支持的配置类型会返回错误，且不会产生部分 JSON 输出。
 func TestConfigDumpPropagatesDependencyAndSerializationErrors(t *testing.T) {

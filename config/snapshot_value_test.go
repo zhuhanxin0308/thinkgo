@@ -1,14 +1,67 @@
 package config
 
 import (
+	"encoding/json"
 	"errors"
 	"math/big"
 	"os"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+func TestTypedSnapshotPreservesNilAndEmptyScalarSlices(t *testing.T) {
+	for _, test := range []struct {
+		name            string
+		nilValue, empty interface{}
+		populated       interface{}
+		populatedJSON   string
+	}{
+		{"strings", []string(nil), []string{}, []string{"api"}, `["api"]`},
+		{"ints", []int(nil), []int{}, []int{1}, `[1]`},
+		{"int64s", []int64(nil), []int64{}, []int64{2}, `[2]`},
+		{"floats", []float64(nil), []float64{}, []float64{1.5}, `[1.5]`},
+		{"bools", []bool(nil), []bool{}, []bool{true}, `[true]`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := NewConfig()
+			values := []struct {
+				key, json string
+				input     interface{}
+			}{
+				{"nil", "null", test.nilValue},
+				{"empty", "[]", test.empty},
+				{"populated", test.populatedJSON, test.populated},
+			}
+			for _, item := range values {
+				if err := cfg.Set("feature."+item.key, item.input); err != nil {
+					t.Fatal(err)
+				}
+			}
+			clone := cfg.Clone()
+			replaced := NewConfig()
+			replaced.ReplaceWithSnapshot(cfg)
+			reflect.ValueOf(test.populated).Index(0).SetZero()
+			for _, snapshot := range []*Config{cfg, clone, replaced} {
+				group := snapshot.GetMap("feature")
+				for _, item := range values {
+					for _, got := range []interface{}{snapshot.Get("feature." + item.key), group[item.key]} {
+						data, err := json.Marshal(got)
+						if err != nil || string(data) != item.json || reflect.TypeOf(got) != reflect.TypeOf(item.input) {
+							t.Errorf("快照 %s 的类型或 JSON 发生变化: %T %s, %v", item.key, got, data, err)
+						}
+					}
+				}
+				reflect.ValueOf(group["populated"]).Index(0).SetZero()
+				if data, _ := json.Marshal(snapshot.Get("feature.populated")); string(data) != test.populatedJSON {
+					t.Errorf("GetMap 返回值不应修改内部存储: %s", data)
+				}
+			}
+		})
+	}
+}
 
 type snapshotEndpoint struct {
 	Headers map[string]string
