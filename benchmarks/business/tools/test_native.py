@@ -8,7 +8,9 @@ import pathlib
 import secrets
 import signal
 import subprocess
+import sys
 import tempfile
+import time
 import unittest
 import urllib.error
 from unittest import mock
@@ -196,6 +198,69 @@ class NativeTest(unittest.TestCase):
             self.assertIn(option, command)
 
 
+class ProcessGroupTest(unittest.TestCase):
+    def test_close_attempts_all_processes_and_reports_failures(self):
+        finished = mock.Mock()
+        first = mock.Mock()
+        second = mock.Mock()
+        first.stop.side_effect = PermissionError("无法停止应用")
+        second.stop.side_effect = subprocess.TimeoutExpired("worker", 1)
+        applications = {"healthy": finished, "broken": first}
+        infrastructure = {"worker": second}
+        with self.assertRaises(ExceptionGroup) as failure:
+            Environment.stop_processes(applications, infrastructure)
+        self.assertEqual(failure.exception.exceptions, (first.stop.side_effect, second.stop.side_effect))
+        finished.stop.assert_called_once_with()
+        self.assertEqual(applications, {})
+        self.assertEqual(infrastructure, {})
+
+    def test_stop_closes_workers_after_the_leader_exits(self):
+        with tempfile.TemporaryDirectory() as directory:
+            folder = pathlib.Path(directory)
+            marker = folder / "worker.pid"
+            script = (
+                "import os, pathlib, subprocess, sys\n"
+                "worker = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(20)'])\n"
+                "pathlib.Path(sys.argv[1]).write_text(str(worker.pid))\n"
+                "os._exit(0)"
+            )
+            process = native.Process([sys.executable, "-c", script, marker], folder, os.environ,
+                                     folder / "process.log", [min(os.sched_getaffinity(0))])
+            worker = None
+            try:
+                deadline = time.monotonic() + 5
+                while True:
+                    try:
+                        process.check()
+                    except RuntimeError:
+                        break
+                    self.assertLess(time.monotonic(), deadline, "组长应主动退出")
+                    time.sleep(0.01)
+                worker = int(marker.read_text())
+                self.assertEqual(os.getpgid(worker), process.pid)
+                process.stop()
+                # 在子进程被 systemd 回收之前，僵尸状态也表示不再运行。
+                stat = pathlib.Path(f"/proc/{worker}/stat")
+                deadline = time.monotonic() + 3
+                while True:
+                    try:
+                        if stat.read_text().rpartition(") ")[2].split()[0] == "Z":
+                            break
+                    except FileNotFoundError:
+                        break
+                    self.assertLess(time.monotonic(), deadline, "已退出组长的工作进程仍在运行")
+                    time.sleep(0.01)
+                self.assertTrue(process.log.closed)
+            finally:
+                if worker is not None:
+                    try:
+                        if os.getpgid(worker) == process.pid:
+                            os.kill(worker, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                process.stop()
+
+
 class PostgresStartupTest(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -237,6 +302,8 @@ class PostgresStartupTest(unittest.TestCase):
             if "pg_database" in query:
                 self.assertEqual(database, "postgres")
                 return "1"
+            if "to_regclass" in query:
+                return "t"
             return json.dumps(self.counts)
 
         postgres = mock.Mock(command=["postgres"])
@@ -249,8 +316,60 @@ class PostgresStartupTest(unittest.TestCase):
                 mock.patch.object(self.environment, "sql", side_effect=template_query) as sql:
             self.environment.start()
         self.assertEqual(command.call_count, 3)
-        self.assertEqual(sql.call_count, 2)
+        self.assertEqual(sql.call_count, 3)
         self.assertEqual(self.environment.seed_counts, self.counts)
+
+    def test_template_seed_failure_can_resume_in_the_same_work_directory(self):
+        databases = {"unrelated": True}
+        fail_seed = True
+
+        def sql(query, database):
+            words = query.split()
+            if "FROM pg_database WHERE datname=" in query:
+                return "1" if query.split("'")[1] in databases else ""
+            if query.startswith("CREATE DATABASE "):
+                self.assertNotIn(words[2], databases)
+                databases[words[2]] = False
+            elif query.startswith("DROP DATABASE IF EXISTS "):
+                databases.pop(words[4], None)
+            elif query.startswith("DROP DATABASE "):
+                del databases[words[2]]
+            elif query.startswith("ALTER DATABASE "):
+                self.assertTrue(databases[words[2]], "发布前必须已验证模板")
+                databases[words[5]] = databases.pop(words[2])
+            elif "to_regclass" in query:
+                return "t" if databases[database] else "f"
+            elif "json_build_object" in query:
+                if not databases[database]:
+                    raise RuntimeError("模板缺少关系")
+                return json.dumps(self.counts)
+            return ""
+
+        def command(arguments, *, database):
+            if fail_seed:
+                raise RuntimeError("种子初始化失败")
+            self.assertIn("--single-transaction", arguments)
+            databases[database] = True
+            return ""
+
+        with mock.patch.object(self.environment, "prepare"), \
+                mock.patch.object(native, "Process"), mock.patch.object(native, "wait_for"), \
+                mock.patch.object(self.environment, "sql", side_effect=sql), \
+                mock.patch.object(self.environment, "command", side_effect=command) as seed:
+            with self.assertRaisesRegex(RuntimeError, "种子初始化失败"):
+                self.environment.start()
+            self.environment.close()
+            self.assertNotIn(self.environment.template, databases)
+            self.assertTrue(databases["unrelated"])
+            # 旧实现可能已留下正式库，进程崩溃也可能遗留暂存库。
+            databases[self.environment.template] = False
+            databases[self.environment.template + "_building"] = False
+            fail_seed = False
+            self.environment.start()
+            self.assertEqual(databases, {"unrelated": True, self.environment.template: True})
+            self.assertEqual(self.environment.seed_counts, self.counts)
+            self.environment.start()
+            self.assertEqual(seed.call_count, 2, "已完成的模板应直接复用")
 
     def test_postgres_probe_retries_connection_loss_timeout_and_read_only_state(self):
         responses = [subprocess.CompletedProcess(["psql"], 2, "", "FATAL: recovery in progress"),
@@ -346,7 +465,7 @@ class ReadinessIntegrationTest(unittest.TestCase):
             # 仅中断本测试专属数据库，真实验证下次启动会等待崩溃恢复完成。
             postgres = environment.infrastructure["postgres"]
             os.killpg(postgres.pid, signal.SIGKILL)
-            crash_status = postgres.child.wait(timeout=native.STOP_SECONDS)
+            crash_status = postgres.wait(timeout=native.STOP_SECONDS)
             self.assertEqual(crash_status, -signal.SIGKILL)
         finally:
             environment.close()

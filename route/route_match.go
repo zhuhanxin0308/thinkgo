@@ -99,7 +99,13 @@ func (r *Router) matchDynamic(method string, requestParts []string, trailingSlas
 		if r.dynamicIndex != nil {
 			candidates = r.dynamicIndex.candidates(method, host, requestParts, exactDomain)
 		}
+		var alias *Route
+		var aliasParams map[string]string
+		var aliasSpecificity int
 		for _, candidate := range candidates {
+			if alias != nil && routeSpecificity(candidate) < aliasSpecificity {
+				break
+			}
 			if r.dynamicIndex == nil {
 				if exactDomain {
 					if candidate.domain == "" || candidate.domain != host {
@@ -110,8 +116,27 @@ func (r *Router) matchDynamic(method string, requestParts []string, trailingSlas
 				}
 			}
 			if matched, params := candidate.matchRequestPartsWithOptions(requestParts, trailingSlash); matched {
-				return candidate, params
+				usesAlias := candidate.matchesExtensionAlias(requestParts)
+				if alias == nil && !usesAlias {
+					return candidate, params
+				}
+				consumed, endsInLiteral := candidate.matchedDynamicPathShape(params)
+				if alias == nil {
+					aliasPartCount := len(requestParts)
+					if requestParts[aliasPartCount-1] == "."+candidate.ext {
+						aliasPartCount--
+					}
+					if consumed != aliasPartCount {
+						return candidate, params
+					}
+					alias, aliasParams, aliasSpecificity = candidate, params, routeSpecificity(candidate)
+				} else if !usesAlias && endsInLiteral && consumed == len(requestParts) {
+					return candidate, params
+				}
 			}
+		}
+		if alias != nil {
+			return alias, aliasParams
 		}
 	}
 	return nil, nil
@@ -144,7 +169,7 @@ func (candidates staticCandidateSegments) firstMatch(host string, requestParts [
 		if candidate.domain != "" && candidate.domain != host {
 			continue
 		}
-		if matched, _ := candidate.matchRequestPartsWithOptions(requestParts, trailingSlash); matched && moreSpecificStaticRoute(candidate, best) {
+		if matched, _ := candidate.matchRequestPartsWithOptions(requestParts, trailingSlash); matched && moreSpecificStaticRoute(candidate, best, requestParts) {
 			best = candidate
 		}
 	}
@@ -166,7 +191,7 @@ func (candidates staticCandidateSegments) firstMatch(host string, requestParts [
 			candidate.domain != "" && candidate.domain != host {
 			continue
 		}
-		parts, ok := stripRouteExtension(requestParts, candidate.ext, candidate.extensionRequired)
+		parts, ok := candidate.requestPartsForMatch(requestParts)
 		if !ok {
 			continue
 		}
@@ -174,7 +199,7 @@ func (candidates staticCandidateSegments) firstMatch(host string, requestParts [
 		if !candidates.includePrefix && !exact {
 			continue
 		}
-		if best != nil && (!exact && bestExact || exact == bestExact && !moreSpecificStaticRoute(candidate, best)) {
+		if best != nil && (!exact && bestExact || exact == bestExact && !moreSpecificStaticRoute(candidate, best, requestParts)) {
 			continue
 		}
 		if matched, _ := candidate.matchRequestPartsWithOptions(requestParts, trailingSlash); matched {
@@ -186,7 +211,7 @@ func (candidates staticCandidateSegments) firstMatch(host string, requestParts [
 
 // moreSpecificStaticRoute ranks equally complete candidates without depending
 // on whether they came from the index or the registration fallback.
-func moreSpecificStaticRoute(candidate, current *Route) bool {
+func moreSpecificStaticRoute(candidate, current *Route, requestParts []string) bool {
 	if current == nil {
 		return true
 	}
@@ -195,6 +220,11 @@ func moreSpecificStaticRoute(candidate, current *Route) bool {
 	}
 	if (candidate.domain != "") != (current.domain != "") {
 		return candidate.domain != ""
+	}
+	if len(candidate.pathParts) == len(requestParts) {
+		if candidateAlias, currentAlias := candidate.matchesExtensionAlias(requestParts), current.matchesExtensionAlias(requestParts); candidateAlias != currentAlias {
+			return !candidateAlias
+		}
 	}
 	return candidate.order < current.order
 }
@@ -219,7 +249,7 @@ func automaticOptionsRoute() *Route {
 
 // matchRequestPartsWithOptions 按路由器配置匹配请求路径，并保留参数原始大小写。
 func (r *Route) matchRequestPartsWithOptions(requestParts []string, trailingSlash bool) (bool, map[string]string) {
-	parts, ok := stripRouteExtension(requestParts, r.ext, r.extensionRequired)
+	parts, ok := r.requestPartsForMatch(requestParts)
 	if !ok {
 		return false, nil
 	}
@@ -240,7 +270,7 @@ func (r *Route) matchRequestPartsWithOptions(requestParts []string, trailingSlas
 				return false, nil
 			}
 		}
-		return true, nil
+		return r.acceptsLiteralRequestEnd(parts, len(r.pathParts)), nil
 	}
 
 	type state struct{ routeIndex, requestIndex int }
@@ -253,7 +283,7 @@ func (r *Route) matchRequestPartsWithOptions(requestParts []string, trailingSlas
 		}
 		if routeIndex == len(r.pathParts) {
 			completeMatch := r.jsonContract || r.router == nil || r.router.completeMatch
-			if !completeMatch || requestIndex == len(parts) {
+			if (!completeMatch || requestIndex == len(parts)) && r.acceptsLiteralRequestEnd(parts, requestIndex) {
 				return make(map[string]string), true
 			}
 			failed[current] = true
@@ -447,6 +477,58 @@ func routePartsWithExtension(parts []routePart, extension string) []string {
 	}
 	result[len(result)-1] += "." + extension
 	return result
+}
+
+// hasLiteralExtension 判断声明路径的末段是否已经包含所用后缀。
+func (r *Route) hasLiteralExtension(caseSensitive bool) bool {
+	if r.ext == "" || len(r.pathParts) == 0 {
+		return false
+	}
+	last := r.pathParts[len(r.pathParts)-1].literal
+	ext := routePathExtension(last)
+	if caseSensitive {
+		return ext == r.ext
+	}
+	return strings.EqualFold(ext, r.ext)
+}
+
+// matchesExtensionAlias 只将实际剥离后缀的候选视为别名，字面候选之间保持注册顺序。
+func (r *Route) matchesExtensionAlias(parts []string) bool {
+	return r.ext != "" && !r.literalExtension && len(parts) > 0 && strings.HasSuffix(parts[len(parts)-1], "."+r.ext)
+}
+
+// matchedDynamicPathShape 忽略未消费的可选参数，计算真正参与匹配的请求尾段。
+func (r *Route) matchedDynamicPathShape(params map[string]string) (consumed int, endsInLiteral bool) {
+	consumed = len(params)
+	for _, part := range r.pathParts {
+		if part.param == "" {
+			consumed++
+			endsInLiteral = true
+		} else if _, exists := params[part.param]; exists {
+			endsInLiteral = false
+		}
+	}
+	return consumed, endsInLiteral
+}
+
+func (r *Route) requestPartsForMatch(parts []string) ([]string, bool) {
+	if r.literalExtension {
+		return parts, true
+	}
+	return stripRouteExtension(parts, r.ext, r.extensionRequired)
+}
+
+// acceptsLiteralRequestEnd 仅对实际消费的字面后缀沿用路径的大小写策略。
+func (r *Route) acceptsLiteralRequestEnd(parts []string, consumed int) bool {
+	return !r.literalExtension || !r.extensionRequired || consumed == len(parts) ||
+		routePathExtension(parts[len(parts)-1]) == r.ext
+}
+
+func routePathExtension(part string) string {
+	if dot := strings.LastIndexByte(part, '.'); dot >= 0 {
+		return part[dot+1:]
+	}
+	return ""
 }
 
 func stripRouteExtension(parts []string, extension string, required bool) ([]string, bool) {

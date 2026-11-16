@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"math"
 )
 
 func (service *Service) CreateOrder(ctx context.Context, principal Principal, key string, input OrderInput) (order OrderResponse, replay bool, result error) {
@@ -32,7 +33,7 @@ func (service *Service) CreateOrder(ctx context.Context, principal Principal, ke
 		order.Items = make([]OrderItem, 0, len(items))
 		order.Status = "created"
 		for _, item := range items {
-			created, err := service.orderItem(ctx, tx, principal, order.OrderID, item)
+			created, err := service.orderItem(ctx, tx, principal, order.OrderID, item, math.MaxInt64-order.TotalCents)
 			if err != nil {
 				return order, false, err
 			}
@@ -60,7 +61,7 @@ func (service *Service) CreateOrder(ctx context.Context, principal Principal, ke
 	return order, replay, nil
 }
 
-func (service *Service) orderItem(ctx context.Context, tx *sql.Tx, principal Principal, orderID int64, input OrderItemInput) (OrderItem, error) {
+func (service *Service) orderItem(ctx context.Context, tx *sql.Tx, principal Principal, orderID int64, input OrderItemInput, remainingCents int64) (OrderItem, error) {
 	item := OrderItem{ProductID: input.ProductID, Quantity: input.Quantity}
 	var stock int64
 	err := tx.QueryRowContext(ctx, service.queries["lock_product"], principal.TenantID, input.ProductID).Scan(&item.UnitPriceCents, &stock)
@@ -75,6 +76,10 @@ func (service *Service) orderItem(ctx context.Context, tx *sql.Tx, principal Pri
 	}
 	if item.UnitPriceCents < 1 || item.UnitPriceCents > service.config.Dataset.MaximumPriceCents {
 		return item, errors.New("数据库商品价格不符合业务约束")
+	}
+	// 数量已验证为正数，用剩余额度除法同时防止明细乘法和订单累加溢出。
+	if item.UnitPriceCents > remainingCents/input.Quantity {
+		return item, errors.New("订单金额超出整数范围")
 	}
 	changed, err := tx.ExecContext(ctx, service.queries["deduct_stock"], input.Quantity, principal.TenantID, input.ProductID, input.Quantity)
 	if err != nil {

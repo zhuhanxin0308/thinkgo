@@ -291,11 +291,15 @@ class BootstrapTest(unittest.TestCase):
 
     def test_cli_success_selects_dependencies_and_python_only(self):
         arguments = ["bootstrap.py", "--runtime", str(self.installer.runtime), "--python-only"]
-        with mock.patch.object(sys, "argv", arguments), mock.patch.object(bootstrap, "preflight"), \
+        with mock.patch.object(sys, "argv", arguments), mock.patch("shutil.which", return_value=None), \
              mock.patch.object(bootstrap.Installer, "python_install", return_value={"state": "reused"}) as python, \
              mock.patch("sys.stdout", io.StringIO()):
             bootstrap.main()
         python.assert_called_once()
+        archive = next(item for item in self.manifest["components"] if item["kind"] == "archive")
+        with mock.patch("shutil.which", return_value=None):
+            with self.assertRaisesRegex(ValueError, "curl"):
+                bootstrap.preflight(self.manifest, [archive])
         arguments = ["bootstrap.py", "--runtime", str(self.installer.runtime), "--components", "composer"]
         with mock.patch.object(sys, "argv", arguments), mock.patch.object(bootstrap, "preflight"), \
              mock.patch.object(bootstrap.Installer, "install", return_value="reused") as install, \

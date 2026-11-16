@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/zhuhanxin0308/thinkgo/v3/db"
 	neodriver "github.com/zhuhanxin0308/thinkgo/v3/db/driver/neo4j"
@@ -34,10 +35,14 @@ type connectorNeoProbeSession struct {
 	databaseError    error
 	executeReadCalls int
 	closeCalls       int
+	probeBudget      time.Duration
 }
 
 func (session *connectorNeoProbeSession) ExecuteRead(ctx context.Context, work neo4j.ManagedTransactionWork, _ ...func(*neo4j.TransactionConfig)) (interface{}, error) {
 	session.executeReadCalls++
+	if deadline, ok := ctx.Deadline(); ok {
+		session.probeBudget = time.Until(deadline)
+	}
 	if session.databaseError != nil {
 		return nil, session.databaseError
 	}
@@ -79,7 +84,7 @@ func (driver *connectorFakeNeoDriver) Close(context.Context) error {
 func TestNeoConnectVerifiesConfiguredDatabase(t *testing.T) {
 	driver := &connectorFakeNeoDriver{databaseError: errors.New("database not found")}
 	config := db.Config{Type: "neo4j", Database: "tenant_a"}
-	connection, err := connectNeoWithDriver(config, driver)
+	connection, err := connectNeoWithDriver(config, driver, defaultNativeOperationTimeout)
 	if err == nil || connection != nil {
 		t.Fatalf("missing target database must fail: connection=%#v err=%v", connection, err)
 	}
@@ -94,16 +99,20 @@ func TestNeoConnectVerifiesConfiguredDatabase(t *testing.T) {
 func TestNeoConnectReturnsOnlyAfterSuccessfulTargetProbe(t *testing.T) {
 	driver := &connectorFakeNeoDriver{}
 	config := db.Config{Type: "neo4j", Database: "tenant_a"}
-	connection, err := connectNeoWithDriver(config, driver)
+	operationBudget := 2 * remoteConnectionTimeout
+	connection, err := connectNeoWithDriver(config, driver, operationBudget)
 	if err != nil {
 		t.Fatal(err)
 	}
 	neoConnection, ok := connection.(*neodriver.Neo4jConnection)
-	if !ok || neoConnection.Database != "tenant_a" {
+	if !ok || neoConnection.Database != "tenant_a" || neoConnection.OperationTimeout != operationBudget {
 		t.Fatalf("connector returned wrong connection: %#v", connection)
 	}
 	if driver.verifyCalls != 1 || driver.lastDatabase != "tenant_a" || driver.closeCalls != 0 || driver.session.executeReadCalls != 1 || driver.session.closeCalls != 1 {
 		t.Fatalf("successful target probe lifecycle is wrong: %#v", driver)
+	}
+	if driver.session.probeBudget <= 0 || driver.session.probeBudget > remoteConnectionTimeout {
+		t.Fatalf("应用操作预算不能延长目标库启动探针: %v", driver.session.probeBudget)
 	}
 	if err := connection.Close(); err != nil {
 		t.Fatal(err)
@@ -116,7 +125,7 @@ func TestNeoConnectReturnsOnlyAfterSuccessfulTargetProbe(t *testing.T) {
 // TestNeoRuntimePingChecksConfiguredDatabase 验证建连成功后目标库失效仍会让公开健康检查失败。
 func TestNeoRuntimePingChecksConfiguredDatabase(t *testing.T) {
 	driver := &connectorFakeNeoDriver{}
-	connection, err := connectNeoWithDriver(db.Config{Type: "neo4j", Database: "tenant_a"}, driver)
+	connection, err := connectNeoWithDriver(db.Config{Type: "neo4j", Database: "tenant_a"}, driver, defaultNativeOperationTimeout)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +146,7 @@ func TestNeoRuntimePingChecksConfiguredDatabase(t *testing.T) {
 
 func TestNeoConnectClosesDriverOnConnectivityFailure(t *testing.T) {
 	driver := &connectorFakeNeoDriver{connectivityError: errors.New("offline")}
-	connection, err := connectNeoWithDriver(db.Config{Type: "neo4j", Database: "tenant_a"}, driver)
+	connection, err := connectNeoWithDriver(db.Config{Type: "neo4j", Database: "tenant_a"}, driver, defaultNativeOperationTimeout)
 	if err == nil || connection != nil || driver.closeCalls != 1 || driver.session != nil {
 		t.Fatalf("connectivity failure lifecycle is wrong: connection=%#v driver=%#v err=%v", connection, driver, err)
 	}

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"io"
 	"strings"
+
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/redact"
 )
 
 // sanitizeJSONBody 对调试页中的 JSON 递归脱敏，解析失败时由调用方隐藏整个请求体。
@@ -75,5 +77,5 @@ func isSensitiveKey(key string) bool {
 			return true
 		}
 	}
-	return false
+	return redact.CredentialAlias(key)
 }

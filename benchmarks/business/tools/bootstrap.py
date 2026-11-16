@@ -106,6 +106,8 @@ def select(manifest, requested, pcov):
 def preflight(manifest, components):
     if platform.system() != manifest["platform"]["system"] or platform.machine() != manifest["platform"]["machine"]:
         raise ValueError("固定二进制归档仅支持 Linux x86_64")
+    if not components:
+        return
     compiled = any(item["kind"] not in {"archive", "composer"} for item in components)
     required = ["curl"] + (["cc", "c++", "make", "perl", "pkg-config"] if compiled else [])
     if any(item["name"] == "composer" for item in components):

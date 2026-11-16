@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// TestSchemaCacheSQLiteLifecycle 验证真实系统表读取、复合主键、缓存跨连接消费和星号查询展开。
+// TestSchemaCacheSQLiteLifecycle 验证真实系统表读取、复合主键、跨连接缓存和实时星号投影。
 func TestSchemaCacheSQLiteLifecycle(t *testing.T) {
 	database, raw := newModelScanSQLite(t)
 	if _, err := raw.Exec(`CREATE TABLE schema_items (tenant INTEGER NOT NULL, code TEXT NOT NULL, note TEXT DEFAULT 'hello', PRIMARY KEY (tenant, code))`); err != nil {
@@ -40,14 +40,18 @@ func TestSchemaCacheSQLiteLifecycle(t *testing.T) {
 		t.Fatalf("去重失败: %+v %v", decoded, err)
 	}
 	fresh, recorder := newRecordingHardeningSQLConnection(t)
-	if err := NewDB(fresh).LoadSchemaCache(content, identity); err != nil {
+	freshDB := NewDB(fresh)
+	if err := freshDB.LoadSchemaCache(content, identity); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewDB(fresh).Table("schema_items").Select(); err != nil {
+	if info, err := freshDB.GetSchemaInfo(ctx, "schema_items", false); err != nil || len(info.Columns) != 3 || recorder.recordedQuery() != "" {
+		t.Fatalf("跨连接元数据查询没有消费字段缓存: %#v %v", info, err)
+	}
+	if _, err := freshDB.Table("schema_items").Select(); err != nil {
 		t.Fatal(err)
 	}
-	if query := recorder.recordedQuery(); strings.Contains(query, "SELECT *") || !strings.Contains(query, "tenant") || !strings.Contains(query, "code") {
-		t.Fatalf("字段缓存没有被 SELECT 消费: %s", query)
+	if query := recorder.recordedQuery(); !strings.HasPrefix(query, "SELECT * ") {
+		t.Fatalf("查询应保留星号投影: %s", query)
 	}
 	if _, err := database.GetSchemaInfo(ctx, "missing_table", true); err == nil {
 		t.Fatal("缺失表不能生成空字段缓存")
