@@ -152,7 +152,7 @@ func relationFloatValueKey(typeName string, value float64, bitSize int) (string,
 	return typeName + ":" + strconv.FormatFloat(value, 'g', -1, bitSize), true, nil
 }
 
-// relationComparableValueKey 构造内部关联索引键，整数直接保留数值避免字符串分配。
+// relationComparableValueKey 按整数数值关联不同位宽的数据库列，并保持非整数类型独立。
 func relationComparableValueKey(value interface{}) (relationComparableKey, bool, error) {
 	if value == nil {
 		return nil, false, nil
@@ -164,8 +164,10 @@ func relationComparableValueKey(value interface{}) (relationComparableKey, bool,
 		return relationTimeKey(timestamp.UTC().Format(time.RFC3339Nano)), true, nil
 	}
 	switch typed := value.(type) {
-	case string, bool, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+	case string, bool, int64:
 		return typed, true, nil
+	case int:
+		return int64(typed), true, nil
 	case float32:
 		key, _, err := relationFloatValueKey("float32", float64(typed), 32)
 		if err != nil {
@@ -181,9 +183,16 @@ func relationComparableValueKey(value interface{}) (relationComparableKey, bool,
 	}
 	reflected := reflect.ValueOf(value)
 	switch reflected.Kind() {
-	case reflect.String, reflect.Bool, reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
-		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+	case reflect.String, reflect.Bool:
 		return value, true, nil
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return reflected.Int(), true, nil
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		numeric := reflected.Uint()
+		if numeric <= math.MaxInt64 {
+			return int64(numeric), true, nil
+		}
+		return numeric, true, nil
 	case reflect.Float32, reflect.Float64:
 		key, _, err := relationFloatValueKey(reflected.Type().String(), reflected.Float(), reflected.Type().Bits())
 		if err != nil {

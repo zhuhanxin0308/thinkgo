@@ -274,3 +274,28 @@ func TestRelationComparableKeyPreservesTypeIdentity(t *testing.T) {
 		t.Fatalf("不同类型关联键未隔离: integer=%#v text=%#v usable=%t err=%v", integer, text, usable, err)
 	}
 }
+
+func TestRelationComparableKeyNormalizesIntegerWidthsLosslessly(t *testing.T) {
+	type businessID uint32
+	expected, _, err := relationComparableValueKey(int64(27))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []interface{}{int(27), int8(27), int16(27), int32(27), uint(27), uint64(27), businessID(27)} {
+		key, usable, err := relationComparableValueKey(value)
+		if err != nil || !usable || key != expected {
+			t.Errorf("相同整数 %T 未参与同一关联: key=%#v err=%v", value, key, err)
+		}
+	}
+	for _, value := range []interface{}{float64(27), "27", uint64(math.MaxUint64), int64(-1)} {
+		key, usable, err := relationComparableValueKey(value)
+		if err != nil || !usable || key == expected {
+			t.Errorf("不同值或非整数字段 %T(%v) 被误合并: key=%#v err=%v", value, value, key, err)
+		}
+	}
+	high, _, _ := relationComparableValueKey(uint64(math.MaxUint64))
+	negative, _, _ := relationComparableValueKey(int64(-1))
+	if high == negative {
+		t.Fatal("无符号上界不应与负数键冲突")
+	}
+}

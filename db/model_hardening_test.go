@@ -401,7 +401,7 @@ func (c *relationHardeningConnection) Select(_ context.Context, request SelectRe
 		return []map[string]interface{}{{"id": int64(1)}, {"id": "1"}}, nil
 	case "profiles":
 		return []map[string]interface{}{
-			{"user_id": int64(1), "label": "numeric", "status": 1},
+			{"user_id": int32(1), "label": "numeric", "status": 1},
 			{"user_id": "1", "label": "string", "status": 1},
 		}, nil
 	default:
@@ -423,7 +423,7 @@ func (c *relationHardeningConnection) Count(context.Context, CountRequest) (int6
 }
 func (c *relationHardeningConnection) Close() error { return nil }
 
-// TestRelationLoadingKeepsKeyTypesAndAppliesRelatedGetters 验证 int(1) 与 string("1") 不会串组。
+// TestRelationLoadingKeepsKeyTypesAndAppliesRelatedGetters 验证不同整数位宽可关联，字符串键仍独立。
 func TestRelationLoadingKeepsKeyTypesAndAppliesRelatedGetters(t *testing.T) {
 	connection := &relationHardeningConnection{}
 	database := NewDB(connection)

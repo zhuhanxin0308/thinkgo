@@ -760,8 +760,8 @@ func (mq *ModelQuery) loadRelation(rows []map[string]interface{}, relation Relat
 			if err != nil {
 				return err
 			}
+			records := grouped[key]
 			if relation.Type == relationHasOne {
-				records := grouped[key]
 				if len(records) > 1 {
 					return fmt.Errorf("%w: 一对一关联 %q 返回多条记录", ErrInvalidRelation, relation.Name)
 				}
@@ -772,11 +772,10 @@ func (mq *ModelQuery) loadRelation(rows []map[string]interface{}, relation Relat
 				}
 				continue
 			}
-			if !usable {
-				row[relation.Name] = []map[string]interface{}{}
-			} else {
-				row[relation.Name] = grouped[key]
+			if records == nil {
+				records = []map[string]interface{}{}
 			}
+			row[relation.Name] = records
 		}
 	case relationBelongsTo:
 		keys, err := collectRelationKeys(rows, relation.ForeignKey)
