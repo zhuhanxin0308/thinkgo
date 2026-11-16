@@ -256,16 +256,12 @@ func (m *Model) insertOwnedRecord(r *modelRecord) error {
 	if zero {
 		delete(data, pk)
 	}
-	result, err := m.newModelQuery().insertResult(data, zero)
+	result, err := m.newModelQuery().insertResult(data, zero, true)
 	if err != nil {
 		r.uncertain = errors.Is(err, ErrPartialWrite)
 		return err
 	}
 	r.tx = m.transaction
-	if result.Affected != 1 {
-		r.uncertain = true
-		return fmt.Errorf("%w: 创建记录影响行数为 %d", ErrPartialWrite, result.Affected)
-	}
 	if err := binding.assignInsertedKey(result, pk); err != nil {
 		r.uncertain = true
 		return err

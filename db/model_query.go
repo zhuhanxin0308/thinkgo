@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 )
 
@@ -177,7 +178,7 @@ func (mq *ModelQuery) Count() (int64, error) {
 
 // Insert 使用 map 插入记录并返回影响行数，语义与 Query.Insert/ThinkPHP 一致。
 func (mq *ModelQuery) Insert(data map[string]interface{}) (int64, error) {
-	result, err := mq.insertResult(data, false)
+	result, err := mq.insertResult(data, false, false)
 	if err != nil {
 		return 0, err
 	}
@@ -186,14 +187,14 @@ func (mq *ModelQuery) Insert(data map[string]interface{}) (int64, error) {
 
 // InsertGetId 使用 map 插入记录并返回驱动报告的真实主键。
 func (mq *ModelQuery) InsertGetId(data map[string]interface{}) (interface{}, error) {
-	result, err := mq.insertResult(data, true)
+	result, err := mq.insertResult(data, true, false)
 	if err != nil {
 		return nil, err
 	}
 	return result.InsertedID()
 }
 
-func (mq *ModelQuery) insertResult(data map[string]interface{}, wantID bool) (InsertResult, error) {
+func (mq *ModelQuery) insertResult(data map[string]interface{}, wantID, requireOneRow bool) (InsertResult, error) {
 	if err := mq.validationError(); err != nil {
 		return InsertResult{}, err
 	}
@@ -214,6 +215,16 @@ func (mq *ModelQuery) insertResult(data map[string]interface{}, wantID bool) (In
 	result, err := q.insertResult(workingData, wantID)
 	if err != nil {
 		return InsertResult{}, err
+	}
+	if requireOneRow && result.Affected != 1 {
+		// 单个模型创建必须真实写入一行，方可发布成功事件。
+		if result.Affected == 0 {
+			return result, fmt.Errorf("创建模型未写入记录: %w", sql.ErrNoRows)
+		}
+		return result, &PartialWriteError{
+			Result: result,
+			Cause:  fmt.Errorf("创建模型影响行数为 %d", result.Affected),
+		}
 	}
 	persistedData := result.Data
 	if persistedData == nil {

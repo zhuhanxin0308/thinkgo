@@ -1,6 +1,7 @@
 package db
 
 import (
+	"database/sql"
 	"errors"
 	"strings"
 	"testing"
@@ -21,6 +22,31 @@ func TestModelCreateBindsExplicitPrimaryKeyWithoutAskingDriverForID(t *testing.T
 	}
 	if state.execs.Load() != 1 || state.ids.Load() != 0 {
 		t.Fatalf("只应执行一次 INSERT，不读取生成 ID: writes=%d ids=%d", state.execs.Load(), state.ids.Load())
+	}
+}
+
+func TestModelCreateSkipsSuccessHooksWhenTriggerIgnoresInsert(t *testing.T) {
+	database, raw := newModelScanSQLite(t)
+	if _, err := raw.Exec(`CREATE TABLE ignored_records (code TEXT PRIMARY KEY, name TEXT NOT NULL);
+		CREATE TRIGGER ignore_record BEFORE INSERT ON ignored_records BEGIN SELECT RAISE(IGNORE); END;`); err != nil {
+		t.Fatal(err)
+	}
+	model := NewModel(database, "ignored_records").PrimaryKey("code")
+	record := &struct{ Code, Name string }{Code: "original", Name: "first"}
+	if err := model.Setter("code", func(any, map[string]any) any { return "normalized" }); err != nil {
+		t.Fatal(err)
+	}
+	var called bool
+	if err := model.On(ModelAfterInsert, func(map[string]any) bool { called = true; return true }); err != nil {
+		t.Fatal(err)
+	}
+	err := model.Create(record)
+	var count int
+	if countErr := raw.QueryRow("SELECT count(*) FROM ignored_records").Scan(&count); countErr != nil {
+		t.Fatal(countErr)
+	}
+	if !errors.Is(err, sql.ErrNoRows) || count != 0 || called || record.Code != "original" {
+		t.Fatalf("零行写入不得回填或触发成功事件: code=%q affected=%d callback=%t err=%v", record.Code, count, called, err)
 	}
 }
 

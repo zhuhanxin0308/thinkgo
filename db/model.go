@@ -805,7 +805,7 @@ func (m *Model) createWithBinding(v interface{}, binding primaryKeyBinding, prim
 		delete(data, pk)
 	}
 
-	result, err := m.newModelQuery().insertResult(data, primaryWasZero)
+	result, err := m.newModelQuery().insertResult(data, primaryWasZero, true)
 	if err != nil {
 		return err
 	}
