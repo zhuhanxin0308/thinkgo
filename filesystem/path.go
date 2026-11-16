@@ -3,6 +3,8 @@ package filesystem
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"unicode"
 )
@@ -17,7 +19,7 @@ var (
 )
 
 // normalizePath 对齐 Flysystem WhitespacePathNormalizer：反斜杠转为斜杠，
-// 忽略空段和当前目录段，并只在父目录会越过逻辑根时拒绝路径。
+// 忽略空段和当前目录段，拒绝越界父目录与 Windows 文件名别名。
 func normalizePath(path string) (string, error) {
 	path = strings.ReplaceAll(path, "\\", "/")
 	for _, character := range path {
@@ -36,10 +38,23 @@ func normalizePath(path string) (string, error) {
 			}
 			parts = parts[:len(parts)-1]
 		default:
+			if runtime.GOOS == "windows" && !validWindowsPathSegment(part) {
+				return "", fmt.Errorf("%w: Windows 路径段 %q 无效", ErrInvalidPath, part)
+			}
 			parts = append(parts, part)
 		}
 	}
 	return strings.Join(parts, "/"), nil
+}
+
+func validWindowsPathSegment(part string) bool {
+	if strings.HasSuffix(part, ".") || strings.HasSuffix(part, " ") || !filepath.IsLocal(part) {
+		return false
+	}
+	// 设备名带扩展名时在不同 Windows 版本上的行为不同，统一检查名称主体。
+	stem, _, _ := strings.Cut(part, ".")
+	stem = strings.TrimRight(stem, " ")
+	return stem == "" || filepath.IsLocal(stem)
 }
 
 func normalizeFilePath(path string) (string, error) {
