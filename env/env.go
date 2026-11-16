@@ -79,16 +79,24 @@ func (e *Env) Snapshot() *Env {
 	if e == nil {
 		return &Env{data: make(map[string]string), processSnapshot: make(map[string]string)}
 	}
+	fileValues, processValues := e.readEnvironmentValues(currentProcessEnvironment)
+	return &Env{data: fileValues, processSnapshot: processValues}
+}
+
+func (e *Env) readEnvironmentValues(readProcess func() map[string]string) (map[string]string, map[string]string) {
 	e.mu.RLock()
-	fileValues := cloneEnvironmentValues(e.data)
 	var processValues map[string]string
 	if e.processSnapshot == nil {
-		processValues = currentProcessEnvironment()
-	} else {
+		e.mu.RUnlock()
+		processValues = readProcess()
+		e.mu.RLock()
+	}
+	defer e.mu.RUnlock()
+	if e.processSnapshot != nil {
+		// 进程读取期间可能已经安装冻结快照，此时文件和进程值统一取新快照。
 		processValues = cloneEnvironmentValues(e.processSnapshot)
 	}
-	e.mu.RUnlock()
-	return &Env{data: fileValues, processSnapshot: processValues}
+	return cloneEnvironmentValues(e.data), processValues
 }
 
 // ReplaceWithSnapshot 原子替换当前文件环境，并冻结为输入快照捕获的进程环境。
@@ -283,21 +291,12 @@ func (e *Env) FileValues() map[string]string {
 // All 返回文件层与完整进程环境的合并快照，进程变量保持与 Get 相同的最高优先级。
 // 返回值可能包含凭据，输出时应按允许的键筛选。
 func (e *Env) All() map[string]string {
-	result := make(map[string]string)
-	var processValues map[string]string
+	var result, processValues map[string]string
 	if e == nil {
+		result = make(map[string]string)
 		processValues = currentProcessEnvironment()
 	} else {
-		e.mu.RLock()
-		for key, value := range e.data {
-			result[key] = value
-		}
-		if e.processSnapshot == nil {
-			processValues = currentProcessEnvironment()
-		} else {
-			processValues = cloneEnvironmentValues(e.processSnapshot)
-		}
-		e.mu.RUnlock()
+		result, processValues = e.readEnvironmentValues(currentProcessEnvironment)
 	}
 	for key, value := range processValues {
 		result[key] = value
@@ -355,32 +354,38 @@ func (e *Env) GetBool(key string, def ...bool) (bool, error) {
 // Lookup 查找环境变量并区分“未设置”和“显式设置为空”。
 // 进程环境仅按规范大写键查询；文件键会归一化，Windows 保留系统大小写不敏感行为。
 func (e *Env) Lookup(key string) (string, bool) {
+	return e.lookup(key, os.LookupEnv)
+}
+
+func (e *Env) lookup(key string, readProcess func(string) (string, bool)) (string, bool) {
 	key = normalizeEnvName(key)
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	if value, ok := e.lookupProcessKey(key); ok {
-		return value, true
-	}
 	legacy, hasLegacy := legacyDatabaseEnvironmentFallback(key)
-	if hasLegacy {
-		if value, ok := e.lookupProcessKey(legacy); ok {
-			return value, true
+	var value string
+	var found bool
+	e.mu.RLock()
+	if e.processSnapshot == nil {
+		e.mu.RUnlock()
+		value, found = readProcess(key)
+		if !found && hasLegacy {
+			value, found = readProcess(legacy)
 		}
+		e.mu.RLock()
+	}
+	defer e.mu.RUnlock()
+	if e.processSnapshot != nil {
+		value, found = e.processSnapshot[key]
+		if !found && hasLegacy {
+			value, found = e.processSnapshot[legacy]
+		}
+	}
+	if found {
+		return value, true
 	}
 	if value, ok := e.data[key]; ok {
 		return value, true
 	}
 	value, ok := e.data[legacy]
 	return value, hasLegacy && ok
-}
-
-// lookupProcessKey 在 Env 读锁内读取活动的进程环境或已冻结的快照。
-func (e *Env) lookupProcessKey(key string) (string, bool) {
-	if e.processSnapshot == nil {
-		return os.LookupEnv(key)
-	}
-	value, ok := e.processSnapshot[key]
-	return value, ok
 }
 
 // legacyDatabaseEnvironmentAlias 返回旧式数据库键对应的规范环境变量名。
