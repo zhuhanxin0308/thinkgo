@@ -88,13 +88,13 @@ var (
 	_ ContextualRawQueryable  = (*SQLConnection)(nil)
 )
 
-// Capabilities describes the identifier shapes produced by each SQL path.
-// LastInsertId and Oracle RETURNING are integer-only; PostgreSQL and SQL Server
-// scan returned primary keys through database/sql and may yield strings too.
+// Capabilities 描述连接各写入路径可返回的主键类型。
 func (c *SQLConnection) Capabilities() DriverCapabilities {
 	kinds := []InsertIDKind{InsertIDInteger}
 	if c != nil && c.Builder != nil {
 		switch c.Builder.DialectName() {
+		case "oracle":
+			kinds = []InsertIDKind{InsertIDInteger, InsertIDString}
 		case "postgres", "sqlserver":
 			kinds = []InsertIDKind{InsertIDInteger, InsertIDString, InsertIDDynamic}
 		}
@@ -214,6 +214,9 @@ func (c *SQLConnection) Insert(ctx context.Context, request InsertRequest) (Inse
 }
 
 func (c *SQLConnection) insertReturningOperation(ctx context.Context, request InsertRequest, data map[string]interface{}) (InsertResult, error) {
+	if c.Builder.DialectName() == "oracle" {
+		return c.insertOracleReturning(ctx, nil, request, data)
+	}
 	query, values, ok := c.Builder.InsertReturning(request.Table(), data, request.PrimaryKey())
 	if !ok {
 		return InsertResult{}, ErrInsertIDUnavailable

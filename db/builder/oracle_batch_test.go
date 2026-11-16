@@ -4,12 +4,25 @@
 package builder
 
 import (
+	"database/sql"
 	"errors"
 	"reflect"
 	"testing"
 
 	"github.com/zhuhanxin0308/thinkgo/v3/db"
 )
+
+func TestOracleInsertReturningBindsExplicitStringKey(t *testing.T) {
+	oracle := &Oracle{}
+	query, args, ok := oracle.InsertReturning("app.accounts", map[string]any{"account_id": "00042"}, "ACCOUNT_ID")
+	if !ok || query != `INSERT INTO "APP"."ACCOUNTS" ("ACCOUNT_ID") VALUES (?) RETURNING "ACCOUNT_ID" INTO ?` || len(args) != 2 {
+		t.Fatalf("Oracle 回传语句错误: %s %v", query, args)
+	}
+	output, valid := args[1].(sql.Out)
+	if _, isString := output.Dest.(*string); !valid || !isString {
+		t.Fatalf("Oracle 回传必须绑定字符串目标: %#v", args[1])
+	}
+}
 
 func TestOracleTypedLockCapabilities(t *testing.T) {
 	oracle := &Oracle{}
