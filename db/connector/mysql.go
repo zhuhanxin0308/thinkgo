@@ -95,7 +95,7 @@ func buildMysqlConfig(config db.Config) (*mysqlDriver.Config, error) {
 
 func isDangerousMysqlBoolean(canonical string) bool {
 	switch canonical {
-	case "multistatements", "allowallfiles", "allowcleartextpasswords", "allowfallbacktoplaintext", "allowoldpasswords":
+	case "multistatements", "allowallfiles", "allowcleartextpasswords", "allowfallbacktoplaintext", "allowoldpasswords", "interpolateparams":
 		return true
 	default:
 		return false

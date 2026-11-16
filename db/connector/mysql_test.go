@@ -30,9 +30,31 @@ func mysqlConfigWithParams(params map[string]string) db.Config {
 
 func TestMysqlRejectsEveryDangerousTrueValue(t *testing.T) {
 	for _, value := range []string{"1", "t", "T", "TRUE", "True", "true"} {
-		for _, key := range []string{"multiStatements", "allowAllFiles", "allowCleartextPasswords", "allowFallbackToPlaintext", "allowOldPasswords"} {
+		for _, key := range []string{"multiStatements", "allowAllFiles", "allowCleartextPasswords", "allowFallbackToPlaintext", "allowOldPasswords", "interpolateParams"} {
 			if _, err := buildMysqlDSN(mysqlConfigWithParams(map[string]string{key: value})); !errors.Is(err, db.ErrInvalidDatabaseConfig) {
 				t.Fatalf("dangerous MySQL parameter %s=%s was not rejected: %v", key, value, err)
+			}
+		}
+	}
+}
+
+func TestMysqlInterpolationIsDisabledForEveryCharset(t *testing.T) {
+	for _, charset := range []string{"utf8mb4", "gbk", "gb18030", "big5", "sjis"} {
+		for _, key := range []string{"interpolateParams", "INTERPOLATEPARAMS"} {
+			config := mysqlConfigWithParams(map[string]string{"charset": charset, key: "true"})
+			if _, err := buildMysqlDSN(config); !errors.Is(err, db.ErrInvalidDatabaseConfig) {
+				t.Errorf("字符集 %s 可开启客户端插值 %q: %v", charset, key, err)
+			}
+			for _, disabled := range []string{"false", "0", "F"} {
+				config.Params[key] = disabled
+				dsn, err := buildMysqlDSN(config)
+				if err != nil {
+					t.Fatalf("已禁用插值的参数被拒绝: %v", err)
+				}
+				parsed, err := mysqlDriver.ParseDSN(dsn)
+				if err != nil || parsed.InterpolateParams {
+					t.Fatalf("驱动未保持服务端参数绑定: %v", err)
+				}
 			}
 		}
 	}
