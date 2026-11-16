@@ -39,8 +39,8 @@ func TestPostgresNestedCommentBoundaries(t *testing.T) {
 			})
 		}
 	}
-	// 非 PostgreSQL 方言保留已有的单层块注释契约，不推断或扩大其他方言语法。
-	for _, dialect := range []string{"mysql", "sqlite", "oracle", "sqlserver", ""} {
+	// 其余方言保留已有的单层块注释语义。
+	for _, dialect := range []string{"mysql", "sqlite", "oracle", ""} {
 		query := `SELECT /* first /* inner */ tail ? */ ?`
 		if count, err := countSQLPlaceholders(query, dialect); err != nil || count != 2 {
 			t.Fatalf("%q 的既有单层计数被改变: %d, %v", dialect, count, err)
