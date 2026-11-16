@@ -84,6 +84,35 @@ func TestLocalConfigurationMatchesThinkPHP(t *testing.T) {
 	}
 }
 
+func TestLocalConfigurationRejectsMisspelledPermissionsAndLinkPolicies(t *testing.T) {
+	root := t.TempDir()
+	for _, tc := range []struct {
+		permissions map[string]interface{}
+		wantPath    string
+	}{
+		{map[string]interface{}{"files": map[string]interface{}{"public": "0600"}}, "permissions.files"},
+		{map[string]interface{}{"file": map[string]interface{}{"publc": "0600"}}, "permissions.file.publc"},
+		{map[string]interface{}{"dir": map[string]interface{}{"privte": "0700"}}, "permissions.dir.privte"},
+	} {
+		_, err := parseLocalConfig(map[string]interface{}{"root": root, "permissions": tc.permissions})
+		if !errors.Is(err, ErrInvalidConfiguration) || !strings.Contains(err.Error(), tc.wantPath) {
+			t.Errorf("非法权限字段 %q 应明确报错: %v", tc.wantPath, err)
+		}
+	}
+	for _, links := range []string{"Skip", "allow", "skpi"} {
+		_, err := normalizeLocalConfig(LocalConfig{Root: root, Links: links})
+		if !errors.Is(err, ErrInvalidConfiguration) || !strings.Contains(err.Error(), "local.links") {
+			t.Errorf("非法符号链接策略 %q 应明确报错: %v", links, err)
+		}
+	}
+	for name, want := range map[string]linkHandling{"": disallowLinks, "disallow": disallowLinks, "skip": skipLinks} {
+		normalized, err := normalizeLocalConfig(LocalConfig{Root: root, Links: name})
+		if err != nil || normalized.linkHandling() != want {
+			t.Errorf("合法符号链接策略 %q 未按配置生效: %v", name, err)
+		}
+	}
+}
+
 // TestLocalDiskStreamChecksumVisibilityAndLifecycle 验证 ThinkPHP Filesystem
 // 常用的流、目录、校验值、可见性、复制移动和关闭生命周期。
 func TestLocalDiskStreamChecksumVisibilityAndLifecycle(t *testing.T) {
