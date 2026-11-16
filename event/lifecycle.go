@@ -85,7 +85,7 @@ func NewHttpRunEvent() *HttpRunEvent {
 	return &HttpRunEvent{SimpleEvent: &SimpleEvent{name: EventHttpRun}}
 }
 
-// HttpEndEvent HTTP 请求结束事件，携带响应状态码。
+// HttpEndEvent HTTP 请求结束事件，状态未知的连接接管使用状态码 0。
 type HttpEndEvent struct {
 	*SimpleEvent
 	StatusCode int
@@ -97,6 +97,15 @@ func NewHttpEndEvent(statusCode int) *HttpEndEvent {
 		SimpleEvent: &SimpleEvent{name: EventHttpEnd},
 		StatusCode:  statusCode,
 	}
+}
+
+// Hijacked 表示结束时连接已经由处理器接管。
+func (e *HttpEndEvent) Hijacked() bool {
+	if e == nil || e.SimpleEvent == nil {
+		return false
+	}
+	response, ok := e.Data.(interface{ Hijacked() bool })
+	return ok && response.Hijacked()
 }
 
 // RouteLoadedEvent 路由加载完成事件。

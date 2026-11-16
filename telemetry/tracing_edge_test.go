@@ -66,3 +66,39 @@ func TestTracingNormalizesEmptyRequestAndClosesSpanOnce(t *testing.T) {
 	SetHTTPRoute(nilContext, "/ignored")
 	EndHTTPServer(nilContext, http.StatusOK, nil)
 }
+
+func TestTracingPreservesUnknownHijackedStatus(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+	tracing, err := New(Config{
+		Enabled:             true,
+		Provider:            provider,
+		Propagator:          propagation.TraceContext{},
+		InstrumentationName: "thinkgo-test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, status := range []int{0, http.StatusSwitchingProtocols} {
+		ctx, _ := tracing.StartServer(t.Context(), nil, http.MethodGet, "/upgrade", "example.test")
+		EndHijackedHTTPServer(ctx, status, nil)
+		ended := recorder.Ended()
+		span := ended[len(ended)-1]
+		var hijacked, hasStatus bool
+		for _, attribute := range span.Attributes() {
+			switch attribute.Key {
+			case "thinkgo.http.hijacked":
+				hijacked = attribute.Value.AsBool()
+			case "http.response.status_code":
+				hasStatus = true
+				if got := attribute.Value.AsInt64(); got != int64(status) {
+					t.Errorf("追踪记录的状态 %d 不符合声明 %d", got, status)
+				}
+			}
+		}
+		if !hijacked || hasStatus != (status != 0) || span.Status().Code.String() == "Error" {
+			t.Errorf("接管状态追踪错误: %+v", span.Attributes())
+		}
+	}
+}

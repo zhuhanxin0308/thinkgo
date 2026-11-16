@@ -144,14 +144,28 @@ func SetHTTPRoute(ctx context.Context, route string) {
 
 // EndHTTPServer 幂等记录响应状态、异常并结束服务端 Span。
 func EndHTTPServer(ctx context.Context, status int, requestErr error) {
+	endHTTPServer(ctx, status, false, requestErr)
+}
+
+// EndHijackedHTTPServer 结束连接接管追踪，状态未知时省略标准 HTTP 状态码属性。
+func EndHijackedHTTPServer(ctx context.Context, status int, requestErr error) {
+	endHTTPServer(ctx, status, true, requestErr)
+}
+
+func endHTTPServer(ctx context.Context, status int, hijacked bool, requestErr error) {
 	span := SpanFromContext(ctx)
 	if span == nil || span.span == nil || !span.ended.CompareAndSwap(false, true) {
 		return
 	}
-	if status < http.StatusContinue || status > 599 {
-		status = http.StatusInternalServerError
+	if hijacked {
+		span.span.SetAttributes(attribute.Bool("thinkgo.http.hijacked", true))
 	}
-	span.span.SetAttributes(attribute.Int("http.response.status_code", status))
+	if !hijacked || status != 0 {
+		if status < http.StatusContinue || status > 599 {
+			status = http.StatusInternalServerError
+		}
+		span.span.SetAttributes(attribute.Int("http.response.status_code", status))
+	}
 	if requestErr != nil {
 		// 请求错误可能携带凭据、SQL、路径或个人数据，遥测边界只导出稳定分类。
 		span.span.RecordError(errRequestFailure)

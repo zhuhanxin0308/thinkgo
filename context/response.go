@@ -50,6 +50,7 @@ type Response struct {
 	chunks       [][]byte
 	err          error
 	committed    bool
+	hijacked     bool
 	session      *frameworksession.Session
 }
 
@@ -98,7 +99,7 @@ func (r *Response) GetBody() []byte {
 	return append([]byte(nil), r.body...)
 }
 
-// GetStatus 获取 HTTP 状态码。
+// GetStatus 获取 HTTP 状态码。连接已接管但状态未知时返回 0。
 func (r *Response) GetStatus() int {
 	if r == nil {
 		return 0
@@ -148,14 +149,25 @@ func NewResponse() *Response {
 
 // NewCommittedResponse 表示响应已经由标准库处理器直接写出，框架不得重复发送实体。
 func NewCommittedResponse(status int) *Response {
-	response := NewResponse()
-	if !isValidFinalResponseStatus(status) {
-		response.addError(ErrInvalidResponseStatus)
-		return response
+	return NewResponse().ObserveTransmission(status, false)
+}
+
+// ObserveTransmission 同步实际提交或接管的状态，连接接管且未声明状态时允许 0。
+func (r *Response) ObserveTransmission(status int, hijacked bool) *Response {
+	if r == nil {
+		return nil
 	}
-	response.status = status
-	response.committed = true
-	return response
+	if !isValidFinalResponseStatus(status) && status != http.StatusSwitchingProtocols && !(hijacked && status == 0) {
+		r.addError(ErrInvalidResponseStatus)
+		return r
+	}
+	r.status, r.committed, r.hijacked = status, true, hijacked
+	return r
+}
+
+// Hijacked 表示连接已经由处理器接管，原 ResponseWriter 不再拥有连接。
+func (r *Response) Hijacked() bool {
+	return r != nil && r.hijacked
 }
 
 // Committed 判断响应是否已经通过底层 ResponseWriter 写出。
