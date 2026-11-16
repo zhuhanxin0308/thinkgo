@@ -3,13 +3,16 @@ package filesystem
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"unicode"
 )
 
 var (
-	// ErrInvalidPath 表示业务路径包含越界父目录或 Unicode 控制字符。
-	ErrInvalidPath = errors.New("文件系统路径无效")
+	// ErrInvalidPath 表示业务路径越界、含控制字符或无法唯一映射到本地文件。
+	ErrInvalidPath      = errors.New("文件系统路径无效")
+	errWindowsPathAlias = fmt.Errorf("%w: Windows 路径段无效", ErrInvalidPath)
 	// ErrSymbolicLink 对应 LocalFilesystemAdapter 默认的 DISALLOW_LINKS。
 	ErrSymbolicLink = errors.New("文件系统不允许符号链接")
 	// ErrURLNotSupported 表示当前磁盘没有配置 URL 前缀。
@@ -17,7 +20,7 @@ var (
 )
 
 // normalizePath 对齐 Flysystem WhitespacePathNormalizer：反斜杠转为斜杠，
-// 忽略空段和当前目录段，并只在父目录会越过逻辑根时拒绝路径。
+// 忽略空段和当前目录段，拒绝越界父目录与 Windows 文件名别名。
 func normalizePath(path string) (string, error) {
 	path = strings.ReplaceAll(path, "\\", "/")
 	for _, character := range path {
@@ -36,10 +39,23 @@ func normalizePath(path string) (string, error) {
 			}
 			parts = parts[:len(parts)-1]
 		default:
+			if runtime.GOOS == "windows" && !validWindowsPathSegment(part) {
+				return "", fmt.Errorf("%w: %q", errWindowsPathAlias, part)
+			}
 			parts = append(parts, part)
 		}
 	}
 	return strings.Join(parts, "/"), nil
+}
+
+func validWindowsPathSegment(part string) bool {
+	if strings.HasSuffix(part, ".") || strings.HasSuffix(part, " ") || !filepath.IsLocal(part) {
+		return false
+	}
+	// 设备名带扩展名时在不同 Windows 版本上的行为不同，统一检查名称主体。
+	stem, _, _ := strings.Cut(part, ".")
+	stem = strings.TrimRight(stem, " ")
+	return stem == "" || filepath.IsLocal(stem)
 }
 
 func normalizeFilePath(path string) (string, error) {
