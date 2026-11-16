@@ -409,7 +409,11 @@ func (h *Http) replaceUncommittedSendFailure(state *requestServeState) {
 	if state == nil || state.statusWriter == nil || state.statusWriter.Written() {
 		return
 	}
-	if state.compressionWriter != nil && !state.compressionWriter.ResetUncommitted() {
+	if state.compressionWriter != nil {
+		if !state.compressionWriter.ResetUncommitted() {
+			return
+		}
+	} else if !state.statusWriter.ResetUncommitted() {
 		return
 	}
 	previous := state.response
