@@ -85,6 +85,43 @@ func TestConfigDumpRedactsDirectSensitiveKey(t *testing.T) {
 	}
 }
 
+func TestConfigDumpRedactsCommonCredentialAliases(t *testing.T) {
+	configuration := config.NewConfig()
+	payment := map[string]interface{}{
+		"app_key": "hidden-app-key", "mch_key": "hidden-merchant-key",
+		"sign-key": "hidden-sign-key", "author": "visible-author",
+		"primary_key": "visible-record-id",
+	}
+	redis := map[string]interface{}{
+		"auth": "hidden-auth", "pwd": "hidden-pwd", "tls_cert": "hidden-pem", "salt": "hidden-salt",
+	}
+	if err := configuration.Set("payment", payment); err != nil {
+		t.Fatal(err)
+	}
+	if err := configuration.Set("redis", redis); err != nil {
+		t.Fatal(err)
+	}
+	command := &ConfigDump{Command: console.Command{App: configDumpTestApp(t, configuration)}}
+	command.Configure()
+	for _, key := range []string{"", "payment.app_key", "redis.auth"} {
+		input := console.NewInput(key)
+		if err := input.Parse(command.GetArgumentDefinitions(), command.GetOptionDefinitions()); err != nil {
+			t.Fatal(err)
+		}
+		var stdout bytes.Buffer
+		if err := command.Execute(input, console.NewOutputWithWriters(&stdout, &bytes.Buffer{}, false)); err != nil {
+			t.Fatal(err)
+		}
+		output := stdout.String()
+		if strings.Contains(output, "hidden-") || !strings.Contains(output, configDumpRedactedValue) {
+			t.Fatalf("命令导出包含凭据或缺少脱敏标记: %q", output)
+		}
+		if key == "" && (!strings.Contains(output, "visible-author") || !strings.Contains(output, "visible-record-id")) {
+			t.Fatalf("普通业务字段应可查看: %q", output)
+		}
+	}
+}
+
 // TestConfigDumpRedactsTypedStringMaps 验证类型化字符串映射中的凭据也会递归脱敏。
 func TestConfigDumpRedactsTypedStringMaps(t *testing.T) {
 	appConfig := config.NewConfig()

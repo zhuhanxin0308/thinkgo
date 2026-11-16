@@ -12,6 +12,8 @@ import (
 
 const configDumpRedactedValue = "[REDACTED]"
 
+var configDumpKeyNormalizer = strings.NewReplacer("-", "_", ".", "_")
+
 // ConfigDump command
 type ConfigDump struct {
 	console.Command
@@ -110,7 +112,7 @@ func isConfigDumpSensitiveKey(key string) bool {
 	if key == "" {
 		return false
 	}
-	normalizedKey := strings.NewReplacer("-", "_", ".", "_").Replace(key)
+	normalizedKey := configDumpKeyNormalizer.Replace(key)
 
 	sensitiveFragments := []string{
 		"authorization",
@@ -122,6 +124,8 @@ func isConfigDumpSensitiveKey(key string) bool {
 		"private_key",
 		"privatekey",
 		"signing_key",
+		"sign_key",
+		"signkey",
 		"encryption_key",
 		"client_secret",
 		"secret",
@@ -129,6 +133,10 @@ func isConfigDumpSensitiveKey(key string) bool {
 		"token",
 		"api_key",
 		"apikey",
+		"app_key",
+		"appkey",
+		"mch_key",
+		"mchkey",
 		"access_key",
 		"accesskey",
 		"connection_string",
@@ -139,18 +147,10 @@ func isConfigDumpSensitiveKey(key string) bool {
 			return true
 		}
 	}
-	for _, part := range strings.FieldsFunc(normalizedKey, func(current rune) bool {
-		return current == '_'
-	}) {
-		if part == "pass" {
-			return true
-		}
-	}
-	// dsn/uri/url 仅按完整键片段匹配，避免把 security、duration 等普通字段误判。
-	for _, part := range strings.FieldsFunc(normalizedKey, func(current rune) bool {
-		return current == '_' || current == '-' || current == '.'
-	}) {
-		if part == "dsn" || part == "uri" || part == "url" {
+	// 短格式别名按完整片段匹配，避免误遮蔽 author、duration 等字段。
+	for part := range strings.SplitSeq(normalizedKey, "_") {
+		switch part {
+		case "auth", "pwd", "pass", "salt", "cert", "dsn", "uri", "url":
 			return true
 		}
 	}
