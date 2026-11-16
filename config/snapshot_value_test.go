@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"math/big"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -119,4 +120,93 @@ func TestTypedSnapshotConcurrentReadersOwnIndependentValues(t *testing.T) {
 		})
 	}
 	readers.Wait()
+}
+
+func TestTypedSnapshotRejectsSharedBranchesThatExceedDepth(t *testing.T) {
+	type node struct{ Next *node }
+	chain := func(length int, tail *node) *node {
+		for range length {
+			tail = &node{Next: tail}
+		}
+		return tail
+	}
+	short := chain(10, nil)
+	long := chain(maxConfigJSONDepth/2-5, short)
+	configuration := NewConfig()
+	value := struct {
+		Short *node
+		Long  *node
+	}{short, long}
+	if err := configuration.Set("deep", value); !errors.Is(err, ErrConfigUnsupportedValue) {
+		t.Fatalf("短路径共享节点不能跳过长路径的深度检查: %v", err)
+	}
+	for range maxConfigJSONDepth {
+		if err := configuration.Set("deep", map[string]*node{"short": short, "long": long}); !errors.Is(err, ErrConfigUnsupportedValue) {
+			t.Fatalf("深度检查不应取决于 map 遍历顺序: %v", err)
+		}
+	}
+}
+
+func TestTypedSnapshotRejectsOverlappingStorageWithoutMutation(t *testing.T) {
+	configuration := NewConfig()
+	if err := configuration.Set("value", "original"); err != nil {
+		t.Fatal(err)
+	}
+	items := []int{1, 2}
+	type entry struct{ Number int }
+	record := &entry{Number: 3}
+	for _, value := range []interface{}{
+		struct {
+			Items    []int
+			Selected *int
+		}{items, &items[0]},
+		struct {
+			Items  []int
+			Prefix []int
+		}{items, items[:1]},
+		struct {
+			Record *entry
+			Field  *int
+		}{record, &record.Number},
+		map[string]interface{}{"items": items, "selected": &items[0]},
+	} {
+		if err := configuration.Set("value", value); !errors.Is(err, ErrConfigUnsupportedValue) {
+			t.Fatalf("无法保留别名关系的重叠存储应被拒绝: %v", err)
+		}
+		if got := configuration.GetString("value"); got != "original" {
+			t.Fatalf("失败写入改变了配置: %q", got)
+		}
+	}
+	adjacent := struct{ Left, Right []int }{items[:1:1], items[1:2:2]}
+	if err := configuration.Set("value", adjacent); err != nil {
+		t.Fatalf("可独立复制的不重叠视图应保持可用: %v", err)
+	}
+	identical := struct{ A, B []int }{items, items}
+	if err := configuration.Set("value", identical); err != nil {
+		t.Fatalf("完全相同的视图应复用副本: %v", err)
+	}
+	snapshot := configuration.Get("value").(struct{ A, B []int })
+	snapshot.A[0] = 10
+	if snapshot.B[0] != 10 || items[0] != 1 {
+		t.Fatal("快照未保留独立副本内完全相同的视图")
+	}
+}
+
+func TestApplyEnvironmentRejectsUnsafeTypedSnapshotBeforeCommit(t *testing.T) {
+	configuration := NewConfig()
+	if err := configuration.Set("numbers", []*big.Int{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := configuration.Set("name", "original"); err != nil {
+		t.Fatal(err)
+	}
+	if err := configuration.ApplyEnvironment(environmentStub{
+		"NAME":    "replacement",
+		"NUMBERS": "[42]",
+	}); !errors.Is(err, ErrConfigUnsupportedValue) {
+		t.Fatalf("环境变量不能提交无法复制的强类型对象: %v", err)
+	}
+	if got := configuration.Get("numbers").([]*big.Int); len(got) != 0 || configuration.GetString("name") != "original" {
+		t.Fatal("错误的环境覆盖改变了配置")
+	}
 }

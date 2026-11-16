@@ -574,7 +574,7 @@ func deepCopyValue(value interface{}) interface{} {
 	case []bool:
 		return append([]bool(nil), typed...)
 	default:
-		cloned, err := copyTypedConfigValue(value, 0)
+		cloned, err := copyTypedConfigValue(value, 0, nil)
 		if err != nil {
 			// 写入边界已拒绝不可复制的值，内部快照必须保持此约束。
 			panic(err)
@@ -584,6 +584,7 @@ func deepCopyValue(value interface{}) interface{} {
 }
 
 // Set 设置一个点路径配置值，并返回路径或输入值校验错误。
+// 对无法隔离的锁、资源状态和重叠存储视图，返回 ErrConfigUnsupportedValue。
 func (c *Config) Set(name string, value interface{}) error {
 	name, ok := normalizeConfigPath(name)
 	if !ok {
@@ -791,6 +792,20 @@ func normalizeConfigNamespace(name string) (string, error) {
 
 // normalizeConfigInputValue 规范化 Set 写入的动态 map，并为调用方隔离嵌套集合。
 func normalizeConfigInputValue(value interface{}, depth int, path string) (interface{}, error) {
+	var spans []configSnapshotSpan
+	normalized, err := normalizeConfigInputWithSpans(value, depth, path, &spans)
+	if err != nil {
+		return nil, err
+	}
+	err = validateConfigSnapshotSpans(spans)
+	runtime.KeepAlive(value)
+	if err != nil {
+		return nil, fmt.Errorf("%w at %s", err, path)
+	}
+	return normalized, nil
+}
+
+func normalizeConfigInputWithSpans(value interface{}, depth int, path string, spans *[]configSnapshotSpan) (interface{}, error) {
 	switch typed := value.(type) {
 	case map[string]interface{}:
 		if depth > maxConfigJSONDepth {
@@ -802,7 +817,7 @@ func normalizeConfigInputValue(value interface{}, depth int, path string) (inter
 			if _, exists := result[canonicalKey]; exists {
 				return nil, fmt.Errorf("%w at %s.%s", ErrConfigDuplicateKey, path, key)
 			}
-			normalized, err := normalizeConfigInputValue(item, depth+1, path+"."+key)
+			normalized, err := normalizeConfigInputWithSpans(item, depth+1, path+"."+key, spans)
 			if err != nil {
 				return nil, err
 			}
@@ -813,19 +828,18 @@ func normalizeConfigInputValue(value interface{}, depth int, path string) (inter
 		if depth > maxConfigJSONDepth {
 			return nil, fmt.Errorf("%w at %s", ErrConfigJSONTooDeep, path)
 		}
+		recordConfigSnapshotSpan(spans, reflect.ValueOf(typed))
 		result := make([]interface{}, len(typed))
 		for index, item := range typed {
-			normalized, err := normalizeConfigInputValue(item, depth+1, fmt.Sprintf("%s[%d]", path, index))
+			normalized, err := normalizeConfigInputWithSpans(item, depth+1, fmt.Sprintf("%s[%d]", path, index), spans)
 			if err != nil {
 				return nil, err
 			}
 			result[index] = normalized
 		}
 		return result, nil
-	case map[string]string, []string, []int, []int64, []float64, []bool:
-		return deepCopyValue(value), nil
 	default:
-		copied, err := copyTypedConfigValue(value, depth)
+		copied, err := copyTypedConfigValue(value, depth, spans)
 		if err != nil {
 			return nil, fmt.Errorf("%w at %s", err, path)
 		}

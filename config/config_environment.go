@@ -287,7 +287,7 @@ func parseTypedConfigEnvironmentCollection(path, raw string, targetType reflect.
 	if err := ensureJSONDecoderEOF(decoder); err != nil {
 		return nil, configEnvironmentTypeError(path, targetType.String())
 	}
-	return target.Elem().Interface(), nil
+	return normalizeConfigInputValue(target.Elem().Interface(), 0, "$"+path)
 }
 
 func decodeSingleEnvironmentJSON(raw string) (interface{}, error) {
