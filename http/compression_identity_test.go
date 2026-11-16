@@ -2,6 +2,7 @@ package http
 
 import (
 	"bytes"
+	"compress/gzip"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -137,5 +138,88 @@ func TestCompressionIdentityExclusionPreservesBodylessAndEncodedResponses(t *tes
 		if test.encoding != "" && recorder.Body.String() != "already-encoded-fixture" {
 			t.Fatal("已有编码被二次转换")
 		}
+	}
+}
+
+// TestCompressionNegotiatesPreEncodedRepresentation 验证预编码正文按请求的编码许可提交。
+func TestCompressionNegotiatesPreEncodedRepresentation(t *testing.T) {
+	var encoded bytes.Buffer
+	gzipWriter := gzip.NewWriter(&encoded)
+	if _, err := gzipWriter.Write([]byte("预编码的业务正文")); err != nil {
+		t.Fatal(err)
+	}
+	if err := gzipWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name, method string
+		accept       []string
+		codings      []string
+		status       int
+		rejected     bool
+	}{
+		{"显式拒绝", http.MethodGet, []string{"br", "GZIP;q=0, identity;q=0"}, []string{"gzip"}, http.StatusOK, true},
+		{"通配拒绝", http.MethodGet, []string{"br, *;q=0"}, []string{"gzip"}, http.StatusOK, true},
+		{"指定优先于通配", http.MethodGet, []string{"gzip;q=0, *;q=1"}, []string{"gzip"}, http.StatusOK, true},
+		{"多层编码有一项拒绝", http.MethodGet, []string{"gzip, br;q=0"}, []string{"gzip", "br"}, http.StatusOK, true},
+		{"未列出", http.MethodGet, []string{"br"}, []string{"gzip"}, http.StatusOK, true},
+		{"空请求头", http.MethodGet, []string{""}, []string{"gzip"}, http.StatusOK, true},
+		{"允许通过", http.MethodGet, []string{"gzip, *;q=0"}, []string{"gzip"}, http.StatusOK, false},
+		{"缺少请求头", http.MethodGet, nil, []string{"gzip"}, http.StatusOK, false},
+		{"HEAD", http.MethodHead, []string{"gzip;q=0"}, []string{"gzip"}, http.StatusOK, false},
+		{"204", http.MethodGet, []string{"gzip;q=0"}, []string{"gzip"}, http.StatusNoContent, false},
+		{"304", http.MethodGet, []string{"gzip;q=0"}, []string{"gzip"}, http.StatusNotModified, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for _, mode := range []string{"写入", "关闭", "刷新"} {
+				t.Run(mode, func(t *testing.T) {
+					request := httptest.NewRequest(test.method, "http://example.test", nil)
+					if test.accept != nil {
+						request.Header["Accept-Encoding"] = test.accept
+					}
+					threshold := 1024
+					if mode == "写入" {
+						threshold = 1
+					}
+					recorder := httptest.NewRecorder()
+					writer := NewCompressionResponseWriter(recorder, request, threshold, nil)
+					for _, coding := range test.codings {
+						writer.Header().Add("Content-Encoding", coding)
+					}
+					writer.Header().Set("ETag", `"encoded"`)
+					writer.Header().Set("Cache-Control", "no-transform")
+					writer.WriteHeader(test.status)
+					hasBody := test.method != http.MethodHead && test.status == http.StatusOK
+					if hasBody {
+						if _, err := writer.Write(encoded.Bytes()); err != nil {
+							t.Fatal(err)
+						}
+					}
+					if mode == "刷新" {
+						if err := writer.flushResponse(); err != nil {
+							t.Fatal(err)
+						}
+					}
+					if err := writer.Close(); err != nil {
+						t.Fatal(err)
+					}
+					result := recorder.Result()
+					defer result.Body.Close()
+					if test.rejected {
+						if result.StatusCode != http.StatusNotAcceptable || recorder.Body.Len() != 0 ||
+							result.Header.Get("Content-Encoding") != "" || result.Header.Get("ETag") != "" ||
+							!errors.Is(writer.NegotiationError(), ErrContentEncodingNotAcceptable) {
+							t.Fatalf("不可接受的表示应提交无正文 406: %d %v %v", result.StatusCode, result.Header, writer.NegotiationError())
+						}
+						return
+					}
+					if result.StatusCode != test.status || result.Header.Get("Content-Encoding") != test.codings[0] ||
+						result.Header.Get("ETag") != `"encoded"` || result.Header.Get("Vary") != "Accept-Encoding" ||
+						writer.NegotiationError() != nil || hasBody && !bytes.Equal(recorder.Body.Bytes(), encoded.Bytes()) {
+						t.Fatalf("已接受的原表示被更改: %d %v", result.StatusCode, result.Header)
+					}
+				})
+			}
+		})
 	}
 }
