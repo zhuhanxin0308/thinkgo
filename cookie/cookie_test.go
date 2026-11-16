@@ -142,11 +142,11 @@ func TestSignedCookieRejectsTamperingFutureAndExpiredTimestamp(t *testing.T) {
 	config.Secret = strings.Repeat("z", 32)
 	config.SignMaxAge = 60
 	now := time.Now().Truncate(time.Second)
-	valid, err := signCookieValue("sid", "value", config.Secret, now)
+	valid, err := signCookieValue("sid", "value", config.Secret, config.SignMaxAge, now)
 	if err != nil {
 		t.Fatalf("生成测试签名失败: %v", err)
 	}
-	if _, err = unsignCookieValue("sid", valid+"x", config.Secret, config.SignMaxAge, now); !errors.Is(err, ErrInvalidCookieSignature) {
+	if _, err = unsignCookieValue("sid", valid+"x", config.Secret, config.SignMaxAge, config.SignMaxAge, now); !errors.Is(err, ErrInvalidCookieSignature) {
 		t.Fatalf("篡改签名应返回 ErrInvalidCookieSignature，实际为 %v", err)
 	}
 	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
@@ -155,15 +155,15 @@ func TestSignedCookieRejectsTamperingFutureAndExpiredTimestamp(t *testing.T) {
 		t.Fatalf("规范 SHA-256 Base64 尾字符索引错误: %d", lastIndex)
 	}
 	alias := valid[:len(valid)-1] + string(alphabet[lastIndex+1])
-	if _, err = unsignCookieValue("sid", alias, config.Secret, config.SignMaxAge, now); !errors.Is(err, ErrInvalidCookieSignature) {
+	if _, err = unsignCookieValue("sid", alias, config.Secret, config.SignMaxAge, config.SignMaxAge, now); !errors.Is(err, ErrInvalidCookieSignature) {
 		t.Fatalf("非规范 Base64 签名别名应被拒绝，实际为 %v", err)
 	}
-	future, _ := signCookieValue("sid", "value", config.Secret, now.Add(maxCookieClockSkew+time.Second))
-	if _, err = unsignCookieValue("sid", future, config.Secret, config.SignMaxAge, now); !errors.Is(err, ErrInvalidCookieSignature) {
+	future, _ := signCookieValue("sid", "value", config.Secret, config.SignMaxAge, now.Add(maxCookieClockSkew+time.Second))
+	if _, err = unsignCookieValue("sid", future, config.Secret, config.SignMaxAge, config.SignMaxAge, now); !errors.Is(err, ErrInvalidCookieSignature) {
 		t.Fatalf("未来签名应被拒绝，实际为 %v", err)
 	}
-	expired, _ := signCookieValue("sid", "value", config.Secret, now.Add(-61*time.Second))
-	if _, err = unsignCookieValue("sid", expired, config.Secret, config.SignMaxAge, now); !errors.Is(err, ErrExpiredCookieSignature) {
+	expired, _ := signCookieValue("sid", "value", config.Secret, config.SignMaxAge, now.Add(-61*time.Second))
+	if _, err = unsignCookieValue("sid", expired, config.Secret, config.SignMaxAge, config.SignMaxAge, now); !errors.Is(err, ErrExpiredCookieSignature) {
 		t.Fatalf("过期签名应返回 ErrExpiredCookieSignature，实际为 %v", err)
 	}
 }
@@ -360,11 +360,11 @@ func TestCookieFactoriesAndSignaturesRejectInvalidState(t *testing.T) {
 		"v1.payload." + timestamp + ".short",
 	}
 	for _, signed := range malformed {
-		if _, err := unsignCookieValue("sid", signed, secret, 60, now); !errors.Is(err, ErrInvalidCookieSignature) {
+		if _, err := unsignCookieValue("sid", signed, secret, 60, 60, now); !errors.Is(err, ErrInvalidCookieSignature) {
 			t.Fatalf("畸形签名 %q 应被拒绝，实际为 %v", signed, err)
 		}
 	}
-	if _, err := signCookieValue("sid", "value", "short", now); !errors.Is(err, ErrInvalidCookieSignature) {
+	if _, err := signCookieValue("sid", "value", "short", 60, now); !errors.Is(err, ErrInvalidCookieSignature) {
 		t.Fatalf("短密钥签名应失败，实际为 %v", err)
 	}
 }
