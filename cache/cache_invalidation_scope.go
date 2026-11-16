@@ -216,23 +216,13 @@ func (c *Cache) compactScopeBucketAtFence(ctx context.Context, driver Driver, ke
 
 // invalidationForKey 合并整 store、当前键与匹配前缀的水位，其他键的失效不参与判定。
 func (c *Cache) invalidationForKey(ctx context.Context, driver Driver, key string) (uint64, error) {
-	maximum := uint64(0)
 	raw, found, err := getCacheValueContext(ctx, driver, c.keyInvalidationBucketKey(keyInvalidationBucket(key)))
 	if err != nil {
 		return 0, err
 	}
-	if found {
-		watermarks, valid := raw.(map[string]interface{})
-		if !valid {
-			return 0, ErrCacheFenceUnavailable
-		}
-		if value, exists := watermarks[keyInvalidationScope(key)]; exists {
-			generation, err := parseFenceGenerationValue(value)
-			if err != nil {
-				return 0, err
-			}
-			maximum = max(maximum, generation)
-		}
+	exact, err := exactKeyInvalidation(raw, found, key)
+	if err != nil {
+		return 0, err
 	}
 	raw, found, err = getCacheValueContext(ctx, driver, c.scopedInvalidationKey())
 	if err != nil {
@@ -242,27 +232,52 @@ func (c *Cache) invalidationForKey(ctx context.Context, driver Driver, key strin
 	if err != nil {
 		return 0, err
 	}
+	// 先读取范围，再读取全局水位；Flush 先发布全局水位再压缩范围，读取不能落入两者之间的空窗。
+	global, err := c.currentInvalidationGeneration(ctx, driver)
+	return max(exact, matchingPrefixInvalidation(watermarks, key), global), err
+}
+
+func exactKeyInvalidation(raw interface{}, found bool, key string) (uint64, error) {
+	if !found {
+		return 0, nil
+	}
+	watermarks, valid := raw.(map[string]interface{})
+	if !valid {
+		return 0, ErrCacheFenceUnavailable
+	}
+	if value, exists := watermarks[keyInvalidationScope(key)]; exists {
+		return parseFenceGenerationValue(value)
+	}
+	return 0, nil
+}
+
+func matchingPrefixInvalidation(watermarks map[string]interface{}, key string) uint64 {
+	var maximum uint64
 	for scope, value := range watermarks {
-		if strings.HasPrefix(scope, prefixInvalidationScopePrefix) && strings.HasPrefix(key, strings.TrimPrefix(scope, prefixInvalidationScopePrefix)) {
+		if prefix, isPrefix := strings.CutPrefix(scope, prefixInvalidationScopePrefix); isPrefix && strings.HasPrefix(key, prefix) {
 			generation, _ := parseFenceGenerationValue(value)
 			maximum = max(maximum, generation)
 		}
 	}
-	// 先读取范围，再读取全局水位；Flush 先发布全局水位再压缩范围，读取不能落入两者之间的空窗。
-	global, err := c.currentInvalidationGeneration(ctx, driver)
-	return max(maximum, global), err
+	return maximum
 }
 
 // visibleCacheValue 在读取边界屏蔽迟到旧写者，不能依赖仍可能暂停的写者自行回滚。
 func (c *Cache) visibleCacheValue(ctx context.Context, driver Driver, key string, raw interface{}) (interface{}, bool, error) {
+	return visibleCacheValueAtFence(raw, func() (uint64, error) {
+		if !cacheDriverSupportsAtomicFencing(driver) {
+			return 0, nil
+		}
+		return c.invalidationForKey(ctx, driver, key)
+	})
+}
+
+func visibleCacheValueAtFence(raw interface{}, invalidationForKey func() (uint64, error)) (interface{}, bool, error) {
 	value, generation, _, err := decodeCacheValueAtOrigin(raw)
 	if err != nil {
 		return nil, false, err
 	}
-	if !cacheDriverSupportsAtomicFencing(driver) {
-		return value, true, nil
-	}
-	invalidation, err := c.invalidationForKey(ctx, driver, key)
+	invalidation, err := invalidationForKey()
 	if err != nil {
 		return nil, false, err
 	}
