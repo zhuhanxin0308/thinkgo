@@ -108,6 +108,9 @@ func TestSessionMiddlewareFailsWhenInitializationFails(t *testing.T) {
 	if called || resp == nil || resp.GetStatus() != http.StatusInternalServerError {
 		t.Fatalf("初始化失败应返回 500 且不调用下游: called=%t resp=%#v", called, resp)
 	}
+	if resp.GetHeader("Set-Cookie") != "" {
+		t.Fatal("存储读取失败时应保留原会话 Cookie")
+	}
 }
 
 // TestSessionMiddlewareFailsWhenSaveFails 验证会话落盘失败不能返回业务成功响应。
