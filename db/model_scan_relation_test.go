@@ -35,6 +35,84 @@ type modelScanRelationsRecord struct {
 	Roles     []modelScanNameDTO   `thinkgo:"roles,readonly"`
 }
 
+// TestSQLiteEagerLoadingBatchesByBindBudget 验证四类关联跨越 SQLite 单条语句的参数上限。
+func TestSQLiteEagerLoadingBatchesByBindBudget(t *testing.T) {
+	database, raw := newModelScanSQLite(t)
+	count := maxQueryArgumentsForBuilder(databaseQueryBuilder(database)) + 2
+	for _, statement := range []string{
+		"CREATE TABLE accounts (id INTEGER PRIMARY KEY, company_id TEXT NOT NULL)",
+		"CREATE TABLE profiles (id INTEGER PRIMARY KEY, account_id INTEGER NOT NULL)",
+		"CREATE TABLE posts (id INTEGER PRIMARY KEY, account_id INTEGER NOT NULL)",
+		"CREATE TABLE companies (id TEXT COLLATE NOCASE PRIMARY KEY)",
+		"CREATE TABLE roles (id INTEGER PRIMARY KEY)",
+		"CREATE TABLE account_role (account_id INTEGER NOT NULL, role_id INTEGER NOT NULL)",
+	} {
+		if _, err := raw.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const seed = "WITH RECURSIVE ids(id) AS (SELECT 1 UNION ALL SELECT id+1 FROM ids WHERE id < ?) "
+	for _, statement := range []string{
+		"INSERT INTO accounts SELECT id, id FROM ids",
+		"INSERT INTO profiles SELECT id, id FROM ids",
+		"INSERT INTO posts SELECT id, id FROM ids",
+		"INSERT INTO companies SELECT id FROM ids",
+		"INSERT INTO roles SELECT id FROM ids",
+		"INSERT INTO account_role SELECT id, id FROM ids",
+	} {
+		if _, err := raw.Exec(seed+statement, count); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := raw.Exec("INSERT INTO companies VALUES ('ALIAS')"); err != nil {
+		t.Fatal(err)
+	}
+	// 将等价的 SQL 查找值放进不同批次，验证同一行不会被重复加入。
+	if _, err := raw.Exec("UPDATE accounts SET company_id = CASE WHEN id = 1 THEN 'ALIAS' ELSE 'alias' END WHERE id IN (1, ?)", count); err != nil {
+		t.Fatal(err)
+	}
+
+	accounts := NewModel(database, "accounts")
+	for _, err := range []error{
+		accounts.DefineHasOne("profile", NewModel(database, "profiles"), "account_id", "id"),
+		accounts.DefineHasMany("posts", NewModel(database, "posts"), "account_id", "id"),
+		accounts.DefineBelongsTo("company", NewModel(database, "companies"), "company_id", "id"),
+		accounts.DefineBelongsToMany("roles", NewModel(database, "roles"), "account_role", "account_id", "role_id", "id"),
+	} {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, err := accounts.With("profile", "posts", "company", "roles").Order("id ASC").SelectMaps()
+	if err != nil || len(rows) != count {
+		t.Fatalf("参数超过单条预算仍应成功预加载: 结果 %d 行，错误 %v", len(rows), err)
+	}
+	for index, row := range rows {
+		id := int64(index + 1)
+		if row["id"] != id {
+			t.Fatalf("主查询顺序发生变化: 第 %d 行", index)
+		}
+		profile, _ := row["profile"].(map[string]interface{})
+		if profile["id"] != id {
+			t.Fatalf("一对一关联未回填第 %d 行: %v", index, profile)
+		}
+		company, _ := row["company"].(map[string]interface{})
+		if row["company_id"] == "alias" {
+			if company != nil {
+				t.Fatalf("关联索引应保持原始键语义: %v", company)
+			}
+		} else if company["id"] != row["company_id"] {
+			t.Fatalf("归属关联未回填第 %d 行: %v", index, company)
+		}
+		for _, field := range []string{"posts", "roles"} {
+			got, _ := row[field].([]map[string]interface{})
+			if len(got) != 1 || got[0]["id"] != id {
+				t.Fatalf("关联 %s 跨批结果错误，第 %d 行: %v", field, index, got)
+			}
+		}
+	}
+}
+
 // TestModelScanSQLiteEagerProjections 验证四种真实关联能映射为 DTO，且保存只触及父表。
 func TestModelScanSQLiteEagerProjections(t *testing.T) {
 	database, raw := newModelScanSQLite(t)
