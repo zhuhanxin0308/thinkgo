@@ -17,6 +17,58 @@ func newCorsRequest(t *testing.T, method, origin string) *fwcontext.Request {
 	return fwcontext.MustNewRequest(raw)
 }
 
+func TestCorsMatchesBrowserOriginsUsingCanonicalAuthority(t *testing.T) {
+	handler, err := NewCors(CorsConfig{
+		AllowOrigins: []string{
+			"HTTPS://CLIENT.Example:443",
+			"http://OTHER.Example:080",
+			"https://LOCALHOST:8443",
+			"https://[2001:DB8::1]:443",
+		},
+		AllowMethods:     []string{http.MethodPost},
+		AllowCredentials: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		origin  string
+		allowed bool
+	}{
+		{"https://client.example", true},
+		{"http://other.example", true},
+		{"https://localhost:8443", true},
+		{"https://[2001:db8::1]", true},
+		{"HTTPS://CLIENT.Example:443", true},
+		{"http://client.example", false},
+		{"https://client.example:444", false},
+		{"https://client.example.attacker.test", false},
+		{"https://localhost", false},
+	} {
+		t.Run(test.origin, func(t *testing.T) {
+			preflight := newCorsRequest(t, http.MethodOptions, test.origin)
+			preflight.Raw().Header.Set("Access-Control-Request-Method", http.MethodPost)
+			response := handler(preflight, func(*fwcontext.Request) *fwcontext.Response {
+				t.Fatal("预检不得执行下游处理器")
+				return nil
+			})
+			wantOrigin, wantStatus := "", http.StatusForbidden
+			if test.allowed {
+				wantOrigin, wantStatus = test.origin, http.StatusNoContent
+			}
+			if response.GetStatus() != wantStatus || response.GetHeader("Access-Control-Allow-Origin") != wantOrigin {
+				t.Fatalf("预检来源匹配错误: %d, %v", response.GetStatus(), response.Headers())
+			}
+			actual := handler(newCorsRequest(t, http.MethodPost, test.origin), func(*fwcontext.Request) *fwcontext.Response {
+				return fwcontext.NewResponse().Content("ok")
+			})
+			if got := actual.GetHeader("Access-Control-Allow-Origin"); got != wantOrigin {
+				t.Fatalf("普通响应应采用相同来源策略: %q，期望 %q", got, wantOrigin)
+			}
+		})
+	}
+}
+
 // newCorsRequestWithWriter 创建绑定原生响应写入器的请求，用于验证已提交响应的头部边界。
 func newCorsRequestWithWriter(t *testing.T, method, origin string, writer http.ResponseWriter) *fwcontext.Request {
 	t.Helper()

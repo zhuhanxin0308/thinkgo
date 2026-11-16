@@ -79,6 +79,11 @@ func normalizeCorsConfig(config CorsConfig) (CorsConfig, error) {
 		if err != nil || parsed.Scheme == "" || parsed.Host == "" || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
 			return CorsConfig{}, fmt.Errorf("%w: AllowOrigins 包含无效来源: %q", ErrInvalidCorsConfig, origin)
 		}
+		if !parsed.ForceQuery && !strings.HasSuffix(origin, "#") {
+			if canonical := canonicalBrowserOrigin(parsed); canonical != "" && canonical != origin {
+				config.AllowOrigins = append(config.AllowOrigins, canonical)
+			}
+		}
 	}
 	if wildcard && len(config.AllowOrigins) != 1 {
 		return CorsConfig{}, fmt.Errorf("%w: AllowOrigins 不能同时包含 * 和具体来源", ErrInvalidCorsConfig)
@@ -96,6 +101,26 @@ func normalizeCorsConfig(config CorsConfig) (CorsConfig, error) {
 		}
 	}
 	return config, nil
+}
+
+// canonicalBrowserOrigin 生成同一 HTTP(S) 来源的浏览器规范写法。
+func canonicalBrowserOrigin(parsed *url.URL) string {
+	defaultPort := defaultHTTPOriginPort(parsed.Scheme)
+	if defaultPort == "" || parsed.Hostname() == "" {
+		return ""
+	}
+	authority := strings.ToLower(parsed.Host)
+	if rawPort := parsed.Port(); rawPort != "" {
+		port, err := strconv.ParseUint(rawPort, 10, 16)
+		if err != nil {
+			return ""
+		}
+		authority = strings.TrimSuffix(authority, ":"+rawPort)
+		if normalized := strconv.FormatUint(port, 10); normalized != defaultPort {
+			authority += ":" + normalized
+		}
+	}
+	return parsed.Scheme + "://" + authority
 }
 
 func normalizeCorsMethods(values []string) []string {
