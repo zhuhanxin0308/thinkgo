@@ -269,7 +269,19 @@ func (e *Env) Get(key string, def ...string) string {
 	return ""
 }
 
-// All 返回当前环境变量快照，进程环境变量保持与 Get 相同的最高优先级。
+// FileValues 返回仅包含环境文件值的独立快照。
+// 文件值可能包含凭据，输出时应按允许的键筛选。
+func (e *Env) FileValues() map[string]string {
+	if e == nil {
+		return make(map[string]string)
+	}
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return cloneEnvironmentValues(e.data)
+}
+
+// All 返回文件层与完整进程环境的合并快照，进程变量保持与 Get 相同的最高优先级。
+// 返回值可能包含凭据，输出时应按允许的键筛选。
 func (e *Env) All() map[string]string {
 	result := make(map[string]string)
 	var processValues map[string]string
