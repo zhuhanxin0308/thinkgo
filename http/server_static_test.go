@@ -211,6 +211,24 @@ func TestStaticPrefixProbeKeepsNewerNegativeCacheDecisions(t *testing.T) {
 	}
 }
 
+func TestExpiredStaticProbeCannotRecreateClearedNegativeCache(t *testing.T) {
+	handler := &Http{staticMisses: make(map[string]time.Time)}
+	const path = "/assets/missing"
+	const prefix = "assets"
+	older := time.Now()
+	handler.staticMisses[prefix] = older
+	newer := older.Add(staticMissCacheTTL)
+	if handler.reserveStaticPrefixProbe(path, newer) {
+		t.Fatal("新一轮探测应确认目录已经出现")
+	}
+	handler.clearStaticPrefixProbe(path, newer)
+	// 旧请求的 Lstat 结果在新探测清除负缓存后才准备发布。
+	handler.cacheStaticPrefixMiss(prefix, older, newer.Add(time.Millisecond))
+	if _, exists := handler.staticMisses[prefix]; exists {
+		t.Fatal("已经过期的 Lstat 结果不能恢复已确认失效的缓存")
+	}
+}
+
 // TestHTTPServerHelpers 验证服务错误归一化、未启动服务关闭和 TLS 预检失败路径。
 func TestHTTPServerHelpers(t *testing.T) {
 	if normalizeServerError(nil) != nil || normalizeServerError(http.ErrServerClosed) != nil {

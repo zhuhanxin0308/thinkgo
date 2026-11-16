@@ -123,6 +123,8 @@ func (h *Http) openPublicFile(urlPath string) (*os.File, os.FileInfo, bool) {
 		}
 		return nil, nil, false
 	}
+	// 打开的文件已证明一级目录存在；清除本轮占用后再决定是否可服务文件。
+	h.clearStaticPrefixProbe(cleanPath, probeAt)
 	publicReal, err := filepath.EvalSymlinks(publicAbsolute)
 	if err != nil {
 		_ = file.Close()
@@ -139,7 +141,6 @@ func (h *Http) openPublicFile(urlPath string) (*os.File, os.FileInfo, bool) {
 		_ = file.Close()
 		return nil, nil, false
 	}
-	h.forgetStaticPrefixMiss(cleanPath)
 	return file, info, true
 }
 
@@ -176,10 +177,14 @@ func (h *Http) rememberStaticPrefixMiss(cleanPath, publicAbsolute string, probeA
 		return
 	}
 
-	now := time.Now()
+	h.cacheStaticPrefixMiss(prefix, probeAt, time.Now())
+}
+
+func (h *Http) cacheStaticPrefixMiss(prefix string, probeAt, now time.Time) {
 	h.staticMissMu.Lock()
 	defer h.staticMissMu.Unlock()
-	if h.staticMisses[prefix].After(probeAt) {
+	// 过期的探测已经让出这一轮缓存，不能恢复后来被删除的条目。
+	if now.Sub(probeAt) >= staticMissCacheTTL || h.staticMisses[prefix].After(probeAt) {
 		return
 	}
 	if h.staticMisses == nil {
@@ -195,7 +200,7 @@ func (h *Http) rememberStaticPrefixMiss(cleanPath, publicAbsolute string, probeA
 			return
 		}
 	}
-	h.staticMisses[prefix] = now
+	h.staticMisses[prefix] = probeAt
 }
 
 // clearStaticPrefixProbe 只清除本次探测占用的时间戳，避免覆盖其他请求的新结果。
