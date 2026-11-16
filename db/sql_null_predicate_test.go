@@ -45,3 +45,17 @@ func TestSQLScalarNullPredicatesMatchRealSQLiteRows(t *testing.T) {
 		t.Fatalf("NULL 不支持顺序比较: %v", err)
 	}
 }
+
+func TestSQLNullPolicyPreservesPredicatesWithoutSQLBuilder(t *testing.T) {
+	connection := &queryHardeningConnection{selectRows: []map[string]any{{"parent_id": int64(3)}}}
+	query := NewDB(connection).Table("nodes").Where("parent_id", ">=", nil)
+	rows, err := query.Select()
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("无 SQL 构造器的驱动应保留原生 NULL 比较: %v, %v", rows, err)
+	}
+	predicate, err := query.operationPredicate()
+	if err != nil || len(predicate.nodes) != 1 || predicate.nodes[0].Operator != ">=" ||
+		len(predicate.nodes[0].Values) != 1 || predicate.nodes[0].Values[0] != nil {
+		t.Fatalf("原生驱动谓词被 SQL 约束改写: %+v, %v", predicate, err)
+	}
+}
