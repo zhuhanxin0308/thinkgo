@@ -517,6 +517,7 @@ func (app *App) databaseConnectionSpecs(dbConfigData map[string]interface{}, def
 	}
 	sort.Strings(names)
 	specs := make([]databaseConnectionSpec, 0, len(names))
+	production := app.securityWarningEnvironment() == securityEnvironmentProduction
 	for _, name := range names {
 		if err := db.ValidateConnectionName(name); err != nil {
 			if name == defaultConn {
@@ -537,6 +538,9 @@ func (app *App) databaseConnectionSpecs(dbConfigData map[string]interface{}, def
 		databaseConfig, err := readDatabaseConfig(connConfig)
 		if err == nil {
 			err = applyThinkPHPDatabaseDefaults(dbConfigData, &databaseConfig)
+		}
+		if err == nil && production && strings.EqualFold(strings.TrimSpace(databaseConfig.Type), "mongo") {
+			err = validateMongoProductionTLS(databaseConfig.Params)
 		}
 		if err != nil {
 			if name == defaultConn {

@@ -25,6 +25,8 @@ MongoDB 通过 `db.Connection` 接口接入，使用 `DB.Name` 的短名称作�
 
 URI 使用标准 URL 构造，凭据、数据库名和参数会转义。默认追加 `tls=true`；本地明文连接必须显式传入字符串参数 `"tls": "false"`。重复的大小写参数、同时配置 `tls`/`ssl`、只配置密码或非法数据库名会返回 `ErrInvalidDatabaseConfig`。
 
+生产启动和 `deploy:check` 要求 MongoDB 启用 TLS，校验证书与主机名，并拒绝禁用吊销检查。参数 `tlsInsecure`、`sslInsecure` 及其他跳过验证的选项只用于本地或测试环境的显式配置。使用私有 CA 的生产部署可配置 `tlsCAFile`。
+
 连接阶段使用 10 秒上下文执行 Ping；每次操作默认也有 10 秒上限，并会合并请求上下文的取消和截止时间。
 
 ## 查询

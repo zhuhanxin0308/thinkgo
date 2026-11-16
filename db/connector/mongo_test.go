@@ -135,6 +135,46 @@ func TestBuildMongoURIEscapesCredentials(t *testing.T) {
 	}
 }
 
+func TestMongoTLSClientOptionsPreserveExplicitLocalOverride(t *testing.T) {
+	for _, params := range []map[string]string{nil, {"tlsInsecure": "true"}, {"sslInsecure": "false"}} {
+		uri, err := buildMongoURI(db.Config{Hostname: "mongo.internal", Hostport: "27017", Database: "app", Params: params})
+		if err != nil {
+			t.Fatal(err)
+		}
+		clientOptions := options.Client().ApplyURI(uri)
+		if err := clientOptions.Validate(); err != nil {
+			t.Fatal(err)
+		}
+		wantInsecure := params["tlsInsecure"] == "true"
+		if clientOptions.TLSConfig == nil || clientOptions.TLSConfig.InsecureSkipVerify != wantInsecure {
+			t.Errorf("驱动 TLS 验证配置与本地参数不一致: insecure=%t", wantInsecure)
+		}
+	}
+}
+
+func TestMongoOCSPOptionUsesDriverSupportedName(t *testing.T) {
+	for _, test := range []struct {
+		option     string
+		recognized bool
+	}{
+		{"tlsDisableOCSPEndpointCheck", true},
+		{"sslDisableOCSPEndpointCheck", false},
+	} {
+		uri, err := buildMongoURI(db.Config{Hostname: "mongo.internal", Database: "app", Params: map[string]string{test.option: "true"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		client := options.Client().ApplyURI(uri)
+		if err := client.Validate(); err != nil {
+			t.Fatal(err)
+		}
+		got := client.DisableOCSPEndpointCheck != nil && *client.DisableOCSPEndpointCheck
+		if got != test.recognized {
+			t.Fatalf("驱动处理 %s 的结果错误: %t", test.option, got)
+		}
+	}
+}
+
 // TestBuildMongoURIHonorsExplicitTLSAndRejectsAmbiguity 验证显式本地降级可用，
 // 同时拒绝大小写不同的重复选项和无用户名密码，避免驱动解析产生歧义。
 func TestBuildMongoURIHonorsExplicitTLSAndRejectsAmbiguity(t *testing.T) {

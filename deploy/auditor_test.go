@@ -260,3 +260,33 @@ func TestDefaultAuditorEnforcesPostgreSQLTLSForNamedConnections(t *testing.T) {
 		})
 	}
 }
+
+func TestDefaultAuditorEnforcesMongoTLSForNamedConnections(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		params map[string]any
+		level  Level
+	}{
+		{name: "默认 TLS", level: LevelPass},
+		{name: "关闭绕过选项仍安全", params: map[string]any{"tlsAllowInvalidCertificates": "false"}, level: LevelPass},
+		{name: "允许失效证书", params: map[string]any{"tlsAllowInvalidCertificates": "true"}, level: LevelFail},
+		{name: "允许错误主机名", params: map[string]any{"sslAllowInvalidHostnames": "true"}, level: LevelFail},
+		{name: "禁用 TLS", params: map[string]any{"ssl": "false"}, level: LevelFail},
+		{name: "关闭 OCSP 端点检查", params: map[string]any{"tlsDisableOCSPEndpointCheck": "true"}, level: LevelFail},
+		{name: "禁止输出参数值", params: map[string]any{"tlsInsecure": "private-marker"}, level: LevelFail},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			app, configuration := newDeployTestApp(t)
+			if err := configuration.Set("database.connections.analytics", map[string]any{"type": "mongo", "params": test.params}); err != nil {
+				t.Fatal(err)
+			}
+			result := checkDatabaseTLS(t.Context(), app)
+			if result.Level != test.level {
+				t.Fatalf("MongoDB 生产发布门禁结果为 %#v，期望 %s", result, test.level)
+			}
+			if test.level == LevelFail && (!strings.Contains(result.Message, "analytics") || strings.Contains(result.Message, "private-marker")) {
+				t.Fatalf("审计应指出连接名，避免输出参数值: %#v", result)
+			}
+		})
+	}
+}
