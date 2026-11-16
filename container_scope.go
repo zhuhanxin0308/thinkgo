@@ -18,10 +18,16 @@ type scopedInstance struct {
 	generation uint64
 }
 
+// scopedBuildKey 让各代绑定独立构建，同时保留关闭时需要等待的所有构建。
+type scopedBuildKey struct {
+	name       string
+	generation uint64
+}
+
 type containerScopeState struct {
 	lock         sync.Mutex
 	instances    map[string]scopedInstance
-	building     map[string]*buildState
+	building     map[scopedBuildKey]*buildState
 	waiting      map[string]map[string]struct{}
 	created      []interface{}
 	nodeSequence uint64
@@ -233,8 +239,8 @@ func (c *Container) makeScoped(abstract string, registered binding, resolutionSc
 		state.lock.Unlock()
 		return instance.value, nil
 	}
-	delete(state.instances, abstract)
-	if active, ok := state.building[abstract]; ok {
+	key := scopedBuildKey{name: abstract, generation: registered.generation}
+	if active, ok := state.building[key]; ok {
 		from := resolutionScope.current()
 		if err := addScopeWaitLocked(state, from.node, active.node, from.name, abstract); err != nil {
 			state.lock.Unlock()
@@ -254,9 +260,9 @@ func (c *Container) makeScoped(abstract string, registered binding, resolutionSc
 		node:       fmt.Sprintf("scope:%s@%d", abstract, state.nodeSequence),
 	}
 	if state.building == nil {
-		state.building = make(map[string]*buildState)
+		state.building = make(map[scopedBuildKey]*buildState)
 	}
-	state.building[abstract] = active
+	state.building[key] = active
 	state.lock.Unlock()
 
 	instance, err := c.build(registered, resolutionScope.push(abstract, active.node, Scoped), params...)
@@ -284,9 +290,7 @@ func (c *Container) makeScoped(abstract string, registered binding, resolutionSc
 		}
 		state.instances[abstract] = scopedInstance{value: instance, generation: registered.generation}
 	}
-	if currentBuild, ok := state.building[abstract]; ok && currentBuild == active {
-		delete(state.building, abstract)
-	}
+	delete(state.building, key)
 	close(active.done)
 	state.lock.Unlock()
 	global.lock.RUnlock()
