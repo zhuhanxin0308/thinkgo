@@ -21,6 +21,7 @@ func TestProductionDatabaseProviderRejectsInsecureMongoTLSBeforeDial(t *testing.
 		{name: "关闭 TLS", environment: "production", params: map[string]any{"tls": "false"}, reject: true},
 		{name: "重复的 TLS 别名", environment: "production", params: map[string]any{"tls": "true", "ssl": "true"}, reject: true},
 		{name: "关闭证书吊销检查", environment: "production", params: map[string]any{"tlsDisableCertificateRevocationCheck": "true"}, reject: true},
+		{name: "关闭 OCSP 端点检查", environment: "production", params: map[string]any{"tlsDisableOCSPEndpointCheck": "true"}, reject: true},
 		{name: "本地显式覆盖", environment: "test", params: map[string]any{"tlsInsecure": "true"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {

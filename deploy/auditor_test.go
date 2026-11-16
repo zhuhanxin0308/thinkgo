@@ -272,6 +272,7 @@ func TestDefaultAuditorEnforcesMongoTLSForNamedConnections(t *testing.T) {
 		{name: "允许失效证书", params: map[string]any{"tlsAllowInvalidCertificates": "true"}, level: LevelFail},
 		{name: "允许错误主机名", params: map[string]any{"sslAllowInvalidHostnames": "true"}, level: LevelFail},
 		{name: "禁用 TLS", params: map[string]any{"ssl": "false"}, level: LevelFail},
+		{name: "关闭 OCSP 端点检查", params: map[string]any{"tlsDisableOCSPEndpointCheck": "true"}, level: LevelFail},
 		{name: "禁止输出参数值", params: map[string]any{"tlsInsecure": "private-marker"}, level: LevelFail},
 	} {
 		t.Run(test.name, func(t *testing.T) {

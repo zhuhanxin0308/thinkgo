@@ -152,6 +152,29 @@ func TestMongoTLSClientOptionsPreserveExplicitLocalOverride(t *testing.T) {
 	}
 }
 
+func TestMongoOCSPOptionUsesDriverSupportedName(t *testing.T) {
+	for _, test := range []struct {
+		option     string
+		recognized bool
+	}{
+		{"tlsDisableOCSPEndpointCheck", true},
+		{"sslDisableOCSPEndpointCheck", false},
+	} {
+		uri, err := buildMongoURI(db.Config{Hostname: "mongo.internal", Database: "app", Params: map[string]string{test.option: "true"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		client := options.Client().ApplyURI(uri)
+		if err := client.Validate(); err != nil {
+			t.Fatal(err)
+		}
+		got := client.DisableOCSPEndpointCheck != nil && *client.DisableOCSPEndpointCheck
+		if got != test.recognized {
+			t.Fatalf("驱动处理 %s 的结果错误: %t", test.option, got)
+		}
+	}
+}
+
 // TestBuildMongoURIHonorsExplicitTLSAndRejectsAmbiguity 验证显式本地降级可用，
 // 同时拒绝大小写不同的重复选项和无用户名密码，避免驱动解析产生歧义。
 func TestBuildMongoURIHonorsExplicitTLSAndRejectsAmbiguity(t *testing.T) {
