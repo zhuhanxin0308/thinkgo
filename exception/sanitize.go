@@ -2,13 +2,19 @@ package exception
 
 import (
 	"encoding/json"
+	"io"
 	"strings"
 )
 
 // sanitizeJSONBody 对调试页中的 JSON 递归脱敏，解析失败时由调用方隐藏整个请求体。
 func sanitizeJSONBody(body string) (string, bool) {
 	var payload interface{}
-	if err := json.Unmarshal([]byte(body), &payload); err != nil {
+	decoder := json.NewDecoder(strings.NewReader(body))
+	decoder.UseNumber()
+	if err := decoder.Decode(&payload); err != nil {
+		return "", false
+	}
+	if err := decoder.Decode(new(json.RawMessage)); err != io.EOF {
 		return "", false
 	}
 

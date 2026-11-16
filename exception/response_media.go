@@ -19,7 +19,7 @@ func exceptionResponseMedia(r *http.Request) exceptionMedia {
 	if r == nil {
 		return exceptionMediaHTML
 	}
-	accept := strings.TrimSpace(r.Header.Get("Accept"))
+	accept := strings.Trim(strings.Join(r.Header.Values("Accept"), ","), " \t,")
 	if accept != "" {
 		jsonPreference, htmlPreference, plainPreference, recognized := negotiateExceptionMedia(accept)
 		if !recognized {

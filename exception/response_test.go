@@ -58,6 +58,8 @@ func TestResponseAdapterPreservesApplicationHeaders(t *testing.T) {
 	recorder.Header().Set("Content-Length", "999")
 	recorder.Header().Set("Transfer-Encoding", "chunked")
 	recorder.WriteHeader(http.StatusForbidden)
+	recorder.Header().Set("Set-Cookie", "late=1")
+	recorder.Header().Set("X-After-Commit", "late")
 	_, _ = recorder.WriteString("denied")
 	response := ResponseFromRecorder(recorder)
 	if response.GetStatus() != http.StatusForbidden || string(response.GetBody()) != "denied" {
@@ -65,6 +67,9 @@ func TestResponseAdapterPreservesApplicationHeaders(t *testing.T) {
 	}
 	if response.GetHeader("Content-Length") != "" || response.GetHeader("Transfer-Encoding") != "" {
 		t.Fatal("适配器复制了由连接宿主管理的响应头")
+	}
+	if response.GetHeader("X-After-Commit") != "" {
+		t.Fatal("适配器复制了提交后修改的头")
 	}
 	if values := response.Headers().Values("Set-Cookie"); len(values) != 2 {
 		t.Fatalf("适配器丢失多值 Cookie: %v", values)
