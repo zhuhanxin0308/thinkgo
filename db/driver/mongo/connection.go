@@ -142,14 +142,12 @@ func (c *MongoConnection) Insert(parent context.Context, request InsertRequest) 
 	if err != nil {
 		return InsertResult{}, err
 	}
-	for _, primaryKey := range mongoPrimaryKeyPaths(request.PrimaryKey()) {
-		if value, exists := data[primaryKey]; exists {
-			converted, err := coerceMongoPrimaryKey(value)
-			if err != nil {
-				return InsertResult{}, err
-			}
-			data[primaryKey] = converted
+	if value, exists := data["_id"]; exists {
+		converted, err := coerceMongoIntrinsicID(value)
+		if err != nil {
+			return InsertResult{}, err
 		}
+		data["_id"] = converted
 	}
 	result, err := collection.InsertOne(ctx, data)
 	if err != nil {
@@ -469,15 +467,11 @@ func coerceMongoFilterPrimaryKeyAlias(filter bson.M, primaryKey string, modelPri
 			if _, exists := filter[primaryKey]; exists {
 				return fmt.Errorf("%w: MongoDB primary key filter contains both %q and %q", ErrInvalidQuery, modelPrimaryKey, primaryKey)
 			}
-			converted, err := coerceMongoPrimaryCondition(value)
-			if err != nil {
-				return err
-			}
 			delete(filter, key)
-			filter[primaryKey] = converted
-			continue
+			key = primaryKey
+			filter[key] = value
 		}
-		if isMongoPrimaryKeyPath(key, primaryKey) {
+		if isMongoIntrinsicKeyInModel(key, primaryKey) {
 			converted, err := coerceMongoPrimaryCondition(value)
 			if err != nil {
 				return err
@@ -493,13 +487,6 @@ func coerceMongoFilterPrimaryKeyAlias(filter bson.M, primaryKey string, modelPri
 		}
 	}
 	return nil
-}
-
-func mongoPrimaryKeyPaths(primaryKey string) []string {
-	if primaryKey == "" || primaryKey == "_id" {
-		return []string{"_id"}
-	}
-	return []string{"_id", primaryKey}
 }
 
 func mongoStoragePrimaryKeyField(field string, primaryKey string, modelPrimaryKey string) string {
@@ -540,8 +527,8 @@ func rejectMongoPrimaryKeyUpdate(data map[string]interface{}, primaryKey string,
 	return nil
 }
 
-func isMongoPrimaryKeyPath(field string, primaryKey string) bool {
-	return primaryKey != "" && (field == "_id" || field == primaryKey)
+func isMongoIntrinsicKeyInModel(field string, primaryKey string) bool {
+	return primaryKey != "" && field == "_id"
 }
 
 func coerceMongoLogicalFilters(value interface{}, primaryKey string, modelPrimaryKey string) error {
@@ -583,12 +570,12 @@ func coerceMongoLogicalFilters(value interface{}, primaryKey string, modelPrimar
 func coerceMongoPrimaryCondition(value interface{}) (interface{}, error) {
 	operators, ok := value.(bson.M)
 	if !ok {
-		return coerceMongoPrimaryKey(value)
+		return coerceMongoIntrinsicID(value)
 	}
 	for operator, operand := range operators {
 		switch operator {
 		case "$eq", "$ne", "$gt", "$gte", "$lt", "$lte":
-			converted, err := coerceMongoPrimaryKey(operand)
+			converted, err := coerceMongoIntrinsicID(operand)
 			if err != nil {
 				return nil, err
 			}
@@ -615,7 +602,7 @@ func coerceMongoPrimaryList(value interface{}) (interface{}, error) {
 	case bson.A:
 		converted := make(bson.A, len(typed))
 		for index, item := range typed {
-			value, err := coerceMongoPrimaryKey(item)
+			value, err := coerceMongoIntrinsicID(item)
 			if err != nil {
 				return nil, err
 			}
@@ -625,7 +612,7 @@ func coerceMongoPrimaryList(value interface{}) (interface{}, error) {
 	case []interface{}:
 		converted := make([]interface{}, len(typed))
 		for index, item := range typed {
-			value, err := coerceMongoPrimaryKey(item)
+			value, err := coerceMongoIntrinsicID(item)
 			if err != nil {
 				return nil, err
 			}
@@ -637,7 +624,8 @@ func coerceMongoPrimaryList(value interface{}) (interface{}, error) {
 	}
 }
 
-func coerceMongoPrimaryKey(value interface{}) (interface{}, error) {
+// coerceMongoIntrinsicID 仅对内置 _id 保留十六进制字符串与 ObjectID 的兼容转换。
+func coerceMongoIntrinsicID(value interface{}) (interface{}, error) {
 	if value == nil {
 		return nil, nil
 	}

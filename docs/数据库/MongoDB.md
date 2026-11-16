@@ -52,7 +52,7 @@ rows, err := database.Name("users").
 
 条件参数必须是标量。框架递归解引用指针，拒绝 map、slice、array 和普通 struct，避免通过条件值注入 MongoDB 运算符；`time.Time`、ObjectID、Decimal128、Binary 和 `[]byte` 等驱动值可用。LIKE 模式最多 4096 字节，并先转义再转换通配符。
 
-字段投影、排序、集合名和分页值均校验。投影使用逗号分隔的字段名，不支持 SQL `AS` 别名；MongoDB 返回的 BSON 文档会递归规范化，ObjectID 转为十六进制字符串，驱动字节缓冲不会直接复用。
+字段投影、排序、集合名和分页值均校验。投影仅支持以逗号分隔的原字段名。MongoDB 返回的 BSON 文档会递归规范化，内置 `_id` 按模型主键规则转为十六进制字符串，业务字段中的 ObjectID 保留 BSON 类型，驱动字节缓冲不会直接复用。
 
 ## 流式读取与游标分页
 
