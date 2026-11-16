@@ -257,8 +257,7 @@ func (d *File) getOrCreateFileLocked(filename string) (*os.File, error) {
 		}
 	}
 
-	// #nosec G304 -- filename 由驱动自己的日志目录和轮转命名规则生成，并非请求输入。
-	file, err := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	file, err := openManagedLogFile(filename)
 	if err != nil {
 		return nil, err
 	}
@@ -278,6 +277,25 @@ func (d *File) getOrCreateFileLocked(filename string) (*os.File, error) {
 	// 新日志文件会改变数量和容量，强制本次写入后重新执行治理。
 	d.lastCleanupTime = time.Time{}
 	return file, nil
+}
+
+// openManagedLogFile 将独占创建与追加分开，拒绝悬空链接时不会创建链接目标。
+func openManagedLogFile(filename string) (*os.File, error) {
+	const appendFlags = os.O_APPEND | os.O_WRONLY
+	// #nosec G304 -- filename 来自日志目录和轮转规则，独占创建不跟随已存在的链接。
+	file, err := os.OpenFile(filename, appendFlags|os.O_CREATE|os.O_EXCL, 0o600)
+	if !errors.Is(err, os.ErrExist) {
+		return file, err
+	}
+	info, err := os.Lstat(filename)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, errUnsafeLogFilePath
+	}
+	// #nosec G304 -- 仅追加现存文件，调用方还会在写入前复核句柄身份。
+	return os.OpenFile(filename, appendFlags, 0)
 }
 
 // validateOpenedLogFile 防止预先存在的符号链接或路径替换把日志写入目录之外。
