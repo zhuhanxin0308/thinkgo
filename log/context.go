@@ -10,6 +10,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/redact"
 )
 
 const (
@@ -239,7 +241,7 @@ func isSensitiveLogKey(key string) bool {
 			return true
 		}
 	}
-	return false
+	return redact.CredentialAlias(key)
 }
 
 // SanitizeErrorText 脱敏错误文本中的常见凭据键值，供跨包错误日志复用。
