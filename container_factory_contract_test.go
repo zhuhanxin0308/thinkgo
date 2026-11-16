@@ -11,7 +11,7 @@ func TestInvalidFactorySignatureDoesNotExecute(t *testing.T) {
 		calls := 0
 		for _, factory := range []interface{}{
 			func() { calls++ },
-			func() (int, error, string) { calls++; return 1, nil, "" },
+			func() (int, string, bool) { calls++; return 1, "", false },
 			func() (int, string) { calls++; return 1, "" },
 		} {
 			switch lifecycle {
