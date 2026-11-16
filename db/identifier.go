@@ -88,14 +88,7 @@ func validateIdentifierList(value string) error {
 			return errors.New("identifier list contains empty item")
 		}
 
-		expr := item
-		alias := ""
-		lower := strings.ToLower(item)
-		if index := strings.Index(lower, " as "); index >= 0 {
-			expr = strings.TrimSpace(item[:index])
-			alias = strings.TrimSpace(item[index+4:])
-		}
-
+		expr, alias := splitIdentifierAlias(item)
 		if err := validateIdentifier(expr); err != nil {
 			return err
 		}
@@ -107,6 +100,13 @@ func validateIdentifierList(value string) error {
 	}
 
 	return nil
+}
+
+func splitIdentifierAlias(item string) (column, alias string) {
+	if index := strings.Index(strings.ToLower(item), " as "); index >= 0 {
+		return strings.TrimSpace(item[:index]), strings.TrimSpace(item[index+4:])
+	}
+	return item, ""
 }
 
 // validateOrderClause 校验排序子句，只允许“字段 + 可选 ASC/DESC”的组合。

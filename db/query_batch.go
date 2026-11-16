@@ -412,6 +412,10 @@ func (q *Query) ChunkByIdWithCodec(count int, pkField string, codec CursorCodec,
 
 	readLimit := count
 	hasLookAhead := q.canStreamSQLRows()
+	cursorField, err := q.resolveCursorResultField(pkField, strings.ContainsRune(pkField, '.') && hasLookAhead)
+	if err != nil {
+		return q.reportError("chunk_by_id", err, nil)
+	}
 	if hasLookAhead {
 		readLimit, hasLookAhead = chunkReadLimit(count)
 	}
@@ -438,7 +442,7 @@ func (q *Query) ChunkByIdWithCodec(count int, pkField string, codec CursorCodec,
 		if hasMore {
 			visibleRows = rows[:count]
 		}
-		next, err := cursorPageLastCursor(visibleRows, pkField, lastID, codec)
+		next, err := cursorPageLastCursor(visibleRows, cursorField, lastID, codec)
 		if err != nil {
 			return q.reportError("chunk_by_id", err, nil)
 		}

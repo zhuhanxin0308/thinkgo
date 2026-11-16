@@ -60,18 +60,18 @@ func TestPredicateAndCursorValidationContracts(t *testing.T) {
 
 	codec := OrderedCursorCodec{}
 	validRows := []map[string]interface{}{{"id": int64(1)}, {"id": int64(2)}}
-	if err := validateCursorRows(validRows, "id", nil, codec); err != nil {
+	if err := validateCursorRows(validRows, cursorResultField{name: "id"}, nil, codec); err != nil {
 		t.Fatalf("递增游标行不应失败: %v", err)
 	}
 	for _, rows := range [][]map[string]interface{}{
 		{{"name": "missing-id"}},
 		{{"id": int64(2)}, {"id": int64(1)}},
 	} {
-		if err := validateCursorRows(rows, "id", nil, codec); !errors.Is(err, ErrInvalidDatabaseRow) {
+		if err := validateCursorRows(rows, cursorResultField{name: "id"}, nil, codec); !errors.Is(err, ErrInvalidDatabaseRow) {
 			t.Fatalf("非法游标行应被拒绝: rows=%#v err=%v", rows, err)
 		}
 	}
-	if err := validateCursorRows([]map[string]interface{}{{"id": int64(2)}}, "id", int64(2), codec); !errors.Is(err, ErrInvalidDatabaseRow) {
+	if err := validateCursorRows([]map[string]interface{}{{"id": int64(2)}}, cursorResultField{name: "id"}, int64(2), codec); !errors.Is(err, ErrInvalidDatabaseRow) {
 		t.Fatalf("不大于前游标的结果应被拒绝: %v", err)
 	}
 	if err := validateCursorBoundary(nil, codec); !errors.Is(err, ErrInvalidDatabaseRow) {

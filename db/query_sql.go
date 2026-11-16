@@ -23,6 +23,18 @@ func (q *Query) resolveTable() string {
 	return q.db.prefix + q.table
 }
 
+// selectProjection 让 JOIN 的通配投影只返回主表列，避免同名列覆盖。
+func (q *Query) selectProjection() string {
+	fields := strings.TrimSpace(q.fields)
+	if fields == "" || fields == "*" {
+		if len(q.joins) > 0 {
+			return q.resolveTable() + ".*"
+		}
+		return "*"
+	}
+	return fields
+}
+
 // resolveJoinTable 为 JOIN 表套用与主表一致的前缀规则，避免主表带前缀而 JOIN 表不带导致表名错配。
 // rawTable 为 true（通过 JoinRaw 注册）时按完整表名处理，不再追加前缀。
 func (q *Query) resolveJoinTable(join joinClause) string {
@@ -219,7 +231,7 @@ func (q *Query) BuildSelectSQL() (string, []interface{}, error) {
 	}
 
 	tableName := q.resolveTable()
-	fields := q.fields
+	fields := q.selectProjection()
 	if q.aggregateExpression != nil {
 		if err := q.aggregateExpression.validate(); err != nil {
 			return "", nil, q.reportError("build_sql", err, nil)
@@ -227,11 +239,6 @@ func (q *Query) BuildSelectSQL() (string, []interface{}, error) {
 		fields = fmt.Sprintf("%s(%s) AS %s", strings.ToUpper(strings.TrimSpace(q.aggregateExpression.Function)), q.aggregateExpression.Field, q.aggregateExpression.Alias)
 	}
 	group := q.group
-	// JOIN 默认只返回主表列，避免不同表的同名列在 map 结果中静默覆盖。
-	// 关联表字段必须通过 Field 显式选择并使用唯一别名。
-	if fields == "*" && len(q.joins) > 0 {
-		fields = tableName + ".*"
-	}
 	builder := q.builder()
 	lockSpec := LockSpec{}
 	if builder != nil {
