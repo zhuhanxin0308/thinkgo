@@ -78,6 +78,43 @@ func decodeRedisTestCounter(t *testing.T, data string) int {
 	return counter
 }
 
+func TestRedisSessionWithoutExplicitExpiryUsesBoundedIdleLifetime(t *testing.T) {
+	driver, server := newMiniredisSession(t)
+	const sessionID = "browser-session"
+	const data = `{"version":1,"data":{"counter":1}}`
+	const idleLifetime = 24 * time.Hour
+	key := driver.dataKey(sessionID)
+	// 模拟已有的无 TTL 键，首次修改时应同步回收策略。
+	if err := server.Set(key, data); err != nil {
+		t.Fatal(err)
+	}
+	if err := driver.Write(sessionID, data); err != nil {
+		t.Fatal(err)
+	}
+	if got := server.TTL(key); got != idleLifetime {
+		t.Fatalf("浏览器会话应有空闲回收时限: %v", got)
+	}
+	server.FastForward(idleLifetime - time.Minute)
+	if _, found, err := driver.Read(sessionID); !found || err != nil {
+		t.Fatalf("回收窗口内应保留会话: found=%t err=%v", found, err)
+	}
+	if err := driver.Update(sessionID, func(current string, found bool) (string, bool, error) {
+		if !found || current != data {
+			return "", false, errors.New("更新前的浏览器会话丢失")
+		}
+		return current, false, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := server.TTL(key); got != idleLifetime {
+		t.Fatalf("更新应刷新空闲回收时限: %v", got)
+	}
+	server.FastForward(idleLifetime)
+	if _, found, err := driver.Read(sessionID); found || err != nil {
+		t.Fatalf("达到空闲时限后应自动回收: found=%t err=%v", found, err)
+	}
+}
+
 // TestRedisSessionRoundTripWithMiniredis 验证 Redis Session 的读写、TTL、删除和清理语义。
 func TestRedisSessionRoundTripWithMiniredis(t *testing.T) {
 	driver, server := newMiniredisSession(t)

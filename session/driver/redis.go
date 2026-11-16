@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"github.com/zhuhanxin0308/thinkgo/v3/session/internal/retention"
 )
 
 const (
@@ -50,11 +51,7 @@ end
 if (redis.call("GET", KEYS[3]) or "") ~= (string.match(ARGV[1], "^[^|]*|(.*)$") or "") then
 	return -2
 end
-if ARGV[3] == "0" then
-	redis.call("SET", KEYS[2], ARGV[2])
-else
-	redis.call("SET", KEYS[2], ARGV[2], "PX", ARGV[3])
-end
+redis.call("SET", KEYS[2], ARGV[2], "PX", ARGV[3])
 return 1
 `
 	redisSessionDeleteLuaScript = `
@@ -341,13 +338,7 @@ func (r *Redis) writeUnlockedContext(parent context.Context, owner, id string, d
 	}
 	ctx, cancel := r.contextWithParent(parent)
 	defer cancel()
-	ttlMilliseconds := int64(0)
-	if ttl > 0 {
-		ttlMilliseconds = ttl.Milliseconds()
-		if ttlMilliseconds < 1 {
-			ttlMilliseconds = 1
-		}
-	}
+	ttlMilliseconds := max(ttl.Milliseconds(), 1)
 	result, err := r.client.Eval(ctx, redisSessionWriteLuaScript, []string{r.lockKey(id), r.dataKey(id), r.generationKey()}, owner, data, ttlMilliseconds).Result()
 	if err != nil {
 		return err
@@ -489,8 +480,8 @@ func redisSessionTTL(data string) (time.Duration, error) {
 	if err := json.Unmarshal([]byte(data), &envelope); err != nil {
 		return 0, fmt.Errorf("session 信封非法: %w", err)
 	}
-	if envelope.ExpireAt <= 0 {
-		return 0, nil
+	if envelope.ExpireAt == 0 {
+		return retention.IdleLifetime, nil
 	}
 	ttl := time.Until(time.Unix(envelope.ExpireAt, 0))
 	if ttl <= 0 {

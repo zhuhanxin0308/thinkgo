@@ -39,7 +39,7 @@ func TestNewRedisStrictConfig(t *testing.T) {
 
 // TestRedisSessionTTL 验证 Redis Session 从标准信封正确推导原生 TTL。
 func TestRedisSessionTTL(t *testing.T) {
-	if ttl, err := redisSessionTTL(`{"version":1,"data":{}}`); err != nil || ttl != 0 {
+	if ttl, err := redisSessionTTL(`{"version":1,"data":{}}`); err != nil || ttl != 24*time.Hour {
 		t.Fatalf("无过期时间的 Session TTL 错误: ttl=%v err=%v", ttl, err)
 	}
 	if ttl, err := redisSessionTTL(`{"expire_at":1}`); err != nil || ttl <= 0 || ttl > time.Millisecond*2 {

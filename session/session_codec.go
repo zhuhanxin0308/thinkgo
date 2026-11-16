@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/zhuhanxin0308/thinkgo/v3/session/internal/retention"
 )
 
 // validateSessionKey 校验键名的长度、UTF-8 与控制字符边界。
@@ -76,7 +78,7 @@ func encodeSessionEnvelope(envelope sessionEnvelope, maxBytes int) (string, bool
 func encodeRevokedEnvelope(config Config, now time.Time) (string, bool, error) {
 	lifetime := time.Duration(config.Expire) * time.Second
 	if lifetime <= 0 {
-		lifetime = 24 * time.Hour
+		lifetime = retention.IdleLifetime
 	}
 	envelope := sessionEnvelope{
 		Version: sessionEnvelopeVersion, ExpireAt: now.Add(lifetime).Unix(), Revoked: true,
