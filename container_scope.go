@@ -225,7 +225,7 @@ func (s *ContainerScope) scopeCloseError() error {
 	return s.state.closeErr
 }
 
-func (c *Container) makeScoped(abstract string, registered binding, resolutionScope *resolution, params ...interface{}) (interface{}, error) {
+func (c *Container) makeScoped(abstract string, registered binding, resolutionScope *resolution, params ...interface{}) (instance interface{}, err error) {
 	state := c.lifetimeScope
 	if state == nil {
 		return nil, fmt.Errorf("%w: %s", ErrContainerScopeRequired, abstract)
@@ -265,35 +265,41 @@ func (c *Container) makeScoped(abstract string, registered binding, resolutionSc
 	state.building[key] = active
 	state.lock.Unlock()
 
-	instance, err := c.build(registered, resolutionScope.push(abstract, active.node, Scoped), params...)
-	constructed := err == nil
+	global := c.sharedState()
+	var returned, constructed bool
+	defer func() {
+		if !returned {
+			err = fmt.Errorf("build scoped %s failed: %w", abstract, ErrContainerBuildAborted)
+		}
+		global.lock.RLock()
+		defer global.lock.RUnlock()
+		current, exists := global.bindings[abstract]
+		if err == nil && (!exists || current.generation != registered.generation || current.lifecycle != Scoped) {
+			err = bindingChangedError(abstract)
+		}
+
+		state.lock.Lock()
+		defer state.lock.Unlock()
+		// 工厂成功后所有权已经交给作用域；即使绑定失效，也必须保留到统一逆序关闭。
+		if constructed {
+			state.created = append(state.created, instance)
+		}
+		active.err = err
+		if err == nil {
+			active.instance = instance
+			if state.instances == nil {
+				state.instances = make(map[string]scopedInstance)
+			}
+			state.instances[abstract] = scopedInstance{value: instance, generation: registered.generation}
+		}
+		delete(state.building, key)
+		close(active.done)
+	}()
+	instance, err = c.build(registered, resolutionScope.push(abstract, active.node, Scoped), params...)
+	returned, constructed = true, err == nil
 	if err != nil {
 		err = fmt.Errorf("build scoped %s failed: %w", abstract, err)
 	}
-	global := c.sharedState()
-	global.lock.RLock()
-	current, exists := global.bindings[abstract]
-	if err == nil && (!exists || current.generation != registered.generation || current.lifecycle != Scoped) {
-		err = bindingChangedError(abstract)
-	}
-
-	state.lock.Lock()
-	// 工厂成功后所有权已经交给作用域；即使绑定失效，也必须保留到统一逆序关闭。
-	if constructed {
-		state.created = append(state.created, instance)
-	}
-	active.err = err
-	if err == nil {
-		active.instance = instance
-		if state.instances == nil {
-			state.instances = make(map[string]scopedInstance)
-		}
-		state.instances[abstract] = scopedInstance{value: instance, generation: registered.generation}
-	}
-	delete(state.building, key)
-	close(active.done)
-	state.lock.Unlock()
-	global.lock.RUnlock()
 	return instance, err
 }
 
