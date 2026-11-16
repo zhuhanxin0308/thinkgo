@@ -43,12 +43,9 @@ func ResponseFromRecorder(recorder *httptest.ResponseRecorder) *fwcontext.Respon
 	if recorder == nil {
 		return InternalServerErrorResponse()
 	}
-	status := recorder.Code
-	if status == 0 {
-		status = http.StatusOK
-	}
-	response := fwcontext.NewResponse().Code(status)
-	for key, values := range recorder.Header() {
+	result := recorder.Result()
+	response := fwcontext.NewResponse().Code(result.StatusCode)
+	for key, values := range result.Header {
 		if IsHostManagedHeader(key) {
 			continue
 		}
@@ -60,7 +57,10 @@ func ResponseFromRecorder(recorder *httptest.ResponseRecorder) *fwcontext.Respon
 			}
 		}
 	}
-	return response.Content(recorder.Body.String())
+	if recorder.Body != nil {
+		response.Content(recorder.Body.String())
+	}
+	return response
 }
 
 // IsHostManagedHeader 标记不能从内存渲染器复制到最终连接的协议级响应头。
