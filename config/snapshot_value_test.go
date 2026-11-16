@@ -5,6 +5,7 @@ import (
 	"errors"
 	"math/big"
 	"os"
+	"path/filepath"
 	"reflect"
 	"sync"
 	"sync/atomic"
@@ -60,6 +61,76 @@ func TestTypedSnapshotPreservesNilAndEmptyScalarSlices(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestTypedSnapshotPreservesDynamicCollections 验证空集合与 null 在读写和快照中保留各自语义。
+func TestTypedSnapshotPreservesDynamicCollections(t *testing.T) {
+	cfg := NewConfig()
+	file := filepath.Join(t.TempDir(), "feature.json")
+	if err := os.WriteFile(file, []byte(`{"from_file":null}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Load(file, "feature"); err != nil {
+		t.Fatal(err)
+	}
+	values := []struct {
+		key, json string
+		input     interface{}
+	}{
+		{"nil_map", "null", map[string]interface{}(nil)},
+		{"empty_map", "{}", map[string]interface{}{}},
+		{"map", `{"inner":null}`, map[string]interface{}{"INNER": []interface{}(nil)}},
+		{"nil_list", "null", []interface{}(nil)},
+		{"empty_list", "[]", []interface{}{}},
+		{"list", `[null]`, []interface{}{map[string]interface{}(nil)}},
+		{"nil_string_map", "null", map[string]string(nil)},
+	}
+	for _, item := range values {
+		if err := cfg.Set("feature."+item.key, item.input); err != nil {
+			t.Fatal(err)
+		}
+	}
+	clone := cfg.Clone()
+	replaced := NewConfig()
+	replaced.ReplaceWithSnapshot(clone)
+	for _, current := range []*Config{cfg, clone, replaced} {
+		group := current.GetMap("feature")
+		for _, item := range values {
+			path := "feature." + item.key
+			if !current.Has(path) {
+				t.Errorf("已设置的路径不可见: %s", path)
+			}
+			for _, value := range []interface{}{current.Get(path), group[item.key]} {
+				data, err := json.Marshal(value)
+				if err != nil || string(data) != item.json || reflect.TypeOf(value) != reflect.TypeOf(item.input) {
+					t.Errorf("配置 %s 应为 %T、JSON %s，实际为 %T、%s，错误 %v", path, item.input, item.json, value, data, err)
+				}
+			}
+		}
+		if group["from_file"] != nil || !current.Has("feature.from_file") || current.GetMap("feature.nil_map") != nil {
+			t.Error("配置文件 null 和强类型 nil map 应保留空值")
+		}
+		if err := current.Set("feature.nil_map.child", true); err != nil {
+			t.Fatal(err)
+		}
+		if !current.GetBool("feature.nil_map.child", false) {
+			t.Error("应能在原 nil map 下写入子节点")
+		}
+	}
+	for _, loadAll := range []bool{false, true} {
+		if err := cfg.Set("feature", map[string]interface{}(nil)); err != nil {
+			t.Fatal(err)
+		}
+		var err error
+		if loadAll {
+			err = cfg.LoadAll(filepath.Dir(file))
+		} else {
+			err = cfg.Load(file, "feature")
+		}
+		if err != nil || !cfg.Has("feature.from_file") {
+			t.Fatalf("文件配置应能覆盖 nil 命名空间，批量加载=%t，错误 %v", loadAll, err)
+		}
 	}
 }
 

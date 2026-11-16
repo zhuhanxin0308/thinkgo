@@ -138,6 +138,17 @@ func predicateNodeSQL(node PredicateNode, builder Builder, dialects ...string) (
 			}
 			return field + " " + node.Operator + " (" + strings.Join(marks, ", ") + ")", cloned, nil
 		default:
+			// 原生驱动也使用此函数生成条件缓存，只有 SQL 构造器或显式 SQL 编译应用 NULL 规则。
+			if len(cloned) == 1 && cloned[0] == nil && (builder != nil || len(dialects) > 0) {
+				switch node.Operator {
+				case "=", "IS":
+					return field + " IS NULL", nil, nil
+				case "!=", "<>", "IS NOT":
+					return field + " IS NOT NULL", nil, nil
+				default:
+					return "", nil, fmt.Errorf("%w: 操作符 %q 不接受 NULL 值", ErrInvalidQuery, node.Operator)
+				}
+			}
 			return field + " " + node.Operator + " ?", cloned, nil
 		}
 	default:

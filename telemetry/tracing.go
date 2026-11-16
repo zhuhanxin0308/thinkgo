@@ -73,13 +73,12 @@ func (tracing *Tracing) Enabled() bool {
 	return tracing != nil && tracing.enabled && tracing.tracer != nil && tracing.propagator != nil
 }
 
-// StartServer 提取远程父上下文并创建 HTTP 服务端 Span。
+// StartServer 提取远程父上下文并创建 HTTP 服务端 Span。末尾两个参数保留调用兼容性。
 func (tracing *Tracing) StartServer(
 	ctx context.Context,
 	header http.Header,
 	method string,
-	path string,
-	host string,
+	_, _ string,
 ) (context.Context, *HTTPSpan) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -92,18 +91,12 @@ func (tracing *Tracing) StartServer(
 	if method == "" {
 		method = "HTTP"
 	}
-	path = strings.TrimSpace(path)
-	if path == "" {
-		path = "/"
-	}
 	ctx, span := tracing.tracer.Start(
 		ctx,
 		method,
 		trace.WithSpanKind(trace.SpanKindServer),
 		trace.WithAttributes(
 			attribute.String("http.request.method", method),
-			attribute.String("url.path", path),
-			attribute.String("server.address", strings.TrimSpace(host)),
 		),
 	)
 	httpSpan := &HTTPSpan{span: span, method: method}

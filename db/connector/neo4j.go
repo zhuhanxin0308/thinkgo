@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/zhuhanxin0308/thinkgo/v3/db"
 	neodriver "github.com/zhuhanxin0308/thinkgo/v3/db/driver/neo4j"
@@ -25,6 +26,10 @@ func (n *Neo4j) Connect(config db.Config) (db.Connection, error) {
 	if validated.Username == "" && validated.Password != "" {
 		return nil, fmt.Errorf("%w: Neo4j 密码不能脱离用户名配置", db.ErrInvalidDatabaseConfig)
 	}
+	validated, operationTimeout, err := takeNativeOperationTimeout(validated)
+	if err != nil {
+		return nil, err
+	}
 	uri, err := buildNeo4jURI(validated)
 	if err != nil {
 		return nil, err
@@ -37,10 +42,10 @@ func (n *Neo4j) Connect(config db.Config) (db.Connection, error) {
 	if err != nil {
 		return nil, err
 	}
-	return connectNeoWithDriver(validated, driver)
+	return connectNeoWithDriver(validated, driver, operationTimeout)
 }
 
-func connectNeoWithDriver(validated db.Config, driver neo4j.DriverWithContext) (db.Connection, error) {
+func connectNeoWithDriver(validated db.Config, driver neo4j.DriverWithContext, operationTimeout time.Duration) (db.Connection, error) {
 	if driver == nil {
 		return nil, db.ErrDatabaseUnavailable
 	}
@@ -51,56 +56,18 @@ func connectNeoWithDriver(validated db.Config, driver neo4j.DriverWithContext) (
 		return nil, errors.Join(connectivityErr, closeNeo4jDriver(driver))
 	}
 
+	connection := &neodriver.Neo4jConnection{
+		Driver:           driver,
+		Database:         validated.Database,
+		OperationTimeout: operationTimeout,
+	}
 	probeCtx, probeCancel := context.WithTimeout(context.Background(), remoteConnectionTimeout)
-	probeErr := verifyNeo4jTargetDatabase(probeCtx, driver, validated.Database)
+	probeErr := connection.PingContext(probeCtx)
 	probeCancel()
 	if probeErr != nil {
 		return nil, errors.Join(probeErr, closeNeo4jDriver(driver))
 	}
-
-	return &neodriver.Neo4jConnection{
-		Driver:           driver,
-		Database:         validated.Database,
-		OperationTimeout: remoteConnectionTimeout,
-	}, nil
-}
-
-func verifyNeo4jTargetDatabase(ctx context.Context, driver neo4j.DriverWithContext, database string) (resultErr error) {
-	if ctx == nil || driver == nil {
-		return db.ErrDatabaseUnavailable
-	}
-	session := driver.NewSession(ctx, neo4j.SessionConfig{AccessMode: neo4j.AccessModeRead, DatabaseName: database})
-	if session == nil {
-		return fmt.Errorf("%w: Neo4j 驱动返回空目标数据库会话", db.ErrDatabaseUnavailable)
-	}
-	defer func() {
-		closeCtx, cancel := context.WithTimeout(context.Background(), remoteConnectionTimeout)
-		defer cancel()
-		resultErr = errors.Join(resultErr, session.Close(closeCtx))
-	}()
-
-	value, err := session.ExecuteRead(ctx, func(transaction neo4j.ManagedTransaction) (interface{}, error) {
-		result, err := transaction.Run(ctx, "RETURN 1 AS thinkgo_probe", nil)
-		if err != nil {
-			return nil, err
-		}
-		if result == nil {
-			return nil, fmt.Errorf("%w: Neo4j 目标数据库探测返回空结果", db.ErrDatabaseUnavailable)
-		}
-		return result.Single(ctx)
-	})
-	if err != nil {
-		return err
-	}
-	record, ok := value.(*neo4j.Record)
-	if !ok || record == nil {
-		return fmt.Errorf("%w: Neo4j 目标数据库探测结果类型为 %T", db.ErrDatabaseUnavailable, value)
-	}
-	probe, exists := record.Get("thinkgo_probe")
-	if !exists || probe != int64(1) {
-		return fmt.Errorf("%w: Neo4j 目标数据库探测结果非法", db.ErrDatabaseUnavailable)
-	}
-	return nil
+	return connection, nil
 }
 
 func closeNeo4jDriver(driver neo4j.DriverWithContext) error {

@@ -31,18 +31,19 @@ func NewSQL(name string, upStatements, downStatements []string) (Migration, erro
 		return nil, fmt.Errorf("%w: 迁移 %q 至少需要一条 Up 语句", ErrInvalidMigration, name)
 	}
 	checksum := checksumStatements(up, down)
+	var downOperation func(context.Context, Executor) error
+	if len(down) != 0 {
+		downOperation = func(ctx context.Context, executor Executor) error {
+			return executeStatements(ctx, executor, down)
+		}
+	}
 	return New(
 		name,
 		checksum,
 		func(ctx context.Context, executor Executor) error {
 			return executeStatements(ctx, executor, up)
 		},
-		func(ctx context.Context, executor Executor) error {
-			if len(down) == 0 {
-				return fmt.Errorf("%w: %s", ErrIrreversibleMigration, name)
-			}
-			return executeStatements(ctx, executor, down)
-		},
+		downOperation,
 	)
 }
 

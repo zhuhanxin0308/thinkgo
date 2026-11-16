@@ -1,9 +1,13 @@
 package driver
 
-import "errors"
+import (
+	"errors"
+
+	"github.com/zhuhanxin0308/thinkgo/v3/session/internal/sessionkey"
+)
 
 const (
-	maxSessionIDBytes         = 128
+	maxSessionIDBytes         = sessionkey.MaxBytes
 	maxFileSessionEntryBytes  = 1 << 20
 	fileSessionLockShardCount = 64
 )
@@ -29,16 +33,7 @@ var (
 
 // validateSessionID 统一约束所有驱动入口，避免存储键注入与资源滥用。
 func validateSessionID(id string) error {
-	if id == "" || len(id) > maxSessionIDBytes {
-		return ErrInvalidSessionID
-	}
-	for _, character := range id {
-		isDigit := character >= '0' && character <= '9'
-		isLower := character >= 'a' && character <= 'z'
-		isUpper := character >= 'A' && character <= 'Z'
-		if isDigit || isLower || isUpper || character == '-' || character == '_' {
-			continue
-		}
+	if id == "" || len(id) > maxSessionIDBytes || !sessionkey.ValidCharacters(id) {
 		return ErrInvalidSessionID
 	}
 	return nil

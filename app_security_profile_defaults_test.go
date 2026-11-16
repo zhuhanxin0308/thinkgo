@@ -143,6 +143,37 @@ func TestBrowserSecurityDefaultsReachAssembledResponses(t *testing.T) {
 	}
 }
 
+// TestStrictBrowserSessionCookieInheritsSecure 验证明文请求也继承 Cookie 工厂的 Secure 配置。
+func TestStrictBrowserSessionCookieInheritsSecure(t *testing.T) {
+	app := writeBrowserSecurityConfig(t, true, nil)
+	if err := app.Initialize(); err != nil {
+		t.Fatal(err)
+	}
+	raw := httptest.NewRequest(http.MethodGet, "http://example.test/page", nil)
+	response := app.Middleware().Then(fwcontext.MustNewRequest(raw), func(request *fwcontext.Request) *fwcontext.Response {
+		if token := request.BuildToken(); token == "" {
+			t.Fatal("请求未绑定可写的 Session")
+		}
+		return fwcontext.NewResponse().Content("page")
+	})
+	if response.GetStatus() != http.StatusOK {
+		t.Fatalf("请求未返回成功状态: %d", response.GetStatus())
+	}
+	sessionName, err := app.Session().CookieName()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, cookie := range (&http.Response{Header: response.Headers()}).Cookies() {
+		if cookie.Name == sessionName {
+			if !cookie.Secure {
+				t.Fatal("未显式配置 session.secure 时，Session Cookie 应继承 cookie.secure")
+			}
+			return
+		}
+	}
+	t.Fatalf("响应未下发 Session Cookie %q", sessionName)
+}
+
 func TestStrictBrowserSecurityRejectsPolicyDowngrades(t *testing.T) {
 	for path, value := range map[string]interface{}{"cookie.httponly": false, "cookie.samesite": "", "session.samesite": "None", "session.reject_unknown_id": false, "app.csrf_enable": false} {
 		t.Run(path, func(t *testing.T) {

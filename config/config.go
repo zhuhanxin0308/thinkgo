@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"math/big"
 	"os"
@@ -144,7 +145,7 @@ func (c *Config) Load(file string, name string) error {
 	if name != "" {
 		// ThinkPHP 的命名空间合并只在命名空间的第一层合并，嵌套 map 会整体替换。
 		existing, ok := c.config[name].(map[string]interface{})
-		if !ok {
+		if !ok || existing == nil {
 			existing = make(map[string]interface{})
 		}
 		mergeConfigMap(existing, data)
@@ -553,14 +554,16 @@ func deepCopyMap(src map[string]interface{}) map[string]interface{} {
 func deepCopyValue(value interface{}) interface{} {
 	switch typed := value.(type) {
 	case map[string]interface{}:
+		if typed == nil {
+			return typed
+		}
 		return deepCopyMap(typed)
 	case map[string]string:
-		cloned := make(map[string]string, len(typed))
-		for key, item := range typed {
-			cloned[key] = item
-		}
-		return cloned
+		return maps.Clone(typed)
 	case []interface{}:
+		if typed == nil {
+			return typed
+		}
 		cloned := make([]interface{}, len(typed))
 		for index, item := range typed {
 			cloned[index] = deepCopyValue(item)
@@ -618,7 +621,7 @@ func (c *Config) Set(name string, value interface{}) error {
 		}
 
 		if nested, exists := current[part]; exists {
-			if nestedMap, mapOK := nested.(map[string]interface{}); mapOK {
+			if nestedMap, mapOK := nested.(map[string]interface{}); mapOK && nestedMap != nil {
 				current = nestedMap
 				continue
 			}
@@ -733,7 +736,7 @@ func (c *Config) LoadAll(dir string) error {
 	working := deepCopyMap(c.config)
 	for index, candidate := range candidates {
 		existing, ok := working[candidate.name].(map[string]interface{})
-		if !ok {
+		if !ok || existing == nil {
 			existing = make(map[string]interface{})
 		}
 		mergeConfigMap(existing, loaded[index])
@@ -814,6 +817,9 @@ func normalizeConfigInputWithSpans(value interface{}, depth int, path string, sp
 		if depth > maxConfigJSONDepth {
 			return nil, fmt.Errorf("%w at %s", ErrConfigJSONTooDeep, path)
 		}
+		if typed == nil {
+			return typed, nil
+		}
 		result := make(map[string]interface{}, len(typed))
 		for key, item := range typed {
 			canonicalKey := strings.ToLower(key)
@@ -830,6 +836,9 @@ func normalizeConfigInputWithSpans(value interface{}, depth int, path string, sp
 	case []interface{}:
 		if depth > maxConfigJSONDepth {
 			return nil, fmt.Errorf("%w at %s", ErrConfigJSONTooDeep, path)
+		}
+		if typed == nil {
+			return typed, nil
 		}
 		spans.Record(reflect.ValueOf(typed))
 		result := make([]interface{}, len(typed))

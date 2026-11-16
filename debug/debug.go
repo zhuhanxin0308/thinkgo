@@ -6,10 +6,12 @@ import (
 	"time"
 
 	"github.com/zhuhanxin0308/thinkgo/v3/context"
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/snapshot"
 )
 
 const (
 	defaultMemStatsSampleInterval = 5 * time.Second
+	unsupportedDebugVariable      = "[无法安全复制的调试值]"
 
 	// RequestKey 是请求上下文中存放调试 collector 的统一键。
 	RequestKey = "_debug"
@@ -283,7 +285,7 @@ func (d *Debug) AddCache(op, key string) {
 	})
 }
 
-// AddVar 添加调试变量
+// AddVar 保存调试值的独立副本。无法安全复制的值在快照中显示固定提示。
 func (d *Debug) AddVar(key string, val interface{}) {
 	if d == nil || !d.Enabled {
 		return
@@ -297,7 +299,7 @@ func (d *Debug) AddVar(key string, val interface{}) {
 		d.truncated |= truncationVar
 		return
 	}
-	d.vars[key] = val
+	d.vars[key] = copyDebugVariable(val)
 }
 
 // AddFile 添加文件加载记录（自动去重）
@@ -342,11 +344,12 @@ func (d *Debug) GetInfo() map[string]interface{} {
 		return emptyDebugInfo()
 	}
 	d.lock.RLock()
+	variables := cloneDebugVars(d.vars)
 	info := map[string]interface{}{
 		"logs":  cloneDebugEntries(d.logs),
 		"sqls":  cloneDebugEntries(d.sqls),
 		"cache": cloneDebugEntries(d.cache),
-		"vars":  cloneDebugVars(d.vars),
+		"vars":  variables,
 		"files": append([]string(nil), d.files...),
 		"time":  time.Since(d.start).Seconds(),
 		"truncated": map[string]bool{
@@ -359,6 +362,10 @@ func (d *Debug) GetInfo() map[string]interface{} {
 	}
 	sampler := d.memSampler
 	d.lock.RUnlock()
+	// 写入时已隔离底层对象，快照的递归复制可以在锁外完成。
+	for key, value := range variables {
+		variables[key] = copyDebugVariable(value)
+	}
 	if sampler != nil {
 		info["mem"] = sampler.CurrentAlloc()
 	} else {
@@ -416,11 +423,19 @@ func cloneDebugEntries(entries []map[string]interface{}) []map[string]interface{
 	return cloned
 }
 
-// cloneDebugVars 复制调试变量表，保持 Debug 内部状态只由自身方法维护。
+// cloneDebugVars 复制稳定的调试变量引用，便于在锁外复制实际值。
 func cloneDebugVars(vars map[string]interface{}) map[string]interface{} {
 	cloned := make(map[string]interface{}, len(vars))
 	for key, value := range vars {
 		cloned[key] = value
+	}
+	return cloned
+}
+
+func copyDebugVariable(value interface{}) interface{} {
+	cloned, err := snapshot.Copy(value)
+	if err != nil {
+		return unsupportedDebugVariable
 	}
 	return cloned
 }

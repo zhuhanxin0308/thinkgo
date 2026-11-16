@@ -63,8 +63,14 @@ func (c *Cache) GetManyContext(ctx context.Context, keys []string) (map[string]i
 	if values == nil {
 		values = make(map[string]interface{})
 	}
+	watermark, err := c.batchInvalidationReader(ctx, driver, values)
+	if err != nil {
+		return nil, err
+	}
 	for key, raw := range values {
-		value, visible, unwrapErr := c.visibleCacheValue(ctx, driver, key, raw)
+		value, visible, unwrapErr := visibleCacheValueAtFence(raw, func() (uint64, error) {
+			return watermark(key)
+		})
 		if unwrapErr != nil {
 			return nil, unwrapErr
 		}

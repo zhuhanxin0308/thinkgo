@@ -27,12 +27,15 @@ const (
 	actionContextRollback
 )
 
+type activeTransactionContextKey struct{}
+
 // Tx 表示持有数据库生命周期租约的 SQL 事务。
 type Tx struct {
 	db          *DB
 	tx          *sql.Tx
 	connection  *SQLConnection
 	ctx         context.Context
+	outer       *Tx
 	mu          sync.Mutex
 	state       transactionState
 	done        chan struct{}
@@ -62,6 +65,18 @@ func (db *DB) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) {
 		release()
 		return nil, err
 	}
+	outer, _ := ctx.Value(activeTransactionContextKey{}).(*Tx)
+	for active := outer; active != nil; active = active.outer {
+		if active.db != db && active.connection.DB != sqlConnection.DB {
+			continue
+		}
+		select {
+		case <-active.done:
+		default:
+			release()
+			return nil, ErrNestedTransaction
+		}
+	}
 	handle, err := sqlConnection.DB.BeginTx(ctx, opts)
 	if err != nil {
 		release()
@@ -71,13 +86,19 @@ func (db *DB) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) {
 		db:         db,
 		tx:         handle,
 		connection: sqlConnection,
-		ctx:        ctx,
+		outer:      outer,
 		state:      transactionActive,
 		done:       make(chan struct{}),
 		release:    release,
 	}
+	transaction.ctx = context.WithValue(ctx, activeTransactionContextKey{}, transaction)
 	go transaction.watchContext()
 	return transaction, nil
+}
+
+// Context 返回携带当前事务作用域的上下文，供下游调用识别同库事务。
+func (t *Tx) Context() context.Context {
+	return t.ctx
 }
 
 func (db *DB) Transaction(fn func(tx *Tx) error) error {

@@ -172,7 +172,7 @@ def run_load(environment, variables, path, run_id, scenario, duration, rate, mea
                                **{name: [process.pid] for name, process in environment.infrastructure.items()},
                                "load": [child.pid]}, environment.protocol["sample_interval_seconds"])
             sampler.start()
-        status = child.child.wait(timeout=duration + environment.protocol["request_timeout_seconds"] + 30)
+        status = child.wait(timeout=duration + environment.protocol["request_timeout_seconds"] + 30)
         if status:
             raise RuntimeError(f"负载进程失败({status}): {path.with_suffix('.console.txt').read_text()}")
     finally:

@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/zhuhanxin0308/thinkgo/v3/db"
 	mongodriver "github.com/zhuhanxin0308/thinkgo/v3/db/driver/mongo"
@@ -54,6 +55,7 @@ func TestMongoConnectVerifiesReachabilityAndReturnsV2Connection(t *testing.T) {
 		Hostname: "mongo.internal",
 		Hostport: "27017",
 		Database: "app",
+		Params:   map[string]string{"operation_timeout": "52s"},
 	}, func(clientOptions ...*options.ClientOptions) (*mongo.Client, error) {
 		if len(clientOptions) != 1 || clientOptions[0] == nil {
 			t.Fatalf("MongoDB 连接器必须传入唯一有效的客户端配置")
@@ -67,7 +69,8 @@ func TestMongoConnectVerifiesReachabilityAndReturnsV2Connection(t *testing.T) {
 		t.Fatalf("MongoDB 连接不应失败: %v", err)
 	}
 	mongoConnection, ok := connection.(*mongodriver.MongoConnection)
-	if !ok || mongoConnection.Client != client || mongoConnection.Database != "app" {
+	if !ok || mongoConnection.Client != client || mongoConnection.Database != "app" ||
+		mongoConnection.OperationTimeout != 52*time.Second {
 		t.Fatalf("MongoDB 连接结果不完整: %#v", connection)
 	}
 	if err := connection.Close(); err != nil {

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/zhuhanxin0308/thinkgo/v3/cookie"
+	sessiondriver "github.com/zhuhanxin0308/thinkgo/v3/session/driver"
 )
 
 // countingDriver 提供线程安全的可观测原子存储，专门验证 Session 的持久化协议。
@@ -166,6 +167,62 @@ func TestParseConfigStrictlyValidatesSessionPolicy(t *testing.T) {
 		if parsed, parseErr := ParseConfig(raw); !errors.Is(parseErr, ErrInvalidSessionConfig) || parsed != (Config{}) {
 			t.Fatalf("非法 Session 配置 %#v 应失败: parsed=%#v err=%v", raw, parsed, parseErr)
 		}
+	}
+}
+
+// TestSessionStoragePrefixMatchesDriverContract 验证内置存储驱动在启动时检查实际存储键。
+func TestSessionStoragePrefixMatchesDriverContract(t *testing.T) {
+	const largestBuiltInPrefix = 96
+	for _, driverType := range []string{"file", "memory", "redis"} {
+		t.Run(driverType, func(t *testing.T) {
+			for _, test := range []struct {
+				prefix string
+				valid  bool
+			}{
+				{"", true},
+				{"tenant-1_", true},
+				{"think:", false},
+				{"app.session", false},
+				{"a/b", false},
+				{"租户", false},
+				{strings.Repeat("a", largestBuiltInPrefix), true},
+				{strings.Repeat("a", largestBuiltInPrefix+1), false},
+			} {
+				raw := map[string]interface{}{"type": driverType, "prefix": test.prefix}
+				if driverType == "redis" {
+					raw["redis"] = map[string]interface{}{"host": "127.0.0.1"}
+				}
+				parsed, err := ParseConfig(raw)
+				if test.valid {
+					if err != nil || parsed.Prefix != test.prefix {
+						t.Errorf("合法前缀 %q 未通过: %v", test.prefix, err)
+					}
+				} else if !errors.Is(err, ErrInvalidSessionConfig) || !strings.Contains(err.Error(), "prefix") {
+					t.Errorf("非法前缀 %q 应在启动时被拒绝: %v", test.prefix, err)
+				}
+			}
+		})
+	}
+	if _, err := ParseConfig(map[string]interface{}{"type": "cache", "prefix": "app.session:"}); err != nil {
+		t.Fatalf("缓存驱动应保留可用分隔符: %v", err)
+	}
+
+	prefix := strings.Repeat("a", largestBuiltInPrefix)
+	storage := sessiondriver.NewMemory()
+	manager := newTestSessionManager(t, storage, map[string]interface{}{"type": "memory", "prefix": prefix}, nil)
+	raw, writer := httptest.NewRequest(http.MethodGet, "http://example.test", nil), httptest.NewRecorder()
+	current, err := manager.NewRequestSession(raw, writer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := current.Set("authenticated", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := current.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, err := storage.Read(prefix + current.id); err != nil || !found {
+		t.Fatalf("上限长度会话键应能由真实内存驱动读写: %t %v", found, err)
 	}
 }
 

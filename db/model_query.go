@@ -754,7 +754,7 @@ func (mq *ModelQuery) loadRelation(rows []map[string]interface{}, relation Relat
 			initializeEmptyRelation(rows, relation)
 			return nil
 		}
-		relatedRows, err := selectRelationRows(mq.relationModelQuery(relation.Related).WhereIn(relation.ForeignKey, keys), relation.ForeignKey)
+		relatedRows, err := selectRelationRows(mq.relationModelQuery(relation.Related), relation.ForeignKey, keys)
 		if err != nil {
 			return err
 		}
@@ -797,7 +797,7 @@ func (mq *ModelQuery) loadRelation(rows []map[string]interface{}, relation Relat
 			initializeEmptyRelation(rows, relation)
 			return nil
 		}
-		relatedRows, err := selectRelationRows(mq.relationModelQuery(relation.Related).WhereIn(relation.OwnerKey, keys), relation.OwnerKey)
+		relatedRows, err := selectRelationRows(mq.relationModelQuery(relation.Related), relation.OwnerKey, keys)
 		if err != nil {
 			return err
 		}
@@ -833,9 +833,8 @@ func (mq *ModelQuery) loadRelation(rows []map[string]interface{}, relation Relat
 		database := mq.model.db
 		mq.model.mu.RUnlock()
 		pivotQuery := mq.newRelationTableQuery(database, relation.PivotTable).
-			Field(relation.ForeignKey+", "+relation.RelatedForeignKey).
-			WhereIn(relation.ForeignKey, keys)
-		pivotRows, err := pivotQuery.Select()
+			Field(relation.ForeignKey + ", " + relation.RelatedForeignKey)
+		pivotRows, err := selectRelationKeyBatches(pivotQuery, relation.ForeignKey, keys)
 		if err != nil {
 			return fmt.Errorf("预加载多对多关联 %s 中间表查询失败: %w", relation.Name, err)
 		}
@@ -874,7 +873,7 @@ func (mq *ModelQuery) loadRelation(rows []map[string]interface{}, relation Relat
 			}
 		}
 		relatedPK := relation.Related.primaryKeyField()
-		relatedRows, err := selectRelationRows(mq.relationModelQuery(relation.Related).WhereIn(relatedPK, allRelatedKeys), relatedPK)
+		relatedRows, err := selectRelationRows(mq.relationModelQuery(relation.Related), relatedPK, allRelatedKeys)
 		if err != nil {
 			return err
 		}

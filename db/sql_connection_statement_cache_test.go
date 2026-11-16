@@ -147,6 +147,30 @@ func newStatementCacheConnection(t *testing.T) (*SQLConnection, *statementCacheD
 	return NewSQLConnection(handle, &builder.Sqlite{}), state
 }
 
+// TestPostgreSQLWildcardDoesNotReusePreparedResultShape 验证星号结果不会锁定在旧的预编译列类型上。
+func TestPostgreSQLWildcardDoesNotReusePreparedResultShape(t *testing.T) {
+	connection, state := newStatementCacheConnection(t)
+	connection.Builder = &builder.Pgsql{}
+	connection.statementCapacity = 8
+	database := NewDB(connection)
+	for range 2 {
+		if _, err := database.Table("items").Select(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := state.prepares.Load(); got != 2 {
+		t.Errorf("PostgreSQL 星号查询应逐次解析结果列，实际准备 %d 次", got)
+	}
+	for range 2 {
+		if _, err := database.Table("items").Field("id").Select(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := state.prepares.Load(); got != 3 {
+		t.Errorf("显式字段查询应继续复用语句，累计准备 %d 次", got)
+	}
+}
+
 func newConcurrentStatementCacheConnection(t *testing.T) (*SQLConnection, *statementCacheDriverState) {
 	t.Helper()
 	state := &statementCacheDriverState{}

@@ -322,7 +322,7 @@ func (h *Http) serveHTTP(originalWriter http.ResponseWriter, raw *http.Request, 
 		return
 	}
 	if h.telemetry != nil && h.telemetry.Enabled() {
-		traceContext, _ := h.telemetry.StartServer(raw.Context(), raw.Header, raw.Method, raw.URL.Path, raw.Host)
+		traceContext, _ := h.telemetry.StartServer(raw.Context(), raw.Header, raw.Method, "", "")
 		raw = raw.WithContext(traceContext)
 		state.raw = raw
 	}
@@ -458,9 +458,8 @@ func (h *Http) routeRequest(req *context.Request) *context.Response {
 		}
 		return context.NewResponse().Code(http.StatusNotFound).Content("404 Not Found")
 	}
-	if h.telemetry != nil && h.telemetry.Enabled() {
-		spanRoute := matched.Path()
-		telemetry.SetHTTPRoute(req.Raw().Context(), spanRoute)
+	if h.telemetry != nil && h.telemetry.Enabled() && !matched.IsAuto() && strings.HasPrefix(matched.Path(), "/") {
+		telemetry.SetHTTPRoute(req.Raw().Context(), matched.Path())
 	}
 
 	if !matched.HasMiddleware() {

@@ -12,6 +12,53 @@ import (
 	frameworkContext "github.com/zhuhanxin0308/thinkgo/v3/context"
 )
 
+// TestDebugVariablesAreIsolated 验证写入和读取得到的调试值均与收集器状态隔离。
+func TestDebugVariablesAreIsolated(t *testing.T) {
+	manager := NewRequestDebug(true)
+	type record struct{ Roles []string }
+	entry := &record{Roles: []string{"reader"}}
+	original := map[string][]*record{"team": {entry, entry}}
+	manager.AddVar("state", original)
+	entry.Roles[0] = "source mutation"
+	var workers sync.WaitGroup
+	for range 8 {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			values := manager.GetInfo()["vars"].(map[string]interface{})["state"].(map[string][]*record)["team"]
+			if values[0] != values[1] || values[0].Roles[0] != "reader" {
+				t.Error("调试快照应保存原始值和同一快照内的别名")
+				return
+			}
+			values[0].Roles[0] = "snapshot mutation"
+		}()
+	}
+	workers.Wait()
+	values := manager.GetInfo()["vars"].(map[string]interface{})["state"].(map[string][]*record)["team"]
+	if values[0].Roles[0] != "reader" {
+		t.Fatal("修改嵌套快照不应污染后续调试数据")
+	}
+}
+
+// TestDebugVariablesMarkUnsupportedValues 验证不能复制的值用固定提示显示。
+func TestDebugVariablesMarkUnsupportedValues(t *testing.T) {
+	manager := NewRequestDebug(true)
+	cycle := map[string]interface{}{}
+	cycle["self"] = cycle
+	manager.AddVar("cycle", cycle)
+	manager.AddVar("lock", &sync.Mutex{})
+	manager.AddVar("ready", true)
+	vars := manager.GetInfo()["vars"].(map[string]interface{})
+	for _, key := range []string{"cycle", "lock"} {
+		if got, ok := vars[key].(string); !ok || got != "[无法安全复制的调试值]" {
+			t.Errorf("不可复制的变量 %q 应显示固定提示，实际类型为 %T", key, vars[key])
+		}
+	}
+	if got := vars["ready"]; got != true {
+		t.Fatalf("合法调试变量应正常读取: %v", got)
+	}
+}
+
 // TestMemStatsSamplerCachesWithinInterval 验证内存采样器会在采样窗口内复用最近一次结果，避免每次请求都读取运行时内存统计。
 func TestMemStatsSamplerCachesWithinInterval(t *testing.T) {
 	readCount := 0

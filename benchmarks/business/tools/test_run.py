@@ -161,7 +161,7 @@ class LoadLifecycleTest(unittest.TestCase):
         )
         self.variables = {"BENCH_SECRET": "private-secret", "GOMAXPROCS": "99"}
         self.child = mock.Mock(pid=104)
-        self.child.child.wait.return_value = 0
+        self.child.wait.return_value = 0
         self.process = self.enterContext(mock.patch.object(run, "Process", return_value=self.child))
         self.sampler = mock.Mock()
         self.sampler.stop.return_value = {"samples": []}
@@ -201,7 +201,7 @@ class LoadLifecycleTest(unittest.TestCase):
         self.child.stop.assert_called_once_with()
 
     def test_nonzero_exit_keeps_console_and_never_accepts_partial_report(self):
-        self.child.child.wait.return_value = 17
+        self.child.wait.return_value = 17
         console = self.path.with_suffix(".console.txt")
         console.write_text("负载初始化失败", encoding="utf-8")
         with mock.patch.object(run, "read_report") as read, \
@@ -217,7 +217,7 @@ class LoadLifecycleTest(unittest.TestCase):
             with self.subTest(error=type(error).__name__):
                 self.child.reset_mock()
                 self.sampler.reset_mock()
-                self.child.child.wait.side_effect = error
+                self.child.wait.side_effect = error
                 with mock.patch.object(run, "read_report") as read, self.assertRaises(type(error)):
                     self.load()
                 read.assert_not_called()

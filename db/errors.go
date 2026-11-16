@@ -49,6 +49,8 @@ var (
 	ErrInvalidAggregateValue = errors.New("数据库聚合值非法")
 	// ErrInvalidTransaction 表示事务依赖、回调或生命周期状态非法。
 	ErrInvalidTransaction = errors.New("数据库事务非法")
+	// ErrNestedTransaction 表示请求范围已持有同一数据库的事务。
+	ErrNestedTransaction = errors.New("同一数据库不支持嵌套事务，请复用外层事务")
 	// ErrTransactionDone 表示事务已经提交或回滚。
 	ErrTransactionDone = errors.New("数据库事务已结束")
 	// ErrPinnedConnectionInvalidated 表示固定物理连接已被标记为不安全，禁止继续执行 SQL。

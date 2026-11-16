@@ -53,6 +53,39 @@ func TestLookupReportsExplicitEmptyValue(t *testing.T) {
 	}
 }
 
+// TestFileValuesReturnsOnlyLoadedFileValues 验证文件快照隔离进程覆盖和调用方修改。
+func TestFileValuesReturnsOnlyLoadedFileValues(t *testing.T) {
+	const fileKey = "THINKGO_FILE_VALUES_EXAMPLE"
+	const processOnlyKey = "THINKGO_FILE_VALUES_PROCESS_ONLY"
+	t.Setenv(fileKey, "process-value")
+	t.Setenv(processOnlyKey, "process-only")
+	path := filepath.Join(t.TempDir(), ".env")
+	if err := os.WriteFile(path, []byte("thinkgo_file_values_example=file-value\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	environment := NewEnv()
+	if err := environment.Load(path); err != nil {
+		t.Fatal(err)
+	}
+	for _, current := range []*Env{environment, environment.Snapshot()} {
+		files := current.FileValues()
+		if len(files) != 1 || files[fileKey] != "file-value" {
+			t.Fatalf("应只返回从环境文件读取的键值: %v", files)
+		}
+		if all := current.All(); all[fileKey] != "process-value" || all[processOnlyKey] != "process-only" {
+			t.Fatal("原完整环境查询仍应优先返回进程值")
+		}
+		files[fileKey] = "modified"
+		if current.FileValues()[fileKey] != "file-value" {
+			t.Fatal("修改文件值快照不应污染环境存储")
+		}
+	}
+	var absent *Env
+	if files := absent.FileValues(); files == nil || len(files) != 0 {
+		t.Fatal("空环境应返回独立的空快照")
+	}
+}
+
 // TestSnapshotFreezesProcessAndFileEnvironment 验证环境快照同时冻结进程层与
 // 文件层，并且替换到其它 Env 后仍保持深拷贝隔离。
 func TestSnapshotFreezesProcessAndFileEnvironment(t *testing.T) {

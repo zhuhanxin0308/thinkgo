@@ -168,6 +168,9 @@ func (store *DatabaseStore) Revert(ctx context.Context, current Migration) error
 	if history.Checksum != current.Checksum() {
 		return fmt.Errorf("%w: %s", ErrMigrationDrift, current.Name())
 	}
+	if err := validateReversibleMigration(current); err != nil {
+		return err
+	}
 	if err := store.recordApplying(ctx, current, history.Batch, JournalOperationRevert); err != nil {
 		return err
 	}
