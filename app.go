@@ -674,7 +674,6 @@ func readDefaultDatabaseConnection(config map[string]interface{}) (string, error
 	return defaultConnection, nil
 }
 
-// normalizeViewPath 规范化视图目录配置，避免空字符串触发越界，并统一相对路径基准。
 // applyRouteConfig 将 route.json 的全部字段应用到路由器。
 func (app *App) applyRouteConfig() {
 	if app == nil {
@@ -962,21 +961,4 @@ func readRouteBool(values map[string]interface{}, name string, defaultValue bool
 		}
 	}
 	return defaultValue, fmt.Errorf("route.%s 必须是布尔值", name)
-}
-
-func normalizeViewPath(basePath string, viewConfig map[string]interface{}) {
-	viewPath, ok := viewConfig["view_path"].(string)
-	if !ok {
-		return
-	}
-
-	viewPath = strings.TrimSpace(viewPath)
-	viewConfig["view_path"] = viewPath
-	if viewPath == "" {
-		return
-	}
-
-	if !os.IsPathSeparator(viewPath[0]) && viewPath[0] != '.' {
-		viewConfig["view_path"] = basePath + "/" + viewPath
-	}
 }

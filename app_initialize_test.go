@@ -18,32 +18,6 @@ import (
 	frameworkenv "github.com/zhuhanxin0308/thinkgo/v3/env"
 )
 
-// TestNormalizeViewPathHandlesEmptyValue 验证空视图路径不会导致初始化阶段 panic。
-func TestNormalizeViewPathHandlesEmptyValue(t *testing.T) {
-	viewConfig := map[string]interface{}{
-		"view_path": "",
-	}
-
-	normalizeViewPath("C:/workspace/project", viewConfig)
-
-	if got := viewConfig["view_path"]; got != "" {
-		t.Fatalf("空视图路径应保持为空，实际为 %v", got)
-	}
-}
-
-// TestNormalizeViewPathMakesRelativePathAbsolute 验证相对视图目录会被归一化到项目根目录下。
-func TestNormalizeViewPathMakesRelativePathAbsolute(t *testing.T) {
-	viewConfig := map[string]interface{}{
-		"view_path": "app/view",
-	}
-
-	normalizeViewPath("C:/workspace/project", viewConfig)
-
-	if got := viewConfig["view_path"]; got != "C:/workspace/project/app/view" {
-		t.Fatalf("相对视图路径归一化错误，实际为 %v", got)
-	}
-}
-
 // TestApplicationURLHelpersNormalizeAndValidateInputs 验证 URL 拼接不会产生双斜杠、协议绕过或控制字符注入。
 func TestApplicationURLHelpersNormalizeAndValidateInputs(t *testing.T) {
 	configuration := config.NewConfig()
