@@ -50,6 +50,9 @@ func (r *Router) URL(name string, params map[string]interface{}) (string, error)
 			}
 			return "", fmt.Errorf("%w: 参数 %q 类型或值非法", ErrInvalidRouteParameter, part.param)
 		}
+		if !validDecodedRoutePathPart(text) {
+			return "", fmt.Errorf("%w: 参数 %q 无法作为请求路径段", ErrInvalidRouteParameter, part.param)
+		}
 		if !registered.validateParam(part.param, text) {
 			return "", fmt.Errorf("%w: 参数 %q 不满足路由约束", ErrInvalidRouteParameter, part.param)
 		}

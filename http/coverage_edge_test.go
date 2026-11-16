@@ -177,6 +177,32 @@ func TestHTTPRouteAndRequestErrorResponses(t *testing.T) {
 	}
 }
 
+func TestPathSegmentLimitReturnsBadRequestForBothSlashPolicies(t *testing.T) {
+	const maximumSegments = 64
+	allowed := strings.Repeat("/part", maximumSegments)
+	for _, removeSlash := range []bool{false, true} {
+		app := newTestHTTPApp(t, t.TempDir(), nil)
+		router := mustHTTPRoute(t, app)
+		if err := router.SetRemoveSlash(removeSlash); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := router.Get(allowed, func(*fwcontext.Request) *fwcontext.Response {
+			return fwcontext.NewResponse().Content("ok")
+		}); err != nil {
+			t.Fatal(err)
+		}
+		handler := newTestHTTPHandler(t, app)
+		for path, status := range map[string]int{allowed: stdhttp.StatusOK, allowed + "/extra": stdhttp.StatusBadRequest} {
+			request := httptest.NewRequest(stdhttp.MethodGet, "http://example.test"+path, nil)
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, request)
+			if recorder.Code != status {
+				t.Errorf("remove_slash=%t，状态=%d，期望=%d", removeSlash, recorder.Code, status)
+			}
+		}
+	}
+}
+
 func TestHTTPHelpersHandleLoggingAndPanicBoundaries(t *testing.T) {
 	handler := newTestHTTPHandler(t, newTestHTTPApp(t, t.TempDir(), nil))
 	terminatorCalled := false
