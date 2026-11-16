@@ -69,6 +69,33 @@ func TestResponseCookieKnownOptionsRetainPolicy(t *testing.T) {
 	}
 }
 
+func TestResponseCookieDefaultPolicyAndExplicitOverrides(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		options  []any
+		httpOnly bool
+		sameSite http.SameSite
+	}{
+		{"默认", nil, true, http.SameSiteLaxMode},
+		{"仅指定过期", []any{300}, true, http.SameSiteLaxMode},
+		{"映射覆盖", []any{map[string]any{"httponly": false, "samesite": "Strict"}}, false, http.SameSiteStrictMode},
+		{"空SameSite", []any{map[string]string{"samesite": ""}}, true, 0},
+		{"位置参数覆盖", []any{300, "/", "", false, false}, false, http.SameSiteLaxMode},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			response := fwcontext.NewResponse().Cookie("preference", "zh", test.options...)
+			recorder := httptest.NewRecorder()
+			if err := response.Send(recorder); err != nil {
+				t.Fatal(err)
+			}
+			cookies := recorder.Result().Cookies()
+			if len(cookies) != 1 || cookies[0].HttpOnly != test.httpOnly || cookies[0].SameSite != test.sameSite {
+				t.Fatalf("响应输出的 Cookie 属性错误: %s", recorder.Header().Get("Set-Cookie"))
+			}
+		})
+	}
+}
+
 func TestResponseCookieRejectsDuplicateNormalizedOptions(t *testing.T) {
 	for name, options := range map[string]interface{}{
 		"Secure 大小写":  map[string]interface{}{"Secure": true, "secure": false},

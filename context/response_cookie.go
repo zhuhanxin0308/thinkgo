@@ -9,14 +9,14 @@ import (
 	"time"
 )
 
-// Cookie 设置 Cookie。省略 option 时使用 ThinkPHP 默认的会话 Cookie 和根路径；
+// Cookie 设置 Cookie，默认使用根路径、HttpOnly 和 SameSite=Lax。
 // option 可传过期秒数或包含 expire、path、domain、secure、httponly、samesite 的映射。
 // 为兼容已有 Go 调用，仍接受 maxAge、path、domain、secure、httpOnly 五个位置参数。
 func (r *Response) Cookie(name, value string, options ...interface{}) *Response {
 	if r == nil {
 		return nil
 	}
-	cookie := &http.Cookie{Name: name, Value: value, Path: "/"} // #nosec G124 -- ThinkPHP 默认 Cookie 策略允许业务通过选项决定 Secure、HttpOnly 与 SameSite。
+	cookie := &http.Cookie{Name: name, Value: value, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode} // #nosec G124 -- 允许调用方显式选择 Secure 策略。
 	if err := applyResponseCookieOptions(cookie, options); err != nil {
 		r.addError(fmt.Errorf("%w: Cookie option: %v", ErrInvalidResponseHeader, err))
 		return r

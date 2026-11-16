@@ -67,16 +67,39 @@ func TestParseConfigStrictlyValidatesCookiePolicy(t *testing.T) {
 	}
 }
 
-// TestDefaultConfigMatchesThinkPHPCookieDefaults 验证 Cookie 默认安全属性不擅自
-// 覆盖 ThinkPHP 配置，业务可按项目需要显式加强。
-func TestDefaultConfigMatchesThinkPHPCookieDefaults(t *testing.T) {
+func TestDefaultConfigProtectsCookieFromScriptsAndCrossSitePosts(t *testing.T) {
 	config, err := ParseConfig(map[string]interface{}{})
 	if err != nil {
 		t.Fatalf("解析默认 Cookie 配置失败: %v", err)
 	}
-	if config.Path != "/" || config.Expire != 0 || config.Secure || config.HttpOnly ||
-		config.SameSite != "" || !config.SetCookie {
-		t.Fatalf("Cookie 默认配置与 ThinkPHP 不一致: %#v", config)
+	if config.Path != "/" || config.Expire != 0 || config.Secure || !config.HttpOnly ||
+		config.SameSite != "Lax" || !config.SetCookie {
+		t.Fatalf("Cookie 默认安全配置错误: %#v", config)
+	}
+}
+
+func TestCookieFactoryEmitsDefaultPolicyAndAllowsExplicitOverride(t *testing.T) {
+	for _, test := range []struct {
+		raw      map[string]any
+		httpOnly bool
+		sameSite http.SameSite
+	}{
+		{nil, true, http.SameSiteLaxMode},
+		{map[string]any{"httponly": false, "samesite": "Strict"}, false, http.SameSiteStrictMode},
+		{map[string]any{"samesite": ""}, true, 0},
+	} {
+		factory, err := NewCookie(test.raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		header, err := factory.BuildHeader("preference", "zh", CookieOptions{Expire: 60})
+		if err != nil {
+			t.Fatal(err)
+		}
+		cookies := (&http.Response{Header: http.Header{"Set-Cookie": {header}}}).Cookies()
+		if len(cookies) != 1 || cookies[0].HttpOnly != test.httpOnly || cookies[0].SameSite != test.sameSite {
+			t.Fatalf("Cookie 配置 %#v 生成了意外头部: %s", test.raw, header)
+		}
 	}
 }
 
