@@ -3,7 +3,7 @@ package context
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"fmt"
+	"errors"
 	"mime/multipart"
 	"net/http"
 	"net/url"
@@ -19,6 +19,9 @@ const (
 	defaultRequestTokenName = "__token__"
 	requestTokenBytes       = 32
 )
+
+// ErrRequestSessionUnavailable 表示当前请求未绑定可用的 Session。
+var ErrRequestSessionUnavailable = errors.New("请求 Session 不可用")
 
 // RequestFilter 是 Go 对 ThinkPHP 请求过滤回调的强类型表达。
 type RequestFilter func(string) string
@@ -326,7 +329,7 @@ func (r *Request) WithSession(current *frameworksession.Session) *Request {
 	return r
 }
 
-// Session 读取当前请求 Session；无参数时返回全部数据快照。
+// Session 读取当前请求 Session。无参数时返回全部快照，第二个参数是读取缺省值。
 func (r *Request) Session(arguments ...interface{}) interface{} {
 	current := r.requestSession()
 	if current == nil {
@@ -352,6 +355,15 @@ func (r *Request) Session(arguments ...interface{}) interface{} {
 		return deepCloneRequestValue(arguments[1])
 	}
 	return nil
+}
+
+// SetSession 写入当前请求的 Session，保存时机由 Session 中间件决定。
+func (r *Request) SetSession(name string, value interface{}) error {
+	current := r.requestSession()
+	if current == nil {
+		return ErrRequestSessionUnavailable
+	}
+	return current.Set(name, value)
 }
 
 // SetRule 设置当前匹配的路由规则对象。
@@ -405,7 +417,7 @@ func (r *Request) BuildToken(names ...string) string {
 	}
 	current := r.requestSession()
 	if current == nil {
-		r.setTokenError(errorsRequestSessionUnavailable())
+		r.setTokenError(ErrRequestSessionUnavailable)
 		return ""
 	}
 	random := make([]byte, requestTokenBytes)
@@ -460,7 +472,7 @@ func (r *Request) CheckToken(arguments ...interface{}) bool {
 func (r *Request) TokenError() error {
 	state := r.thinkPHPState()
 	if state == nil {
-		return errorsRequestSessionUnavailable()
+		return ErrRequestSessionUnavailable
 	}
 	state.mu.RLock()
 	defer state.mu.RUnlock()
@@ -490,10 +502,6 @@ func (r *Request) setTokenError(err error) {
 	state.mu.Lock()
 	state.tokenErr = err
 	state.mu.Unlock()
-}
-
-func errorsRequestSessionUnavailable() error {
-	return fmt.Errorf("请求 Session 不可用")
 }
 
 func (r *Request) applyRequestFilters(value string) string {
