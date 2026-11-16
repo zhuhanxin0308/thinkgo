@@ -3,6 +3,7 @@ package middleware
 import (
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 
 	fwcontext "github.com/zhuhanxin0308/thinkgo/v3/context"
@@ -24,6 +25,7 @@ func TestCorsMatchesBrowserOriginsUsingCanonicalAuthority(t *testing.T) {
 			"http://OTHER.Example:080",
 			"https://LOCALHOST:8443",
 			"https://[2001:DB8::1]:443",
+			"https://İ.example:443",
 		},
 		AllowMethods:     []string{http.MethodPost},
 		AllowCredentials: true,
@@ -44,6 +46,7 @@ func TestCorsMatchesBrowserOriginsUsingCanonicalAuthority(t *testing.T) {
 		{"https://client.example:444", false},
 		{"https://client.example.attacker.test", false},
 		{"https://localhost", false},
+		{"https://i.example", false},
 	} {
 		t.Run(test.origin, func(t *testing.T) {
 			preflight := newCorsRequest(t, http.MethodOptions, test.origin)
@@ -65,7 +68,18 @@ func TestCorsMatchesBrowserOriginsUsingCanonicalAuthority(t *testing.T) {
 			if got := actual.GetHeader("Access-Control-Allow-Origin"); got != wantOrigin {
 				t.Fatalf("普通响应应采用相同来源策略: %q，期望 %q", got, wantOrigin)
 			}
+			if !test.allowed && actual.GetHeader("Access-Control-Allow-Credentials") != "" {
+				t.Fatal("未授权来源不应收到凭证许可")
+			}
 		})
+	}
+}
+
+func TestCanonicalBrowserOriginRejectsAmbiguousAuthority(t *testing.T) {
+	for _, authority := range []string{"CLIENT.example:8443:443", "[127.0.0.1]:443", "[fe80::1%zone]:443"} {
+		if got := canonicalBrowserOrigin(&url.URL{Scheme: "https", Host: authority}); got != "" {
+			t.Errorf("歧义主机 %q 不应生成规范来源: %q", authority, got)
+		}
 	}
 }
 

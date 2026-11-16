@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
@@ -106,21 +107,45 @@ func normalizeCorsConfig(config CorsConfig) (CorsConfig, error) {
 // canonicalBrowserOrigin 生成同一 HTTP(S) 来源的浏览器规范写法。
 func canonicalBrowserOrigin(parsed *url.URL) string {
 	defaultPort := defaultHTTPOriginPort(parsed.Scheme)
-	if defaultPort == "" || parsed.Hostname() == "" {
+	host := parsed.Hostname()
+	if defaultPort == "" || host == "" {
 		return ""
 	}
-	authority := strings.ToLower(parsed.Host)
-	if rawPort := parsed.Port(); rawPort != "" {
+	// 仅扩展可验证的 ASCII 主机别名，防止 Unicode 转小写后指向另一个域名。
+	authority := host
+	if strings.HasPrefix(parsed.Host, "[") {
+		address, err := netip.ParseAddr(host)
+		if err != nil || !address.Is6() || address.Zone() != "" {
+			return ""
+		}
+		authority = "[" + host + "]"
+	} else {
+		for _, char := range host {
+			if !isCorsASCIIHostCharacter(char) {
+				return ""
+			}
+		}
+	}
+	rawPort := parsed.Port()
+	if parsed.Host != authority && parsed.Host != authority+":"+rawPort {
+		return ""
+	}
+	authority = strings.ToLower(authority)
+	if rawPort != "" {
 		port, err := strconv.ParseUint(rawPort, 10, 16)
 		if err != nil {
 			return ""
 		}
-		authority = strings.TrimSuffix(authority, ":"+rawPort)
 		if normalized := strconv.FormatUint(port, 10); normalized != defaultPort {
 			authority += ":" + normalized
 		}
 	}
 	return parsed.Scheme + "://" + authority
+}
+
+func isCorsASCIIHostCharacter(char rune) bool {
+	return char >= 'A' && char <= 'Z' || char >= 'a' && char <= 'z' ||
+		char >= '0' && char <= '9' || char == '.' || char == '-' || char == '_'
 }
 
 func normalizeCorsMethods(values []string) []string {
