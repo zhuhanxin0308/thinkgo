@@ -3,7 +3,6 @@ package command
 import (
 	"errors"
 	"fmt"
-	"path/filepath"
 
 	"github.com/zhuhanxin0308/thinkgo/v3/console"
 )
@@ -47,10 +46,10 @@ func (c *MakeCRUD) Execute(input *console.Input, output *console.Output) error {
 	if err := validateCRUDSource(plan, source, testSource); err != nil {
 		return err
 	}
-	created := make([]string, 0, 2)
+	created := make([]stagedControllerDiscoverySource, 0, 2)
 	rollback := func(cause error) error {
 		for index := len(created) - 1; index >= 0; index-- {
-			cause = errors.Join(cause, removeGeneratedAppSource(c.App, filepath.Join("app", target.application, "api"), created[index]))
+			cause = errors.Join(cause, removeGeneratedAppSource(c.App, &created[index]))
 		}
 		return cause
 	}
@@ -61,10 +60,13 @@ func (c *MakeCRUD) Execute(input *console.Input, output *console.Output) error {
 		if err := input.Context().Err(); err != nil {
 			return rollback(err)
 		}
-		if err := writeGeneratedAppSource(c.App, target, "api", file.name, file.content); err != nil {
+		generated, err := writeGeneratedAppSourceSnapshot(c.App, target, "api", file.name, file.content)
+		if generated.published {
+			created = append(created, generated)
+		}
+		if err != nil {
 			return rollback(err)
 		}
-		created = append(created, file.name)
 	}
 	if err := RefreshControllerDiscovery(c.App); err != nil {
 		return rollback(err)

@@ -246,10 +246,11 @@ func TestGeneratorHelpersKeepApplicationAssemblyAtomic(t *testing.T) {
 			t.Fatalf("第 %d 个无效生成器上下文必须返回错误", index+1)
 		}
 	}
-	if err := removeGeneratedAppSource(nil, "app/model", "user.go"); !errors.Is(err, framework.ErrNilApplication) {
+	if err := removeGeneratedAppSource(nil, nil); !errors.Is(err, framework.ErrNilApplication) {
 		t.Fatalf("空应用回滚应返回 ErrNilApplication，实际为 %v", err)
 	}
-	if err := removeGeneratedAppSource(initialized, filepath.Join(initialized.BasePath, "app"), "user.go"); err == nil {
+	snapshot := &stagedControllerDiscoverySource{relativePath: filepath.Join(initialized.BasePath, "app", "user.go"), published: true}
+	if err := removeGeneratedAppSource(initialized, snapshot); err == nil {
 		t.Fatal("回滚路径不得使用绝对目录")
 	}
 }
