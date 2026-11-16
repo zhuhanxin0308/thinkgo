@@ -3,6 +3,7 @@ package http
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/getkin/kin-openapi/openapi3"
@@ -48,5 +49,26 @@ func TestAllHTTPHandlersInjectServiceInterfaces(t *testing.T) {
 	}
 	if err := openapi.Handle(router, registry, openapi.Operation{Method: http.MethodGet, Path: "/api/users", OperationID: "users.list"}, func(repository businessRepository) string { return repository.UserName() }); err != nil {
 		t.Fatalf("OpenAPI 拒绝合法服务接口: %v", err)
+	}
+	request := fwcontext.MustNewRequest(httptest.NewRequest(http.MethodGet, "/api/users", nil))
+	registered, _, err := router.Match(request)
+	if err != nil || registered == nil {
+		t.Fatalf("JSON 路由匹配失败: %v", err)
+	}
+	response := host.dispatch(registered, request)
+	if !strings.HasPrefix(response.GetHeader("Content-Type"), "application/json") || string(response.GetBody()) != `"Ada"` {
+		t.Fatalf("字符串 JSON 路由的实际响应错误: %s %q", response.GetHeader("Content-Type"), response.GetBody())
+	}
+	content, err := registry.JSON(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := openapi3.NewLoader().LoadFromData(content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	media := document.Paths.Value("/api/users").Get.Responses.Status(http.StatusOK).Value.Content
+	if len(media) != 1 || media["application/json"] == nil {
+		t.Fatalf("契约媒体类型与实际响应不同: %v", media)
 	}
 }

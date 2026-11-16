@@ -33,6 +33,9 @@ func operationWithDocumentation(input, output reflect.Type, operationID string, 
 	if strings.TrimSpace(operationID) == "" || successStatus < http.StatusOK || successStatus >= http.StatusMultipleChoices {
 		return nil, nil, fmt.Errorf("%w: 操作标识或成功状态无效", ErrDefinition)
 	}
+	if output != nil && (successStatus == http.StatusNoContent || successStatus == http.StatusResetContent) {
+		return nil, nil, fmt.Errorf("%w: 成功状态 %d 不能声明响应体", ErrDefinition, successStatus)
+	}
 	plan, err := planFor(input)
 	if err != nil {
 		return nil, nil, err
@@ -90,7 +93,7 @@ func operationWithDocumentation(input, output reflect.Type, operationID string, 
 		document["requestBody"] = map[string]any{"required": required, "content": content}
 	}
 	response := map[string]any{"description": http.StatusText(successStatus)}
-	if output != nil && successStatus != http.StatusNoContent {
+	if output != nil {
 		builder.output = true
 		outputPlan, err := compileNode(output, false, true, make(map[planKey]*node), 0)
 		if err != nil {
