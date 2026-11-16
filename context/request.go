@@ -872,6 +872,16 @@ func (r *Request) ensureFormParsed() error {
 				r.setFormError(bodyErr)
 				return
 			}
+			if r.Method(true) == http.MethodDelete {
+				// net/http 的 ParseForm 只为 POST、PUT 和 PATCH 解析表单正文。
+				values, err := url.ParseQuery(string(body))
+				if err != nil {
+					r.setFormError(fmt.Errorf("%w: %v", ErrInvalidFormBody, err))
+					return
+				}
+				r.raw.PostForm = values
+				r.raw.Form = nil
+			}
 			if err := r.raw.ParseForm(); err != nil {
 				r.setFormError(fmt.Errorf("%w: %v", ErrInvalidFormBody, err))
 				return
