@@ -86,6 +86,70 @@ func TestDatabaseStoreAppliesAndRevertsSQLiteMigration(t *testing.T) {
 	}
 }
 
+// TestIrreversibleRevertPreflightLeavesBatchAndJournalIntact 验证不可逆迁移在执行整批回滚前报错。
+func TestIrreversibleRevertPreflightLeavesBatchAndJournalIntact(t *testing.T) {
+	for _, kind := range []string{"SQL", "Go"} {
+		t.Run(kind, func(t *testing.T) {
+			const permanentName = "202608150001_create_permanent"
+			const createPermanent = "CREATE TABLE permanent_data (id INTEGER PRIMARY KEY)"
+			var permanent Migration
+			var err error
+			if kind == "SQL" {
+				permanent, err = NewSQL(permanentName, []string{createPermanent}, nil)
+			} else {
+				permanent, err = New(permanentName, firstChecksum, func(ctx context.Context, executor Executor) error {
+					_, err := executor.ExecuteContext(ctx, createPermanent)
+					return err
+				}, nil)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			reversible, err := NewSQL("202608150002_create_reversible",
+				[]string{"CREATE TABLE reversible_data (id INTEGER PRIMARY KEY)"},
+				[]string{"DROP TABLE reversible_data"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			registry := NewRegistry()
+			for _, current := range []Migration{permanent, reversible} {
+				if err := registry.Register(current); err != nil {
+					t.Fatal(err)
+				}
+			}
+			database := newSQLiteMigrationDatabase(t)
+			store, err := NewDatabaseStore(database)
+			if err != nil {
+				t.Fatal(err)
+			}
+			runner, err := NewRunner(registry, store)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx := t.Context()
+			if result, err := runner.Apply(ctx); err != nil || len(result.Names) != 2 {
+				t.Fatalf("需先提交两个同批迁移: %v %v", result, err)
+			}
+			if result, err := runner.Rollback(ctx, 1); !errors.Is(err, ErrIrreversibleMigration) || len(result.Names) != 0 {
+				t.Errorf("回滚应在执行整批之前拒绝: %v %v", result, err)
+			}
+			if err := store.WithMigrationLock(ctx, func(locked Store) error {
+				return locked.Revert(ctx, permanent)
+			}); !errors.Is(err, ErrIrreversibleMigration) {
+				t.Errorf("直接通过存储回滚也应拒绝: %v", err)
+			}
+			rows, err := database.QueryContext(ctx, "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (?, ?)", "permanent_data", "reversible_data")
+			if err != nil || len(rows) != 2 {
+				t.Errorf("拒绝回滚以后两张表都应存在: %v %v", rows, err)
+			}
+			statuses, initialized, err := runner.InspectStatus(ctx)
+			if err != nil || !initialized || len(statuses) != 2 {
+				t.Fatalf("拒绝回滚后发布检查应能读取完整迁移状态: %v %t %v", statuses, initialized, err)
+			}
+		})
+	}
+}
+
 // TestDatabaseStoreRollsBackFailedMigration 验证 Up 失败时业务变更和迁移历史都不会提交。
 func TestDatabaseStoreRollsBackFailedMigration(t *testing.T) {
 	database := newSQLiteMigrationDatabase(t)

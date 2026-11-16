@@ -96,8 +96,16 @@ func (migration *definition) Down(ctx context.Context, executor Executor) error 
 	if ctx == nil {
 		return fmt.Errorf("%w: 迁移 %q 的上下文为空", ErrInvalidMigration, migration.name)
 	}
-	if migration.down == nil {
-		return fmt.Errorf("%w: %s", ErrIrreversibleMigration, migration.name)
+	if err := validateReversibleMigration(migration); err != nil {
+		return err
 	}
 	return migration.down(ctx, executor)
+}
+
+// validateReversibleMigration 只判断由框架定义且确定缺少 Down 的迁移。
+func validateReversibleMigration(current Migration) error {
+	if migration, ok := current.(*definition); ok && migration.down == nil {
+		return fmt.Errorf("%w: %s", ErrIrreversibleMigration, migration.name)
+	}
+	return nil
 }
