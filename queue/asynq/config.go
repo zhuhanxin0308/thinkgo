@@ -124,7 +124,7 @@ func backendOptions(options queue.EnqueueOptions, now time.Time) ([]backend.Opti
 	result := []backend.Option{
 		backend.Queue(options.NormalizedQueue()),
 		backend.MaxRetry(options.EffectiveMaxRetry()),
-		backend.Timeout(options.EffectiveTimeout()),
+		backend.Timeout(ceilBackendTimeout(options.EffectiveTimeout())),
 	}
 	if !options.ProcessAt.IsZero() {
 		result = append(result, backend.ProcessAt(options.ProcessAt))
@@ -136,6 +136,11 @@ func backendOptions(options queue.EnqueueOptions, now time.Time) ([]backend.Opti
 		result = append(result, backend.Retention(options.Retention))
 	}
 	return result, nil
+}
+
+// ceilBackendTimeout 向上取整到 Asynq 存储支持的整秒，避免亚秒配置被视为零。
+func ceilBackendTimeout(timeout time.Duration) time.Duration {
+	return ((timeout + time.Second - 1) / time.Second) * time.Second
 }
 
 func backendTask(task queue.Task) (*backend.Task, error) {
