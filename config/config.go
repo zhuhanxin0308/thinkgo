@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -564,15 +565,15 @@ func deepCopyValue(value interface{}) interface{} {
 		}
 		return cloned
 	case []string:
-		return append([]string(nil), typed...)
+		return slices.Clone(typed)
 	case []int:
-		return append([]int(nil), typed...)
+		return slices.Clone(typed)
 	case []int64:
-		return append([]int64(nil), typed...)
+		return slices.Clone(typed)
 	case []float64:
-		return append([]float64(nil), typed...)
+		return slices.Clone(typed)
 	case []bool:
-		return append([]bool(nil), typed...)
+		return slices.Clone(typed)
 	default:
 		cloned, err := copyTypedConfigValue(value, 0, nil)
 		if err != nil {
