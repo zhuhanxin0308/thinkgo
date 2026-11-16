@@ -805,20 +805,11 @@ func (m *Model) createWithBinding(v interface{}, binding primaryKeyBinding, prim
 		delete(data, pk)
 	}
 
-	result, err := m.newModelQuery().insertResult(data, true)
+	result, err := m.newModelQuery().insertResult(data, primaryWasZero, true)
 	if err != nil {
 		return err
 	}
-	if primaryWasZero {
-		id, idErr := result.InsertedID()
-		if idErr != nil {
-			return idErr
-		}
-		if assignErr := binding.Assign(id); assignErr != nil {
-			return &PartialWriteError{Result: result, Cause: assignErr}
-		}
-	}
-	return nil
+	return binding.assignInsertedKey(result, pk)
 }
 
 // Update 从结构体更新记录。

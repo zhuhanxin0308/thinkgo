@@ -217,6 +217,14 @@ func (b primaryKeyBinding) Assign(id interface{}) error {
 	}
 }
 
+// assignInsertedKey 使用最终写入身份，兼容数据库生成主键及 Setter 或事件处理后的业务主键。
+func (b primaryKeyBinding) assignInsertedKey(result InsertResult, primaryKey string) error {
+	if err := b.Assign(result.Data[primaryKey]); err != nil {
+		return &PartialWriteError{Result: result, Cause: err}
+	}
+	return nil
+}
+
 func (b primaryKeyBinding) incompatible(id interface{}) error {
 	return fmt.Errorf("%w: 主键字段 %s(%s) 无法绑定 %T", ErrInvalidModel, b.fieldName, b.field.Type(), id)
 }

@@ -256,31 +256,15 @@ func (m *Model) insertOwnedRecord(r *modelRecord) error {
 	if zero {
 		delete(data, pk)
 	}
-	result, err := m.newModelQuery().insertResult(data, zero)
+	result, err := m.newModelQuery().insertResult(data, zero, true)
 	if err != nil {
 		r.uncertain = errors.Is(err, ErrPartialWrite)
 		return err
 	}
 	r.tx = m.transaction
-	if result.Affected != 1 {
+	if err := binding.assignInsertedKey(result, pk); err != nil {
 		r.uncertain = true
-		return fmt.Errorf("%w: 创建记录影响行数为 %d", ErrPartialWrite, result.Affected)
-	}
-	if zero {
-		id, err := result.InsertedID()
-		if err == nil {
-			err = binding.Assign(id)
-		}
-		if err != nil {
-			r.uncertain = true
-			return &PartialWriteError{Result: result, Cause: err}
-		}
-	} else {
-		// 主键修改器和插入事件可能规范化业务主键，后续写入必须使用最终身份。
-		if err := binding.Assign(result.Data[pk]); err != nil {
-			r.uncertain = true
-			return &PartialWriteError{Result: result, Cause: err}
-		}
+		return err
 	}
 	if err := m.syncRecordTimestamps(r, result.Data, true); err != nil {
 		r.uncertain = true
