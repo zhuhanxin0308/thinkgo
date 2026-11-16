@@ -20,7 +20,10 @@ func TestRejectUnknownIDConfiguration(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		want, _ := raw["reject_unknown_id"].(bool)
+		want, explicit := raw["reject_unknown_id"].(bool)
+		if !explicit {
+			want = true
+		}
 		if config.RejectUnknownID != want {
 			t.Fatalf("reject_unknown_id=%t want=%t", config.RejectUnknownID, want)
 		}
@@ -34,8 +37,29 @@ func TestRejectUnknownIDConfiguration(t *testing.T) {
 	manager := newTestSessionManager(t, newCountingDriver(), map[string]interface{}{"reject_unknown_id": true}, nil)
 	copy := manager.GetConfig()
 	copy.RejectUnknownID = false
-	if copy.RejectUnknownID || !manager.GetConfig().RejectUnknownID || DefaultConfig().RejectUnknownID {
-		t.Fatal("configuration ownership or compatibility default changed")
+	if copy.RejectUnknownID || !manager.GetConfig().RejectUnknownID || !DefaultConfig().RejectUnknownID {
+		t.Fatal("修改配置副本不能影响管理器，且默认应拒绝未知会话 ID")
+	}
+}
+
+func TestDefaultSessionReplacesUnknownIDsWithoutAdoptingThem(t *testing.T) {
+	backend := newCountingDriver()
+	manager := newTestSessionManager(t, backend, map[string]any{"name": "SID"}, nil)
+	for _, explicit := range []bool{false, true} {
+		request, recorder, err := strictIDRequest(t, manager, explicit, strictTestExternalID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := request.Set("user", "test"); err != nil {
+			t.Fatal(err)
+		}
+		if err := request.Save(); err != nil {
+			t.Fatal(err)
+		}
+		cookies := recorder.Result().Cookies()
+		if len(cookies) != 1 || cookies[0].Value == strictTestExternalID || !isSafeSessionID(cookies[0].Value) {
+			t.Fatalf("默认会话采纳了外部未知 ID，显式入参=%t", explicit)
+		}
 	}
 }
 
@@ -231,7 +255,7 @@ func TestRejectUnknownIDConcurrentMissesStayIsolated(t *testing.T) {
 
 func TestRejectUnknownIDMixedManagersAndConcurrentRecordCreation(t *testing.T) {
 	backend := newCountingDriver()
-	legacy := newTestSessionManager(t, backend, map[string]interface{}{"name": "SID"}, nil)
+	legacy := newTestSessionManager(t, backend, map[string]interface{}{"name": "SID", "reject_unknown_id": false}, nil)
 	strict := newTestSessionManager(t, backend, map[string]interface{}{"name": "SID", "reject_unknown_id": true}, nil)
 	pending, _, err := strictIDRequest(t, strict, true, strictTestExternalID)
 	if err != nil {

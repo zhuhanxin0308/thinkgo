@@ -41,6 +41,8 @@
 
 显式 `security_strict=true` 的浏览器应用还须设置 `cookie.httponly=true`、`cookie.samesite="Lax"` 或 `"Strict"`、`session.reject_unknown_id=true`；实际 Session Cookie 的 `session.samesite` 也必须为 Lax 或 Strict。仅配置通用 Cookie 工厂为 Lax 不能允许 Session 覆盖成 None。生产环境缺省 strict 时保留原有检查范围，启用 strict 才增加这些准入要求；无状态 API 不要求这些 Cookie 属性。
 
+生产 `browser_cookie` 应用若设置了非空 `session.var_session_id`，启动检查会报错。已有跨域上传流程应使用经认证的上传凭据，避免在 POST 参数传递会话 ID。
+
 失败的非生产应用使用“严格模式安全警告/检查失败”诊断；已有生产环境的诊断保持不变。同一应用按既有分类去重，重复检查不重复记日志。日志过滤或输出失败不取消已经记录的启动错误。实际 HTTP 初始化失败返回通用 500，不把内部配置错误回显给请求方；有效配置下不在白名单中的 Host 继续返回 421，业务处理器不执行。
 
 ## 与其他安全能力的边界

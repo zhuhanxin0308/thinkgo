@@ -143,6 +143,32 @@ func TestBrowserSecurityDefaultsReachAssembledResponses(t *testing.T) {
 	}
 }
 
+func TestProductionBrowserProfileRejectsPOSTSessionIDAdmission(t *testing.T) {
+	for _, test := range []struct {
+		name, environment, parameter string
+		blocked                      bool
+	}{
+		{"生产启用", "production", "upload_sid", true},
+		{"生产未启用", "production", "", false},
+		{"测试启用", "test", "upload_sid", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			app := writeBrowserSecurityConfig(t, false, map[string]any{
+				"app.app_env":            test.environment,
+				"session.var_session_id": test.parameter,
+			})
+			err := app.Initialize()
+			if test.blocked {
+				if err == nil || !strings.Contains(err.Error(), "session.var_session_id") {
+					t.Fatalf("生产浏览器配置应拒绝 POST 会话 ID: %v", err)
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 // TestStrictBrowserSessionCookieInheritsSecure 验证明文请求也继承 Cookie 工厂的 Secure 配置。
 func TestStrictBrowserSessionCookieInheritsSecure(t *testing.T) {
 	app := writeBrowserSecurityConfig(t, true, nil)

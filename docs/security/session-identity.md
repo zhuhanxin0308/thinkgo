@@ -2,7 +2,7 @@
 
 会话 ID 是持有即可能获得会话数据的凭据。仅校验长度和字符不代表 ID 已由服务器分配；拒绝未知 ID 与认证成功后的身份轮换是两个不同控制。
 
-## 显式拒绝未知 ID
+## 默认拒绝未知 ID
 
 在应用的 `config/session.json` 中设置：
 
@@ -12,9 +12,9 @@
 }
 ```
 
-该字段仅接受布尔值。缺省或 `false` 保留现有行为；本次不改变框架全局默认值。直接创建管理器时使用 `config := session.DefaultConfig()`，再设置 `config.RejectUnknownID = true`。配置按值复制，修改 `GetConfig()` 返回值不改变已创建管理器。
+该字段仅接受布尔值，缺省为 `true`。`session.DefaultConfig()` 也启用该策略。需要兼容采纳未知 ID 的应用可显式设置 `false`，严格浏览器档位会拒绝该值。配置按值复制，修改 `GetConfig()` 返回值只影响副本。
 
-启用后的决策如下：
+默认策略如下。
 
 | 输入或后端结果 | 行为 |
 | --- | --- |
@@ -24,7 +24,7 @@
 | 后端读取失败或取消 | 返回原错误，保留客户端 Cookie。 |
 | 记录损坏或超出大小限制 | 中断本次请求。客户端 Cookie 指向该记录时，按原作用域发送删除 Cookie。下一次请求可以重建会话。 |
 
-Cookie 和显式 `NewRequestSessionWithIDAndSecure` 入口使用相同判断。`var_session_id` 仍默认关闭；业务确有必要启用时，POST 来源也经过此判断，其既有优先级不变，不因拒绝未知 POST ID 而回退到另一份 Cookie 身份。
+Cookie 和显式 `NewRequestSessionWithIDAndSecure` 使用同一套 ID 采纳策略。生产 `browser_cookie` 应用配置非空 `session.var_session_id` 时会阻止启动，避免 POST 参数携带他人预先创建的会话。允许启用该参数的环境默认也会校验 ID 是否存在。若未知 POST ID 被拒绝，本次请求会使用服务端生成的新 ID。
 
 不增加提前保存：无会话数据变更时，不会为拒绝的 ID 创建记录，也不会保存刚生成的匿名 ID；正常保存阶段清除无效客户端 Cookie。需要保存会话数据时，先原子持久化新 ID，成功后才发送对应 Cookie。已有 ID 撤销、冲突处理和响应提交边界保持不变。
 
@@ -50,10 +50,10 @@ helper 成功不表示已经持久化。最后仍须由 Session 中间件完成�
 
 旧二进制会严格拒绝未知配置字段。先升级代码，再启用新字段；回滚到不支持该字段的二进制前先移除字段，并明确回滚后不再具备未知 ID 拒绝能力。不要把记录校验和、配置开关或一次后端读取描述成跨节点身份来源证明。
 
-`app.security_strict=true` 的 `browser_cookie` 档案要求显式 `session.reject_unknown_id=true`，详见[严格安全检查](strict-security.md)。直接 Session 包调用仍保留兼容默认；所有节点都应采用一致 ID 策略并接入认证轮换 helper。`Secure`、`HttpOnly`、`SameSite`、CSRF、可信代理、会话有效期、登录限流及账户授权仍需独立配置。该选项不增加登录路由、不自动轮换密码、不改变 Session 的存储容量，也不为应用创建完整认证系统。
+`app.security_strict=true` 的 `browser_cookie` 档案要求实际 `session.reject_unknown_id` 为 true，详见[严格安全检查](strict-security.md)。所有节点应采用一致的 ID 采纳策略，并在认证成功及权限变化时通过 `SetAuthenticated` 或 `Regenerate` 轮换会话。
 
 ## 验证与依据
 
-可执行示例见 `session/session_strict_id_example_test.go`。回归包含默认兼容、严格布尔配置、未知 ID 的 Cookie／显式入口、惰性保存、有效与失效记录、存储错误、并发请求隔离，以及另一节点在首次读取后建立记录的场景。中间件回归使用实际内存和文件后端，检查 POST／Cookie 输入、持久化 Cookie、认证轮换、旧请求重放与轮换失败；这不等于远程 Redis、多主机或真实浏览器验证。
+可执行示例见 `session/session_strict_id_example_test.go`。回归覆盖默认拒绝、明确选择兼容模式、生产启动检查、未知 ID 的 Cookie 和显式入口、惰性保存、有效与失效记录、持久化错误及并发请求隔离。中间件回归使用内存和文件后端，验证 POST、Cookie、认证轮换及旧请求重放。
 
 设计参考 [OWASP Session Management Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html) 中的 “Session ID Generation and Verification: Permissive and Strict Session Management” 与 “Renew the Session ID After Any Privilege Level Change”。拒绝未知 ID 不能替代权限变化后的轮换。
