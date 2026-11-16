@@ -175,3 +175,21 @@ func TestWriteJSONEncodingFailureDoesNotPublish(t *testing.T) {
 	}
 	assertNoSBOMTemporaryFiles(t, output)
 }
+
+func TestWriteJSONPublishesReadableArtifactPermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows 使用 ACL，不支持 Unix 权限位合同")
+	}
+	output := filepath.Join(t.TempDir(), "bom.json")
+	if err := writeJSON(output, map[string]string{"name": "thinkgo"}); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o644 {
+		t.Errorf("公开发行清单权限为 %04o，期望 0644", info.Mode().Perm())
+	}
+	assertNoSBOMTemporaryFiles(t, output)
+}

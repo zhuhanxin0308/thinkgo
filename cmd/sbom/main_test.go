@@ -159,8 +159,8 @@ func TestBuildBOMSortsAndPreservesDependencyGraph(t *testing.T) {
 	if len(result.Components) != 2 {
 		t.Fatalf("组件数量错误: %d", len(result.Components))
 	}
-	if result.Components[0].PURL != "pkg:golang/a.example/library@v2.1.0" {
-		t.Fatalf("替换模块未使用实际版本: %#v", result.Components[0])
+	if result.Components[0].PURL != "pkg:golang/local/library@v2.1.0" {
+		t.Fatalf("替换模块未使用实际路径与版本: %#v", result.Components[0])
 	}
 	if result.Components[1].PURL != "pkg:golang/z.example/library@v1.0.0" {
 		t.Fatalf("组件排序错误: %#v", result.Components)

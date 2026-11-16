@@ -21,11 +21,13 @@ const (
 	defaultModuleName = "github.com/zhuhanxin0308/thinkgo/v3"
 	cycloneDXFormat   = "CycloneDX"
 	cycloneDXVersion  = "1.5"
+	publishedBOMMode  = 0o644
 )
 
 type moduleInfo struct {
 	Path     string
 	Version  string
+	Dir      string
 	Main     bool
 	Sum      string
 	GoModSum string
@@ -59,8 +61,14 @@ type component struct {
 	Name       string          `json:"name"`
 	Version    string          `json:"version,omitempty"`
 	PURL       string          `json:"purl,omitempty"`
+	Hashes     []componentHash `json:"hashes,omitempty"`
 	Licenses   []licenseChoice `json:"licenses,omitempty"`
 	Properties []property      `json:"properties,omitempty"`
+}
+
+type componentHash struct {
+	Algorithm string `json:"alg"`
+	Content   string `json:"content"`
 }
 
 type licenseChoice struct {
@@ -281,7 +289,7 @@ func buildBOMForType(moduleName, version, componentType string, modules []module
 	}
 	sort.Slice(components, func(left, right int) bool {
 		if components[left].PURL == components[right].PURL {
-			return components[left].Name < components[right].Name
+			return components[left].BomRef < components[right].BomRef
 		}
 		return components[left].PURL < components[right].PURL
 	})
@@ -370,19 +378,39 @@ func newBOMSerialNumber() (string, error) {
 }
 
 func moduleComponent(module moduleInfo) (component, error) {
-	path := strings.TrimSpace(module.Path)
-	if path == "" {
+	originalPath := strings.TrimSpace(module.Path)
+	if originalPath == "" {
 		return component{}, errors.New("模块路径不能为空")
 	}
-	version := strings.TrimSpace(module.Version)
+	source := module
+	properties := make([]property, 0, 4)
+	localDigest := ""
 	if module.Replace != nil {
 		if strings.TrimSpace(module.Replace.Path) == "" {
-			return component{}, fmt.Errorf("模块 %q 的替换路径为空", path)
+			return component{}, fmt.Errorf("模块 %q 的替换路径为空", originalPath)
 		}
-		if strings.TrimSpace(module.Replace.Version) != "" {
-			version = strings.TrimSpace(module.Replace.Version)
+		source = *module.Replace
+		replacement := strings.TrimSpace(source.Path)
+		if strings.TrimSpace(source.Version) == "" {
+			var err error
+			localDigest, err = digestLocalModule(source.Dir)
+			if err != nil {
+				return component{}, fmt.Errorf("读取模块 %q 的本地替换摘要失败: %w", originalPath, err)
+			}
+			source.Path = originalPath
+			replacement = "local"
 		}
+		requested := originalPath
+		if version := strings.TrimSpace(module.Version); version != "" {
+			requested += "@" + version
+		}
+		properties = append(properties,
+			property{Name: "go.module.requested", Value: requested},
+			property{Name: "go.module.replace", Value: replacement},
+		)
 	}
+	path := strings.TrimSpace(source.Path)
+	version := strings.TrimSpace(source.Version)
 	name := path
 	group := ""
 	if slash := strings.LastIndex(path, "/"); slash >= 0 {
@@ -393,17 +421,13 @@ func moduleComponent(module moduleInfo) (component, error) {
 	if version != "" {
 		purl += "@" + version
 	}
-	properties := make([]property, 0, 3)
-	if strings.TrimSpace(module.Sum) != "" {
-		properties = append(properties, property{Name: "go.module.sum", Value: strings.TrimSpace(module.Sum)})
+	if sum := strings.TrimSpace(source.Sum); sum != "" {
+		properties = append(properties, property{Name: "go.module.sum", Value: sum})
 	}
-	if strings.TrimSpace(module.GoModSum) != "" {
-		properties = append(properties, property{Name: "go.mod.sum", Value: strings.TrimSpace(module.GoModSum)})
+	if sum := strings.TrimSpace(source.GoModSum); sum != "" {
+		properties = append(properties, property{Name: "go.mod.sum", Value: sum})
 	}
-	if module.Replace != nil {
-		properties = append(properties, property{Name: "go.module.replace", Value: strings.TrimSpace(module.Replace.Path)})
-	}
-	return component{
+	result := component{
 		Type:       "library",
 		BomRef:     purl,
 		Group:      group,
@@ -411,7 +435,14 @@ func moduleComponent(module moduleInfo) (component, error) {
 		Version:    version,
 		PURL:       purl,
 		Properties: properties,
-	}, nil
+	}
+	if localDigest != "" {
+		// 本地源码没有已发布版本；依赖图使用包含源码摘要的独立引用。
+		result.PURL = ""
+		result.BomRef = "urn:thinkgo:go-module:" + path + ":sha256:" + localDigest
+		result.Hashes = []componentHash{{Algorithm: "SHA-256", Content: localDigest}}
+	}
+	return result, nil
 }
 
 func writeJSON(output string, value interface{}) error {
@@ -444,6 +475,10 @@ func writeJSONWithPublisher(output string, value interface{}, publish func(strin
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(value); err != nil {
 		return fmt.Errorf("编码 SBOM 失败: %w", err)
+	}
+	// #nosec G302 -- 编码完成的 SBOM 是供其他流水线账号读取的公开产物。
+	if err := temporary.Chmod(publishedBOMMode); err != nil {
+		return fmt.Errorf("设置发行清单权限失败: %w", err)
 	}
 	if err := temporary.Close(); err != nil {
 		return fmt.Errorf("刷新 SBOM 失败: %w", err)
