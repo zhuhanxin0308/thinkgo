@@ -43,6 +43,43 @@ func newSQLiteQuoteDatabase(t *testing.T) (*DB, *SQLConnection) {
 	return database, connection
 }
 
+// TestSQLiteStarProjectionTracksSchemaAfterCacheLoad 验证实时星号投影不依赖旧字段清单。
+func TestSQLiteStarProjectionTracksSchemaAfterCacheLoad(t *testing.T) {
+	database, _ := newSQLiteQuoteDatabase(t)
+	ctx := t.Context()
+	for _, statement := range []string{
+		"CREATE TABLE accounts (id INTEGER PRIMARY KEY, name TEXT)",
+		"INSERT INTO accounts (id, name) VALUES (1, 'Ada')",
+	} {
+		if _, err := database.ExecuteContext(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if schema, err := database.GetSchemaInfo(ctx, "accounts", true); err != nil || len(schema.Columns) != 2 {
+		t.Fatalf("测试必须先缓存旧结构: %v %v", schema, err)
+	}
+	if _, err := database.ExecuteContext(ctx, "ALTER TABLE accounts ADD COLUMN role TEXT DEFAULT 'reader'"); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := database.Name("accounts").Select()
+	if err != nil || len(rows) != 1 || rows[0]["role"] != "reader" {
+		t.Errorf("默认查询应该读取新列: %v %v", rows, err)
+	}
+	if _, err := database.ExecuteContext(ctx, "ALTER TABLE accounts RENAME COLUMN name TO display_name"); err != nil {
+		t.Fatal(err)
+	}
+	rows, err = database.Name("accounts").Field("*").Select()
+	if err != nil || len(rows) != 1 || rows[0]["display_name"] != "Ada" {
+		t.Errorf("显式星号应该读取重命名后的列: %v %v", rows, err)
+	}
+	if rows, err := database.Name("accounts").Field("id").Select(); err != nil || len(rows) != 1 || len(rows[0]) != 1 {
+		t.Errorf("显式字段列表应继续限制投影: %v %v", rows, err)
+	}
+	if schema, err := database.GetSchemaInfo(ctx, "accounts", false); err != nil || len(schema.Columns) != 2 {
+		t.Errorf("字段元数据仍应使用原缓存，直到显式刷新: %v %v", schema, err)
+	}
+}
+
 func TestIssue125SQLiteSuccessAndFailureLogsRedactLiteral(t *testing.T) {
 	database, _ := newSQLiteQuoteDatabase(t)
 	logger := &sqliteQuoteLogger{}

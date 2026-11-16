@@ -254,20 +254,6 @@ func cloneTableSchema(table TableSchema) TableSchema {
 	return table
 }
 
-func (connection *SQLConnection) cachedSchemaFields(table string) string {
-	connection.schemaMu.RLock()
-	cached, exists := connection.schemaCache[table]
-	connection.schemaMu.RUnlock()
-	if !exists {
-		return ""
-	}
-	fields := make([]string, len(cached.Columns))
-	for index, column := range cached.Columns {
-		fields[index] = column.Name
-	}
-	return strings.Join(fields, ",")
-}
-
 func schemaValueText(value interface{}) string {
 	if value == nil {
 		return ""
