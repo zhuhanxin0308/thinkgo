@@ -254,8 +254,10 @@ func TestMigrationValueConversionsCoverDriverRepresentations(t *testing.T) {
 	if text, err := migrationText(now); err != nil || text != now.Format(time.RFC3339Nano) {
 		t.Fatalf("时间文本转换错误: text=%q err=%v", text, err)
 	}
-	if text, err := migrationOptionalText(nil); err != nil || text != "" {
-		t.Fatalf("可空文本转换错误: text=%q err=%v", text, err)
+	for _, value := range []any{nil, "", []byte(nil), []byte{}} {
+		if text, err := migrationOptionalText(value); err != nil || text != "" {
+			t.Fatalf("可空文本转换错误: value=%#v text=%q err=%v", value, text, err)
+		}
 	}
 	if value := migrationRowValue(map[string]interface{}{"FENCING_TOKEN": int64(12)}, "fencing_token"); value != int64(12) {
 		t.Fatalf("大写方言列名没有按大小写无关读取: %#v", value)
