@@ -1,6 +1,7 @@
 package context
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 )
@@ -41,4 +42,12 @@ func setHeadContentLength(w http.ResponseWriter, policy responseBodyPolicy, stat
 		return
 	}
 	header.Set("Content-Length", strconv.FormatInt(size, 10))
+}
+
+func (r *Response) commitHead(w http.ResponseWriter) error {
+	w.WriteHeader(r.status)
+	if provider, ok := w.(interface{ CommitError() error }); ok {
+		return errors.Join(r.err, markResponseTransmissionError(provider.CommitError()))
+	}
+	return r.err
 }

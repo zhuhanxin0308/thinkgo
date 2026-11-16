@@ -33,9 +33,11 @@ func (source *countDownloadReads) Close() error {
 type downloadBodyPolicyWriter struct {
 	*httptest.ResponseRecorder
 	suppressed bool
+	commitErr  error
 }
 
 func (w *downloadBodyPolicyWriter) BodySuppressed() bool { return w.suppressed }
+func (w *downloadBodyPolicyWriter) CommitError() error   { return w.commitErr }
 
 func TestOpenedDownloadSkipsReadingHeadBody(t *testing.T) {
 	const sampleBlock = "有效下载文件数据"
@@ -66,6 +68,21 @@ func TestOpenedDownloadSkipsReadingHeadBody(t *testing.T) {
 				t.Errorf("%s 读取 %d 字节，输出 %d 字节，期望 %d", method, source.bytesRead, writer.Body.Len(), expectedBytes)
 			}
 		})
+	}
+}
+
+func TestHeadFastPathsReturnCommitHookError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "report.txt")
+	if err := os.WriteFile(path, []byte("payload"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	failure := errors.New("提交钩子失败")
+	for _, response := range []*Response{NewResponse().Content("payload"), NewResponse().Download(path, "report.txt")} {
+		writer := &downloadBodyPolicyWriter{ResponseRecorder: httptest.NewRecorder(), suppressed: true, commitErr: failure}
+		err := response.Send(writer)
+		if !errors.Is(err, failure) || !IsResponseTransmissionError(err) || writer.Body.Len() != 0 {
+			t.Fatalf("HEAD 应传播提交钩子错误且保持正文为空: %v, %q", err, writer.Body.String())
+		}
 	}
 }
 

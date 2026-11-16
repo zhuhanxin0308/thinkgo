@@ -653,8 +653,7 @@ func (r *Response) Send(w http.ResponseWriter) error {
 		if r.body != nil {
 			setHeadContentLength(w, policy, r.status, int64(len(r.body)), r.body)
 		}
-		w.WriteHeader(r.status)
-		return r.err
+		return r.commitHead(w)
 	}
 	w.WriteHeader(r.status)
 	if len(r.body) == 0 {

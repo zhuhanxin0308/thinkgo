@@ -5,10 +5,15 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
+	framework "github.com/zhuhanxin0308/thinkgo/v3"
 	fwcontext "github.com/zhuhanxin0308/thinkgo/v3/context"
+	"github.com/zhuhanxin0308/thinkgo/v3/log"
 )
 
 func TestEffectiveHEADCoversMiddlewareWritesAndCommitFailure(t *testing.T) {
@@ -69,6 +74,68 @@ func TestEffectiveHEADCoversMiddlewareWritesAndCommitFailure(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestHEADFastPathsKeepCommitFailureStatusAndLogging(t *testing.T) {
+	for _, compression := range []bool{false, true} {
+		t.Run(map[bool]string{false: "plain", true: "compressed"}[compression], func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, "report.txt")
+			if err := os.WriteFile(path, []byte(issue151Payload), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			app := newTestHTTPApp(t, root, map[string]interface{}{"enable": compression, "min_size": 1})
+			driver := &accessLogDriver{}
+			logger := log.NewLog(driver)
+			t.Cleanup(func() { _ = logger.Close() })
+			if err := app.Instance(string(framework.ServiceLog), logger); err != nil {
+				t.Fatal(err)
+			}
+			failure := &testCommitFailure{status: http.StatusConflict}
+			mustHTTPMiddleware(t, app).Pipe(func(req *fwcontext.Request, next func(*fwcontext.Request) *fwcontext.Response) *fwcontext.Response {
+				writer, _ := req.ResponseWriter()
+				hook := writer.(interface {
+					BeforeCommit(func(http.Header) error) error
+				})
+				if err := hook.BeforeCommit(func(http.Header) error { return failure }); err != nil {
+					t.Fatal(err)
+				}
+				return next(req)
+			})
+			router := mustHTTPRoute(t, app)
+			for route, response := range map[string]func() *fwcontext.Response{
+				"/buffer":   func() *fwcontext.Response { return fwcontext.NewResponse().Content(issue151Payload) },
+				"/download": func() *fwcontext.Response { return fwcontext.NewResponse().Download(path, "report.txt") },
+			} {
+				if _, err := router.Head(route, func(*fwcontext.Request) *fwcontext.Response { return response() }); err != nil {
+					t.Fatal(err)
+				}
+			}
+			host := newTestHTTPHandler(t, app)
+			for _, route := range []string{"/buffer", "/download"} {
+				req := httptest.NewRequest(http.MethodHead, "http://127.0.0.1"+route, nil)
+				req.Header.Set("Accept-Encoding", "gzip")
+				recorder := httptest.NewRecorder()
+				host.ServeHTTP(recorder, req)
+				assertIssue151HEAD(t, recorder, http.StatusConflict)
+				if recorder.Result().Header.Get("Content-Disposition") != "" || recorder.Result().Header.Get("Content-Length") != "" {
+					t.Fatalf("失败响应不得继承业务响应元数据: %v", recorder.Result().Header)
+				}
+			}
+			if err := logger.Flush(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			var failures int
+			for _, entry := range driver.allEntries() {
+				if entry.Level == log.LevelError && strings.Contains(entry.FormatEntry(), failure.Error()) {
+					failures++
+				}
+			}
+			if failures != 2 {
+				t.Fatalf("两个 HEAD 提交错误应各记录一次，实际为 %d", failures)
+			}
+		})
 	}
 }
 

@@ -100,8 +100,7 @@ func (r *Response) sendOpenedDownload(w http.ResponseWriter, file io.ReadCloser,
 		// 文件响应的长度由已核验文件决定，与普通 GET 的覆盖规则一致。
 		w.Header().Del("Content-Length")
 		setHeadContentLength(w, policy, r.status, info.Size(), nil)
-		w.WriteHeader(r.status)
-		return r.err
+		return r.commitHead(w)
 	}
 	w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
 	w.WriteHeader(r.status)
