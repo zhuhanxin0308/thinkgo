@@ -344,13 +344,14 @@ func (h *Http) serveHTTP(originalWriter http.ResponseWriter, raw *http.Request, 
 	if h.srvConf.EnableTLS && h.srvConf.EnableHTTP3 {
 		state.writer.Header().Set("Alt-Svc", fmt.Sprintf(`h3=":%d"; ma=2592000`, h.srvConf.Port))
 	}
-	if h.compressConf.Enable && raw.Method != http.MethodHead {
+	if h.compressConf.Enable {
 		state.compressionWriter = newConfiguredCompressionResponseWriter(
 			state.writer,
 			raw,
 			h.compressConf.MinSize,
 			h.compressConf.Levels,
 		)
+		state.compressionWriter.bodyPolicy = state.statusWriter
 		state.writer = state.compressionFacade.adapt(state.compressionWriter, originalWriter)
 	}
 	if raw.Method == http.MethodHead {
@@ -377,9 +378,6 @@ func (h *Http) serveHTTP(originalWriter http.ResponseWriter, raw *http.Request, 
 	}
 	state.req = req
 	state.statusWriter.method = req
-	if state.compressionWriter != nil {
-		state.compressionWriter.bodyPolicy = state.statusWriter
-	}
 	h.rememberRequestTask(req, task, true)
 	if application, exists := resolvedApplication(raw); exists {
 		req.SetApplicationContext(application)
@@ -396,7 +394,8 @@ func (h *Http) serveHTTP(originalWriter http.ResponseWriter, raw *http.Request, 
 	if err = state.response.Send(state.writer); err != nil {
 		state.transmissionErr = err
 		h.logHTTPError("发送 HTTP 响应失败", err)
-		if context.IsResponseTransmissionError(err) {
+		// 提交钩子失败时已提交完整的失败响应，无需中断其传输。
+		if context.IsResponseTransmissionError(err) && !errors.Is(err, state.statusWriter.CommitError()) {
 			if state.statusWriter.Written() {
 				state.abortResponse = true
 			} else {
@@ -583,6 +582,15 @@ func (h *Http) finishRequest(state *requestServeState, recovered interface{}) {
 	}
 	if !state.statusWriter.Hijacked() && !state.abortResponse {
 		state.statusWriter.CommitEmpty()
+	}
+	if commitErr := state.statusWriter.CommitError(); commitErr != nil && !errors.Is(requestErr, commitErr) {
+		// 压缩层可能到关闭时才提交响应头，此时才会看到钩子错误。
+		requestErr = errors.Join(requestErr, commitErr)
+		if boundedEnd {
+			requestErr = errors.Join(requestErr, h.logHTTPErrorContext(endContext, "提交 HTTP 响应失败", commitErr))
+		} else {
+			requestErr = errors.Join(requestErr, h.logHTTPErrorNonBlocking("提交 HTTP 响应失败", commitErr))
+		}
 	}
 
 	var accessLogErr error
