@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/netip"
 	"os"
 	"path/filepath"
 	"sort"
@@ -16,6 +15,7 @@ import (
 	"github.com/zhuhanxin0308/thinkgo/v3/config"
 	"github.com/zhuhanxin0308/thinkgo/v3/db"
 	"github.com/zhuhanxin0308/thinkgo/v3/internal/apppath"
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/operational"
 	"github.com/zhuhanxin0308/thinkgo/v3/migration"
 	"github.com/zhuhanxin0308/thinkgo/v3/route"
 	"github.com/zhuhanxin0308/thinkgo/v3/telemetry"
@@ -299,17 +299,8 @@ func checkOperationalAccess(_ context.Context, app *framework.App) Result {
 	if err != nil || len(values) == 0 {
 		return fail("restricted 运维端点必须配置非空 CIDR 白名单")
 	}
-	seen := make(map[netip.Prefix]struct{}, len(values))
-	for _, value := range values {
-		prefix, parseErr := netip.ParsePrefix(value)
-		if parseErr != nil || prefix.Bits() == 0 {
-			return fail("运维端点 CIDR 白名单包含非法或全网段配置")
-		}
-		prefix = prefix.Masked()
-		if _, exists := seen[prefix]; exists {
-			return fail("运维端点 CIDR 白名单包含重复项")
-		}
-		seen[prefix] = struct{}{}
+	if _, err := operational.ParsePrefixes(values); err != nil {
+		return fail("运维端点白名单配置无效: " + err.Error())
 	}
 	return pass(fmt.Sprintf("运维端点由 %d 个 CIDR 白名单限制", len(values)))
 }

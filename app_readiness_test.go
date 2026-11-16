@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/zhuhanxin0308/thinkgo/v3/config"
 	fwcontext "github.com/zhuhanxin0308/thinkgo/v3/context"
 	"github.com/zhuhanxin0308/thinkgo/v3/health"
 	"github.com/zhuhanxin0308/thinkgo/v3/metrics"
@@ -64,6 +65,49 @@ func TestOperationalRoutesEnforceRestrictedSourceNetworks(t *testing.T) {
 	denied.Raw().RemoteAddr = "203.0.113.10:42100"
 	if response := app.livenessRouteWithHealth(app.health, denied); response.GetStatus() != http.StatusNotFound {
 		t.Fatalf("非白名单来源应隐藏运维端点: status=%d", response.GetStatus())
+	}
+}
+
+func TestOperationalRoutesMatchMappedCIDRWithoutBroadeningAccess(t *testing.T) {
+	app := &App{
+		config:                   config.NewConfig(),
+		route:                    route.NewRouter(),
+		health:                   health.NewRegistry(),
+		metrics:                  metrics.NewRegistry(),
+		metricsEnabled:           true,
+		operationalRoutesEnabled: true,
+	}
+	if err := app.config.Set("app.operational_routes_allowed_cidrs", []string{"::ffff:127.0.0.19/120", "::1/128"}); err != nil {
+		t.Fatal(err)
+	}
+	app.applyApplicationPolicies()
+	if err := app.StartupError(); err != nil {
+		t.Fatal(err)
+	}
+	app.metrics.Enable()
+	app.registerOperationalRoutes()
+	for _, path := range []string{OperationalLivenessPath, OperationalReadinessPath, OperationalMetricsPath} {
+		for _, tc := range []struct {
+			source string
+			status int
+		}{
+			{"127.0.0.25:42100", http.StatusOK},
+			{"[::ffff:127.0.0.25]:42100", http.StatusOK},
+			{"[::1]:42100", http.StatusOK},
+			{"127.0.1.25:42100", http.StatusNotFound},
+			{"[::ffff:203.0.113.10]:42100", http.StatusNotFound},
+		} {
+			request := fwcontext.MustNewRequest(httptest.NewRequest(http.MethodGet, "http://localhost"+path, nil))
+			request.Raw().RemoteAddr = tc.source
+			matched, _, err := app.route.Match(request)
+			if err != nil || matched == nil {
+				t.Fatalf("运维路由匹配失败: %v", err)
+			}
+			response := matched.Handler().(func(*fwcontext.Request) *fwcontext.Response)(request)
+			if got := response.GetStatus(); got != tc.status {
+				t.Errorf("%s 来源 %s 得到 %d，期望 %d", path, tc.source, got, tc.status)
+			}
+		}
 	}
 }
 
