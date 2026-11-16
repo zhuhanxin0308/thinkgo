@@ -69,7 +69,7 @@ func isSensitiveKey(key string) bool {
 		"apikey",
 		"accesskey",
 		"refreshtoken",
-		"privatekey", "signingkey", "encryptionkey", "credential", "clientsecret",
+		"privatekey", "signingkey", "encryptionkey", "clientsecret",
 	}
 
 	for _, sensitiveKey := range sensitiveKeys {

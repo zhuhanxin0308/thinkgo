@@ -10,10 +10,11 @@ func CredentialAlias(key string) bool {
 	key = strings.ToLower(strings.TrimSpace(key))
 	compact := compactCredentialKey.Replace(key)
 	switch compact {
-	case "key", "xkey", "xauth":
+	case "key", "xkey", "xauth", "pass", "xpass":
 		return true
 	}
-	if strings.Contains(compact, "passphrase") || strings.Contains(compact, "dbpass") || strings.Contains(compact, "masterkey") {
+	if strings.Contains(compact, "passphrase") || strings.Contains(compact, "dbpass") ||
+		strings.Contains(compact, "masterkey") || strings.Contains(compact, "credential") {
 		return true
 	}
 	for part := range strings.FieldsFuncSeq(key, func(r rune) bool { return r == '-' || r == '_' || r == '.' }) {
