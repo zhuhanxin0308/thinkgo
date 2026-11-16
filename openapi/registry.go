@@ -2,6 +2,7 @@
 package openapi
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -9,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
@@ -386,6 +388,15 @@ func cloneJSON[T any](value T) (T, error) {
 	if err = json.Unmarshal(encoded, &cloned); err != nil {
 		return cloned, err
 	}
+	// kin-openapi 的自定义解码器会在内部把非结构化数字转成 float64。
+	// 用同一份序列化数据恢复这些字段，保留库处理引用和结构的结果。
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	decoder.UseNumber()
+	var exact any
+	if err = decoder.Decode(&exact); err != nil {
+		return cloned, err
+	}
+	restoreExactOpenAPILiterals(reflect.ValueOf(&cloned).Elem(), exact)
 	return cloned, nil
 }
 
