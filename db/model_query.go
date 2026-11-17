@@ -178,6 +178,9 @@ func (mq *ModelQuery) Count() (int64, error) {
 
 // Insert 使用 map 插入记录并返回影响行数，语义与 Query.Insert/ThinkPHP 一致。
 func (mq *ModelQuery) Insert(data map[string]interface{}) (int64, error) {
+	if err := mq.fillableColumns().validate(data); err != nil {
+		return 0, err
+	}
 	result, err := mq.insertResult(data, false, false)
 	if err != nil {
 		return 0, err
@@ -187,6 +190,9 @@ func (mq *ModelQuery) Insert(data map[string]interface{}) (int64, error) {
 
 // InsertGetId 使用 map 插入记录并返回驱动报告的真实主键。
 func (mq *ModelQuery) InsertGetId(data map[string]interface{}) (interface{}, error) {
+	if err := mq.fillableColumns().validate(data); err != nil {
+		return nil, err
+	}
 	result, err := mq.insertResult(data, true, false)
 	if err != nil {
 		return nil, err
@@ -251,6 +257,9 @@ func (mq *ModelQuery) insertResult(data map[string]interface{}, wantID, requireO
 
 // Update 使用 map 更新记录，应用修改器并触发更新事件。
 func (mq *ModelQuery) Update(data map[string]interface{}) (int64, error) {
+	if err := mq.fillableColumns().validate(data); err != nil {
+		return 0, err
+	}
 	result, err := mq.updateResult(data)
 	if err != nil {
 		return 0, err
@@ -462,7 +471,11 @@ func (mq *ModelQuery) InsertAll(dataList []map[string]interface{}) (int64, error
 		return 0, err
 	}
 	workingList := make([]map[string]interface{}, len(dataList))
+	fillable := mq.fillableColumns()
 	for index, data := range dataList {
+		if err := fillable.validate(data); err != nil {
+			return 0, err
+		}
 		var err error
 		workingList[index], err = cloneDatabaseMap(data)
 		if err != nil {

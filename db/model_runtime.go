@@ -105,6 +105,7 @@ func (m *Model) cloneBinding() *Model {
 		setters: maps.Clone(m.setters), searchers: maps.Clone(m.searchers),
 		getterSnapshot: append([]modelGetterEntry(nil), m.getterSnapshot...),
 		setterSnapshot: append([]modelSetterEntry(nil), m.setterSnapshot...),
+		fillable:       m.fillable,
 		events:         make(map[ModelEventType][]ModelEventCallback, len(m.events)),
 		ctx:            m.ctx, transaction: m.transaction, record: m.record,
 	}

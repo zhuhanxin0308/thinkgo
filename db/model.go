@@ -98,6 +98,7 @@ type Model struct {
 	setters            map[string]ModelSetterFunc              // 修改器映射
 	setterSnapshot     []modelSetterEntry                      // 按字段排序的不可变修改器快照
 	searchers          map[string]ModelSearcherFunc            // 搜索器映射
+	fillable           modelFillableColumns
 	ctx                context.Context
 	transaction        *Tx
 	record             *modelRecord
@@ -838,7 +839,7 @@ func (m *Model) Update(v interface{}) error {
 	}
 	delete(data, pk)
 
-	_, err = m.newModelQuery().Where(pk+" = ?", pkVal).Update(data)
+	_, err = m.newModelQuery().Where(pk+" = ?", pkVal).updateResult(data)
 	return err
 }
 
