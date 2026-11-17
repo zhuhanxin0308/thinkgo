@@ -89,8 +89,9 @@ func TestResponseThinkPHPHeaderAndCookieCallingStyle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("解析默认 Cookie 失败: %v", err)
 	}
-	if defaultCookie.Path != "/" || defaultCookie.Secure || defaultCookie.HttpOnly || !defaultCookie.Expires.IsZero() {
-		t.Fatalf("默认 Cookie 配置不符合 ThinkPHP: %#v", defaultCookie)
+	if defaultCookie.Path != "/" || defaultCookie.Secure || !defaultCookie.HttpOnly ||
+		defaultCookie.SameSite != http.SameSiteLaxMode || !defaultCookie.Expires.IsZero() {
+		t.Fatalf("兼容响应入口的 Cookie 默认策略错误: %#v", defaultCookie)
 	}
 	secureCookie, err := http.ParseSetCookie(cookies[1])
 	if err != nil {

@@ -45,7 +45,7 @@
 
 ## 与其他安全能力的边界
 
-通用 Cookie 包的默认值保持兼容，严格浏览器应用使用上述准入检查。独立创建的工厂和业务显式单次选项仍须按 [敏感 Cookie 策略](cookie-policies.md) 审查。JavaScript 可读偏好 Cookie 应使用独立且不承载身份的工厂。跨站 SSO 或嵌入协议需要单独评估，不应使用严格档案后期待 None 被忽略。`SameSite` 不能普遍替代 CSRF 防护，参考 [OWASP CSRF Prevention Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html)。
+通用 Cookie 默认使用 HttpOnly 和 SameSite=Lax，严格浏览器应用按上述条件检查实际配置。需要 JavaScript 读取的公开偏好 Cookie 应使用独立工厂。跨站 SSO 和嵌入协议应按实际流程配置 SameSite 与 CSRF 防护。参见 [Cookie 策略](cookie-policies.md) 和 [OWASP CSRF Prevention Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html)。
 
 `browser_cookie` 下缺省 `app.csrf_enable` 和 `security_headers.enable` 现在默认开启；`stateless_api` 和未使用 Session/CSRF 的旧配置保持关闭。没有显式档案、但启用 Session 的应用会推导为 `browser_cookie`，同样采用浏览器默认值。已有显式 false 不被覆盖；生产和严格模式拒绝关闭 CSRF。安全响应头可通过显式 false 退出，CSP/frame/COOP 等也可按原配置定制。
 

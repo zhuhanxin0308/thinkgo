@@ -95,9 +95,9 @@ type Cookie struct {
 func DefaultConfig() CookieConfig {
 	return CookieConfig{
 		Path:       "/",
-		HttpOnly:   false,
+		HttpOnly:   true,
 		SetCookie:  true,
-		SameSite:   "",
+		SameSite:   "Lax",
 		SignMaxAge: defaultCookieSignMaxAge,
 	}
 }
