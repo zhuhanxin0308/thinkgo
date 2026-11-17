@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/zhuhanxin0308/thinkgo/v3/db/internal/sqllex"
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/sqllex"
 )
 
 const sqlRedactionMarker = "[REDACTED]"

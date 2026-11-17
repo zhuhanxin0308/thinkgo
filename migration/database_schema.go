@@ -1,6 +1,9 @@
 package migration
 
-import "fmt"
+import (
+	"context"
+	"fmt"
+)
 
 const (
 	migrationHistoryTable = "thinkgo_migrations"
@@ -30,9 +33,9 @@ func migrationTableDefinitions(dialect string) ([]migrationTableDefinition, erro
 	switch dialect {
 	case "mysql":
 		existsTemplate = "SELECT 1 AS present FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ?"
-		historySQL = "CREATE TABLE " + migrationHistoryTable + " (name VARCHAR(160) NOT NULL PRIMARY KEY, checksum CHAR(64) NOT NULL, batch BIGINT NOT NULL, applied_at TIMESTAMP(6) NOT NULL)"
-		journalSQL = "CREATE TABLE " + migrationJournalTable + " (name VARCHAR(160) NOT NULL PRIMARY KEY, checksum CHAR(64) NOT NULL, batch BIGINT NOT NULL, operation VARCHAR(16) NOT NULL, state VARCHAR(16) NOT NULL, fencing_token BIGINT NOT NULL, started_at TIMESTAMP(6) NOT NULL, finished_at TIMESTAMP(6) NULL, failure_code VARCHAR(64) NULL)"
-		fenceSQL = "CREATE TABLE " + migrationFenceTable + " (lock_name VARCHAR(160) NOT NULL PRIMARY KEY, fencing_token BIGINT NOT NULL)"
+		historySQL = "CREATE TABLE " + migrationHistoryTable + " (name VARCHAR(160) NOT NULL PRIMARY KEY, checksum CHAR(64) NOT NULL, batch BIGINT NOT NULL, applied_at TIMESTAMP(6) NOT NULL) ENGINE=InnoDB"
+		journalSQL = "CREATE TABLE " + migrationJournalTable + " (name VARCHAR(160) NOT NULL PRIMARY KEY, checksum CHAR(64) NOT NULL, batch BIGINT NOT NULL, operation VARCHAR(16) NOT NULL, state VARCHAR(16) NOT NULL, fencing_token BIGINT NOT NULL, started_at TIMESTAMP(6) NOT NULL, finished_at TIMESTAMP(6) NULL, failure_code VARCHAR(64) NULL) ENGINE=InnoDB"
+		fenceSQL = "CREATE TABLE " + migrationFenceTable + " (lock_name VARCHAR(160) NOT NULL PRIMARY KEY, fencing_token BIGINT NOT NULL) ENGINE=InnoDB"
 	case "postgres":
 		existsTemplate = "SELECT 1 AS present FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = ?"
 		historySQL = "CREATE TABLE " + migrationHistoryTable + " (name VARCHAR(160) NOT NULL PRIMARY KEY, checksum CHAR(64) NOT NULL, batch BIGINT NOT NULL, applied_at TIMESTAMPTZ NOT NULL)"
@@ -61,4 +64,19 @@ func migrationTableDefinitions(dialect string) ([]migrationTableDefinition, erro
 		{name: migrationJournalTable, existsSQL: existsTemplate, createSQL: journalSQL},
 		{name: migrationFenceTable, existsSQL: existsTemplate, createSQL: fenceSQL},
 	}, nil
+}
+
+func (store *DatabaseStore) requireMySQLTransactionalMetadata(ctx context.Context) error {
+	const statement = "SELECT t.TABLE_NAME FROM information_schema.TABLES t JOIN information_schema.ENGINES e ON e.ENGINE = t.ENGINE " +
+		"WHERE t.TABLE_SCHEMA = DATABASE() AND t.TABLE_NAME IN (?, ?, ?) AND e.TRANSACTIONS = 'YES'"
+	tables := []any{migrationHistoryTable, migrationJournalTable, migrationFenceTable}
+	rows, err := store.activeExecutor().QueryContext(ctx, statement, tables...)
+	if err != nil {
+		return fmt.Errorf("%w: 检查迁移元表的存储引擎失败: %w", ErrInvalidMigration, err)
+	}
+	if len(rows) != len(tables) {
+		return fmt.Errorf("%w: 事务型迁移要求 %s、%s 和 %s 使用支持事务的存储引擎",
+			ErrInvalidMigration, migrationHistoryTable, migrationJournalTable, migrationFenceTable)
+	}
+	return nil
 }

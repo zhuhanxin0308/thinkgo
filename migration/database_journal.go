@@ -101,6 +101,13 @@ func (store *DatabaseStore) Journal(ctx context.Context) ([]JournalEntry, error)
 }
 
 func (store *DatabaseStore) recordApplying(ctx context.Context, current Migration, batch int64, operation JournalOperation) error {
+	if store.dialect == "mysql" {
+		if atomic, _ := migrationTransactionMode(current, operation, store.dialect); atomic {
+			if err := store.requireMySQLTransactionalMetadata(ctx); err != nil {
+				return err
+			}
+		}
+	}
 	return store.runAtomic(ctx, func(executor Executor) error {
 		return store.recordApplyingWithExecutor(ctx, executor, current, batch, operation)
 	})
@@ -179,21 +186,7 @@ func (store *DatabaseStore) recordFailedWithExecutor(ctx context.Context, execut
 }
 
 func (store *DatabaseStore) applyMigration(ctx context.Context, current Migration, batch int64) error {
-	if store.dialect == "mysql" || store.dialect == "oracle" {
-		if err := current.Up(ctx, store.activeExecutor()); err != nil {
-			return err
-		}
-		return store.runAtomic(ctx, func(executor Executor) error {
-			if err := store.insertHistory(ctx, executor, current.Name(), current.Checksum(), batch); err != nil {
-				return err
-			}
-			return store.finishJournal(ctx, executor, current.Name(), JournalOperationApply, JournalApplied)
-		})
-	}
-	return store.runAtomic(ctx, func(executor Executor) error {
-		if err := current.Up(ctx, executor); err != nil {
-			return err
-		}
+	return store.runMigrationOperation(ctx, current, JournalOperationApply, current.Up, func(executor Executor) error {
 		if err := store.insertHistory(ctx, executor, current.Name(), current.Checksum(), batch); err != nil {
 			return err
 		}
@@ -202,25 +195,34 @@ func (store *DatabaseStore) applyMigration(ctx context.Context, current Migratio
 }
 
 func (store *DatabaseStore) revertMigration(ctx context.Context, current Migration) error {
-	if store.dialect == "mysql" || store.dialect == "oracle" {
-		if err := current.Down(ctx, store.activeExecutor()); err != nil {
-			return err
-		}
-		return store.runAtomic(ctx, func(executor Executor) error {
-			if err := store.deleteHistory(ctx, executor, current); err != nil {
-				return err
-			}
-			return store.finishJournal(ctx, executor, current.Name(), JournalOperationRevert, JournalReverted)
-		})
-	}
-	return store.runAtomic(ctx, func(executor Executor) error {
-		if err := current.Down(ctx, executor); err != nil {
-			return err
-		}
+	return store.runMigrationOperation(ctx, current, JournalOperationRevert, current.Down, func(executor Executor) error {
 		if err := store.deleteHistory(ctx, executor, current); err != nil {
 			return err
 		}
 		return store.finishJournal(ctx, executor, current.Name(), JournalOperationRevert, JournalReverted)
+	})
+}
+
+func (store *DatabaseStore) runMigrationOperation(ctx context.Context, current Migration, operation JournalOperation,
+	mutate func(context.Context, Executor) error, finalize func(Executor) error,
+) error {
+	atomic, guarded := migrationTransactionMode(current, operation, store.dialect)
+	if !atomic {
+		// 含 DDL 或无法确认边界的迁移仍由已持久化的 applying journal 保护。
+		if err := mutate(ctx, store.activeExecutor()); err != nil {
+			return err
+		}
+		return store.runAtomic(ctx, finalize)
+	}
+	return store.runAtomic(ctx, func(executor Executor) error {
+		mutationExecutor := executor
+		if guarded {
+			mutationExecutor = transactionalMigrationExecutor{executor: executor, dialect: store.dialect}
+		}
+		if err := mutate(ctx, mutationExecutor); err != nil {
+			return err
+		}
+		return finalize(executor)
 	})
 }
 
@@ -437,7 +439,12 @@ func (store *DatabaseStore) finishRecovery(ctx context.Context, executor Executo
 }
 
 func migrationOptionalText(value interface{}) (string, error) {
-	if value == nil {
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed), nil
+	case []byte:
+		return strings.TrimSpace(string(typed)), nil
+	case nil:
 		return "", nil
 	}
 	text, err := migrationText(value)

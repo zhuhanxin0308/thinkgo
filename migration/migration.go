@@ -52,10 +52,12 @@ type Migration interface {
 }
 
 type definition struct {
-	name     string
-	checksum string
-	up       func(context.Context, Executor) error
-	down     func(context.Context, Executor) error
+	name          string
+	checksum      string
+	up            func(context.Context, Executor) error
+	down          func(context.Context, Executor) error
+	sqlSteps      *migrationSQLSteps
+	transactional bool
 }
 
 // New 创建经过完整契约校验的程序化迁移。
@@ -65,6 +67,30 @@ func New(
 	up func(context.Context, Executor) error,
 	down func(context.Context, Executor) error,
 ) (Migration, error) {
+	migration, err := newMigrationDefinition(name, checksum, up, down)
+	if err != nil {
+		return nil, err
+	}
+	return migration, nil
+}
+
+// NewTransactional 声明使用事务的 Go 数据迁移。MySQL 和 Oracle 只允许通过给定执行器运行单条 DML 或只读查询。
+// 迁移不得通过其他连接写入，MySQL 业务表需要使用支持事务的存储引擎。
+func NewTransactional(
+	name string,
+	checksum string,
+	up func(context.Context, Executor) error,
+	down func(context.Context, Executor) error,
+) (Migration, error) {
+	migration, err := newMigrationDefinition(name, checksum, up, down)
+	if err != nil {
+		return nil, err
+	}
+	migration.transactional = true
+	return migration, nil
+}
+
+func newMigrationDefinition(name, checksum string, up, down func(context.Context, Executor) error) (*definition, error) {
 	if !migrationNamePattern.MatchString(name) {
 		return nil, fmt.Errorf("%w: 名称 %q 必须由时间序列、下划线和小写标识组成", ErrInvalidMigration, name)
 	}

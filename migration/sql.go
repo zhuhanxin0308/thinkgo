@@ -37,7 +37,7 @@ func NewSQL(name string, upStatements, downStatements []string) (Migration, erro
 			return executeStatements(ctx, executor, down)
 		}
 	}
-	return New(
+	migration, err := newMigrationDefinition(
 		name,
 		checksum,
 		func(ctx context.Context, executor Executor) error {
@@ -45,6 +45,11 @@ func NewSQL(name string, upStatements, downStatements []string) (Migration, erro
 		},
 		downOperation,
 	)
+	if err != nil {
+		return nil, err
+	}
+	migration.sqlSteps = &migrationSQLSteps{up: up, down: down}
+	return migration, nil
 }
 
 func normalizeStatements(statements []string) ([]string, error) {
