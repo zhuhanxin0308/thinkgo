@@ -67,23 +67,24 @@ type Config struct {
 	MaxDataBytes int
 	MaxEntries   int
 
-	// RejectUnknownID replaces externally supplied IDs absent from storage.
-	// It does not replace Regenerate after authentication or privilege changes.
+	// RejectUnknownID 允许将外部提交但存储中不存在的会话 ID 替换为服务端生成的 ID。
+	// 认证成功或权限变化时仍应轮换会话 ID。
 	RejectUnknownID bool
 }
 
 // DefaultConfig 返回安全且完整的 Session 默认配置。
 func DefaultConfig() Config {
 	return Config{
-		Name:         DefaultSessionName,
-		DriverType:   "file",
-		StoragePath:  "./runtime/session",
-		CookiePath:   "/",
-		Expire:       defaultSessionExpireSeconds,
-		HttpOnly:     true,
-		SameSite:     "Lax",
-		MaxDataBytes: defaultSessionMaxDataBytes,
-		MaxEntries:   defaultSessionMaxEntries,
+		Name:            DefaultSessionName,
+		DriverType:      "file",
+		StoragePath:     "./runtime/session",
+		CookiePath:      "/",
+		Expire:          defaultSessionExpireSeconds,
+		HttpOnly:        true,
+		SameSite:        "Lax",
+		MaxDataBytes:    defaultSessionMaxDataBytes,
+		MaxEntries:      defaultSessionMaxEntries,
+		RejectUnknownID: true,
 	}
 }
 

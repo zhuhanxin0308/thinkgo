@@ -31,6 +31,7 @@ const (
 	securityWarningCookieSameSite
 	securityWarningSessionID
 	securityWarningSessionSameSite
+	securityWarningSessionPOSTID
 )
 
 // createAppCookie 创建经过严格配置校验的全局 Cookie 工厂。
@@ -152,7 +153,8 @@ func (app *App) warnProductionSecurity() {
 		return
 	}
 	strict := app.readApplicationBool("app.security_strict", false)
-	if !strict && !strings.EqualFold(app.securityWarningEnvironment(), securityEnvironmentProduction) {
+	production := strings.EqualFold(app.securityWarningEnvironment(), securityEnvironmentProduction)
+	if !strict && !production {
 		return
 	}
 	if app.IsDebug() || (app.config != nil && app.config.GetBool("app.app_debug", false)) {
@@ -190,6 +192,9 @@ func (app *App) warnProductionSecurity() {
 	}
 	if !sessionEnabled {
 		app.emitSecurityWarning(securityWarningSessionDisabled, "生产环境安全警告：browser_cookie 必须启用 Session")
+	}
+	if production && app.session != nil && app.session.GetConfig().VarSessionID != "" {
+		app.emitSecurityWarning(securityWarningSessionPOSTID, "生产环境安全警告：browser_cookie 禁止配置 session.var_session_id")
 	}
 
 	cookieSecret := ""
