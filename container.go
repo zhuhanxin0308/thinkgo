@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 // LifecycleType 表示容器绑定的生命周期。
@@ -61,16 +62,23 @@ type containerState struct {
 	nodeSequence uint64
 }
 
-// resolution 保存当前依赖解析链；作用域副本只共享不可变切片。
+// resolution 保存当前依赖解析链；作用域副本只共享不可变切片，已完成构建帧通过原子标记退役。
 type resolution struct {
-	stack   []resolutionFrame
-	context context.Context
+	stack           []resolutionFrame
+	context         context.Context
+	contextDone     *atomic.Bool
+	singletonOrigin bool
 }
 
 type resolutionFrame struct {
 	name      string
 	node      string
 	lifecycle LifecycleType
+	done      *atomic.Bool
+}
+
+func (f resolutionFrame) isActive() bool {
+	return f.done == nil || !f.done.Load()
 }
 
 // Container 提供单例、工厂和显式实例三种依赖绑定方式。
@@ -238,15 +246,15 @@ func (c *Container) makeWithResolution(scope *resolution, abstract string, param
 	}
 
 	if active, ok := state.building[abstract]; ok {
-		from := scope.current()
-		if err := state.addWaitLocked(from.node, active.node, from.name, abstract); err != nil {
+		addedNodes, err := state.addWaitEdgesLocked(scope, active.node, abstract)
+		if err != nil {
 			state.lock.Unlock()
 			return nil, err
 		}
 		state.lock.Unlock()
 		<-active.done
 		state.lock.Lock()
-		state.removeWaitLocked(from.node, active.node)
+		state.removeWaitEdgesLocked(addedNodes, active.node)
 		state.lock.Unlock()
 		return active.instance, active.err
 	}
@@ -259,7 +267,7 @@ func (c *Container) makeWithResolution(scope *resolution, abstract string, param
 	state.building[abstract] = active
 	state.lock.Unlock()
 
-	return c.buildSingleton(abstract, registered, scope.push(abstract, active.node, Singleton), active, params...)
+	return c.buildSingleton(abstract, registered, scope, active, params...)
 }
 
 // Get 是 Make 的必需成功版本，解析失败时 panic。
@@ -406,11 +414,16 @@ func reflectArgument(parameter interface{}, targetType reflect.Type) (reflect.Va
 	return value, nil
 }
 
-// buildSingleton 提交构建结果前核对绑定代际，阻止删除或重绑定后的旧结果复活。
+// buildSingleton 提交构建结果前核对绑定代际，阻止删除或重绑定后的旧结果复活；
+// 构建退出后自动退役本次单例帧与构建上下文，并剥离调用方的临时请求作用域。
 func (c *Container) buildSingleton(abstract string, registered binding, scope *resolution, active *buildState, params ...interface{}) (instance interface{}, err error) {
 	state := c.sharedState()
+	frameDone := &atomic.Bool{}
+	singletonScope := scope.pushWithDone(abstract, active.node, Singleton, frameDone)
+	builder := c.withoutLifetimeScope()
 	returned := false
 	defer func() {
+		frameDone.Store(true)
 		// Goexit 会运行 defer，但不会让工厂调用返回。
 		if !returned {
 			err = fmt.Errorf("build singleton %s failed: %w", abstract, ErrContainerBuildAborted)
@@ -431,7 +444,7 @@ func (c *Container) buildSingleton(abstract string, registered binding, scope *r
 		}
 		close(active.done)
 	}()
-	instance, err = c.build(registered, scope, params...)
+	instance, err = builder.build(registered, singletonScope, params...)
 	returned = true
 	if err != nil {
 		err = fmt.Errorf("build singleton %s failed: %w", abstract, err)
@@ -452,9 +465,11 @@ func (c *Container) sharedState() *containerState {
 	return c.state
 }
 
+var emptyResolution resolution
+
 func (c *Container) currentResolution() *resolution {
 	if c.resolution == nil {
-		return &resolution{}
+		return &emptyResolution
 	}
 	return c.resolution
 }
@@ -463,42 +478,106 @@ func (c *Container) scoped(scope *resolution) *Container {
 	return &Container{state: c.sharedState(), resolution: scope, lifetimeScope: c.lifetimeScope}
 }
 
+func (c *Container) withoutLifetimeScope() *Container {
+	if c.lifetimeScope == nil {
+		return c
+	}
+	return &Container{state: c.sharedState(), resolution: c.resolution}
+}
+
+func (r *resolution) effectiveContext() context.Context {
+	if r == nil || r.context == nil {
+		return nil
+	}
+	if r.contextDone != nil && r.contextDone.Load() {
+		return nil
+	}
+	return r.context
+}
+
+func (r *resolution) activeContextDone() *atomic.Bool {
+	if r == nil || r.contextDone == nil || r.contextDone.Load() {
+		return nil
+	}
+	return r.contextDone
+}
+
+func (r *resolution) enclosingDone() *atomic.Bool {
+	if r == nil {
+		return nil
+	}
+	for index := len(r.stack) - 1; index >= 0; index-- {
+		frame := r.stack[index]
+		if frame.done != nil && !frame.done.Load() {
+			return frame.done
+		}
+	}
+	return nil
+}
+
 func (r *resolution) contains(abstract string) bool {
 	for _, current := range r.stack {
-		if current.name == abstract {
+		if current.isActive() && current.name == abstract {
 			return true
 		}
 	}
 	return false
 }
 
-func (r *resolution) current() resolutionFrame {
-	if len(r.stack) == 0 {
-		return resolutionFrame{}
-	}
-	return r.stack[len(r.stack)-1]
+func (r *resolution) push(abstract string, node string, lifecycle LifecycleType) *resolution {
+	return r.pushWithDone(abstract, node, lifecycle, r.enclosingDone())
 }
 
-func (r *resolution) push(abstract string, node string, lifecycle LifecycleType) *resolution {
-	if len(r.stack) == 0 {
+func (r *resolution) pushWithDone(abstract string, node string, lifecycle LifecycleType, done *atomic.Bool) *resolution {
+	ctx := r.effectiveContext()
+	ctxDone := r.activeContextDone()
+	if done != nil {
+		ctxDone = done
+	}
+	singletonOrigin := r.singletonOrigin || lifecycle == Singleton
+
+	activeCount := 0
+	for _, frame := range r.stack {
+		if frame.isActive() {
+			activeCount++
+		}
+	}
+	if activeCount == 0 {
 		// 首层解析状态与唯一栈帧共用一次分配；发布后仍保持不可变，嵌套解析继续复制栈。
 		next := &struct {
 			resolution
 			frame [1]resolutionFrame
 		}{}
-		next.frame[0] = resolutionFrame{name: abstract, node: node, lifecycle: lifecycle}
-		next.resolution = resolution{stack: next.frame[:], context: r.context}
+		next.frame[0] = resolutionFrame{name: abstract, node: node, lifecycle: lifecycle, done: done}
+		next.resolution = resolution{
+			stack:           next.frame[:],
+			context:         ctx,
+			contextDone:     ctxDone,
+			singletonOrigin: singletonOrigin,
+		}
 		return &next.resolution
 	}
-	stack := make([]resolutionFrame, len(r.stack), len(r.stack)+1)
-	copy(stack, r.stack)
-	stack = append(stack, resolutionFrame{name: abstract, node: node, lifecycle: lifecycle})
-	return &resolution{stack: stack, context: r.context}
+	stack := make([]resolutionFrame, 0, activeCount+1)
+	for _, frame := range r.stack {
+		if frame.isActive() {
+			stack = append(stack, frame)
+		}
+	}
+	stack = append(stack, resolutionFrame{name: abstract, node: node, lifecycle: lifecycle, done: done})
+	return &resolution{
+		stack:           stack,
+		context:         ctx,
+		contextDone:     ctxDone,
+		singletonOrigin: singletonOrigin,
+	}
 }
 
 func (r *resolution) containsLifecycle(lifecycle LifecycleType) bool {
+	if lifecycle == Singleton && r.singletonOrigin {
+		return true
+	}
 	for _, frame := range r.stack {
-		if frame.lifecycle == lifecycle {
+		if frame.isActive() && frame.lifecycle == lifecycle {
 			return true
 		}
 	}
@@ -508,10 +587,37 @@ func (r *resolution) containsLifecycle(lifecycle LifecycleType) bool {
 func (r *resolution) circularError(abstract string) error {
 	chain := make([]string, 0, len(r.stack)+1)
 	for _, frame := range r.stack {
-		chain = append(chain, frame.name)
+		if frame.isActive() {
+			chain = append(chain, frame.name)
+		}
 	}
 	chain = append(chain, abstract)
 	return fmt.Errorf("circular singleton dependency detected: %s", strings.Join(chain, " -> "))
+}
+
+func (r *resolution) circularWaitError(fromNode string, toName string, scoped bool) error {
+	chain := make([]string, 0, len(r.stack)+1)
+	started := false
+	for _, frame := range r.stack {
+		if !frame.isActive() {
+			continue
+		}
+		if frame.node == fromNode {
+			started = true
+		}
+		if started {
+			chain = append(chain, frame.name)
+		}
+	}
+	if len(chain) == 0 {
+		chain = append(chain, fromNode)
+	}
+	chain = append(chain, toName)
+	kind := "singleton"
+	if scoped {
+		kind = "scoped"
+	}
+	return fmt.Errorf("circular %s dependency detected: %s", kind, strings.Join(chain, " -> "))
 }
 
 func (s *containerState) nextGenerationLocked(abstract string) uint64 {
@@ -524,43 +630,62 @@ func (s *containerState) nextNodeLocked(abstract string) string {
 	return fmt.Sprintf("%s@%d", abstract, s.nodeSequence)
 }
 
-func (s *containerState) addWaitLocked(fromNode string, toNode string, fromName string, toName string) error {
-	if fromNode == "" {
-		return nil
+// addWaitEdgesLocked 将当前解析链上所有未完成单例节点记为等待源，
+// 防止同协程嵌套构建或经由 Factory 中转时丢失持有边导致跨协程死锁。
+func (s *containerState) addWaitEdgesLocked(scope *resolution, toNode string, toName string) ([]string, error) {
+	if scope == nil || toNode == "" {
+		return nil, nil
 	}
-	if s.waiting[fromNode] == nil {
-		s.waiting[fromNode] = make(map[string]struct{})
-	}
-	s.waiting[fromNode][toNode] = struct{}{}
-	if s.hasWaitPathLocked(toNode, fromNode, make(map[string]bool)) {
-		s.removeWaitLocked(fromNode, toNode)
-		return fmt.Errorf("circular singleton dependency detected: %s -> %s", fromName, toName)
-	}
-	return nil
-}
-
-func (s *containerState) removeWaitLocked(from string, to string) {
-	if from == "" {
-		return
-	}
-	delete(s.waiting[from], to)
-	if len(s.waiting[from]) == 0 {
-		delete(s.waiting, from)
-	}
-}
-
-func (s *containerState) hasWaitPathLocked(current string, target string, visited map[string]bool) bool {
-	if current == target {
-		return true
-	}
-	if visited[current] {
-		return false
-	}
-	visited[current] = true
-	for next := range s.waiting[current] {
-		if s.hasWaitPathLocked(next, target, visited) {
-			return true
+	targets := make(map[string]struct{})
+	var sourceNodes []string
+	for _, frame := range scope.stack {
+		if frame.isActive() && frame.lifecycle == Singleton && frame.node != "" {
+			if _, seen := targets[frame.node]; !seen {
+				targets[frame.node] = struct{}{}
+				sourceNodes = append(sourceNodes, frame.node)
+			}
 		}
 	}
-	return false
+	if len(sourceNodes) == 0 {
+		return nil, nil
+	}
+	if hitNode, found := findReachableWaitTarget(s.waiting, toNode, targets, make(map[string]bool)); found {
+		return nil, scope.circularWaitError(hitNode, toName, false)
+	}
+	added := make([]string, 0, len(sourceNodes))
+	for _, fromNode := range sourceNodes {
+		if s.waiting[fromNode] == nil {
+			s.waiting[fromNode] = make(map[string]struct{})
+		}
+		if _, exists := s.waiting[fromNode][toNode]; !exists {
+			s.waiting[fromNode][toNode] = struct{}{}
+			added = append(added, fromNode)
+		}
+	}
+	return added, nil
+}
+
+func (s *containerState) removeWaitEdgesLocked(fromNodes []string, toNode string) {
+	for _, from := range fromNodes {
+		delete(s.waiting[from], toNode)
+		if len(s.waiting[from]) == 0 {
+			delete(s.waiting, from)
+		}
+	}
+}
+
+func findReachableWaitTarget(waiting map[string]map[string]struct{}, current string, targets map[string]struct{}, visited map[string]bool) (string, bool) {
+	if _, matched := targets[current]; matched {
+		return current, true
+	}
+	if visited[current] {
+		return "", false
+	}
+	visited[current] = true
+	for next := range waiting[current] {
+		if hit, found := findReachableWaitTarget(waiting, next, targets, visited); found {
+			return hit, true
+		}
+	}
+	return "", false
 }

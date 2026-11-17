@@ -24,9 +24,26 @@ func TestKeyUsesOnlyReferenceIdentity(t *testing.T) {
 		t.Fatal("不同动态类型不能共享关闭身份")
 	}
 	var pointer *int
+	var zeroStructPointer *struct{}
 	var channel chan int
 	var mapping map[string]int
-	for _, value := range []any{nil, pointer, channel, mapping, 1, "值", struct{}{}, struct{ Value any }{[]int{1}}, []int{}, []int{1}, func() {}} {
+	for _, value := range []any{
+		nil,
+		pointer,
+		zeroStructPointer,
+		&struct{}{},
+		new([0]int),
+		&struct{ _ [0]func() }{},
+		channel,
+		mapping,
+		1,
+		"值",
+		struct{}{},
+		struct{ Value any }{[]int{1}},
+		[]int{},
+		[]int{1},
+		func() {},
+	} {
 		if _, valid := Key(value); valid {
 			t.Fatalf("不可靠身份不应被用于去重: %T", value)
 		}
