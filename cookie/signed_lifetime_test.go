@@ -24,7 +24,6 @@ func TestSignedCookieBindsEffectiveLifetime(t *testing.T) {
 	}{
 		{"短期 Cookie 过期", 5, 6 * time.Second, ErrExpiredCookieSignature},
 		{"单次期限覆盖默认期限", 40, 20 * time.Second, nil},
-		{"超过全局签名上限", 120, 61 * time.Second, ErrExpiredCookieSignature},
 		{"删除 Cookie 的签名立即失效", -1, 0, ErrExpiredCookieSignature},
 	} {
 		t.Run(sample.name, func(t *testing.T) {
@@ -54,6 +53,30 @@ func TestSignedCookieBindsEffectiveLifetime(t *testing.T) {
 				t.Errorf("篡改签名期限应被拒绝: %v", err)
 			}
 		})
+	}
+
+	if _, err := factory.BuildHeader("sid", "value", CookieOptions{Expire: 120}); !errors.Is(err, ErrInvalidCookieOptions) {
+		t.Fatalf("单次 Expire 超过 SignMaxAge 时应拒绝静默截断，实际 err=%v", err)
+	}
+	longFactory, err := NewCookie(map[string]interface{}{"secret": secret, "expire": 10, "sign_max_age": 120})
+	if err != nil {
+		t.Fatal(err)
+	}
+	longHeader, err := longFactory.BuildHeader("sid", "value", CookieOptions{Expire: 120})
+	if err != nil {
+		t.Fatal(err)
+	}
+	longWritten, err := http.ParseSetCookie(longHeader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	longSegments := strings.Split(longWritten.Value, ".")
+	issuedAt, err := strconv.ParseInt(longSegments[2], 10, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := unsignCookieValue("sid", longWritten.Value, secret, factory.config.SignMaxAge, factory.signingAge(factory.config.Expire), time.Unix(issuedAt, 0).Add(61*time.Second)); !errors.Is(err, ErrExpiredCookieSignature) {
+		t.Fatalf("收紧后的全局 SignMaxAge 仍应约束已签发 Cookie: %v", err)
 	}
 }
 

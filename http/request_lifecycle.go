@@ -113,10 +113,12 @@ func (h *Http) run(request *fwcontext.Request, publicOnly, defaultRequest bool) 
 		}
 	}
 
+	var innerParseResponse *fwcontext.Response
 	response = h.middleware.Then(request, func(current *fwcontext.Request) *fwcontext.Response {
 		// ThinkPHP 在全局中间件内进入路由分发；请求解析和静态资源适配均属于该目标阶段。
 		if parseErr := current.Parse(); parseErr != nil {
-			return responseForRequestParseError(parseErr)
+			innerParseResponse = responseForRequestParseError(parseErr)
+			return innerParseResponse
 		}
 		if staticResponse := h.responseForPublicFile(current); staticResponse != nil {
 			return staticResponse
@@ -128,18 +130,107 @@ func (h *Http) run(request *fwcontext.Request, publicOnly, defaultRequest bool) 
 			h.logHTTPError("切换请求应用上下文失败", err)
 			return fwcontext.NewResponse().Code(http.StatusBadRequest).Content(http.StatusText(http.StatusBadRequest))
 		}
+		var routeResponse *fwcontext.Response
 		if h.appMiddleware == nil {
-			return h.routeRequest(current)
+			routeResponse = h.routeRequest(current)
+		} else {
+			routeResponse = h.appMiddleware.Then(current, h.routeRequest)
 		}
-		return h.appMiddleware.Then(current, h.routeRequest)
+		if parseErr := current.ParseError(); parseErr != nil {
+			if writer, exists := current.ResponseWriter(); exists {
+				if responseWriterStarted(writer) {
+					if routeResponse != nil && routeResponse.Committed() {
+						return routeResponse
+					}
+					return fwcontext.NewCommittedResponse(responseWriterStatus(writer))
+				}
+			} else if routeResponse != nil && routeResponse.Committed() {
+				return routeResponse
+			}
+			innerParseResponse = responseForRequestParseError(parseErr)
+			return innerParseResponse
+		}
+		return routeResponse
 	})
+	if parseErr := request.ParseError(); parseErr != nil {
+		if writer, exists := request.ResponseWriter(); exists && responseWriterStarted(writer) {
+			if response != nil && response.Committed() {
+				return response
+			}
+			return fwcontext.NewCommittedResponse(responseWriterStatus(writer))
+		}
+		if response != nil && response.Committed() {
+			return response
+		}
+		expected := responseForRequestParseError(parseErr)
+		if innerParseResponse != nil && response == innerParseResponse && response.GetStatus() == expected.GetStatus() {
+			return response
+		}
+		preserveMiddlewareHeadersOnParseError(response, expected)
+		h.transferRequestEndState(response, expected)
+		return expected
+	}
 	if response == nil {
 		return internalServerErrorResponse()
 	}
-	if parseErr := request.ParseError(); parseErr != nil {
-		return responseForRequestParseError(parseErr)
-	}
 	return response
+}
+
+func preserveMiddlewareHeadersOnParseError(source, target *fwcontext.Response) {
+	if source == nil || target == nil {
+		return
+	}
+	for name, values := range source.Headers() {
+		canonical := http.CanonicalHeaderKey(name)
+		if isHostManagedHeader(canonical) {
+			continue
+		}
+		switch canonical {
+		case "Content-Type", "Content-Length", "Content-Encoding", "Content-Disposition",
+			"Etag", "Last-Modified", "Accept-Ranges", "Location":
+			continue
+		}
+		for index, value := range values {
+			if index == 0 {
+				target.Header(canonical, value)
+			} else {
+				target.AddHeader(canonical, value)
+			}
+		}
+	}
+}
+
+func responseWriterStarted(writer http.ResponseWriter) bool {
+	for current := writer; current != nil; {
+		switch typed := current.(type) {
+		case *CompressionResponseWriter:
+			if typed.hasStarted() {
+				return true
+			}
+		case *statusTrackingResponseWriter:
+			if typed.Written() {
+				return true
+			}
+		}
+		if bridge, ok := current.(interface{ FrameworkResponseWriter() http.ResponseWriter }); ok {
+			next := bridge.FrameworkResponseWriter()
+			if next == current {
+				break
+			}
+			current = next
+			continue
+		}
+		unwrapper, ok := current.(interface{ Unwrap() http.ResponseWriter })
+		if !ok {
+			break
+		}
+		next := unwrapper.Unwrap()
+		if next == current {
+			break
+		}
+		current = next
+	}
+	return false
 }
 
 // End 执行响应发送后的生命周期，对应 ThinkPHP Http::end。

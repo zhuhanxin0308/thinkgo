@@ -323,9 +323,12 @@ func (w *CompressionResponseWriter) Abort() {
 	}
 }
 
-// ResetUncommitted 丢弃尚未提交的业务缓冲和响应头，供统一异常处理安全重写响应。
+// ResetUncommitted 丢弃尚未提交的业务缓冲和响应头，并同步重置底层未提交写入器的钩子与头状态，供统一异常处理安全重写响应。
 func (w *CompressionResponseWriter) ResetUncommitted() bool {
 	if w == nil || w.closed || w.wroteHeader {
+		return false
+	}
+	if !resetUnderlyingUncommitted(w.ResponseWriter) {
 		return false
 	}
 	w.buffer.Reset()
@@ -339,6 +342,36 @@ func (w *CompressionResponseWriter) ResetUncommitted() bool {
 	}
 	addVaryHeader(w.Header(), "Accept-Encoding")
 	return true
+}
+
+func resetUnderlyingUncommitted(writer http.ResponseWriter) bool {
+	for current := writer; current != nil; {
+		if resetter, ok := current.(interface{ ResetUncommitted() bool }); ok {
+			return resetter.ResetUncommitted()
+		}
+		if bridge, ok := current.(interface{ FrameworkResponseWriter() http.ResponseWriter }); ok {
+			next := bridge.FrameworkResponseWriter()
+			if next == current {
+				break
+			}
+			current = next
+			continue
+		}
+		unwrapper, ok := current.(interface{ Unwrap() http.ResponseWriter })
+		if !ok {
+			break
+		}
+		next := unwrapper.Unwrap()
+		if next == current {
+			break
+		}
+		current = next
+	}
+	return true
+}
+
+func (w *CompressionResponseWriter) hasStarted() bool {
+	return w != nil && (w.closed || w.headerSet || w.wroteHeader || w.buffer.Len() > 0)
 }
 
 // Flush 是旧具体类型的兼容入口；真实请求链只在底层支持时通过自适应 facade 暴露 Flusher。
@@ -678,10 +711,27 @@ func (w *CompressionResponseWriter) Unwrap() http.ResponseWriter {
 	return w.ResponseWriter
 }
 
-// Status 返回底层已记录状态，供标准库路由处理器生成终结器响应快照。
+// Status 返回当前已记录或已提交状态，缓冲阶段立即反映显式 WriteHeader 状态码。
 func (w *CompressionResponseWriter) Status() int {
+	if w == nil {
+		return http.StatusOK
+	}
+	if w.rejected {
+		if w.wroteHeader {
+			if provider, ok := w.ResponseWriter.(interface{ Status() int }); ok {
+				return provider.Status()
+			}
+		}
+		return http.StatusNotAcceptable
+	}
+	if w.headerSet && !w.wroteHeader {
+		return w.statusCode
+	}
 	if provider, ok := w.ResponseWriter.(interface{ Status() int }); ok {
 		return provider.Status()
+	}
+	if w.headerSet || w.wroteHeader {
+		return w.statusCode
 	}
 	return http.StatusOK
 }

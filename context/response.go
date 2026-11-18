@@ -457,8 +457,12 @@ func (r *Response) Redirect(target string, code ...int) *Response {
 	}
 	status := http.StatusFound
 	if len(code) > 1 {
+		r.clearRedirectEntity()
 		r.addError(fmt.Errorf("%w: 状态码只能提供一个", ErrInvalidRedirect))
 		r.status = http.StatusInternalServerError
+		if r.header != nil && r.header.values != nil {
+			r.header.values.Del("Location")
+		}
 		return r
 	}
 	if len(code) == 1 {
@@ -467,13 +471,15 @@ func (r *Response) Redirect(target string, code ...int) *Response {
 	target = strings.TrimSpace(target)
 	_, changed := sanitizeHeaderValue(target)
 	if target == "" || changed || !isRedirectResponseStatus(status) {
+		r.clearRedirectEntity()
 		r.addError(fmt.Errorf("%w: target=%q status=%d", ErrInvalidRedirect, target, status))
 		r.status = http.StatusInternalServerError
-		if r.header != nil {
+		if r.header != nil && r.header.values != nil {
 			r.header.values.Del("Location")
 		}
 		return r
 	}
+	r.clearRedirectEntity()
 	r.Header("Location", target)
 	r.status = status
 	return r
@@ -830,6 +836,116 @@ func (r *Response) clearEntitySource() {
 	r.chunks = nil
 }
 
+// clearRedirectEntity 在切换为重定向响应时清除任何已绑定的实体来源、原始数据及实体描述头，
+// 防止 3xx 跳转响应继续发送受保护下载文件、流内容或泄露原文件名。
+func (r *Response) clearRedirectEntity() {
+	if r == nil {
+		return
+	}
+	hadEntity := r.filePath != "" || r.streamWriter != nil || len(r.chunks) > 0 || len(r.body) > 0
+	r.clearEntitySource()
+	r.data = nil
+	if r.header == nil {
+		return
+	}
+	if r.header.values != nil {
+		r.header.values.Del("Content-Disposition")
+		r.header.values.Del("Content-Length")
+		r.header.values.Del("Content-Range")
+		r.header.values.Del("Content-Encoding")
+		r.header.values.Del("ETag")
+		r.header.values.Del("Last-Modified")
+		r.header.values.Del("Transfer-Encoding")
+	}
+	if hadEntity {
+		if r.header.values != nil {
+			r.header.values.Del("Content-Type")
+		}
+		if r.identity != nil {
+			r.header.contentType = defaultResponseContentType
+			r.header.inlineContentType = true
+			r.header.contentTypeSet = false
+		} else {
+			r.header.contentType = ""
+			r.header.inlineContentType = false
+			r.header.contentTypeSet = false
+		}
+	}
+}
+
+type setCookieIdentity struct {
+	name   string
+	domain string
+	path   string
+}
+
+func parseSetCookieIdentity(raw string) (setCookieIdentity, bool) {
+	parsed, err := http.ParseSetCookie(raw)
+	if err != nil || parsed == nil || parsed.Name == "" {
+		return setCookieIdentity{}, false
+	}
+	domain := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(parsed.Domain), "."))
+	return setCookieIdentity{
+		name:   parsed.Name,
+		domain: domain,
+		path:   parsed.Path,
+	}, true
+}
+
+func mergeSetCookieHeaderValues(header http.Header, values []string) {
+	hasNonCanonical := false
+	existingCount := len(header["Set-Cookie"])
+	for name, items := range header {
+		if name != "Set-Cookie" && strings.EqualFold(name, "Set-Cookie") {
+			hasNonCanonical = true
+			existingCount += len(items)
+		}
+	}
+	if existingCount == 0 && !hasNonCanonical {
+		for _, value := range values {
+			header.Add("Set-Cookie", value)
+		}
+		return
+	}
+	existing := make([]string, 0, existingCount)
+	existing = append(existing, header["Set-Cookie"]...)
+	if hasNonCanonical {
+		for name, items := range header {
+			if name != "Set-Cookie" && strings.EqualFold(name, "Set-Cookie") {
+				existing = append(existing, items...)
+				delete(header, name)
+			}
+		}
+	}
+	if len(values) == 0 {
+		header["Set-Cookie"] = existing
+		return
+	}
+	overriddenRaw := make(map[string]struct{}, len(values))
+	overriddenCookies := make(map[setCookieIdentity]struct{}, len(values))
+	for _, value := range values {
+		overriddenRaw[value] = struct{}{}
+		if identity, ok := parseSetCookieIdentity(value); ok {
+			overriddenCookies[identity] = struct{}{}
+		}
+	}
+	header.Del("Set-Cookie")
+	for _, item := range existing {
+		if _, duplicate := overriddenRaw[item]; duplicate {
+			continue
+		}
+		if identity, ok := parseSetCookieIdentity(item); ok {
+			if _, overridden := overriddenCookies[identity]; overridden {
+				continue
+			}
+		}
+		header.Add("Set-Cookie", item)
+	}
+	for _, value := range values {
+		header.Add("Set-Cookie", value)
+	}
+}
+
 func (r *Response) writeHeaders(w http.ResponseWriter) {
 	if r.header == nil {
 		return
@@ -839,8 +955,12 @@ func (r *Response) writeHeaders(w http.ResponseWriter) {
 		header.Set("Content-Type", r.header.contentType)
 	}
 	for key, values := range r.header.values {
-		if key == "Vary" {
-			header.Set(key, httpheader.MergeVary(header.Values(key), values))
+		if strings.EqualFold(key, "Vary") {
+			header.Set("Vary", httpheader.MergeVary(header.Values("Vary"), values))
+			continue
+		}
+		if strings.EqualFold(key, "Set-Cookie") {
+			mergeSetCookieHeaderValues(header, values)
 			continue
 		}
 		header.Del(key)

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"strings"
 )
 
@@ -195,8 +196,8 @@ func resolveClientIP(raw *http.Request, trusted *TrustedProxySet) string {
 		// X-Real-IP 是单值回退头，重复字段即使内容相同也不参与信任判断。
 		if values := raw.Header.Values("X-Real-IP"); len(values) == 1 {
 			realIP := strings.TrimSpace(values[0])
-			if net.ParseIP(realIP) != nil {
-				return realIP
+			if addr, err := netip.ParseAddr(realIP); err == nil {
+				return addr.WithZone("").Unmap().String()
 			}
 		}
 	}
@@ -209,9 +210,8 @@ func directClientIP(raw *http.Request) string {
 	if raw == nil {
 		return ""
 	}
-	remoteIP := parseRemoteIP(raw.RemoteAddr)
-	if remoteIP != nil {
-		return remoteIP.String()
+	if addr, ok := parseRemoteAddr(raw.RemoteAddr); ok {
+		return addr.String()
 	}
 	return raw.RemoteAddr
 }
@@ -272,11 +272,31 @@ func isHTTPS(raw *http.Request, trusted *TrustedProxySet) bool {
 	return strings.EqualFold(proto, "https")
 }
 
-// parseRemoteIP 兼容 IPv4、IPv6 和带端口的 RemoteAddr。
+// parseRemoteIP 兼容 IPv4、IPv6（含 RFC 4007 Zone ID）和带端口的 RemoteAddr。
 func parseRemoteIP(remoteAddr string) net.IP {
+	addr, ok := parseRemoteAddr(remoteAddr)
+	if !ok {
+		return nil
+	}
+	return net.IP(addr.AsSlice())
+}
+
+func parseRemoteAddr(remoteAddr string) (netip.Addr, bool) {
+	remoteAddr = strings.TrimSpace(remoteAddr)
+	if remoteAddr == "" {
+		return netip.Addr{}, false
+	}
 	host, _, err := net.SplitHostPort(remoteAddr)
 	if err != nil {
-		host = strings.Trim(remoteAddr, "[]")
+		if strings.HasPrefix(remoteAddr, "[") && strings.HasSuffix(remoteAddr, "]") {
+			host = remoteAddr[1 : len(remoteAddr)-1]
+		} else {
+			host = remoteAddr
+		}
 	}
-	return net.ParseIP(host)
+	addr, err := netip.ParseAddr(host)
+	if err != nil {
+		return netip.Addr{}, false
+	}
+	return addr.WithZone("").Unmap(), true
 }
