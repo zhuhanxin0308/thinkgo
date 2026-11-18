@@ -117,7 +117,7 @@ func reusableModelRows(rows []map[string]any) bool {
 // reusableModelRow 仅复用驱动的标准标量。扫描到目标和绑定记录身份时仍会隔离字节切片。
 func reusableModelRow(row map[string]any) bool {
 	// 映射自身占一个节点，每个非空字段再计映射键、外层接口和实际值。
-	const nodesPerColumn = 3
+	const nodesPerColumn = 4
 	if len(row) > (maxDatabaseValueNodes-1)/nodesPerColumn {
 		return false
 	}
