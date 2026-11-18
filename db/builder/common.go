@@ -115,6 +115,7 @@ func sortedMapKeys(data map[string]interface{}) []string {
 // PostgreSQL 使用 standard_conforming_strings=on 的词法规则。
 // E 字符串支持反斜杠转义；普通字符串和引用标识符不把反斜杠视为引号转义。
 func rebindNumbered(query, prefix, dialect string) string {
+	dialect = strings.ToLower(strings.TrimSpace(dialect))
 	const (
 		stateNormal = iota
 		stateSingle
@@ -128,6 +129,7 @@ func rebindNumbered(query, prefix, dialect string) string {
 	dollarDelimiter := ""
 	parameter := 0
 	postgres := dialect == "postgres"
+	mysql := dialect == "mysql"
 	var output strings.Builder
 	output.Grow(len(query) + 8)
 	for index := 0; index < len(query); index++ {
@@ -179,6 +181,12 @@ func rebindNumbered(query, prefix, dialect string) string {
 				}
 			case '-':
 				if index+1 < len(query) && query[index+1] == '-' {
+					if !mysql || index+2 == len(query) || query[index+2] <= ' ' || query[index+2] == 0x7f {
+						state = stateLineComment
+					}
+				}
+			case '#':
+				if mysql {
 					state = stateLineComment
 				}
 			case '/':
@@ -189,8 +197,8 @@ func rebindNumbered(query, prefix, dialect string) string {
 					continue
 				}
 			case '$':
-				delimiter := builderDollarDelimiter(query[index:])
-				if postgres {
+				var delimiter string
+				if postgres || dialect == "" {
 					delimiter = sqllex.PostgresDollarDelimiter(query, index)
 				}
 				if delimiter != "" {
@@ -229,7 +237,7 @@ func rebindNumbered(query, prefix, dialect string) string {
 				state = stateNormal
 			}
 		case stateLineComment:
-			if current == '\n' || current == '\r' {
+			if current == '\n' || (current == '\r' && dialect != "sqlite" && dialect != "mysql") {
 				state = stateNormal
 			}
 		case stateDollarQuote:

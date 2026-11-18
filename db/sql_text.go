@@ -42,15 +42,18 @@ func redactSQLLiteralsAndComments(sqlText string, dialect string) string {
 			index = redactSQLQuotedToken(&result, sqlText, index, '\'', backslashEscapes)
 		case '"':
 			if doubleQuoteIsIdentifier(dialect) {
-				index = copySQLQuotedToken(&result, sqlText, index, '"', backslashEscapes)
+				index = copySQLQuotedToken(&result, sqlText, index, '"', false)
 			} else {
 				index = redactSQLQuotedToken(&result, sqlText, index, '"', backslashEscapes)
 			}
 		case '`':
-			if dialect == "mysql" {
-				index = copySQLQuotedToken(&result, sqlText, index, '`', backslashEscapes)
+			if dialect == "postgres" {
+				result.WriteByte('`')
+				index++
+			} else if dialect == "mysql" {
+				index = copySQLQuotedToken(&result, sqlText, index, '`', false)
 			} else {
-				index = redactSQLQuotedToken(&result, sqlText, index, '`', backslashEscapes)
+				index = redactSQLQuotedToken(&result, sqlText, index, '`', false)
 			}
 		case '[':
 			if dialect == "postgres" {
@@ -58,16 +61,29 @@ func redactSQLLiteralsAndComments(sqlText string, dialect string) string {
 				result.WriteByte('[')
 				index++
 			} else if dialect == "sqlserver" {
-				index = copySQLQuotedToken(&result, sqlText, index, ']', backslashEscapes)
+				index = copySQLQuotedToken(&result, sqlText, index, ']', false)
 			} else {
-				index = redactSQLQuotedToken(&result, sqlText, index, ']', backslashEscapes)
+				index = redactSQLQuotedToken(&result, sqlText, index, ']', false)
 			}
 		case '-':
-			if index+1 < len(sqlText) && sqlText[index+1] == '-' {
+			if index+1 < len(sqlText) && sqlText[index+1] == '-' &&
+				(dialect != "mysql" || index+2 == len(sqlText) || sqlText[index+2] <= ' ' || sqlText[index+2] == 0x7f) {
 				result.WriteString("--")
 				result.WriteString(sqlRedactionMarker)
 				index += 2
-				for index < len(sqlText) && sqlText[index] != '\n' && sqlText[index] != '\r' {
+				for index < len(sqlText) && sqlText[index] != '\n' && (sqlText[index] != '\r' || dialect == "sqlite" || dialect == "mysql") {
+					index++
+				}
+				continue
+			}
+			result.WriteByte(sqlText[index])
+			index++
+		case '#':
+			if dialect == "mysql" {
+				result.WriteByte('#')
+				result.WriteString(sqlRedactionMarker)
+				index++
+				for index < len(sqlText) && sqlText[index] != '\n' {
 					index++
 				}
 				continue
@@ -85,8 +101,8 @@ func redactSQLLiteralsAndComments(sqlText string, dialect string) string {
 			result.WriteByte(sqlText[index])
 			index++
 		case '$':
-			delimiter := readDollarQuoteDelimiter(sqlText[index:])
-			if dialect == "postgres" {
+			var delimiter string
+			if dialect == "postgres" || dialect == "" {
 				delimiter = sqllex.PostgresDollarDelimiter(sqlText, index)
 			}
 			if delimiter == "" {
@@ -189,7 +205,7 @@ func sqlBuilderDialect(builder Builder) string {
 	return builder.DialectName()
 }
 
-// validateRawClause 校验显式原始条件的基本完整性和绑定参数数量。
+// validateRawClause 校验显式原始条件的完整性、参数数量和语句边界。
 func validateRawClause(sqlText string, argsCount int, clauseName string, dialects ...string) error {
 	if strings.TrimSpace(sqlText) == "" {
 		return fmt.Errorf("%s 原始条件不能为空", clauseName)
@@ -197,7 +213,7 @@ func validateRawClause(sqlText string, argsCount int, clauseName string, dialect
 	if strings.IndexByte(sqlText, 0) >= 0 {
 		return fmt.Errorf("%s 原始条件包含 NUL 字节", clauseName)
 	}
-	return validatePlaceholderCount(sqlText, argsCount, dialects...)
+	return validateSQLPlaceholders(sqlText, argsCount, true, dialects...)
 }
 
 // validateRawStatement 校验原生 SQL 入口，框架约定调用方统一使用问号占位符。
@@ -215,7 +231,11 @@ func validateRawStatement(sqlText string, argsCount int, dialects ...string) err
 }
 
 func validatePlaceholderCount(sqlText string, argsCount int, dialects ...string) error {
-	placeholderCount, err := countSQLPlaceholders(sqlText, dialects...)
+	return validateSQLPlaceholders(sqlText, argsCount, false, dialects...)
+}
+
+func validateSQLPlaceholders(sqlText string, argsCount int, rejectSeparators bool, dialects ...string) error {
+	placeholderCount, err := scanSQLPlaceholders(sqlText, rejectSeparators, dialects...)
 	if err != nil {
 		return err
 	}
@@ -227,12 +247,17 @@ func validatePlaceholderCount(sqlText string, argsCount int, dialects ...string)
 
 // countSQLPlaceholders 忽略字符串、标识符引用和注释中的问号，只统计真实绑定占位符。
 func countSQLPlaceholders(sqlText string, dialects ...string) (int, error) {
+	return scanSQLPlaceholders(sqlText, false, dialects...)
+}
+
+func scanSQLPlaceholders(sqlText string, rejectSeparators bool, dialects ...string) (int, error) {
 	backslashEscapes := sqlBackslashEscapes(dialects...)
 	dialect := ""
 	if len(dialects) > 0 {
 		dialect = strings.ToLower(strings.TrimSpace(dialects[0]))
 	}
 	postgres := dialect == "postgres"
+	mysql := dialect == "mysql"
 	const (
 		stateNormal = iota
 		stateSingleQuote
@@ -250,6 +275,10 @@ func countSQLPlaceholders(sqlText string, dialects ...string) (int, error) {
 		switch state {
 		case stateNormal:
 			switch current {
+			case ';':
+				if rejectSeparators {
+					return 0, fmt.Errorf("原始条件不能包含 SQL 语句分隔符")
+				}
 			case '?':
 				// PostgreSQL 单字符 JSONB 存在操作符使用 ?? 转义；
 				// ?|、?& 与 @? 语法无歧义，可直接保留且不计入绑定参数。
@@ -281,11 +310,29 @@ func countSQLPlaceholders(sqlText string, dialects ...string) (int, error) {
 					index = end - 1
 					continue
 				}
+				if rejectSeparators && backslashEscapes {
+					end, err := unambiguousBackslashQuotedEnd(sqlText, index)
+					if err != nil {
+						return 0, err
+					}
+					index = end - 1
+					continue
+				}
 				state = stateSingleQuote
 			case '"':
+				if rejectSeparators && backslashEscapes && !doubleQuoteIsIdentifier(dialect) {
+					end, err := unambiguousBackslashQuotedEnd(sqlText, index)
+					if err != nil {
+						return 0, err
+					}
+					index = end - 1
+					continue
+				}
 				state = stateDoubleQuote
 			case '`':
-				state = stateBacktick
+				if !postgres {
+					state = stateBacktick
+				}
 			case '[':
 				// PostgreSQL 的数组构造、下标和切片仍是 SQL 正文，与 Rebind 保持一致。
 				// 其他方言继续保留方括号标识符的引用规则。
@@ -294,8 +341,15 @@ func countSQLPlaceholders(sqlText string, dialects ...string) (int, error) {
 				}
 			case '-':
 				if index+1 < len(sqlText) && sqlText[index+1] == '-' {
+					// MySQL 要求双横线后有空白或控制字符，否则它是运算符。
+					if !mysql || index+2 == len(sqlText) || sqlText[index+2] <= ' ' || sqlText[index+2] == 0x7f {
+						state = stateLineComment
+						index++
+					}
+				}
+			case '#':
+				if mysql {
 					state = stateLineComment
-					index++
 				}
 			case '/':
 				if index+1 < len(sqlText) && sqlText[index+1] == '*' {
@@ -303,11 +357,26 @@ func countSQLPlaceholders(sqlText string, dialects ...string) (int, error) {
 					if !closed {
 						return 0, fmt.Errorf("SQL 引用或注释未闭合")
 					}
+					if rejectSeparators && mysql {
+						comment := sqlText[index+2 : next-2]
+						var code string
+						executable := false
+						if after, ok := strings.CutPrefix(comment, "!"); ok {
+							code, executable = after, true
+						} else if len(comment) >= 2 && strings.EqualFold(comment[:2], "M!") {
+							code, executable = comment[2:], true
+						}
+						if executable {
+							if _, err := scanSQLPlaceholders(code, true, dialects...); err != nil {
+								return 0, err
+							}
+						}
+					}
 					index = next - 1
 				}
 			case '$':
-				delimiter := readDollarQuoteDelimiter(sqlText[index:])
-				if postgres {
+				var delimiter string
+				if postgres || dialect == "" {
 					delimiter = sqllex.PostgresDollarDelimiter(sqlText, index)
 				}
 				if delimiter != "" {
@@ -323,7 +392,9 @@ func countSQLPlaceholders(sqlText string, dialects ...string) (int, error) {
 			} else if state == stateBacktick {
 				closing = '`'
 			}
-			if backslashEscapes && current == '\\' && index+1 < len(sqlText) {
+			allowBackslashEscape := backslashEscapes &&
+				(state == stateSingleQuote || (state == stateDoubleQuote && !doubleQuoteIsIdentifier(dialect)))
+			if allowBackslashEscape && current == '\\' && index+1 < len(sqlText) {
 				index++
 				continue
 			}
@@ -343,7 +414,8 @@ func countSQLPlaceholders(sqlText string, dialects ...string) (int, error) {
 				state = stateNormal
 			}
 		case stateLineComment:
-			if current == '\n' || current == '\r' {
+			// SQLite 和 MySQL 的行注释只在 LF 或输入结尾终止，CR 仍属于注释内容。
+			if current == '\n' || (current == '\r' && dialect != "sqlite" && dialect != "mysql") {
 				state = stateNormal
 			}
 		case stateDollarQuote:
@@ -363,19 +435,39 @@ func countSQLPlaceholders(sqlText string, dialects ...string) (int, error) {
 	return count, nil
 }
 
-func readDollarQuoteDelimiter(text string) string {
-	if len(text) < 2 || text[0] != '$' {
-		return ""
+// unambiguousBackslashQuotedEnd 要求标准双写转义与反斜杠转义给出同一闭合边界，
+// 防止 MySQL 会话开启 NO_BACKSLASH_ESCAPES 时提前闭合字符串并暴露后续语句分隔符。
+func unambiguousBackslashQuotedEnd(sqlText string, start int) (int, error) {
+	plainEnd, plainClosed := standardQuotedEnd(sqlText, start, false)
+	escapedEnd, escapedClosed := standardQuotedEnd(sqlText, start, true)
+	if !escapedClosed {
+		return 0, fmt.Errorf("SQL 引用或注释未闭合")
 	}
-	for index := 1; index < len(text); index++ {
-		current := text[index]
-		if current == '$' {
-			return text[:index+1]
+	if !plainClosed || plainEnd != escapedEnd {
+		// 若在 NO_BACKSLASH_ESCAPES 边界之后出现分号，直接返回语句分隔符错误；否则拒绝歧义引号边界。
+		if plainClosed && strings.IndexByte(sqlText[plainEnd:], ';') >= 0 {
+			return 0, fmt.Errorf("原始条件不能包含 SQL 语句分隔符")
 		}
-		if !((current >= 'a' && current <= 'z') || (current >= 'A' && current <= 'Z') ||
-			(current >= '0' && current <= '9') || current == '_') {
-			return ""
-		}
+		return 0, fmt.Errorf("原始条件不能包含依赖会话转义模式的引号边界")
 	}
-	return ""
+	return escapedEnd, nil
+}
+
+func standardQuotedEnd(sqlText string, start int, backslash bool) (int, bool) {
+	closing := sqlText[start]
+	for index := start + 1; index < len(sqlText); index++ {
+		if backslash && sqlText[index] == '\\' {
+			index++
+			continue
+		}
+		if sqlText[index] != closing {
+			continue
+		}
+		if index+1 < len(sqlText) && sqlText[index+1] == closing {
+			index++
+			continue
+		}
+		return index + 1, true
+	}
+	return len(sqlText), false
 }

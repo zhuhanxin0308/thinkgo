@@ -71,13 +71,20 @@ func TestBuilderQuotingAndRebindEdgeCases(t *testing.T) {
 		text string
 		want string
 	}{
-		{text: "$tag$?$tag$ ?", want: "$tag$?$tag$ @p1"},
+		{text: "$tag$?$tag$ ?", want: "$tag$@p1$tag$ @p2"},
 		{text: "$bad-tag$ ?", want: "$bad-tag$ @p1"},
 		{text: "SELECT [a?] AS `b?`, ?", want: "SELECT [a?] AS `b?`, @p1"},
+		{text: "SELECT a$t$ FROM v$session WHERE id = ? AND b$t$ = ?", want: "SELECT a$t$ FROM v$session WHERE id = @p1 AND b$t$ = @p2"},
 	} {
 		if got := (&Sqlsrv{}).Rebind(test.text); got != test.want {
 			t.Fatalf("SQL Server Rebind 边界错误: got=%q want=%q", got, test.want)
 		}
+	}
+	if got := (&Pgsql{}).Rebind("$tag$?$tag$ ?"); got != "$tag$?$tag$ $1" {
+		t.Fatalf("PostgreSQL dollar quote Rebind 边界错误: got=%q", got)
+	}
+	if got := rebindNumbered("SELECT a$t$ FROM v$session WHERE id = ? AND b$t$ = ?", ":", "oracle"); got != "SELECT a$t$ FROM v$session WHERE id = :1 AND b$t$ = :2" {
+		t.Fatalf("Oracle Rebind 吞没了占位符: got=%q", got)
 	}
 	if got := builderDollarDelimiter("$tag$"); got != "$tag$" {
 		t.Fatalf("合法 dollar quote 分隔符错误: %q", got)
