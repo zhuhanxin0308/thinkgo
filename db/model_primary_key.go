@@ -39,7 +39,7 @@ type primaryKeyBinding struct {
 	fieldName string
 }
 
-func (m *Model) preparePrimaryKey(value reflect.Value) (primaryKeyBinding, bool, error) {
+func (m *Model) findPrimaryKeyBinding(value reflect.Value) (primaryKeyBinding, bool, error) {
 	if err := m.validationError(); err != nil {
 		return primaryKeyBinding{}, false, err
 	}
@@ -47,9 +47,31 @@ func (m *Model) preparePrimaryKey(value reflect.Value) (primaryKeyBinding, bool,
 	m.mu.RLock()
 	primaryKeyExplicit := m.primaryKeyExplicit
 	m.mu.RUnlock()
-	storagePrimaryKey, err := resolveModelStoragePrimaryKey(m.db, modelPrimaryKey, primaryKeyExplicit)
+	if _, err := resolveModelStoragePrimaryKey(m.db, modelPrimaryKey, primaryKeyExplicit); err != nil {
+		return primaryKeyBinding{}, false, err
+	}
+	field, fieldType, found, err := findModelColumn(value, modelPrimaryKey)
 	if err != nil {
 		return primaryKeyBinding{}, false, err
+	}
+	if !found || !field.CanSet() {
+		return primaryKeyBinding{}, false, fmt.Errorf("%w: 主键 %q 不存在或不可写", ErrInvalidModel, modelPrimaryKey)
+	}
+	return primaryKeyBinding{field: field, fieldName: fieldType.Name}, field.IsZero(), nil
+}
+
+func (m *Model) validateGeneratedPrimaryKey(binding primaryKeyBinding) error {
+	if err := m.validationError(); err != nil {
+		return err
+	}
+	modelPrimaryKey := m.primaryKeyField()
+	m.mu.RLock()
+	primaryKeyExplicit := m.primaryKeyExplicit
+	tx := m.transaction
+	m.mu.RUnlock()
+	storagePrimaryKey, err := resolveModelStoragePrimaryKey(m.db, modelPrimaryKey, primaryKeyExplicit)
+	if err != nil {
+		return err
 	}
 	caps := DriverCapabilities{InsertIDKinds: []InsertIDKind{InsertIDDynamic}}
 	generatesPrimaryKey := true
@@ -62,28 +84,24 @@ func (m *Model) preparePrimaryKey(value reflect.Value) (primaryKeyBinding, bool,
 		}
 		return nil
 	}
-	m.mu.RLock()
-	tx := m.transaction
-	m.mu.RUnlock()
 	if tx != nil {
 		if err := tx.active(); err != nil {
-			return primaryKeyBinding{}, false, err
+			return err
 		}
 		err = readCapabilities(tx.connection)
 	} else {
 		err = m.db.WithConnection(readCapabilities)
 	}
 	if err != nil {
-		return primaryKeyBinding{}, false, err
+		return err
 	}
-	binding, primaryIsZero, err := preparePrimaryKeyBinding(value, modelPrimaryKey, caps)
-	if err != nil {
-		return primaryKeyBinding{}, false, err
+	if !supportedPrimaryKeyKind(binding.field.Type(), caps.InsertIDKinds) {
+		return fmt.Errorf("%w: 主键字段 %s 与驱动 ID 类型不兼容", ErrInvalidModel, binding.fieldName)
 	}
-	if primaryIsZero && !generatesPrimaryKey {
-		return primaryKeyBinding{}, false, fmt.Errorf("%w: storage backend does not generate explicit business primary key %q", ErrInvalidModel, modelPrimaryKey)
+	if !generatesPrimaryKey {
+		return fmt.Errorf("%w: storage backend does not generate explicit business primary key %q", ErrInvalidModel, modelPrimaryKey)
 	}
-	return binding, primaryIsZero, nil
+	return nil
 }
 
 func preparePrimaryKeyBinding(value reflect.Value, column string, caps DriverCapabilities) (primaryKeyBinding, bool, error) {

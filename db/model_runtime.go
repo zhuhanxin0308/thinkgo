@@ -53,6 +53,7 @@ func NewModelFor(ctx context.Context, database *DB, instance any, options ...Mod
 		return nil, err
 	}
 	model.ctx = ctx
+	model.modelType = value.Type()
 	model.record = &modelRecord{owner: value}
 	// 提前分配匿名嵌入链，提升的配置方法才能安全访问其接收者；失败时恢复原值。
 	original := reflect.New(value.Type()).Elem()
@@ -83,6 +84,7 @@ func NewModelFor(ctx context.Context, database *DB, instance any, options ...Mod
 	if err := model.validationError(); err != nil {
 		return nil, err
 	}
+	model.record.tx = model.transaction
 	field.Set(reflect.ValueOf(model))
 	configured = true
 	return model, nil
@@ -107,7 +109,7 @@ func (m *Model) cloneBinding() *Model {
 		setterSnapshot: append([]modelSetterEntry(nil), m.setterSnapshot...),
 		fillable:       m.fillable,
 		events:         make(map[ModelEventType][]ModelEventCallback, len(m.events)),
-		ctx:            m.ctx, transaction: m.transaction, record: m.record,
+		ctx:            m.ctx, transaction: m.transaction, record: m.record, modelType: m.modelType,
 	}
 	for event, callbacks := range m.events {
 		cloned.events[event] = append([]ModelEventCallback(nil), callbacks...)

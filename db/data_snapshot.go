@@ -1,10 +1,13 @@
 package db
 
 import (
+	"database/sql/driver"
 	"fmt"
 	"reflect"
 	"time"
 )
+
+var snapshotDriverValuerType = reflect.TypeFor[driver.Valuer]()
 
 const (
 	// 深度包含接口和指针层，给合法嵌套容器留出余量，同时限制调用栈。
@@ -41,7 +44,14 @@ func (state *databaseValueSnapshot) snapshot(value interface{}) (interface{}, er
 		state.remaining--
 		return value, nil
 	}
-	cloned, err := state.copy(reflect.ValueOf(value), 0)
+	elem := reflect.ValueOf(value)
+	if resolved, handled, err := state.resolveOpaqueValuer(elem, 0); handled {
+		if err != nil || !resolved.IsValid() {
+			return nil, err
+		}
+		return resolved.Interface(), nil
+	}
+	cloned, err := state.copy(elem, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -108,6 +118,19 @@ func (state *databaseValueSnapshot) copy(value reflect.Value, depth int) (copied
 	case reflect.Interface, reflect.Pointer:
 		if value.IsNil() {
 			return reflect.Zero(value.Type()), nil
+		}
+		if value.Kind() == reflect.Interface && value.Type().NumMethod() == 0 {
+			if resolved, handled, err := state.resolveOpaqueValuer(value.Elem(), depth+1); handled {
+				if err != nil {
+					return reflect.Value{}, err
+				}
+				if !resolved.IsValid() {
+					return reflect.Zero(value.Type()), nil
+				}
+				result := reflect.New(value.Type()).Elem()
+				result.Set(resolved)
+				return result, nil
+			}
 		}
 		child, err := state.copy(value.Elem(), depth+1)
 		if err != nil {
@@ -223,4 +246,64 @@ func (state *databaseValueSnapshot) immutable(value reflect.Value, depth int) bo
 		}
 	}
 	return true
+}
+
+// resolveOpaqueValuer 在接口边界对含不可直接复制私有状态的 driver.Valuer 求值，保留安全快照语义。
+func (state *databaseValueSnapshot) resolveOpaqueValuer(elem reflect.Value, depth int) (reflect.Value, bool, error) {
+	if !elem.IsValid() || !elem.CanInterface() {
+		return reflect.Value{}, false, nil
+	}
+	if depth >= maxDatabaseValueDepth || state.remaining <= 0 {
+		return reflect.Value{}, true, fmt.Errorf("%w: 参数快照超过深度或节点预算", ErrInvalidQuery)
+	}
+	structVal := elem
+	if structVal.Kind() == reflect.Pointer {
+		if structVal.IsNil() {
+			return reflect.Value{}, false, nil
+		}
+		structVal = structVal.Elem()
+	}
+	if structVal.Kind() != reflect.Struct || structVal.Type() == reflect.TypeFor[time.Time]() || structVal.Type().ConvertibleTo(reflect.TypeFor[time.Time]()) {
+		return reflect.Value{}, false, nil
+	}
+	if _, handled := snapshotNativeDatabaseValue(elem); handled {
+		return reflect.Value{}, false, nil
+	}
+	needsValuer := false
+	for index := 0; index < structVal.NumField(); index++ {
+		field := structVal.Type().Field(index)
+		if field.PkgPath != "" && !state.immutable(structVal.Field(index), depth+1) {
+			needsValuer = true
+			break
+		}
+	}
+	if !needsValuer {
+		return reflect.Value{}, false, nil
+	}
+	var valuer driver.Valuer
+	switch {
+	case elem.Type().Implements(snapshotDriverValuerType):
+		valuer = elem.Interface().(driver.Valuer)
+	case elem.Kind() != reflect.Pointer && reflect.PointerTo(elem.Type()).Implements(snapshotDriverValuerType):
+		pointed := reflect.New(elem.Type())
+		pointed.Elem().Set(elem)
+		valuer = pointed.Interface().(driver.Valuer)
+	default:
+		return reflect.Value{}, false, nil
+	}
+	raw, err := valuer.Value()
+	if err != nil {
+		return reflect.Value{}, true, fmt.Errorf("%w: 取值器执行失败: %w", ErrInvalidQuery, err)
+	}
+	if !driver.IsValue(raw) {
+		return reflect.Value{}, true, fmt.Errorf("%w: 取值器返回了非法数据库值 %T", ErrInvalidQuery, raw)
+	}
+	if raw == nil {
+		return reflect.Value{}, true, nil
+	}
+	copied, err := state.copy(reflect.ValueOf(raw), depth+1)
+	if err != nil {
+		return reflect.Value{}, true, err
+	}
+	return copied, true, nil
 }

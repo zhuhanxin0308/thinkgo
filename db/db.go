@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"reflect"
@@ -247,7 +248,15 @@ func setAutoTimestamp(data map[string]interface{}, field string, now time.Time, 
 	if normalizeTimestampValueType(valueType) == TimestampValueTypeUnixMilli {
 		unix = now.UnixMilli()
 	}
-	if value, ok := data[field]; ok {
+	if origValue, ok := data[field]; ok {
+		value := origValue
+		if rv := reflect.ValueOf(value); rv.IsValid() && rv.Kind() == reflect.Pointer {
+			if rv.IsNil() {
+				value = reflect.Zero(rv.Type().Elem()).Interface()
+			} else {
+				value = rv.Elem().Interface()
+			}
+		}
 		switch typed := value.(type) {
 		case int:
 			if typed == 0 {
@@ -324,12 +333,45 @@ func setAutoTimestamp(data map[string]interface{}, field string, now time.Time, 
 			if typed.IsZero() {
 				data[field] = now
 			}
+		case sql.NullTime:
+			if !typed.Valid || typed.Time.IsZero() {
+				data[field] = now
+			}
+		case sql.NullInt64:
+			if !typed.Valid {
+				data[field] = unix
+			}
+		case sql.NullInt32:
+			if !typed.Valid {
+				if unix < -1<<31 || unix > 1<<31-1 {
+					return ErrTimestampOverflow
+				}
+				data[field] = int32(unix)
+			}
+		case sql.NullInt16:
+			if !typed.Valid {
+				if unix < -1<<15 || unix > 1<<15-1 {
+					return ErrTimestampOverflow
+				}
+				data[field] = int16(unix)
+			}
+		case sql.NullByte:
+			if !typed.Valid {
+				if unix < 0 || unix > 1<<8-1 {
+					return ErrTimestampOverflow
+				}
+				data[field] = uint8(unix)
+			}
+		case sql.NullString:
+			if !typed.Valid || typed.String == "" {
+				data[field] = defaultTimestampString(now, valueType)
+			}
 		case nil:
 			data[field] = defaultTimestampValue(now, valueType)
 		default:
-			reflected := reflect.ValueOf(value)
+			reflected := reflect.ValueOf(origValue)
 			if reflected.IsValid() && reflected.IsZero() {
-				return fmt.Errorf("%w: 时间戳字段 %q 不支持零值类型 %T", ErrInvalidDatabaseConfig, field, value)
+				return fmt.Errorf("%w: 时间戳字段 %q 不支持零值类型 %T", ErrInvalidDatabaseConfig, field, origValue)
 			}
 		}
 		return nil
