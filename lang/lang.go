@@ -16,6 +16,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"unicode/utf8"
+
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/regularfile"
 )
 
 const (
@@ -176,20 +178,12 @@ func matchLanguageSnapshot(snapshot *languageDetectionSnapshot, candidate string
 	if snapshot == nil || strings.TrimSpace(candidate) == "" {
 		return ""
 	}
-	normalized, err := normalizeLanguageTag(candidate)
-	if err != nil {
+	normalized, ok := normalizeLanguageTagValid(candidate)
+	if !ok {
 		return ""
 	}
-	if alias, exists := snapshot.aliases[normalized]; exists {
-		normalized = alias
-	}
-	if _, loaded := snapshot.loaded[normalized]; loaded {
-		if len(snapshot.allowed) == 0 {
-			return normalized
-		}
-		if _, allowed := snapshot.allowed[normalized]; allowed {
-			return normalized
-		}
+	if exact := matchExactLanguageSnapshot(snapshot, normalized, nil); exact != "" {
+		return exact
 	}
 	prefix, _, _ := strings.Cut(normalized, "-")
 	for _, language := range snapshot.prefixes[prefix] {
@@ -198,13 +192,120 @@ func matchLanguageSnapshot(snapshot *languageDetectionSnapshot, candidate string
 	return ""
 }
 
-// selectAcceptLanguage 返回品质最高的可用语言，同品质时保留客户端的先后顺序。
-func selectAcceptLanguage(snapshot *languageDetectionSnapshot, header string) string {
-	if len(header) == 0 || len(header) > maxAcceptLanguageBytes || strings.Count(header, ",") >= maxAcceptLanguageEntries {
+func isLanguageLoadedAndAllowed(snapshot *languageDetectionSnapshot, language string) bool {
+	if snapshot == nil || language == "" {
+		return false
+	}
+	if _, loaded := snapshot.loaded[language]; !loaded {
+		return false
+	}
+	if len(snapshot.allowed) == 0 {
+		return true
+	}
+	_, allowed := snapshot.allowed[language]
+	return allowed
+}
+
+func matchExactLanguageSnapshot(snapshot *languageDetectionSnapshot, normalized string, entries []acceptLanguageEntry) string {
+	if snapshot == nil || normalized == "" || isLanguageRejected(snapshot, normalized, entries, false) {
 		return ""
 	}
-	best := ""
-	bestQuality := 0.0
+	resolved := normalized
+	if alias, exists := snapshot.aliases[normalized]; exists {
+		resolved = alias
+	}
+	if isLanguageRejected(snapshot, resolved, entries, false) {
+		return ""
+	}
+	if isLanguageLoadedAndAllowed(snapshot, resolved) {
+		return resolved
+	}
+	return ""
+}
+
+func selectWildcardLanguage(snapshot *languageDetectionSnapshot, entries []acceptLanguageEntry) string {
+	if snapshot == nil {
+		return ""
+	}
+	if snapshot.defaultLang != "" &&
+		isLanguageLoadedAndAllowed(snapshot, snapshot.defaultLang) &&
+		!isLanguageRejected(snapshot, snapshot.defaultLang, entries, true) {
+		return snapshot.defaultLang
+	}
+	for _, language := range snapshot.ordered {
+		if isLanguageLoadedAndAllowed(snapshot, language) && !isLanguageRejected(snapshot, language, entries, true) {
+			return language
+		}
+	}
+	return ""
+}
+
+func rangeSpecificityForLanguage(snapshot *languageDetectionSnapshot, entry acceptLanguageEntry, candidate string, includeWildcard bool) int {
+	if entry.wildcard {
+		if includeWildcard {
+			return 1
+		}
+		return 0
+	}
+	resolvedCandidate := candidate
+	if snapshot != nil {
+		if alias, exists := snapshot.aliases[candidate]; exists {
+			resolvedCandidate = alias
+		}
+	}
+	if entry.tag == candidate || entry.tag == resolvedCandidate {
+		return 100
+	}
+	if snapshot != nil {
+		if alias, exists := snapshot.aliases[entry.tag]; exists && (alias == candidate || alias == resolvedCandidate) {
+			return 90
+		}
+	}
+	if strings.HasPrefix(candidate, entry.tag+"-") || (resolvedCandidate != candidate && strings.HasPrefix(resolvedCandidate, entry.tag+"-")) {
+		return 10 + strings.Count(entry.tag, "-")
+	}
+	return 0
+}
+
+func isLanguageRejected(snapshot *languageDetectionSnapshot, candidate string, entries []acceptLanguageEntry, includeWildcard bool) bool {
+	if len(entries) == 0 || candidate == "" {
+		return false
+	}
+	maxSpec := 0
+	rejected := false
+	for _, entry := range entries {
+		spec := rangeSpecificityForLanguage(snapshot, entry, candidate, includeWildcard)
+		if spec == 0 || spec < maxSpec {
+			continue
+		}
+		if spec > maxSpec {
+			maxSpec = spec
+			rejected = entry.quality == 0
+			continue
+		}
+		if entry.quality == 0 {
+			rejected = true
+		}
+	}
+	return maxSpec > 0 && rejected
+}
+
+type acceptLanguageEntry struct {
+	tag      string
+	quality  float64
+	wildcard bool
+}
+
+// selectAcceptLanguage 返回品质最高的可用语言，遵循 RFC 9110 q=0 拒绝语义并优先精确/别名匹配。
+func selectAcceptLanguage(snapshot *languageDetectionSnapshot, header string) (string, string) {
+	if snapshot == nil || len(header) == 0 || len(header) > maxAcceptLanguageBytes || strings.Count(header, ",") >= maxAcceptLanguageEntries {
+		return "", ""
+	}
+	var entries [maxAcceptLanguageEntries]acceptLanguageEntry
+	entryCount := 0
+	hasRejection := false
+	wildcardRejected := false
+
 	for part := range strings.SplitSeq(header, ",") {
 		tag, parameters, _ := strings.Cut(part, ";")
 		tag = strings.TrimSpace(tag)
@@ -212,20 +313,89 @@ func selectAcceptLanguage(snapshot *languageDetectionSnapshot, header string) st
 			continue
 		}
 		quality, valid := parseLanguageQuality(parameters)
-		if !valid || quality <= bestQuality {
+		if !valid {
 			continue
 		}
 		if tag == "*" {
-			tag = snapshot.defaultLang
-		}
-		if selected := matchLanguageSnapshot(snapshot, tag); selected != "" {
-			if quality == 1 {
-				return selected
+			if quality == 0 {
+				wildcardRejected = true
+				hasRejection = true
 			}
-			best, bestQuality = selected, quality
+			entries[entryCount] = acceptLanguageEntry{tag: "*", quality: quality, wildcard: true}
+			entryCount++
+			continue
+		}
+		normalized, ok := normalizeLanguageTagValid(tag)
+		if !ok {
+			continue
+		}
+		if quality == 0 {
+			hasRejection = true
+		}
+		entries[entryCount] = acceptLanguageEntry{tag: normalized, quality: quality}
+		entryCount++
+	}
+
+	var rejectionEntries []acceptLanguageEntry
+	if hasRejection {
+		rejectionEntries = entries[:entryCount]
+	}
+	bestExact := ""
+	bestExactQuality := 0.0
+	bestPrefix := ""
+	bestPrefixQuality := 0.0
+	bestWildcard := ""
+	bestWildcardQuality := 0.0
+
+	for index := 0; index < entryCount; index++ {
+		entry := entries[index]
+		if entry.quality == 0 {
+			continue
+		}
+		if entry.wildcard {
+			if wildcardRejected {
+				continue
+			}
+			if entry.quality > bestWildcardQuality {
+				if selected := selectWildcardLanguage(snapshot, rejectionEntries); selected != "" {
+					bestWildcard, bestWildcardQuality = selected, entry.quality
+				}
+			}
+			continue
+		}
+		if exact := matchExactLanguageSnapshot(snapshot, entry.tag, rejectionEntries); exact != "" {
+			if entry.quality > bestExactQuality {
+				bestExact, bestExactQuality = exact, entry.quality
+			}
+			continue
+		}
+		if entry.quality > bestPrefixQuality && !isLanguageRejected(snapshot, entry.tag, rejectionEntries, false) {
+			prefix, _, _ := strings.Cut(entry.tag, "-")
+			for _, language := range snapshot.prefixes[prefix] {
+				if !isLanguageRejected(snapshot, language, rejectionEntries, false) {
+					bestPrefix, bestPrefixQuality = language, entry.quality
+					break
+				}
+			}
 		}
 	}
-	return best
+
+	concrete := bestExact
+	concreteQuality := bestExactQuality
+	if concrete == "" {
+		concrete = bestPrefix
+		concreteQuality = bestPrefixQuality
+	}
+	if concrete != "" && (bestWildcard == "" || concreteQuality >= bestWildcardQuality) {
+		return concrete, ""
+	}
+	if bestWildcard != "" {
+		return bestWildcard, ""
+	}
+	if !wildcardRejected && hasRejection && isLanguageRejected(snapshot, snapshot.defaultLang, rejectionEntries, true) {
+		return "", selectWildcardLanguage(snapshot, rejectionEntries)
+	}
+	return "", ""
 }
 
 func parseLanguageQuality(parameters string) (float64, bool) {
@@ -323,8 +493,7 @@ func (l *Lang) Init(config map[string]interface{}) error {
 		return err
 	}
 	if rawExtend, exists := config["extend_list"]; exists {
-		extensions, ok := rawExtend.([]interface{})
-		if !ok || len(extensions) != 0 {
+		if !isEmptyExtendList(rawExtend) {
 			return fmt.Errorf("%w: extend_list 的 Go 配置仅支持默认空列表，扩展语言包请调用 Lang.Load", ErrInvalidLangConfig)
 		}
 	}
@@ -352,33 +521,68 @@ func (l *Lang) Init(config map[string]interface{}) error {
 	return nil
 }
 
+func isEmptyExtendList(raw interface{}) bool {
+	if raw == nil {
+		return true
+	}
+	switch typed := raw.(type) {
+	case []interface{}:
+		return len(typed) == 0
+	case []string:
+		return len(typed) == 0
+	case map[string]interface{}:
+		return len(typed) == 0
+	case map[string]string:
+		return len(typed) == 0
+	case map[string][]string:
+		return len(typed) == 0
+	case map[string][]interface{}:
+		return len(typed) == 0
+	default:
+		return false
+	}
+}
+
 func configLanguageAliases(raw interface{}) (map[string]string, error) {
 	if raw == nil {
 		return map[string]string{}, nil
 	}
-	values, ok := raw.(map[string]interface{})
-	if !ok {
-		return nil, fmt.Errorf("%w: accept_language 必须是对象", ErrInvalidLangConfig)
-	}
-	aliases := make(map[string]string, len(values))
-	for source, rawTarget := range values {
+	aliases := make(map[string]string)
+	addAlias := func(source, target string) error {
 		normalizedSource, err := normalizeLanguageTag(source)
 		if err != nil {
-			return nil, fmt.Errorf("%w: accept_language.%s: %v", ErrInvalidLangConfig, source, err)
-		}
-		target, ok := rawTarget.(string)
-		if !ok {
-			return nil, fmt.Errorf("%w: accept_language.%s 必须是字符串", ErrInvalidLangConfig, source)
+			return fmt.Errorf("%w: accept_language.%s: %v", ErrInvalidLangConfig, source, err)
 		}
 		normalizedTarget, err := normalizeLanguageTag(target)
 		if err != nil {
-			return nil, fmt.Errorf("%w: accept_language.%s: %v", ErrInvalidLangConfig, source, err)
+			return fmt.Errorf("%w: accept_language.%s: %v", ErrInvalidLangConfig, source, err)
 		}
 		// 同目标重复项保持兼容合并；不同目标必须在发布配置前拒绝。
 		if existing, found := aliases[normalizedSource]; found && existing != normalizedTarget {
-			return nil, fmt.Errorf("%w: accept_language 别名 %q 的目标冲突", ErrInvalidLangConfig, normalizedSource)
+			return fmt.Errorf("%w: accept_language 别名 %q 的目标冲突", ErrInvalidLangConfig, normalizedSource)
 		}
 		aliases[normalizedSource] = normalizedTarget
+		return nil
+	}
+	switch values := raw.(type) {
+	case map[string]string:
+		for source, target := range values {
+			if err := addAlias(source, target); err != nil {
+				return nil, err
+			}
+		}
+	case map[string]interface{}:
+		for source, rawTarget := range values {
+			target, ok := rawTarget.(string)
+			if !ok {
+				return nil, fmt.Errorf("%w: accept_language.%s 必须是字符串", ErrInvalidLangConfig, source)
+			}
+			if err := addAlias(source, target); err != nil {
+				return nil, err
+			}
+		}
+	default:
+		return nil, fmt.Errorf("%w: accept_language 必须是对象", ErrInvalidLangConfig)
 	}
 	return aliases, nil
 }
@@ -485,8 +689,12 @@ func (l *Lang) DetectLanguage(queryValue, cookieValue, headerValue, acceptLangua
 		return selected
 	}
 	if snapshot.config.AutoDetectBrowser {
-		if selected := selectAcceptLanguage(snapshot, acceptLanguage); selected != "" {
+		selected, fallback := selectAcceptLanguage(snapshot, acceptLanguage)
+		if selected != "" {
 			return selected
+		}
+		if fallback != "" {
+			return fallback
 		}
 	}
 	return snapshot.defaultLang
@@ -532,20 +740,20 @@ func (l *Lang) Has(name, language string) bool {
 	if l == nil {
 		return false
 	}
-	if strings.TrimSpace(language) == "" {
-		language = l.GetLang()
-	}
-	normalized, err := normalizeLanguageTag(language)
-	if err != nil {
-		return false
-	}
 	key := strings.ToLower(strings.TrimSpace(name))
+	snapshot := l.loadDetectionSnapshot()
 	l.lock.RLock()
 	defer l.lock.RUnlock()
-	if !l.languageAllowedLocked(normalized) {
+	target := l.currentLang
+	if strings.TrimSpace(language) != "" {
+		target = matchLanguageSnapshot(snapshot, language)
+		if target == "" {
+			return false
+		}
+	} else if !l.languageAllowedLocked(target) {
 		return false
 	}
-	_, exists := l.data[normalized][key]
+	_, exists := l.data[target][key]
 	return exists
 }
 
@@ -554,14 +762,17 @@ func (l *Lang) Get(name string, variables map[string]interface{}, language strin
 	if l == nil {
 		return name
 	}
+	snapshot := l.loadDetectionSnapshot()
 	l.lock.RLock()
 	requested := l.currentLang
 	if strings.TrimSpace(language) != "" {
-		if normalized, err := normalizeLanguageTag(language); err == nil && l.languageAllowedLocked(normalized) {
-			requested = normalized
+		if matched := matchLanguageSnapshot(snapshot, language); matched != "" {
+			requested = matched
 		} else {
 			requested = l.defaultLang
 		}
+	} else if !l.languageAllowedLocked(requested) {
+		requested = l.defaultLang
 	}
 	key := strings.ToLower(strings.TrimSpace(name))
 	value, found := l.data[requested][key]
@@ -767,21 +978,16 @@ func readLanguageObject(decoder *json.Decoder, prefix string, depth int, transla
 }
 
 func readLanguageFile(filePath string) (content []byte, err error) {
-	// #nosec G304 -- filePath 由应用语言目录解析器生成，加载前已完成应用根目录边界校验。
-	file, err := os.Open(filePath)
+	file, info, err := regularfile.Open(filePath)
 	if err != nil {
+		if errors.Is(err, regularfile.ErrNotRegular) {
+			return nil, ErrInvalidLanguageFile
+		}
 		return nil, err
 	}
 	defer func() {
 		err = errors.Join(err, file.Close())
 	}()
-	info, err := file.Stat()
-	if err != nil {
-		return nil, err
-	}
-	if !info.Mode().IsRegular() {
-		return nil, ErrInvalidLanguageFile
-	}
 	if info.Size() < 0 || info.Size() > maxLanguageFileBytes {
 		return nil, fmt.Errorf("%w: %d", ErrLanguageFileTooLarge, info.Size())
 	}
@@ -800,25 +1006,33 @@ func (l *Lang) languageAllowedLocked(language string) bool {
 }
 
 func normalizeLanguageTag(language string) (string, error) {
+	normalized, ok := normalizeLanguageTagValid(language)
+	if !ok {
+		return "", fmt.Errorf("%w: %q", ErrInvalidLanguageTag, strings.ToLower(strings.TrimSpace(language)))
+	}
+	return normalized, nil
+}
+
+func normalizeLanguageTagValid(language string) (string, bool) {
 	language = strings.ToLower(strings.TrimSpace(language))
 	if language == "" || len(language) > maxLanguageTagBytes || strings.Contains(language, "_") {
-		return "", fmt.Errorf("%w: %q", ErrInvalidLanguageTag, language)
+		return "", false
 	}
 	primary := true
 	for part := range strings.SplitSeq(language, "-") {
 		if part == "" || len(part) > 8 || primary && len(part) < 2 {
-			return "", fmt.Errorf("%w: %q", ErrInvalidLanguageTag, language)
+			return "", false
 		}
 		for _, char := range part {
 			letter := char >= 'a' && char <= 'z'
 			digit := char >= '0' && char <= '9'
 			if !letter && (primary || !digit) {
-				return "", fmt.Errorf("%w: %q", ErrInvalidLanguageTag, language)
+				return "", false
 			}
 		}
 		primary = false
 	}
-	return language, nil
+	return language, true
 }
 
 func configBool(config map[string]interface{}, key string, defaultValue bool) (bool, error) {

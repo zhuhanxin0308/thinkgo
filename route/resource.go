@@ -33,18 +33,26 @@ func (r *Router) Resource(path, controller string) (*ResourceRoute, error) {
 
 // Resource 注册当前分组作用域下的 RESTful 资源路由集合。
 func (g *Group) Resource(path, controller string) (*ResourceRoute, error) {
-	if !isValidAutoControllerName(controller) {
+	if g == nil || g.router == nil {
+		return nil, ErrInvalidRoute
+	}
+	normalizedController, ok := normalizeResourceController(controller)
+	if !ok {
 		return nil, fmt.Errorf("%w: 资源控制器 %q 非法", ErrInvalidRouteHandler, controller)
 	}
+	trimmedPath := strings.TrimSpace(path)
+	if strings.Contains(trimmedPath, "//") {
+		return nil, fmt.Errorf("%w: 路径 %q 非法", ErrInvalidRoute, path)
+	}
+	basePath := strings.TrimRight(trimmedPath, "/")
 	definitions := make([]routeDefinition, 0, len(resourceDefinitions))
 	for _, definition := range resourceDefinitions {
-		definitions = append(definitions, routeDefinition{
-			method:      definition.method,
-			path:        joinRoutePath(g.prefix, path+definition.pathSuffix),
-			handler:     controller + "/" + definition.action,
-			middlewares: g.middlewares,
-			domain:      g.domain,
-		})
+		definitions = append(definitions, g.newDefinition(
+			definition.method,
+			basePath+definition.pathSuffix,
+			normalizedController+"/"+definition.action,
+			nil,
+		))
 	}
 	routes, err := g.router.registerDefinitions(definitions)
 	if err != nil {
@@ -55,6 +63,36 @@ func (g *Group) Resource(path, controller string) (*ResourceRoute, error) {
 		resource.routes[definition.action] = routes[index]
 	}
 	return resource, nil
+}
+
+// Routes 返回当前资源路由集合中的全部已注册路由快照。
+func (r *ResourceRoute) Routes() []*Route {
+	if r == nil || r.router == nil {
+		return nil
+	}
+	r.router.mu.RLock()
+	defer r.router.mu.RUnlock()
+	result := make([]*Route, 0, len(resourceDefinitions))
+	for _, definition := range resourceDefinitions {
+		if registered := r.routes[definition.action]; registered != nil && !registered.removed {
+			result = append(result, registered)
+		}
+	}
+	return result
+}
+
+func normalizeResourceController(controller string) (string, bool) {
+	if controller == "" {
+		return "", false
+	}
+	normalized := strings.ReplaceAll(controller, ".", "/")
+	parts := strings.Split(normalized, "/")
+	for _, part := range parts {
+		if !isValidAutoRouteSegment(part) {
+			return "", false
+		}
+	}
+	return strings.Join(parts, "/"), true
 }
 
 // Only 保留指定的资源动作。

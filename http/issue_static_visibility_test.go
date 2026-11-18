@@ -46,6 +46,8 @@ func TestIssue53StaticHiddenPathsNotServed(t *testing.T) {
 				want := http.StatusNotFound
 				if tc.allowed {
 					want = http.StatusOK
+				} else if strings.Contains(strings.ToLower(tc.path), "%2f") {
+					want = http.StatusBadRequest
 				}
 				if recorder.Code != want {
 					t.Fatalf("status=%d want=%d", recorder.Code, want)

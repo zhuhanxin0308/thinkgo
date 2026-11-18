@@ -100,7 +100,7 @@ func operationWithDocumentation(input, output reflect.Type, operationID string, 
 			return nil, nil, err
 		}
 		media := "application/json"
-		if output.Kind() == reflect.String {
+		if output == reflect.TypeFor[string]() {
 			media = "text/plain"
 		}
 		response["content"] = map[string]any{media: map[string]any{"schema": builder.schema(outputPlan)}}
@@ -155,9 +155,9 @@ func (builder *schemaBuilder) schemaValue(plan *node) map[string]any {
 		result := map[string]any{"type": []string{"array", "null"}, "items": builder.schema(plan.elem)}
 		if plan.typ.Kind() == reflect.Array {
 			result["minItems"], result["maxItems"] = plan.typ.Len(), plan.typ.Len()
-		}
-		if plan.typ.Kind() == reflect.Array {
 			result["type"] = "array"
+		} else if !builder.output {
+			result["maxItems"] = maxSliceBindingElements
 		}
 		return result
 	case reflect.Map:
@@ -188,8 +188,7 @@ func (builder *schemaBuilder) objectSchema(plan *node, suffix string) map[string
 	if name, exists := builder.names[plan]; exists {
 		return map[string]any{"$ref": "#/components/schemas/" + name}
 	}
-	digest := sha256.Sum256([]byte(plan.typ.PkgPath() + "/" + plan.typ.String() + suffix + strconv.FormatBool(builder.output)))
-	name := "ThinkGo_" + hex.EncodeToString(digest[:schemaDigestBytes])
+	name := schemaComponentName(plan, suffix, builder.output)
 	builder.names[plan] = name
 	properties := make(map[string]any)
 	object := map[string]any{"type": "object", "properties": properties, "additionalProperties": false}
@@ -202,6 +201,89 @@ func (builder *schemaBuilder) objectSchema(plan *node, suffix string) map[string
 	}
 	builder.objectPresence(plan, object)
 	return map[string]any{"$ref": "#/components/schemas/" + name}
+}
+
+func schemaComponentName(plan *node, suffix string, output bool) string {
+	var buf strings.Builder
+	buf.WriteString(suffix)
+	buf.WriteByte('|')
+	buf.WriteString(strconv.FormatBool(output))
+	buf.WriteByte('|')
+	visited := make(map[reflect.Type]int)
+	writeTypeFingerprint(&buf, plan.typ, visited)
+	buf.WriteString("|fields:")
+	for _, item := range plan.fields {
+		buf.WriteString(item.goName)
+		buf.WriteByte(':')
+		buf.WriteString(item.name)
+		buf.WriteByte(':')
+		buf.WriteString(item.source)
+		buf.WriteByte(':')
+		buf.WriteString(item.rules)
+		buf.WriteByte(':')
+		buf.WriteString(item.description)
+		buf.WriteByte(':')
+		buf.WriteString(strconv.FormatBool(item.omitEmpty))
+		buf.WriteByte(':')
+		buf.WriteString(strconv.FormatBool(item.quoted))
+		buf.WriteByte(':')
+		buf.WriteString(strconv.FormatBool(item.hasDefault))
+		buf.WriteByte(';')
+	}
+	digest := sha256.Sum256([]byte(buf.String()))
+	return "ThinkGo_" + hex.EncodeToString(digest[:schemaDigestBytes])
+}
+
+func writeTypeFingerprint(buf *strings.Builder, typ reflect.Type, visited map[reflect.Type]int) {
+	if typ == nil {
+		buf.WriteString("nil")
+		return
+	}
+	buf.WriteString(typ.Kind().String())
+	buf.WriteByte(':')
+	buf.WriteString(typ.PkgPath())
+	buf.WriteByte('/')
+	buf.WriteString(typ.Name())
+	buf.WriteByte(':')
+	buf.WriteString(typ.String())
+	if id, seen := visited[typ]; seen {
+		buf.WriteByte('@')
+		buf.WriteString(strconv.Itoa(id))
+		return
+	}
+	visited[typ] = len(visited)
+	switch typ.Kind() {
+	case reflect.Pointer, reflect.Slice:
+		buf.WriteByte('[')
+		writeTypeFingerprint(buf, typ.Elem(), visited)
+		buf.WriteByte(']')
+	case reflect.Array:
+		buf.WriteByte('[')
+		buf.WriteString(strconv.Itoa(typ.Len()))
+		buf.WriteByte(']')
+		writeTypeFingerprint(buf, typ.Elem(), visited)
+	case reflect.Map:
+		buf.WriteString("map[")
+		writeTypeFingerprint(buf, typ.Key(), visited)
+		buf.WriteByte(']')
+		writeTypeFingerprint(buf, typ.Elem(), visited)
+	case reflect.Struct:
+		buf.WriteByte('{')
+		for index := 0; index < typ.NumField(); index++ {
+			spec := typ.Field(index)
+			buf.WriteString(spec.Name)
+			buf.WriteByte('@')
+			buf.WriteString(spec.PkgPath)
+			buf.WriteByte(':')
+			buf.WriteString(strconv.FormatBool(spec.Anonymous))
+			buf.WriteByte(':')
+			buf.WriteString(string(spec.Tag))
+			buf.WriteByte('=')
+			writeTypeFingerprint(buf, spec.Type, visited)
+			buf.WriteByte(';')
+		}
+		buf.WriteByte('}')
+	}
 }
 
 func (builder *schemaBuilder) fieldSchema(item field) map[string]any {
@@ -324,7 +406,7 @@ func (builder *schemaBuilder) fieldSchemaWithDocumentation(item field, docs Type
 }
 
 func underlyingNode(plan *node) *node {
-	for plan.optional || plan.typ.Kind() == reflect.Pointer {
+	for plan != nil && (plan.optional || plan.typ.Kind() == reflect.Pointer) && plan.elem != nil {
 		plan = plan.elem
 	}
 	return plan

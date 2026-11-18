@@ -154,6 +154,13 @@ func (index *routeIndex) candidates(method, host string, parts []string, exactDo
 	if index == nil {
 		return nil
 	}
+	return index.candidatesWithOptions(method, host, parts, exactDomain, index.completeMatch)
+}
+
+func (index *routeIndex) candidatesWithOptions(method, host string, parts []string, exactDomain, completeMatch bool) []*Route {
+	if index == nil {
+		return nil
+	}
 	methodIndex := index.methods[method]
 	if methodIndex == nil {
 		return nil
@@ -181,9 +188,9 @@ func (index *routeIndex) candidates(method, host string, parts []string, exactDo
 		}
 	}
 	var lists routeCandidateLists
-	root.collect(parts, 0, &lists, index.completeMatch)
+	root.collect(parts, 0, &lists, completeMatch)
 	if hasRegisteredExtension {
-		root.collect(stripped, 0, &lists, index.completeMatch)
+		root.collect(stripped, 0, &lists, completeMatch)
 	}
 	return lists.merged()
 }

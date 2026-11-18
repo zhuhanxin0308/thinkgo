@@ -56,6 +56,8 @@ func (builder *schemaBuilder) schemaWithInline(plan *node, docs TypeDocumentatio
 		result := map[string]any{"type": []string{"array", "null"}, "items": builder.schemaWithInline(plan.elem, docs, true)}
 		if plan.typ.Kind() == reflect.Array {
 			result["type"], result["minItems"], result["maxItems"] = "array", plan.typ.Len(), plan.typ.Len()
+		} else if !builder.output {
+			result["maxItems"] = maxSliceBindingElements
 		}
 		return result
 	case reflect.Map:

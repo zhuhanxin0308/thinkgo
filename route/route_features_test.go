@@ -136,20 +136,20 @@ func TestRouterExtensionParticipatesInMatchingAndURLGeneration(t *testing.T) {
 		t.Fatalf("设置扩展名失败: %v", err)
 	}
 	if err = registered.WithPattern("name", `.+`); err != nil {
-		t.Fatalf("设置允许编码斜杠的显式变量规则失败: %v", err)
+		t.Fatalf("设置显式变量规则失败: %v", err)
 	}
 	if err = registered.WithName("report.show"); err != nil {
 		t.Fatalf("设置名称失败: %v", err)
 	}
 
 	matched, params := matchForTest(t, router, fwcontext.MustNewRequest(
-		httptest.NewRequest(http.MethodGet, "http://example.com/reports/a%2Fb.json", nil),
+		httptest.NewRequest(http.MethodGet, "http://example.com/reports/a%20b.json", nil),
 	))
-	if matched == nil || params["name"] != "a/b" {
-		t.Fatalf("带编码斜杠的扩展名路由匹配错误，路由=%#v 参数=%#v", matched, params)
+	if matched == nil || params["name"] != "a b" {
+		t.Fatalf("带百分号编码的扩展名路由匹配错误，路由=%#v 参数=%#v", matched, params)
 	}
 	withoutExtension, _, err := router.Match(fwcontext.MustNewRequest(
-		httptest.NewRequest(http.MethodGet, "http://example.com/reports/a%2Fb", nil),
+		httptest.NewRequest(http.MethodGet, "http://example.com/reports/a%20b", nil),
 	))
 	if err != nil {
 		t.Fatalf("无扩展名请求不应产生配置错误: %v", err)
@@ -157,13 +157,21 @@ func TestRouterExtensionParticipatesInMatchingAndURLGeneration(t *testing.T) {
 	if withoutExtension != nil {
 		t.Fatal("设置扩展名约束后，无扩展名请求不得匹配")
 	}
+	if _, _, err = router.Match(fwcontext.MustNewRequest(
+		httptest.NewRequest(http.MethodGet, "http://example.com/reports/a%2Fb.json", nil),
+	)); !errors.Is(err, ErrInvalidRequestPath) {
+		t.Fatalf("编码斜杠路径段应返回 ErrInvalidRequestPath，实际为 %v", err)
+	}
 
-	builtURL, err := router.URL("report.show", map[string]interface{}{"name": "a/b"})
+	builtURL, err := router.URL("report.show", map[string]interface{}{"name": "a b"})
 	if err != nil {
 		t.Fatalf("生成 URL 失败: %v", err)
 	}
-	if builtURL != "/reports/a%2Fb.json" {
+	if builtURL != "/reports/a%20b.json" {
 		t.Fatalf("扩展名 URL 生成错误，实际为 %q", builtURL)
+	}
+	if _, err = router.URL("report.show", map[string]interface{}{"name": "a/b"}); !errors.Is(err, ErrInvalidRouteParameter) {
+		t.Fatalf("包含斜杠的参数生成 URL 应返回 ErrInvalidRouteParameter，实际为 %v", err)
 	}
 }
 

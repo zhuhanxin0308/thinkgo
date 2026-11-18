@@ -65,8 +65,8 @@ func Handle(target RouteRegistrar, registry *Registry, metadata Operation, callb
 		return err
 	}
 	_, err = target.AddWithCommit(method, metadata.Path, handler, func(info route.RouteInfo) error {
-		if info.Domain != "" || strings.ContainsAny(info.Path, "{}") {
-			return fmt.Errorf("%w: 域名分组或花括号路径未声明契约", ErrUnsupportedRoute)
+		if info.Domain != "" || info.ExtensionRequired || strings.ContainsAny(info.Path, "{}") {
+			return fmt.Errorf("%w: 域名分组、强制后缀或花括号路径未声明契约", ErrUnsupportedRoute)
 		}
 		path, err := normalizePath(info.Path)
 		if err != nil {

@@ -332,8 +332,10 @@ func newRouteIndexParityRouterForFuzz(complete bool) *Router {
 		{method: http.MethodGet, path: "/files/:name", handler: "File@Show"},
 		{method: anyMethod, path: "/wild/:name", handler: "Wild@Show"},
 		{method: http.MethodGet, path: "/ſtatus", handler: "Status@FirstAlias"},
-		{method: http.MethodGet, path: "/status", handler: "Status@Public"},
 		{method: http.MethodGet, path: "/status/admin", handler: "Status@Admin"},
+		{method: http.MethodGet, path: "/posts", handler: "Post@Index"},
+		{method: http.MethodGet, path: "/posts/:id", handler: "Post@Read"},
+		{method: http.MethodGet, path: "/posts/:id/edit", handler: "Post@Edit"},
 		{method: http.MethodGet, path: "/api/.json", handler: "API@Literal"},
 	} {
 		var route *Route
@@ -352,9 +354,6 @@ func newRouteIndexParityRouterForFuzz(complete bool) *Router {
 	_ = registered[4].WithExtension("json")
 	_ = router.Domain("api.example.com", func(group *Group) error {
 		if _, err := group.Get("/ſtatus", "Status@FirstDomainAlias"); err != nil {
-			return err
-		}
-		if _, err := group.Get("/status", "Status@Domain"); err != nil {
 			return err
 		}
 		registered, err := group.Get("/api", "API@Domain")
@@ -377,18 +376,11 @@ func linearRouteMatch(router *Router, req *fwcontext.Request) (*Route, map[strin
 		return nil, nil, fmt.Errorf("%w: 请求方法 %q 非法", ErrInvalidRoute, req.Method())
 	}
 	host := normalizeRequestHost(req.Host())
-	methods := []string{method}
-	methods = append(methods, anyMethod)
-	for _, candidateMethod := range methods {
-		if matched := ownedMergeStaticMatch(router, candidateMethod, requestParts, trailingSlash, host); matched != nil {
-			return matched, nil, nil
-		}
-		if matched, params := linearDynamicMatch(router.dynamicRoutes[candidateMethod], requestParts, trailingSlash, host); matched != nil {
-			return matched, params, nil
-		}
+	if matched, params := linearExplicitMatch(router, method, requestParts, trailingSlash, host); matched != nil {
+		return matched, params, nil
 	}
-	if miss := router.matchMissRoute(method); miss != nil {
-		return miss, nil, nil
+	if miss, params := router.matchMissRoute(method, requestParts, host); miss != nil {
+		return miss, params, nil
 	}
 	if method == http.MethodOptions {
 		if router.autoRoute {
@@ -398,11 +390,8 @@ func linearRouteMatch(router *Router, req *fwcontext.Request) (*Route, map[strin
 	}
 	if router.autoRoute && isSafeAutoRouteParts(requestParts) {
 		if !router.removeSlash {
-			for _, candidateMethod := range methods {
-				dynamic, _ := linearDynamicMatch(router.dynamicRoutes[candidateMethod], requestParts, !trailingSlash, host)
-				if dynamic != nil || ownedMergeStaticMatch(router, candidateMethod, requestParts, !trailingSlash, host) != nil {
-					return nil, nil, nil
-				}
+			if matched, _ := linearExplicitMatch(router, method, requestParts, !trailingSlash, host); matched != nil {
+				return nil, nil, nil
 			}
 		}
 		// ThinkPHP 自动调度不先按 HTTP 方法裁剪控制器动作。
@@ -413,9 +402,63 @@ func linearRouteMatch(router *Router, req *fwcontext.Request) (*Route, map[strin
 	return nil, nil, nil
 }
 
-func linearDynamicMatch(routes []*Route, requestParts []string, trailingSlash bool, host string) (*Route, map[string]string) {
+func linearExplicitMatch(router *Router, method string, requestParts []string, trailingSlash bool, host string) (*Route, map[string]string) {
+	for _, candidateMethod := range [...]string{method, anyMethod} {
+		if matched := linearStaticMatch(router, candidateMethod, requestParts, trailingSlash, host, true); matched != nil {
+			return matched, nil
+		}
+		if matched, params := linearDynamicMatch(router.dynamicRoutes[candidateMethod], requestParts, trailingSlash, host, true); matched != nil {
+			return matched, params
+		}
+		if !router.completeMatch {
+			staticPrefix := linearStaticMatch(router, candidateMethod, requestParts, trailingSlash, host, false)
+			dynamicPrefix, dynamicParams := linearDynamicMatch(router.dynamicRoutes[candidateMethod], requestParts, trailingSlash, host, false)
+			if staticPrefix != nil && dynamicPrefix != nil {
+				dynamicConsumed, _ := dynamicPrefix.matchedDynamicPathShape(dynamicParams)
+				if dynamicConsumed > len(staticPrefix.pathParts) {
+					return dynamicPrefix, dynamicParams
+				}
+				return staticPrefix, nil
+			}
+			if staticPrefix != nil {
+				return staticPrefix, nil
+			}
+			if dynamicPrefix != nil {
+				return dynamicPrefix, dynamicParams
+			}
+		}
+	}
+	return nil, nil
+}
+
+func linearStaticMatch(router *Router, method string, requestParts []string, trailingSlash bool, host string, requireComplete bool) *Route {
+	if requireComplete {
+		var best *Route
+		for _, candidate := range router.routes {
+			if candidate == nil || candidate.method != method || !isStaticRouteParts(candidate.pathParts) {
+				continue
+			}
+			if candidate.domain != "" && candidate.domain != host {
+				continue
+			}
+			if matched, _ := candidate.matchRequestParts(requestParts, trailingSlash, true); matched && moreSpecificStaticRoute(candidate, best, requestParts) {
+				best = candidate
+			}
+		}
+		return best
+	}
+	return ownedMergeStaticMatch(router, method, requestParts, trailingSlash, host)
+}
+
+func linearDynamicMatch(routes []*Route, requestParts []string, trailingSlash bool, host string, requireComplete bool) (*Route, map[string]string) {
 	for _, exactDomain := range []bool{true, false} {
+		var alias *Route
+		var aliasParams map[string]string
+		var aliasSpecificity int
 		for _, candidate := range routes {
+			if alias != nil && routeSpecificity(candidate) < aliasSpecificity {
+				break
+			}
 			if exactDomain {
 				if candidate.domain == "" || candidate.domain != host {
 					continue
@@ -423,9 +466,28 @@ func linearDynamicMatch(routes []*Route, requestParts []string, trailingSlash bo
 			} else if candidate.domain != "" {
 				continue
 			}
-			if matched, params := candidate.matchRequestPartsWithOptions(requestParts, trailingSlash); matched {
-				return candidate, params
+			if matched, params := candidate.matchRequestParts(requestParts, trailingSlash, requireComplete); matched {
+				usesAlias := candidate.matchesExtensionAlias(requestParts)
+				if alias == nil && !usesAlias {
+					return candidate, params
+				}
+				consumed, endsInLiteral := candidate.matchedDynamicPathShape(params)
+				if alias == nil {
+					aliasPartCount := len(requestParts)
+					if requestParts[aliasPartCount-1] == "."+candidate.ext {
+						aliasPartCount--
+					}
+					if consumed != aliasPartCount {
+						return candidate, params
+					}
+					alias, aliasParams, aliasSpecificity = candidate, params, routeSpecificity(candidate)
+				} else if !usesAlias && endsInLiteral && consumed == len(requestParts) {
+					return candidate, params
+				}
 			}
+		}
+		if alias != nil {
+			return alias, aliasParams
 		}
 	}
 	return nil, nil

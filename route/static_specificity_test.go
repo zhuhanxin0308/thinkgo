@@ -1,6 +1,7 @@
 package route
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -163,11 +164,14 @@ func TestStaticExactSpecificityAndFoldAliasesPreserveAuthentication(t *testing.T
 						}); err != nil {
 							return err
 						}
-						_, err := group.Get(aliases[1], func(*fwcontext.Request) *fwcontext.Response {
+						_, duplicateErr := group.Get(aliases[1], func(*fwcontext.Request) *fwcontext.Response {
 							publicCalls++
 							return fwcontext.NewResponse()
 						})
-						return err
+						if !errors.Is(duplicateErr, ErrDuplicateRoute) {
+							t.Fatalf("expected ErrDuplicateRoute for fold alias %q/%q, got %v", aliases[0], aliases[1], duplicateErr)
+						}
+						return nil
 					}
 					if err := router.Domain(domain, register); err != nil {
 						t.Fatal(err)

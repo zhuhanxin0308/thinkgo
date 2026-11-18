@@ -68,14 +68,15 @@ func (r Result) Violations() []Violation {
 }
 
 type validationOptions struct {
-	scene        string
-	collectAll   bool
-	strictFields bool
-	location     *time.Location
-	language     *lang.Lang
-	messages     map[string]string
-	locale       string
-	localeSet    bool
+	scene           string
+	collectAll      bool
+	strictFields    bool
+	location        *time.Location
+	language        *lang.Lang
+	messages        map[string]string
+	locale          string
+	localeSet       bool
+	nonNullPresence map[string]struct{}
 }
 
 // Option 配置一次 Validate 调用，不修改共享验证器。
@@ -132,6 +133,24 @@ func WithLocation(location *time.Location) Option {
 			return fmt.Errorf("%w: 时区不能为空", ErrInvalidOption)
 		}
 		options.location = location
+		return nil
+	}
+}
+
+// WithNonNullPresenceFields 指定按“存在且非 nil”判定存在性规则（如 json.RawMessage 允许 {}、[]、""）。
+func WithNonNullPresenceFields(fields ...string) Option {
+	return func(options *validationOptions) error {
+		if len(fields) == 0 {
+			return nil
+		}
+		if options.nonNullPresence == nil {
+			options.nonNullPresence = make(map[string]struct{}, len(fields))
+		}
+		for _, field := range fields {
+			if field != "" {
+				options.nonNullPresence[field] = struct{}{}
+			}
+		}
 		return nil
 	}
 }
@@ -305,7 +324,7 @@ func (v *Validator) Validate(data map[string]interface{}, optionFunctions ...Opt
 			if !exists && !rule.requiresPresence() {
 				continue
 			}
-			if evaluateRule(data, field.name, value, exists, rule, location, current) {
+			if evaluateRule(data, field.name, value, exists, rule, location, current, options.nonNullPresence) {
 				continue
 			}
 			result.violations = append(result.violations, buildViolation(config, field, rule))
