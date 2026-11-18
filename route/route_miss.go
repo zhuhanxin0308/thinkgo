@@ -73,21 +73,37 @@ func (g *Group) SetMiss(method string, handler HandlerFunc) (*Route, error) {
 
 func newMissRoute(router *Router, method string, handler HandlerFunc, group *Group) *Route {
 	registered := &Route{
-		router:   router,
-		method:   method,
-		path:     "__miss__",
-		handler:  handler,
-		patterns: make(map[string]string),
-		compiled: make(map[string]*regexp.Regexp),
-		isMiss:   true,
+		router:           router,
+		method:           method,
+		path:             "__miss__",
+		handler:          handler,
+		patterns:         make(map[string]string),
+		compiled:         make(map[string]*regexp.Regexp),
+		explicitPatterns: make(map[string]bool),
+		isMiss:           true,
 	}
 	if group != nil {
 		registered.missPrefix = group.prefix
 		registered.domain = group.domain
+		registered.domainDepth = group.domainDepth
 		registered.ext = group.ext
+		registered.extDepth = group.extDepth
 		registered.extensionRequired = group.extensionRequired
 		registered.middlewares = slices.Clone(group.middlewares)
 		registered.middlewarePipeline = buildMiddlewarePipeline(group.middlewares)
+		if group.prefix != "" && len(group.patterns) > 0 {
+			registered.patternDepth = make(map[string]int)
+			for param, pattern := range group.patterns {
+				if !routeHasParam(group.prefix, param) {
+					continue
+				}
+				if regex, err := compileRoutePattern(param, pattern); err == nil {
+					registered.patterns[param] = pattern
+					registered.compiled[param] = regex
+					registered.patternDepth[param] = group.patternDepth[param]
+				}
+			}
+		}
 	}
 	return registered
 }

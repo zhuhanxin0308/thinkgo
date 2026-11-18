@@ -35,19 +35,20 @@ type planKey struct {
 	root bool
 }
 type node struct {
-	typ         reflect.Type
-	elem        *node
-	fields      []field
-	knownFields map[string]bool
-	validator   *validate.Validator
-	sources     fwcontext.SourceSelection
-	hasBody     bool
-	hasForm     bool
-	optional    bool
-	text        bool
-	binary      bool
-	number      bool
-	rawJSON     bool
+	typ           reflect.Type
+	elem          *node
+	fields        []field
+	knownFields   map[string]bool
+	rawJSONFields []string
+	validator     *validate.Validator
+	sources       fwcontext.SourceSelection
+	hasBody       bool
+	hasForm       bool
+	optional      bool
+	text          bool
+	binary        bool
+	number        bool
+	rawJSON       bool
 }
 type field struct {
 	index                            []int
@@ -181,6 +182,9 @@ func compileNode(typ reflect.Type, root, output bool, building map[planKey]*node
 				return nil, fmt.Errorf("%w: 字段名 %q 重复", ErrDefinition, item.name)
 			}
 			names[item.name] = true
+			if isRawJSONType(item.node.typ) {
+				result.rawJSONFields = append(result.rawJSONFields, item.name)
+			}
 			if item.rules != "" {
 				rules[item.name] = item.rules
 			}
@@ -346,7 +350,11 @@ func compileFields(typ reflect.Type, root, output bool, building map[planKey]*no
 				return nil, fmt.Errorf("%w: 字段 %s 默认值类型无效", ErrDefinition, spec.Name)
 			}
 			if item.rules != "" {
-				validation, err := validate.ValidateRules(map[string]interface{}{item.name: validationFieldValue(child, item.defaultValue)}, map[string]string{item.name: item.rules})
+				var ruleOpts []validate.Option
+				if underlyingNode(child).rawJSON {
+					ruleOpts = append(ruleOpts, validate.WithNonNullPresenceFields(item.name))
+				}
+				validation, err := validate.ValidateRules(map[string]interface{}{item.name: validationFieldValue(child, item.defaultValue)}, map[string]string{item.name: item.rules}, ruleOpts...)
 				if err != nil || !validation.Valid() {
 					return nil, fmt.Errorf("%w: 字段 %s 默认值不符合规则", ErrDefinition, spec.Name)
 				}
@@ -371,6 +379,25 @@ func compileFields(typ reflect.Type, root, output bool, building map[planKey]*no
 		}
 	}
 	return result, nil
+}
+
+func isRawJSONType(typ reflect.Type) bool {
+	for typ != nil {
+		if typ == reflect.TypeFor[json.RawMessage]() {
+			return true
+		}
+		if typ.Kind() == reflect.Pointer {
+			typ = typ.Elem()
+			continue
+		}
+		if reflect.PointerTo(typ).Implements(optionalInterface) {
+			holder := reflect.New(typ).Interface().(optionalValue)
+			typ = reflect.TypeOf(holder.valuePointer()).Elem()
+			continue
+		}
+		return false
+	}
+	return false
 }
 
 func validParameterNode(plan *node) bool {

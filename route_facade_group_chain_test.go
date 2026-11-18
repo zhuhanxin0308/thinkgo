@@ -277,3 +277,126 @@ func TestRouteFacadeScopedMissPreservesGroupPrefixDomainAndMiddleware(t *testing
 		t.Fatalf("域名 Miss 执行链错误: %v", trace)
 	}
 }
+
+func TestRouteFacadeNestedOverridesPreservedUnderOuterPostfixModifiers(t *testing.T) {
+	app := NewConsoleAppUninitialized(t.TempDir())
+	t.Cleanup(func() { _ = app.Close() })
+
+	makeHandler := func(name string) func(*Request) *Response {
+		return func(*Request) *Response {
+			return NewResponse().Content(name)
+		}
+	}
+
+	routes := app.Route()
+	routes.Group("/api", func() {
+		routes.Domain("private.example.com", func() {
+			routes.Get("/secret/:id", makeHandler("secret"))
+		}).Ext("xml").Pattern(map[string]string{"id": `[a-z]+`})
+
+		routes.Group("/nested", func() {
+			routes.Get("/sub/:id", makeHandler("sub"))
+		}).Domain("sub.example.com").Ext("yaml").Pattern(map[string]string{"id": `[A-Z]+`})
+
+		routes.Domain("chain.example.com").Ext("csv").Pattern(map[string]string{"id": `[0-9]{2}`}).Get("/chain/:id", makeHandler("chain"))
+
+		routes.Get("/public/:id", makeHandler("public"))
+	}).Domain("first.example.com").Domain("public.example.com").Ext("json").Pattern(map[string]string{"id": `\d+`})
+
+	// 1. 外层未显式覆盖路由继承外层后置 Domain / Ext / Pattern（含连续链式后置覆盖）
+	reqPublic := fwcontext.MustNewRequest(httptest.NewRequest(http.MethodGet, "http://public.example.com/api/public/123.json", nil))
+	if matched, params, err := routes.Match(reqPublic); err != nil || matched == nil || params["id"] != "123" {
+		t.Fatalf("外层后置修饰路由匹配失败: matched=%#v params=%#v err=%v", matched, params, err)
+	}
+	reqPublicAlpha := fwcontext.MustNewRequest(httptest.NewRequest(http.MethodGet, "http://public.example.com/api/public/abc.json", nil))
+	if matched, _, err := routes.Match(reqPublicAlpha); err != nil || matched != nil {
+		t.Fatalf("外层后置 Pattern 应拦截非数字 id: matched=%#v err=%v", matched, err)
+	}
+
+	// 2. 嵌套 Domain 分组、嵌套后置分组、嵌套前置链式分组均不被外层后置修饰覆盖
+	reqPrivate := fwcontext.MustNewRequest(httptest.NewRequest(http.MethodGet, "http://private.example.com/api/secret/alpha.xml", nil))
+	if matched, params, err := routes.Match(reqPrivate); err != nil || matched == nil || params["id"] != "alpha" {
+		t.Fatalf("嵌套 Domain/Ext/Pattern 被外层覆盖: matched=%#v params=%#v err=%v", matched, params, err)
+	}
+	reqPrivateWrongHost := fwcontext.MustNewRequest(httptest.NewRequest(http.MethodGet, "http://public.example.com/api/secret/alpha.xml", nil))
+	if matched, _, err := routes.Match(reqPrivateWrongHost); err != nil || matched != nil {
+		t.Fatalf("私域路由不应暴露在外层公域域名下: matched=%#v err=%v", matched, err)
+	}
+
+	reqSub := fwcontext.MustNewRequest(httptest.NewRequest(http.MethodGet, "http://sub.example.com/api/nested/sub/ABC.yaml", nil))
+	if matched, params, err := routes.Match(reqSub); err != nil || matched == nil || params["id"] != "ABC" {
+		t.Fatalf("嵌套子组后置修饰被外层覆盖: matched=%#v params=%#v err=%v", matched, params, err)
+	}
+
+	reqChain := fwcontext.MustNewRequest(httptest.NewRequest(http.MethodGet, "http://chain.example.com/api/chain/42.csv", nil))
+	if matched, params, err := routes.Match(reqChain); err != nil || matched == nil || params["id"] != "42" {
+		t.Fatalf("嵌套前置链式修饰被外层覆盖: matched=%#v params=%#v err=%v", matched, params, err)
+	}
+}
+
+func TestRouteFacadeParameterizedGroupMissExtractsParamsAndMiddleware(t *testing.T) {
+	app := NewConsoleAppUninitialized(t.TempDir())
+	t.Cleanup(func() { _ = app.Close() })
+
+	var trace []string
+	tenantMw := middleware.Handler(func(req *Request, next func(*Request) *Response) *Response {
+		trace = append(trace, "tenant_mw")
+		return next(req)
+	})
+	makeHandler := func(name string) func(*Request) *Response {
+		return func(*Request) *Response {
+			trace = append(trace, name)
+			return NewResponse().Content(name)
+		}
+	}
+
+	routes := app.Route()
+	routes.Miss(makeHandler("global_miss"))
+	routes.Group("/tenants/:tenant", func() {
+		routes.Get("/profile", makeHandler("profile"))
+		routes.Miss(makeHandler("tenant_miss"))
+	}, tenantMw).Pattern(map[string]string{"tenant": `[a-z]+`})
+
+	routes.Group("/tenants/system", func() {
+		routes.Miss(makeHandler("system_miss"))
+	})
+
+	// 1. 参数化分组下的未命中路径命中 tenant_miss，返回提取的 :tenant 参数并执行分组中间件
+	trace = trace[:0]
+	reqTenantMiss := fwcontext.MustNewRequest(httptest.NewRequest(http.MethodGet, "http://example.com/tenants/acme/missing", nil))
+	matched, params, err := routes.Match(reqTenantMiss)
+	if err != nil || matched == nil || params["tenant"] != "acme" {
+		t.Fatalf("参数化分组 Miss 匹配失败: matched=%#v params=%#v err=%v", matched, params, err)
+	}
+	if !reflect.DeepEqual(matched.ParameterNames(), []string{"tenant"}) {
+		t.Fatalf("参数化 Miss ParameterNames 异常: %v", matched.ParameterNames())
+	}
+	_ = matched.ExecuteMiddleware(reqTenantMiss, matched.Handler().(func(*Request) *Response))
+	if !reflect.DeepEqual(trace, []string{"tenant_mw", "tenant_miss"}) {
+		t.Fatalf("参数化分组 Miss 中间件执行异常: %v", trace)
+	}
+
+	// 2. 不满足分组变量正则的前缀不命中 tenant_miss，回退到 global_miss
+	trace = trace[:0]
+	reqInvalidTenant := fwcontext.MustNewRequest(httptest.NewRequest(http.MethodGet, "http://example.com/tenants/12345/missing", nil))
+	matchedFallback, fallbackParams, err := routes.Match(reqInvalidTenant)
+	if err != nil || matchedFallback == nil || len(fallbackParams) != 0 {
+		t.Fatalf("不满足约束的参数化前缀应回退到全局 Miss: matched=%#v params=%#v err=%v", matchedFallback, fallbackParams, err)
+	}
+	_ = matchedFallback.ExecuteMiddleware(reqInvalidTenant, matchedFallback.Handler().(func(*Request) *Response))
+	if !reflect.DeepEqual(trace, []string{"global_miss"}) {
+		t.Fatalf("回退全局 Miss 执行异常: %v", trace)
+	}
+
+	// 3. 同深度下字面量分组 /tenants/system 优先于参数化分组 /tenants/:tenant
+	trace = trace[:0]
+	reqSystem := fwcontext.MustNewRequest(httptest.NewRequest(http.MethodGet, "http://example.com/tenants/system/missing", nil))
+	matchedSystem, sysParams, err := routes.Match(reqSystem)
+	if err != nil || matchedSystem == nil || len(sysParams) != 0 {
+		t.Fatalf("字面量分组 Miss 匹配失败: matched=%#v params=%#v err=%v", matchedSystem, sysParams, err)
+	}
+	_ = matchedSystem.ExecuteMiddleware(reqSystem, matchedSystem.Handler().(func(*Request) *Response))
+	if !reflect.DeepEqual(trace, []string{"system_miss"}) {
+		t.Fatalf("字面量分组 Miss 优先级异常: %v", trace)
+	}
+}

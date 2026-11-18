@@ -379,8 +379,8 @@ func linearRouteMatch(router *Router, req *fwcontext.Request) (*Route, map[strin
 	if matched, params := linearExplicitMatch(router, method, requestParts, trailingSlash, host); matched != nil {
 		return matched, params, nil
 	}
-	if miss := router.matchMissRoute(method, requestParts, host); miss != nil {
-		return miss, nil, nil
+	if miss, params := router.matchMissRoute(method, requestParts, host); miss != nil {
+		return miss, params, nil
 	}
 	if method == http.MethodOptions {
 		if router.autoRoute {

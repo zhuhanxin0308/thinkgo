@@ -406,7 +406,7 @@ func (builder *schemaBuilder) fieldSchemaWithDocumentation(item field, docs Type
 }
 
 func underlyingNode(plan *node) *node {
-	for plan.optional || plan.typ.Kind() == reflect.Pointer {
+	for plan != nil && (plan.optional || plan.typ.Kind() == reflect.Pointer) && plan.elem != nil {
 		plan = plan.elem
 	}
 	return plan

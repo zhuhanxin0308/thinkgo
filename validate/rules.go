@@ -36,10 +36,10 @@ var (
 	decimalRegex     = regexp.MustCompile(`^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$`)
 )
 
-func evaluateRule(data map[string]interface{}, field string, value interface{}, exists bool, rule compiledRule, location *time.Location, current time.Time) bool {
+func evaluateRule(data map[string]interface{}, field string, value interface{}, exists bool, rule compiledRule, location *time.Location, current time.Time, nonNullPresence map[string]struct{}) bool {
 	switch rule.name {
 	case "required":
-		return exists && !isEmptyValue(value)
+		return exists && !isFieldEmpty(field, value, nonNullPresence)
 	case "number", "float":
 		_, valid := numericValue(value)
 		return valid
@@ -143,11 +143,11 @@ func evaluateRule(data map[string]interface{}, field string, value interface{}, 
 		if !comparable || text != rule.parameters[1] {
 			return true
 		}
-		return exists && !isEmptyValue(value)
+		return exists && !isFieldEmpty(field, value, nonNullPresence)
 	case "requireWith":
 		for _, relatedField := range rule.parameters {
-			if relatedValue, relatedExists := data[relatedField]; relatedExists && !isEmptyValue(relatedValue) {
-				return exists && !isEmptyValue(value)
+			if relatedValue, relatedExists := data[relatedField]; relatedExists && !isFieldEmpty(relatedField, relatedValue, nonNullPresence) {
+				return exists && !isFieldEmpty(field, value, nonNullPresence)
 			}
 		}
 		return true
@@ -339,6 +339,17 @@ func valueLength(value interface{}) (int, bool) {
 	default:
 		return 0, false
 	}
+}
+
+func isFieldEmpty(field string, value interface{}, nonNullPresence map[string]struct{}) bool {
+	if _, ok := nonNullPresence[field]; ok {
+		if value == nil {
+			return true
+		}
+		_, valid := indirectValidationValue(reflect.ValueOf(value))
+		return !valid
+	}
+	return isEmptyValue(value)
 }
 
 func isEmptyValue(value interface{}) bool {

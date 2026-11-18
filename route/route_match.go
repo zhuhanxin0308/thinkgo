@@ -34,8 +34,8 @@ func (r *Router) Match(req *context.Request) (*Route, map[string]string, error) 
 		return matched, params, nil
 	}
 
-	if matched := r.matchMissRoute(method, requestParts, host); matched != nil {
-		return matched, nil, nil
+	if matched, params := r.matchMissRoute(method, requestParts, host); matched != nil {
+		return matched, params, nil
 	}
 
 	if method == http.MethodOptions {
@@ -90,17 +90,22 @@ func (r *Router) matchExplicit(method string, parts []string, trailingSlash bool
 	return nil, nil
 }
 
-func (r *Router) matchMissRoute(method string, requestParts []string, host string) *Route {
+func (r *Router) matchMissRoute(method string, requestParts []string, host string) (*Route, map[string]string) {
 	if r == nil {
-		return nil
+		return nil, nil
 	}
 	if len(r.missList) == 0 {
 		if matched := r.missRoutes[method]; matched != nil {
-			return matched
+			return matched, nil
 		}
-		return r.missRoute
+		return r.missRoute, nil
 	}
-	var best *Route
+	var (
+		best         *Route
+		bestParams   map[string]string
+		bestConsumed int
+		bestSpec     int
+	)
 	for _, candidate := range r.missList {
 		if candidate == nil || candidate.removed {
 			continue
@@ -119,32 +124,95 @@ func (r *Router) matchMissRoute(method string, requestParts []string, host strin
 				continue
 			}
 		}
-		if len(parts) < len(candidate.missParts) {
+		params, consumed, specificity, ok := r.matchMissPrefixParts(candidate, parts)
+		if !ok {
 			continue
 		}
-		prefixMatched := true
-		for index, part := range candidate.missParts {
-			if !routeLiteralEqual(r, part.literal, parts[index]) {
-				prefixMatched = false
-				break
-			}
-		}
-		if !prefixMatched {
-			continue
-		}
-		if betterMissRoute(candidate, best, method) {
+		if betterMissRoute(candidate, best, consumed, bestConsumed, specificity, bestSpec, method) {
 			best = candidate
+			bestParams = params
+			bestConsumed = consumed
+			bestSpec = specificity
 		}
 	}
-	return best
+	return best, bestParams
 }
 
-func betterMissRoute(candidate, current *Route, method string) bool {
+func (r *Router) matchMissPrefixParts(candidate *Route, parts []string) (map[string]string, int, int, bool) {
+	if len(candidate.missParts) == 0 {
+		return nil, 0, 0, true
+	}
+	if isStaticRouteParts(candidate.missParts) {
+		if len(parts) < len(candidate.missParts) {
+			return nil, 0, 0, false
+		}
+		for index, part := range candidate.missParts {
+			if !routeLiteralEqual(r, part.literal, parts[index]) {
+				return nil, 0, 0, false
+			}
+		}
+		return nil, len(candidate.missParts), len(candidate.missParts) * 100, true
+	}
+
+	type state struct{ routeIndex, requestIndex int }
+	failed := make(map[state]bool)
+	var visit func(int, int) (map[string]string, int, int, bool)
+	visit = func(routeIndex, requestIndex int) (map[string]string, int, int, bool) {
+		current := state{routeIndex: routeIndex, requestIndex: requestIndex}
+		if failed[current] {
+			return nil, 0, 0, false
+		}
+		if routeIndex == len(candidate.missParts) {
+			return make(map[string]string), requestIndex, 0, true
+		}
+		part := candidate.missParts[routeIndex]
+		if part.param == "" {
+			if requestIndex < len(parts) && routeLiteralEqual(r, part.literal, parts[requestIndex]) {
+				if params, consumed, spec, matched := visit(routeIndex+1, requestIndex+1); matched {
+					return params, consumed, spec + 100, true
+				}
+			}
+			failed[current] = true
+			return nil, 0, 0, false
+		}
+		if requestIndex < len(parts) && candidate.validateParam(part.param, parts[requestIndex]) {
+			if params, consumed, spec, matched := visit(routeIndex+1, requestIndex+1); matched {
+				params[part.param] = parts[requestIndex]
+				paramSpec := 10
+				if candidate.compiled[part.param] != nil {
+					paramSpec += 5
+				}
+				return params, consumed, spec + paramSpec, true
+			}
+		}
+		if part.optional {
+			if params, consumed, spec, matched := visit(routeIndex+1, requestIndex); matched {
+				return params, consumed, spec + 1, true
+			}
+		}
+		failed[current] = true
+		return nil, 0, 0, false
+	}
+
+	params, consumed, spec, matched := visit(0, 0)
+	if !matched {
+		return nil, 0, 0, false
+	}
+	if len(params) == 0 {
+		params = nil
+	}
+	return params, consumed, spec, true
+}
+
+func betterMissRoute(candidate, current *Route, candidateConsumed, currentConsumed, candidateSpec, currentSpec int, method string) bool {
 	if current == nil {
 		return true
 	}
-	if len(candidate.missParts) != len(current.missParts) {
-		return len(candidate.missParts) > len(current.missParts)
+	if candidateConsumed != currentConsumed {
+		return candidateConsumed > currentConsumed
+	}
+	if candidateSpec != currentSpec {
+		return candidateSpec > currentSpec
 	}
 	if (candidate.domain != "") != (current.domain != "") {
 		return candidate.domain != ""

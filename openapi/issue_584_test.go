@@ -3,6 +3,7 @@ package openapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -120,5 +121,36 @@ func TestIssue584JSONNumberAndDerivedStringUseApplicationJSON(t *testing.T) {
 	plainContent := doc.Paths.Value("/plain").Get.Responses.Status(http.StatusOK).Value.Content
 	if plainContent["text/plain"] == nil || plainContent["application/json"] != nil {
 		t.Fatalf("/plain 原生 string 应保持 text/plain 契约: %#v", plainContent)
+	}
+}
+
+func TestHandleRejectsExtensionConstrainedGroupAtomically(t *testing.T) {
+	router := route.NewRouter()
+	registry, err := NewRegistry(openapi3.Info{Title: "ExtGuard", Version: "1.0.0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	extGroup, err := router.RootGroup().WithExtension("json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	type resp struct {
+		OK bool `json:"ok"`
+	}
+	err = Handle(extGroup, registry, Operation{Method: http.MethodGet, Path: "/users", OperationID: "listUsers"}, func() (resp, error) {
+		return resp{OK: true}, nil
+	})
+	if !errors.Is(err, ErrUnsupportedRoute) {
+		t.Fatalf("带强制后缀分组注册 OpenAPI 应返回 ErrUnsupportedRoute，实际为 %v", err)
+	}
+	routes, err := router.Routes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(routes) != 0 {
+		t.Fatalf("契约拒绝时不得残留已注册路由: %#v", routes)
+	}
+	if err := registry.ValidateRouter(router, "/"); err != nil {
+		t.Fatalf("原子回滚后 ValidateRouter 应完全一致: %v", err)
 	}
 }

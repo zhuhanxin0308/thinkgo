@@ -57,9 +57,12 @@ type Route struct {
 	patterns           map[string]string
 	compiled           map[string]*regexp.Regexp
 	explicitPatterns   map[string]bool
+	patternDepth       map[string]int
 	domain             string
+	domainDepth        int
 	explicitDomain     bool
 	ext                string
+	extDepth           int
 	extensionRequired  bool
 	explicitExt        bool
 	literalExtension   bool
@@ -87,7 +90,14 @@ func (r *Route) ParameterNames() []string {
 		return nil
 	}
 	parts := r.pathParts
-	if len(parts) == 0 && r.path != "" {
+	if r.isMiss {
+		parts = r.missParts
+		if len(parts) == 0 && r.missPrefix != "" {
+			if parsed, _, err := parseRoutePath(r.missPrefix); err == nil {
+				parts = parsed
+			}
+		}
+	} else if len(parts) == 0 && r.path != "" {
 		parsed, _, err := parseRoutePath(r.path)
 		if err == nil {
 			parts = parsed
@@ -149,10 +159,14 @@ type Router struct {
 type Group struct {
 	router            *Router
 	prefix            string
+	scopeDepth        int
 	domain            string
+	domainDepth       int
 	ext               string
+	extDepth          int
 	extensionRequired bool
 	patterns          map[string]string
+	patternDepth      map[string]int
 	middlewares       []routeMiddleware
 }
 
@@ -162,9 +176,12 @@ type routeDefinition struct {
 	handler           HandlerFunc
 	middlewares       []routeMiddleware
 	domain            string
+	domainDepth       int
 	ext               string
+	extDepth          int
 	extensionRequired bool
 	patterns          map[string]string
+	patternDepth      map[string]int
 }
 
 // NewRouter 创建处于注册状态的路由器；默认强制显式路由，不进行自动控制器调度。
@@ -387,7 +404,14 @@ func (r *Router) RootGroup() *Group {
 }
 
 func (r *Router) rootGroup() *Group {
-	return &Group{router: r}
+	return &Group{router: r, scopeDepth: 1}
+}
+
+func (g *Group) effectiveScopeDepth() int {
+	if g == nil || g.scopeDepth <= 0 {
+		return 1
+	}
+	return g.scopeDepth
 }
 
 func (g *Group) clone() *Group {
@@ -397,7 +421,19 @@ func (g *Group) clone() *Group {
 	copied := *g
 	copied.middlewares = slices.Clone(g.middlewares)
 	copied.patterns = cloneRoutePatterns(g.patterns)
+	copied.patternDepth = clonePatternDepth(g.patternDepth)
 	return &copied
+}
+
+func clonePatternDepth(depths map[string]int) map[string]int {
+	if len(depths) == 0 {
+		return nil
+	}
+	cloned := make(map[string]int, len(depths))
+	for name, depth := range depths {
+		cloned[name] = depth
+	}
+	return cloned
 }
 
 func cloneRoutePatterns(patterns map[string]string) map[string]string {
@@ -418,9 +454,12 @@ func (g *Group) newDefinition(method, path string, handler HandlerFunc, handlers
 		handler:           handler,
 		middlewares:       mergeMiddleware(g.middlewares, handlers),
 		domain:            g.domain,
+		domainDepth:       g.domainDepth,
 		ext:               g.ext,
+		extDepth:          g.extDepth,
 		extensionRequired: g.extensionRequired,
 		patterns:          cloneRoutePatterns(g.patterns),
+		patternDepth:      clonePatternDepth(g.patternDepth),
 	}
 }
 
@@ -484,13 +523,16 @@ func (g *Group) scoped(domain, prefix string, fn func(*Group) error, handlers ..
 	if err := validateMiddleware(handlers); err != nil {
 		return err
 	}
+	nextScopeDepth := g.effectiveScopeDepth() + 1
 	nextDomain := g.domain
+	nextDomainDepth := g.domainDepth
 	if strings.TrimSpace(domain) != "" {
 		validated, err := normalizeAndValidateRouteDomain(domain)
 		if err != nil {
 			return err
 		}
 		nextDomain = validated
+		nextDomainDepth = nextScopeDepth
 	}
 	nextPrefix := joinRoutePath(g.prefix, prefix)
 	if nextPrefix == "/" {
@@ -504,10 +546,14 @@ func (g *Group) scoped(domain, prefix string, fn func(*Group) error, handlers ..
 	next := &Group{
 		router:            g.router,
 		prefix:            nextPrefix,
+		scopeDepth:        nextScopeDepth,
 		domain:            nextDomain,
+		domainDepth:       nextDomainDepth,
 		ext:               g.ext,
+		extDepth:          g.extDepth,
 		extensionRequired: g.extensionRequired,
 		patterns:          cloneRoutePatterns(g.patterns),
+		patternDepth:      clonePatternDepth(g.patternDepth),
 		middlewares:       mergeMiddleware(g.middlewares, handlers),
 	}
 	return fn(next)
@@ -531,7 +577,9 @@ func (g *Group) WithDomain(domain string) (*Group, error) {
 		return nil, ErrRouterFrozen
 	}
 	next := g.clone()
+	next.scopeDepth = g.effectiveScopeDepth() + 1
 	next.domain = normalized
+	next.domainDepth = next.scopeDepth
 	return next, nil
 }
 
@@ -552,11 +600,18 @@ func (g *Group) ApplyDomainToRoutes(routes []*Route, domain string) (*Group, err
 	if g.router.frozen {
 		return nil, ErrRouterFrozen
 	}
+	level := g.effectiveScopeDepth()
 	active := uniqueActiveRoutes(routes)
 	mutating := make(map[*Route]struct{}, len(active))
 	candidates := make([]*Route, 0, len(active))
 	for _, registered := range active {
-		if registered.isMiss || registered.explicitDomain {
+		if registered.explicitDomain || registered.domainDepth > level {
+			continue
+		}
+		if registered.jsonContract {
+			return nil, fmt.Errorf("%w: JSON 契约路由不支持分组域名约束", ErrInvalidRouteDomain)
+		}
+		if registered.isMiss {
 			continue
 		}
 		mutating[registered] = struct{}{}
@@ -570,12 +625,23 @@ func (g *Group) ApplyDomainToRoutes(routes []*Route, domain string) (*Group, err
 		}
 	}
 	for _, registered := range active {
-		if !registered.explicitDomain {
+		if !registered.explicitDomain && registered.domainDepth <= level {
 			registered.domain = normalized
+			registered.domainDepth = level
+			if registered.isMiss {
+				if g.router.missRoute == registered {
+					g.router.missRoute = nil
+				}
+				if g.router.missRoutes[registered.method] == registered {
+					delete(g.router.missRoutes, registered.method)
+				}
+			}
 		}
 	}
 	next := g.clone()
+	next.scopeDepth = level
 	next.domain = normalized
+	next.domainDepth = level
 	return next, nil
 }
 
@@ -594,8 +660,10 @@ func (g *Group) WithExtension(extension string) (*Group, error) {
 		return nil, ErrRouterFrozen
 	}
 	next := g.clone()
+	next.scopeDepth = g.effectiveScopeDepth() + 1
 	next.ext = normalized
 	next.extensionRequired = true
+	next.extDepth = next.scopeDepth
 	return next, nil
 }
 
@@ -613,16 +681,24 @@ func (g *Group) ApplyExtensionToRoutes(routes []*Route, extension string) (*Grou
 	if g.router.frozen {
 		return nil, ErrRouterFrozen
 	}
+	level := g.effectiveScopeDepth()
 	active := uniqueActiveRoutes(routes)
 	mutating := make(map[*Route]struct{}, len(active))
 	candidates := make([]*Route, 0, len(active))
 	for _, registered := range active {
-		if registered.isMiss || registered.explicitExt {
+		if registered.explicitExt || registered.extDepth > level {
+			continue
+		}
+		if registered.jsonContract {
+			return nil, fmt.Errorf("%w: JSON 契约路由不支持分组强制后缀约束", ErrInvalidRoute)
+		}
+		if registered.isMiss {
 			continue
 		}
 		mutating[registered] = struct{}{}
 		copied := *registered
 		copied.ext = normalized
+		copied.extensionRequired = true
 		candidates = append(candidates, &copied)
 	}
 	for _, candidate := range candidates {
@@ -631,14 +707,25 @@ func (g *Group) ApplyExtensionToRoutes(routes []*Route, extension string) (*Grou
 		}
 	}
 	for _, registered := range active {
-		if !registered.explicitExt {
+		if !registered.explicitExt && registered.extDepth <= level {
 			registered.ext = normalized
 			registered.extensionRequired = true
+			registered.extDepth = level
+			if registered.isMiss {
+				if g.router.missRoute == registered {
+					g.router.missRoute = nil
+				}
+				if g.router.missRoutes[registered.method] == registered {
+					delete(g.router.missRoutes, registered.method)
+				}
+			}
 		}
 	}
 	next := g.clone()
+	next.scopeDepth = level
 	next.ext = normalized
 	next.extensionRequired = true
+	next.extDepth = level
 	return next, nil
 }
 
@@ -658,12 +745,17 @@ func (g *Group) WithPatterns(patterns map[string]string) (*Group, error) {
 		return nil, ErrRouterFrozen
 	}
 	next := g.clone()
+	next.scopeDepth = g.effectiveScopeDepth() + 1
 	if len(normalizedMap) > 0 {
 		if next.patterns == nil {
 			next.patterns = make(map[string]string, len(normalizedMap))
 		}
+		if next.patternDepth == nil {
+			next.patternDepth = make(map[string]int, len(normalizedMap))
+		}
 		for param, pattern := range normalizedMap {
 			next.patterns[param] = pattern
+			next.patternDepth[param] = next.scopeDepth
 		}
 	}
 	return next, nil
@@ -683,30 +775,41 @@ func (g *Group) ApplyPatternsToRoutes(routes []*Route, patterns map[string]strin
 	if g.router.frozen {
 		return nil, ErrRouterFrozen
 	}
+	level := g.effectiveScopeDepth()
 	keys := make([]string, 0, len(normalizedMap))
 	for param := range normalizedMap {
 		keys = append(keys, param)
 	}
 	sort.Strings(keys)
 	for _, registered := range uniqueActiveRoutes(routes) {
+		targetPath := registered.path
 		if registered.isMiss {
-			continue
+			targetPath = registered.missPrefix
 		}
 		for _, param := range keys {
-			if registered.explicitPatterns[param] || !routeHasParam(registered.path, param) {
+			if registered.explicitPatterns[param] || registered.patternDepth[param] > level || !routeHasParam(targetPath, param) {
 				continue
+			}
+			if registered.patternDepth == nil {
+				registered.patternDepth = make(map[string]int)
 			}
 			registered.patterns[param] = normalizedMap[param]
 			registered.compiled[param] = compiledMap[param]
+			registered.patternDepth[param] = level
 		}
 	}
 	next := g.clone()
+	next.scopeDepth = level
 	if len(normalizedMap) > 0 {
 		if next.patterns == nil {
 			next.patterns = make(map[string]string, len(normalizedMap))
 		}
+		if next.patternDepth == nil {
+			next.patternDepth = make(map[string]int, len(normalizedMap))
+		}
 		for param, pattern := range normalizedMap {
 			next.patterns[param] = pattern
+			next.patternDepth[param] = level
 		}
 	}
 	return next, nil
@@ -867,6 +970,18 @@ func (r *Router) Freeze() error {
 				return err
 			}
 			miss.missParts = parts
+			for param, pattern := range miss.patterns {
+				if !routeHasParam(miss.missPrefix, param) {
+					continue
+				}
+				regex, compileErr := compileRoutePattern(param, pattern)
+				if compileErr != nil {
+					r.freezeErr = compileErr
+					r.frozen = true
+					return compileErr
+				}
+				miss.compiled[param] = regex
+			}
 		}
 	}
 	r.staticRoutes = staticRoutes

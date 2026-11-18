@@ -70,6 +70,7 @@ func (r *Router) registerDefinitionsWithCommit(definitions []routeDefinition, co
 		}
 		patterns := make(map[string]string)
 		compiled := make(map[string]*regexp.Regexp)
+		patternDepth := make(map[string]int)
 		for param, pattern := range definition.patterns {
 			if !routeHasParam(path, param) {
 				continue
@@ -80,6 +81,15 @@ func (r *Router) registerDefinitionsWithCommit(definitions []routeDefinition, co
 			}
 			patterns[param] = pattern
 			compiled[param] = regex
+			patternDepth[param] = definition.patternDepth[param]
+		}
+		var domainDepth int
+		if domain != "" {
+			domainDepth = definition.domainDepth
+		}
+		var extDepth int
+		if ext != "" {
+			extDepth = definition.extDepth
 		}
 		_, jsonContract := definition.handler.(*JSONHandler)
 		prepared = append(prepared, &Route{
@@ -92,8 +102,11 @@ func (r *Router) registerDefinitionsWithCommit(definitions []routeDefinition, co
 			patterns:           patterns,
 			compiled:           compiled,
 			explicitPatterns:   make(map[string]bool),
+			patternDepth:       patternDepth,
 			domain:             domain,
+			domainDepth:        domainDepth,
 			ext:                ext,
+			extDepth:           extDepth,
 			extensionRequired:  extensionRequired,
 			jsonContract:       jsonContract,
 			trailingSlash:      routeHasTrailingSlash(definition.path),

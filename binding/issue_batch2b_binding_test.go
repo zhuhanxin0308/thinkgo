@@ -130,6 +130,33 @@ func TestIssue583RawMessageRequiredAndDefaultContract(t *testing.T) {
 	if err := ValidateType(reflect.TypeFor[invalidNullDefault]()); !errors.Is(err, ErrDefinition) {
 		t.Fatalf("default:null 配合 required 必须返回 ErrDefinition，实际为 %v", err)
 	}
+
+	// 非存在性规则（如 gt:0、array）在 json.RawMessage 上保留解码值语义
+	type rawNumericInput struct {
+		Input
+		Payload json.RawMessage `json:"payload" validate:"gt:0"`
+	}
+	var okNum rawNumericInput
+	if err := Bind(bindingRequest(t, `{"payload":1}`), &okNum); err != nil || string(okNum.Payload) != `1` {
+		t.Fatalf("RawMessage gt:0 对合法正数应通过: payload=%s err=%v", okNum.Payload, err)
+	}
+	var badNum rawNumericInput
+	if err := Bind(bindingRequest(t, `{"payload":0}`), &badNum); err == nil {
+		t.Fatal("RawMessage gt:0 对 0 应校验失败")
+	}
+
+	type rawArrayInput struct {
+		Input
+		Payload json.RawMessage `json:"payload" validate:"array"`
+	}
+	var badArr rawArrayInput
+	if err := Bind(bindingRequest(t, `{"payload":1}`), &badArr); err == nil {
+		t.Fatal("RawMessage array 对标量数值 1 应校验失败")
+	}
+	var okArr rawArrayInput
+	if err := Bind(bindingRequest(t, `{"payload":[1]}`), &okArr); err != nil || string(okArr.Payload) != `[1]` {
+		t.Fatalf("RawMessage array 对 JSON 数组应通过: payload=%s err=%v", okArr.Payload, err)
+	}
 }
 
 func TestIssue583ExplicitNullParticipatesInCrossFieldValidation(t *testing.T) {

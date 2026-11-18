@@ -396,13 +396,14 @@ func validationFieldValue(plan *node, raw any) any {
 			if trimmed == "" || trimmed == "null" {
 				return nil
 			}
-			return json.RawMessage(trimmed)
+			decoder := json.NewDecoder(strings.NewReader(trimmed))
+			decoder.UseNumber()
+			var decoded any
+			if err := decoder.Decode(&decoded); err != nil {
+				return nil
+			}
+			return decoded
 		}
-		encoded, err := json.Marshal(raw)
-		if err != nil || len(encoded) == 0 || string(encoded) == "null" {
-			return nil
-		}
-		return json.RawMessage(encoded)
 	}
 	return raw
 }
@@ -412,6 +413,9 @@ func (state *bindState) validate(plan *node, data map[string]any, target reflect
 		return
 	}
 	options := []validate.Option{validate.CollectAllErrors()}
+	if len(plan.rawJSONFields) > 0 {
+		options = append(options, validate.WithNonNullPresenceFields(plan.rawJSONFields...))
+	}
 	options = append(options, state.options...)
 	result, err := plan.validator.Validate(data, options...)
 	if err != nil {
