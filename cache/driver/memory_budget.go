@@ -41,6 +41,7 @@ const (
 	memoryEntryCharge      = uint64(256)
 	memoryLockCharge       = uint64(128)
 	memoryGraphVisitCharge = uint64(128)
+	memoryTimeCharge       = uint64(64)
 	memoryGraphMaxDepth    = 64
 	memoryGraphMaxNodes    = 65536
 )
@@ -160,10 +161,16 @@ func (g *memoryGraphInspection) inspect(value reflect.Value, depth int) error {
 			}
 		}
 	case reflect.Struct:
+		if value.Type() == reflect.TypeFor[time.Time]() {
+			return g.add(memoryTimeCharge)
+		}
 		for i := 0; i < value.NumField(); i++ {
 			if value.Type().Field(i).PkgPath != "" {
 				if !budgetInlineType(value.Field(i).Type(), depth+1) {
 					return ErrUnsupportedMemoryValue
+				}
+				if err := g.chargeInlineTime(value.Field(i).Type(), depth+1); err != nil {
+					return err
 				}
 				continue
 			}
@@ -200,9 +207,40 @@ func budgetMapKey(t reflect.Type) bool {
 	return false
 }
 
+func (g *memoryGraphInspection) chargeInlineTime(t reflect.Type, depth int) error {
+	if depth > memoryGraphMaxDepth {
+		return ErrMemoryValueTooLarge
+	}
+	if t == reflect.TypeFor[time.Time]() {
+		return g.add(memoryTimeCharge)
+	}
+	switch t.Kind() {
+	case reflect.Array:
+		count := t.Len()
+		if count <= 0 {
+			return nil
+		}
+		for i := 0; i < count; i++ {
+			if err := g.chargeInlineTime(t.Elem(), depth+1); err != nil {
+				return err
+			}
+		}
+	case reflect.Struct:
+		for i := 0; i < t.NumField(); i++ {
+			if err := g.chargeInlineTime(t.Field(i).Type, depth+1); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func budgetInlineType(t reflect.Type, depth int) bool {
 	if depth > memoryGraphMaxDepth {
 		return false
+	}
+	if t == reflect.TypeFor[time.Time]() {
+		return true
 	}
 	if budgetMapKey(t) {
 		return t.Kind() != reflect.String
@@ -298,6 +336,9 @@ func cloneBudgetValue(v reflect.Value, seen map[memoryCloneVisit]reflect.Value) 
 	case reflect.Array, reflect.Struct:
 		result := reflect.New(v.Type()).Elem()
 		result.Set(v)
+		if v.Type() == reflect.TypeFor[time.Time]() {
+			return result
+		}
 		if v.Kind() == reflect.Array {
 			for i := 0; i < v.Len(); i++ {
 				result.Index(i).Set(cloneBudgetValue(v.Index(i), seen))

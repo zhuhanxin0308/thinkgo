@@ -20,6 +20,7 @@ import (
 
 const (
 	defaultStoreName   = "default"
+	defaultTagPrefix   = "tag:"
 	tagMetaPrefix      = cachekey.TagMetadataPrefix
 	tagReversePrefix   = cachekey.TagReverseMetadataPrefix
 	cacheFencePrefix   = "__thinkgo_cache_fence__:"
@@ -101,9 +102,13 @@ type cacheResourceIdentified interface {
 }
 
 type rememberCall struct {
-	done  chan struct{}
-	value interface{}
-	err   error
+	done      chan struct{}
+	value     interface{}
+	err       error
+	sharedCtx context.Context
+	cancel    context.CancelCauseFunc
+	waiters   int
+	finished  bool
 }
 
 type cacheState struct {
@@ -483,15 +488,15 @@ func (c *Cache) RememberContext(ctx context.Context, key string, ttl time.Durati
 	rememberNamespace := c.state.rememberNamespaces[c.storeName]
 	c.state.storesMu.RUnlock()
 	callKey := rememberNamespace + "\x00" + key
-	return c.state.doRememberContext(ctx, callKey, func() (interface{}, error) {
-		if value, found, err := c.GetContext(ctx, key); err != nil || found {
+	return c.state.doRememberContext(ctx, callKey, func(sharedCtx context.Context) (interface{}, error) {
+		if value, found, err := c.GetContext(sharedCtx, key); err != nil || found {
 			return value, err
 		}
 		value, err := callback()
 		if err != nil {
 			return nil, err
 		}
-		if err = c.SetContext(ctx, key, value, ttl); err != nil {
+		if err = c.SetContext(sharedCtx, key, value, ttl); err != nil {
 			return nil, err
 		}
 		return value, nil
@@ -868,17 +873,26 @@ func (c *Cache) trace(action, key string) {
 	}
 }
 
-func (s *cacheState) doRememberContext(ctx context.Context, key string, callback func() (interface{}, error)) (value interface{}, err error) {
+func (s *cacheState) doRememberContext(ctx context.Context, key string, callback func(context.Context) (interface{}, error)) (value interface{}, err error) {
 	if ctx == nil {
 		return nil, ErrInvalidCacheContext
 	}
 	s.rememberMu.Lock()
 	if existing := s.remembering[key]; existing != nil {
+		if err := ctx.Err(); err != nil {
+			s.rememberMu.Unlock()
+			return nil, err
+		}
+		existing.waiters++
 		s.rememberMu.Unlock()
 		select {
 		case <-existing.done:
-			return existing.value, existing.err
+			if existing.err != nil {
+				return nil, existing.err
+			}
+			return cloneRememberValue(existing.value), nil
 		case <-ctx.Done():
+			s.releaseRememberWaiter(key, existing, ctx.Err())
 			return nil, ctx.Err()
 		}
 	}
@@ -886,12 +900,33 @@ func (s *cacheState) doRememberContext(ctx context.Context, key string, callback
 		s.rememberMu.Unlock()
 		return nil, err
 	}
-	call := &rememberCall{done: make(chan struct{})}
+	sharedCtx, cancel := context.WithCancelCause(context.WithoutCancel(ctx))
+	call := &rememberCall{
+		done:      make(chan struct{}),
+		sharedCtx: sharedCtx,
+		cancel:    cancel,
+		waiters:   1,
+	}
 	s.remembering[key] = call
 	s.rememberMu.Unlock()
+
+	var leaderReleased sync.Once
+	releaseLeader := func() {
+		leaderReleased.Do(func() {
+			s.releaseRememberWaiter(key, call, ctx.Err())
+		})
+	}
+	stopWatch := context.AfterFunc(ctx, releaseLeader)
+	defer func() {
+		stopWatch()
+		cancel(nil)
+	}()
 	if err := ctx.Err(); err != nil {
-		s.finishRemember(key, call, nil, err)
-		return nil, err
+		releaseLeader()
+		if !s.hasActiveRememberWaiters(call) {
+			s.finishRemember(key, call, nil, err)
+			return nil, err
+		}
 	}
 
 	callbackReturned := false
@@ -903,23 +938,185 @@ func (s *cacheState) doRememberContext(ctx context.Context, key string, callback
 			// Goexit 没有返回值，必须通知等待者失败，不能永久保留共享加载状态。
 			value, err = nil, errors.New("Remember 回调异常退出")
 		}
-		s.finishRemember(key, call, value, err)
+		sharedValue := value
+		if err == nil {
+			sharedValue = cloneRememberValue(value)
+			value = cloneRememberValue(sharedValue)
+		}
+		s.finishRemember(key, call, sharedValue, err)
 		if recovered != nil {
 			panic(recovered)
 		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			value, err = nil, ctxErr
+		}
 	}()
-	value, err = callback()
+	value, err = callback(sharedCtx)
 	callbackReturned = true
 	return value, err
 }
 
+func (s *cacheState) hasActiveRememberWaiters(call *rememberCall) bool {
+	s.rememberMu.Lock()
+	active := !call.finished && call.waiters > 0
+	s.rememberMu.Unlock()
+	return active
+}
+
+func (s *cacheState) releaseRememberWaiter(key string, call *rememberCall, cause error) {
+	s.rememberMu.Lock()
+	if call.finished {
+		s.rememberMu.Unlock()
+		return
+	}
+	if call.waiters > 0 {
+		call.waiters--
+	}
+	shouldCancel := call.waiters == 0
+	if shouldCancel && s.remembering[key] == call {
+		delete(s.remembering, key)
+	}
+	s.rememberMu.Unlock()
+	if shouldCancel && call.cancel != nil {
+		call.cancel(cause)
+	}
+}
+
 func (s *cacheState) finishRemember(key string, call *rememberCall, value interface{}, err error) {
 	s.rememberMu.Lock()
-	call.value = value
-	call.err = err
-	delete(s.remembering, key)
-	close(call.done)
+	if !call.finished {
+		call.finished = true
+		call.value = value
+		call.err = err
+		if s.remembering[key] == call {
+			delete(s.remembering, key)
+		}
+		close(call.done)
+	}
 	s.rememberMu.Unlock()
+}
+
+type rememberCloneVisit struct {
+	typ      reflect.Type
+	kind     reflect.Kind
+	pointer  uintptr
+	length   int
+	capacity int
+}
+
+// cloneRememberValue 为每个并发 Remember 调用方克隆可变引用，防止并发读写同一 map/slice 崩溃。
+func cloneRememberValue(value interface{}) interface{} {
+	if value == nil {
+		return nil
+	}
+	switch value.(type) {
+	case bool, string,
+		int, int8, int16, int32, int64,
+		uint, uint8, uint16, uint32, uint64, uintptr,
+		float32, float64, complex64, complex128, time.Time:
+		return value
+	}
+	cloned := cloneRememberReflect(reflect.ValueOf(value), make(map[rememberCloneVisit]reflect.Value))
+	if !cloned.IsValid() {
+		return nil
+	}
+	return cloned.Interface()
+}
+
+func cloneRememberReflect(value reflect.Value, visited map[rememberCloneVisit]reflect.Value) reflect.Value {
+	if !value.IsValid() {
+		return value
+	}
+	switch value.Kind() {
+	case reflect.Interface:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		cloned := cloneRememberReflect(value.Elem(), visited)
+		result := reflect.New(value.Type()).Elem()
+		if cloned.IsValid() && cloned.Type().AssignableTo(value.Type()) {
+			result.Set(cloned)
+		}
+		return result
+	case reflect.Pointer:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		visit := rememberCloneVisit{typ: value.Type(), kind: value.Kind(), pointer: value.Pointer()}
+		if existing, ok := visited[visit]; ok {
+			return existing
+		}
+		result := reflect.New(value.Type().Elem())
+		if result.Type() != value.Type() {
+			result = result.Convert(value.Type())
+		}
+		visited[visit] = result
+		result.Elem().Set(cloneRememberReflect(value.Elem(), visited))
+		return result
+	case reflect.Map:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		visit := rememberCloneVisit{typ: value.Type(), kind: value.Kind(), pointer: value.Pointer()}
+		if existing, ok := visited[visit]; ok {
+			return existing
+		}
+		result := reflect.MakeMapWithSize(value.Type(), value.Len())
+		visited[visit] = result
+		iter := value.MapRange()
+		for iter.Next() {
+			result.SetMapIndex(cloneRememberReflect(iter.Key(), visited), cloneRememberReflect(iter.Value(), visited))
+		}
+		return result
+	case reflect.Slice:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		visit := rememberCloneVisit{
+			typ:      value.Type(),
+			kind:     value.Kind(),
+			pointer:  value.Pointer(),
+			length:   value.Len(),
+			capacity: value.Cap(),
+		}
+		if existing, ok := visited[visit]; ok {
+			return existing
+		}
+		result := reflect.MakeSlice(value.Type(), value.Len(), value.Len())
+		visited[visit] = result
+		switch value.Type().Elem().Kind() {
+		case reflect.Bool, reflect.String,
+			reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+			reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr,
+			reflect.Float32, reflect.Float64, reflect.Complex64, reflect.Complex128:
+			reflect.Copy(result, value)
+			return result
+		}
+		for index := 0; index < value.Len(); index++ {
+			result.Index(index).Set(cloneRememberReflect(value.Index(index), visited))
+		}
+		return result
+	case reflect.Array:
+		result := reflect.New(value.Type()).Elem()
+		for index := 0; index < value.Len(); index++ {
+			result.Index(index).Set(cloneRememberReflect(value.Index(index), visited))
+		}
+		return result
+	case reflect.Struct:
+		if value.Type() == reflect.TypeFor[time.Time]() {
+			return value
+		}
+		result := reflect.New(value.Type()).Elem()
+		result.Set(value)
+		for index := 0; index < value.NumField(); index++ {
+			if result.Field(index).CanSet() {
+				result.Field(index).Set(cloneRememberReflect(value.Field(index), visited))
+			}
+		}
+		return result
+	default:
+		return value
+	}
 }
 
 func validatePublicCacheKey(key string) error {

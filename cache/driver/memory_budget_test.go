@@ -69,11 +69,18 @@ func TestMemoryBudgetGraphsAndOwnership(t *testing.T) {
 		number int
 	}
 	integer := 7
+	fixedTime := time.Date(2026, 11, 18, 12, 30, 0, 123, time.FixedZone("CST", 8*3600))
+	type privateTimestamp struct {
+		Label string
+		at    time.Time
+	}
 	inputs := []interface{}{
 		nil, true, int8(-1), uint64(9), float64(2), complex128(3), "text",
+		fixedTime, &fixedTime, []time.Time{fixedTime}, [1]time.Time{fixedTime},
+		privateTimestamp{Label: "ok", at: fixedTime},
 		namedPointer(&integer), (*int)(nil), []int(nil), map[string]int(nil),
 		namedBytes{1, 2}, [2]string{"a", "b"}, exported{Values: []string{"value"}, number: 4},
-		map[string]interface{}{"a": []int{1, 2}, "b": nil},
+		map[string]interface{}{"a": []int{1, 2}, "b": nil, "now": fixedTime},
 	}
 	for _, input := range inputs {
 		clone, _, err := budgetSnapshot(input, 1<<20)
@@ -131,7 +138,7 @@ func TestMemoryBudgetRejectsUnaccountableGraphsBeforeCommit(t *testing.T) {
 	}
 	unsupported := []interface{}{
 		make(chan int), (func())(nil), unsafe.Pointer(&integer), uintptr(1),
-		hidden{value: "hidden"}, time.Now(), map[*int]int{&integer: 1}, map[interface{}]int{1: 1}, map[float64]int{1: 1}, map[complex128]int{1: 1},
+		hidden{value: "hidden"}, map[time.Time]int{time.Now(): 1}, map[*int]int{&integer: 1}, map[interface{}]int{1: 1}, map[float64]int{1: 1}, map[complex128]int{1: 1},
 	}
 	m := testBudgetMemory(t, 2, 2048, 4096, 2)
 	if err := m.Set("existing", "keep", 0); err != nil {

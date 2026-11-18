@@ -42,11 +42,17 @@ func (c *Cache) ForgetContext(ctx context.Context, key string) error {
 			if found {
 				deleted, deleteErr := c.deleteAtFenceContext(ctx, driver, key, fence)
 				if deleteErr != nil || !deleted {
+					if deleteErr == nil {
+						return c.completeKeyInvalidation(context.WithoutCancel(ctx), driver, []string{key}, fence)
+					}
 					return deleteErr
 				}
 			}
 			_, cleanupErr := c.unbindKeyFromAllTagsLockedContext(ctx, driver, key)
-			return cleanupErr
+			if cleanupErr != nil {
+				return cleanupErr
+			}
+			return c.completeKeyInvalidation(context.WithoutCancel(ctx), driver, []string{key}, fence)
 		}
 		rollback, err := c.unbindKeyFromAllTagsLockedContext(ctx, driver, key)
 		if err != nil {

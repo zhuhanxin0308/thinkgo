@@ -13,29 +13,63 @@ var errCacheAtomicFenceStale = errors.New("缓存原子操作需要重新分配�
 // maxCacheAtomicRebaseAttempts 与内置 Redis 单次乐观事务预算一致，限制持续竞争时的领票次数。
 const maxCacheAtomicRebaseAttempts = 64
 
+type staleAtomicFenceError struct {
+	observedGeneration uint64
+}
+
+func (staleAtomicFenceError) Error() string {
+	return errCacheAtomicFenceStale.Error()
+}
+
+func (staleAtomicFenceError) Unwrap() error {
+	return errCacheAtomicFenceStale
+}
+
 // withFreshAtomicFence 仅在后端尚未提交且票据过时时重入；真实失效与业务错误直接返回。
 // 领取全局票据必须在单键原子锁之外，避免内存互斥锁或文件分片锁的嵌套死锁。
 func (c *Cache) withFreshAtomicFence(ctx context.Context, driver Driver, key string, run func(uint64, uint64, uint64) error) (generation, origin uint64, err error) {
 	if !cacheDriverSupportsAtomicFencing(driver) {
 		return 0, 0, run(0, 0, 0)
 	}
+	var floor uint64
 	for attempt := 0; attempt < maxCacheAtomicRebaseAttempts; attempt++ {
 		if err = ctx.Err(); err != nil {
 			return generation, origin, err
 		}
-		generation, err = c.nextFenceGenerationContext(ctx, driver)
+		invalidation, readErr := c.invalidationForKey(ctx, driver, key)
+		if readErr != nil {
+			return generation, origin, readErr
+		}
+		if origin == 0 {
+			floor = max(floor, invalidation)
+		}
+		generation, err = c.allocateFenceGenerationAboveContext(ctx, driver, floor)
 		if err != nil {
 			return generation, origin, err
 		}
 		if origin == 0 {
 			origin = generation
 		}
-		invalidation, readErr := c.invalidationForKey(ctx, driver, key)
+		invalidation, readErr = c.invalidationForKey(ctx, driver, key)
 		if readErr != nil {
 			return generation, origin, readErr
 		}
-		if err = run(generation, origin, invalidation); !errors.Is(err, errCacheAtomicFenceStale) {
+		err = run(generation, origin, invalidation)
+		if !errors.Is(err, errCacheAtomicFenceStale) {
 			return generation, origin, err
+		}
+		var staleErr staleAtomicFenceError
+		if errors.As(err, &staleErr) && staleErr.observedGeneration >= generation {
+			currentSeq, seqErr := c.currentFenceSequenceContext(ctx, driver)
+			if seqErr != nil {
+				return generation, origin, seqErr
+			}
+			if staleErr.observedGeneration == generation || currentSeq < staleErr.observedGeneration {
+				if healErr := c.raiseFenceSequenceFloorContext(ctx, driver, staleErr.observedGeneration); healErr != nil {
+					return generation, origin, healErr
+				}
+				floor = max(floor, staleErr.observedGeneration)
+			}
 		}
 	}
 	return generation, origin, fmt.Errorf("%w: 重新分配提交代际超过 %d 次", contract.ErrAtomicUpdateConflict, maxCacheAtomicRebaseAttempts)
@@ -52,7 +86,7 @@ func decodeAtomicCacheValue(raw interface{}, found bool, generation, started, in
 			return nil, false, origin, err
 		}
 		if generation > 0 && currentGeneration >= generation {
-			return nil, false, origin, errCacheAtomicFenceStale
+			return nil, false, origin, staleAtomicFenceError{observedGeneration: currentGeneration}
 		}
 		if invalidation == 0 || currentOrigin > invalidation {
 			value = decoded

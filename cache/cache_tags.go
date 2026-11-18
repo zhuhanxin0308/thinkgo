@@ -6,9 +6,12 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/cachekey"
 )
 
 // TaggedCache 提供带标签的缓存读写能力。
@@ -143,37 +146,21 @@ func (c *TaggedCache) FlushContext(ctx context.Context) error {
 				keys[key] = append(keys[key], tag)
 			}
 		}
-		fence := uint64(0)
-		if cacheDriverSupportsAtomicFencing(driver) {
-			members := make([]string, 0, len(keys))
-			for key := range keys {
-				members = append(members, key)
-			}
-			fence, err = c.cache.beginKeyInvalidation(ctx, driver, members)
-			if err != nil {
-				return err
-			}
-		}
-		liveKeys := make(map[string]bool, len(keys))
+		// 先在标签锁内核验双向标签证明，筛除缺少反向证明的 forwardGhosts，绝不提前推进存活无辜业务键的失效水位。
+		validKeys := make([]string, 0, len(keys))
 		forwardGhosts := make(map[string][]string)
-		preservedKeys := make(map[string]bool)
-		// 变更前区分已过期幽灵成员和仍存在的业务值；只有后者要求完整反向关系。
+		deadGhosts := make(map[string][]string)
 		for key, requiredTags := range keys {
 			raw, found, valueErr := getCacheValueContext(ctx, driver, key)
 			if valueErr != nil {
 				return valueErr
 			}
-			if !found {
-				continue
-			}
-			if fence > 0 {
-				_, generation, _, decodeErr := decodeCacheValueAtOrigin(raw)
-				if decodeErr != nil {
-					return decodeErr
-				}
-				if generation > fence {
-					preservedKeys[key] = true
-					continue
+			visible := false
+			if found {
+				var visErr error
+				_, visible, visErr = c.cache.visibleCacheValue(ctx, driver, key, raw)
+				if visErr != nil {
+					return visErr
 				}
 			}
 			reverse, reverseErr := c.cache.reverseTagsLockedContext(ctx, driver, key)
@@ -184,19 +171,27 @@ func (c *TaggedCache) FlushContext(ctx context.Context) error {
 			for _, tag := range requiredTags {
 				if !containsString(reverse, tag) {
 					consistent = false
+					break
 				}
 			}
 			if consistent {
-				liveKeys[key] = true
-			} else {
+				validKeys = append(validKeys, key)
+			} else if visible {
 				forwardGhosts[key] = requiredTags
+			} else {
+				deadGhosts[key] = requiredTags
+			}
+		}
+		sort.Strings(validKeys)
+		fence := uint64(0)
+		if cacheDriverSupportsAtomicFencing(driver) && len(validKeys) > 0 {
+			fence, err = c.cache.beginKeyInvalidation(ctx, driver, validKeys)
+			if err != nil {
+				return err
 			}
 		}
 		resultErr := error(nil)
-		for key, requiredTags := range keys {
-			if liveKeys[key] || preservedKeys[key] || len(forwardGhosts[key]) > 0 {
-				continue
-			}
+		for key, requiredTags := range deadGhosts {
 			_, cleanupErr := c.cache.removeKeyFromTagsLockedContext(ctx, driver, key, requiredTags)
 			resultErr = errors.Join(resultErr, cleanupErr)
 		}
@@ -204,17 +199,49 @@ func (c *TaggedCache) FlushContext(ctx context.Context) error {
 			_, cleanupErr := c.cache.removeForwardMembersLockedContext(ctx, driver, key, tags)
 			resultErr = errors.Join(resultErr, cleanupErr)
 		}
-		for key := range liveKeys {
+		completedKeys := make([]string, 0, len(validKeys))
+		for _, key := range validKeys {
+			raw, found, valueErr := getCacheValueContext(ctx, driver, key)
+			if valueErr != nil {
+				resultErr = errors.Join(resultErr, valueErr)
+				continue
+			}
+			if !found {
+				_, cleanupErr := c.cache.removeKeyFromTagsLockedContext(ctx, driver, key, keys[key])
+				resultErr = errors.Join(resultErr, cleanupErr)
+				if cleanupErr == nil {
+					completedKeys = append(completedKeys, key)
+				}
+				continue
+			}
+			if fence > 0 {
+				_, generation, _, decodeErr := decodeCacheValueAtOrigin(raw)
+				if decodeErr != nil {
+					resultErr = errors.Join(resultErr, decodeErr)
+					continue
+				}
+				if generation > fence {
+					completedKeys = append(completedKeys, key)
+					continue
+				}
+			}
 			deleted, deleteErr := c.cache.deleteAtFenceContext(ctx, driver, key, fence)
 			if deleteErr != nil {
 				resultErr = errors.Join(resultErr, deleteErr)
 				continue
 			}
 			if !deleted {
+				completedKeys = append(completedKeys, key)
 				continue
 			}
 			_, unbindErr := c.cache.unbindKeyFromAllTagsLockedContext(ctx, driver, key)
 			resultErr = errors.Join(resultErr, unbindErr)
+			if unbindErr == nil {
+				completedKeys = append(completedKeys, key)
+			}
+		}
+		if fence > 0 && len(completedKeys) > 0 {
+			resultErr = errors.Join(resultErr, c.cache.completeKeyInvalidation(context.WithoutCancel(ctx), driver, completedKeys, fence))
 		}
 		return resultErr
 	})
@@ -426,13 +453,35 @@ func cloneStrings(values []string) []string {
 	return append([]string(nil), values...)
 }
 
+func (c *Cache) resolveTagPrefix() string {
+	if c == nil || c.state == nil {
+		return defaultTagPrefix
+	}
+	c.state.storesMu.RLock()
+	tagPrefix := c.state.storeOptions[c.storeName].TagPrefix
+	c.state.storesMu.RUnlock()
+	if tagPrefix == "" {
+		return defaultTagPrefix
+	}
+	return tagPrefix
+}
+
 func (c *Cache) tagMetaKey(tag string) string {
-	return tagMetaPrefix + cacheMetadataScope + ":" + tag
+	tagPrefix := c.resolveTagPrefix()
+	if tagPrefix == defaultTagPrefix {
+		return tagMetaPrefix + cacheMetadataScope + ":" + tag
+	}
+	return tagMetaPrefix + "custom:" + cachekey.TagNamespace(tagPrefix) + cacheMetadataScope + ":" + tag
 }
 
 func (c *Cache) tagReverseKey(key string) string {
 	digest := sha256.Sum256([]byte(key))
-	return tagReversePrefix + cacheMetadataScope + ":" + hex.EncodeToString(digest[:])
+	hexDigest := hex.EncodeToString(digest[:])
+	tagPrefix := c.resolveTagPrefix()
+	if tagPrefix == defaultTagPrefix {
+		return tagReversePrefix + cacheMetadataScope + ":" + hexDigest
+	}
+	return tagReversePrefix + "custom:" + cachekey.TagNamespace(tagPrefix) + cacheMetadataScope + ":" + hexDigest
 }
 
 func validateCacheTag(tag string) error {

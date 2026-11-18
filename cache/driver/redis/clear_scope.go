@@ -4,28 +4,30 @@ import (
 	"context"
 	"errors"
 	"strings"
+
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/cachekey"
 )
 
 // ErrAmbiguousRedisClearScope 表示扫描范围包含无法确认归属的锁或 fencing
 // 元数据候选键。调用方必须缩小范围或隔离数据库，不能把部分清理当作成功。
 var ErrAmbiguousRedisClearScope = errors.New("Redis 清理范围包含归属不明确的保护元数据")
 
-// redisClearKeyEligible 不根据值猜测锁类型：已知命名空间的保留键直接保护；
-// 其余包含保留标记的键存在业务键/外部命名空间歧义，失败关闭而非静默跳过。
-// scopePrefix 可以是比 driverPrefix 更窄的显式业务命名空间。
+// redisClearKeyEligible 按精确保留前缀与 canonical namespace 帧边界识别内部锁和
+// fencing 元数据键；普通业务键中间包含保留标记文本不会阻塞清理，只有损坏或未知版本的
+// __thinkgo_namespace__: 帧携带保护标记时才失败关闭。
 func redisClearKeyEligible(key, driverPrefix, scopePrefix string) (bool, error) {
 	if !strings.HasPrefix(key, driverPrefix) || !strings.HasPrefix(key, scopePrefix) {
 		return false, nil
 	}
 	for _, prefix := range []string{driverPrefix, scopePrefix} {
-		if strings.HasPrefix(key, prefix+managerLockKeyPrefix) ||
-			strings.HasPrefix(key, prefix+cacheFenceMetadataPrefix) {
+		logical := strings.TrimPrefix(key, prefix)
+		protected, ambiguous := cachekey.ClassifyProtectedMetadata(logical)
+		if ambiguous {
+			return false, errors.Join(ErrUnsafeRedisFlush, ErrAmbiguousRedisClearScope)
+		}
+		if protected {
 			return false, nil
 		}
-	}
-	logical := strings.TrimPrefix(key, driverPrefix)
-	if strings.Contains(logical, managerLockKeyPrefix) || strings.Contains(logical, cacheFenceMetadataPrefix) {
-		return false, errors.Join(ErrUnsafeRedisFlush, ErrAmbiguousRedisClearScope)
 	}
 	return true, nil
 }

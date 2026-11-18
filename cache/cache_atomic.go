@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"github.com/zhuhanxin0308/thinkgo/v3/cache/contract"
 )
 
 var (
@@ -16,7 +18,7 @@ var (
 	// ErrCacheNamespaceClearUnsupported 表示带前缀的命名空间无法安全局部清理。
 	ErrCacheNamespaceClearUnsupported = errors.New("缓存驱动不支持命名空间清理")
 	// ErrCorruptCacheEnvelope 表示内部 fencing 信封损坏。
-	ErrCorruptCacheEnvelope = errors.New("缓存代际信封损坏")
+	ErrCorruptCacheEnvelope = contract.ErrCorruptCacheEnvelope
 	// ErrCacheFenceUnavailable 表示驱动无法提供有效的单调 fencing 代际。
 	ErrCacheFenceUnavailable = errors.New("缓存 fencing 代际不可用")
 )

@@ -19,13 +19,23 @@ var (
 	ErrInvalidCounterValue  = contract.ErrInvalidCounterValue
 	ErrInvalidCounterStep   = contract.ErrInvalidCounterStep
 	ErrInvalidDriverTTL     = contract.ErrInvalidDriverTTL
+	ErrInvalidCacheValue    = contract.ErrInvalidCacheValue
+	ErrNilAtomicUpdate      = contract.ErrNilAtomicUpdate
+	ErrAtomicUpdateConflict = contract.ErrAtomicUpdateConflict
 )
 
 func validateDriverTTL(ttl time.Duration) error           { return contract.ValidateDriverTTL(ttl) }
 func validateCounterStep(step int64) error                { return contract.ValidateCounterStep(step) }
+func validateCacheNumber(value interface{}) error         { return contract.ValidateCacheNumber(value) }
 func strictCounterValue(value interface{}) (int64, error) { return contract.StrictCounterValue(value) }
 func decodeCounterJSON(encoded []byte) (interface{}, error) {
 	return contract.DecodeCounterJSON(encoded)
+}
+func encodePreciseCacheInteger(value interface{}) (interface{}, string) {
+	return contract.EncodePreciseCacheInteger(value)
+}
+func decodePreciseCacheInteger(value interface{}, encoding string) (interface{}, error) {
+	return contract.DecodePreciseCacheInteger(value, encoding)
 }
 func checkedCounterAdd(value, step int64) (int64, error) {
 	return contract.CheckedCounterAdd(value, step)

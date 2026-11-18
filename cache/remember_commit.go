@@ -2,6 +2,7 @@ package cache
 
 import (
 	"context"
+	"errors"
 	"time"
 )
 
@@ -29,38 +30,60 @@ func (c *Cache) commitRememberValue(ctx context.Context, key string, value inter
 	c.trace("SET", key)
 	return c.mutateWithTagRepairContext(ctx, driver, key, func() error {
 		fenced := cacheDriverSupportsAtomicFencing(driver)
-		generation := uint64(0)
-		if fenced {
-			var err error
-			generation, err = c.nextFenceGenerationContext(ctx, driver)
+		if !fenced {
+			committed, err := driver.(LockGuardedUpdater).UpdateIfLockOwnerContext(ctx, key, ttl, lock.key, lock.owner, func(interface{}, bool) (interface{}, bool, error) {
+				return value, false, nil
+			})
 			if err != nil {
 				return err
 			}
+			if !committed {
+				return ErrCacheLockLost
+			}
+			return nil
 		}
-		committed, err := driver.(LockGuardedUpdater).UpdateIfLockOwnerContext(ctx, key, ttl, lock.key, lock.owner, func(raw interface{}, found bool) (interface{}, bool, error) {
-			if !fenced {
-				return value, false, nil
-			}
-			if found {
-				_, current, enveloped, err := decodeCacheValueEnvelope(raw)
-				if err != nil {
-					return nil, false, err
-				}
-				if enveloped && current > generation {
-					return nil, false, ErrCacheLockLost
-				}
-			}
-			return newCacheValueEnvelope(generation, value), false, nil
-		})
+		floor, err := c.invalidationForKey(ctx, driver, key)
 		if err != nil {
 			return err
 		}
-		if !committed {
-			return ErrCacheLockLost
-		}
-		if fenced {
+		for attempt := 0; attempt < maxCacheAtomicRebaseAttempts; attempt++ {
+			generation, err := c.allocateFenceGenerationAboveContext(ctx, driver, floor)
+			if err != nil {
+				return err
+			}
+			var observed uint64
+			committed, err := driver.(LockGuardedUpdater).UpdateIfLockOwnerContext(ctx, key, ttl, lock.key, lock.owner, func(raw interface{}, found bool) (interface{}, bool, error) {
+				if found {
+					_, current, enveloped, err := decodeCacheValueEnvelope(raw)
+					if err != nil {
+						return nil, false, err
+					}
+					if enveloped && current >= generation {
+						observed = current
+						return nil, false, errCacheSequenceBehindEnvelope
+					}
+				}
+				return newCacheValueEnvelope(generation, value), false, nil
+			})
+			if errors.Is(err, errCacheSequenceBehindEnvelope) {
+				currentSeq, seqErr := c.currentFenceSequenceContext(ctx, driver)
+				if seqErr != nil {
+					return seqErr
+				}
+				if observed > generation && currentSeq >= observed {
+					return ErrCacheLockLost
+				}
+				floor = max(floor, observed)
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			if !committed {
+				return ErrCacheLockLost
+			}
 			return c.verifyFenceCommitContext(ctx, driver, key, generation)
 		}
-		return nil
+		return ErrCacheFenceUnavailable
 	})
 }

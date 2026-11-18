@@ -7,16 +7,20 @@ import (
 	"fmt"
 	"math"
 	"strconv"
-	"strings"
 	"time"
+
+	"github.com/zhuhanxin0308/thinkgo/v3/cache/contract"
 )
 
 const (
 	cacheValueEnvelopeMarker = "thinkgo-cache-value-v1"
-	cacheIntegerEncoding     = "integer:"
+	cacheIntegerEncoding     = contract.PreciseIntegerEncodingPrefix
 )
 
-var errCacheFenceNoChange = errors.New("缓存 fencing 无需变更")
+var (
+	errCacheFenceNoChange          = errors.New("缓存 fencing 无需变更")
+	errCacheSequenceBehindEnvelope = errors.New("缓存代际序列落后于已存信封")
+)
 
 type cacheValueEnvelope struct {
 	Marker     string      `json:"__thinkgo_cache_envelope"`
@@ -47,73 +51,11 @@ func newAtomicCacheValueEnvelope(generation, origin uint64, value interface{}) c
 
 // encodePreciseCacheInteger 避免 int64、uint64 和 json.Number 经 JSON 后端转成 float64 丢失精度。
 func encodePreciseCacheInteger(value interface{}) (interface{}, string) {
-	switch typed := value.(type) {
-	case int:
-		if int64(typed) > 1<<53 || int64(typed) < -(1<<53) {
-			return strconv.FormatInt(int64(typed), 10), cacheIntegerEncoding + "int"
-		}
-	case int64:
-		return strconv.FormatInt(typed, 10), cacheIntegerEncoding + "int64"
-	case uint:
-		if uint64(typed) > 1<<53 {
-			return strconv.FormatUint(uint64(typed), 10), cacheIntegerEncoding + "uint"
-		}
-	case uint64:
-		return strconv.FormatUint(typed, 10), cacheIntegerEncoding + "uint64"
-	case json.Number:
-		if _, err := strconv.ParseInt(typed.String(), 10, 64); err == nil {
-			return typed.String(), cacheIntegerEncoding + "json-number"
-		}
-		if validCacheJSONInteger(typed.String()) {
-			return typed.String(), cacheIntegerEncoding + "json-number-wide"
-		}
-	}
-	return value, ""
+	return contract.EncodePreciseCacheInteger(value)
 }
 
 func decodePreciseCacheInteger(value interface{}, encoding string) (interface{}, error) {
-	if encoding == "" {
-		return value, nil
-	}
-	text, ok := value.(string)
-	if !ok || !strings.HasPrefix(encoding, cacheIntegerEncoding) {
-		return nil, ErrCorruptCacheEnvelope
-	}
-	kind := strings.TrimPrefix(encoding, cacheIntegerEncoding)
-	switch kind {
-	case "json-number-wide":
-		if !validCacheJSONInteger(text) {
-			return nil, ErrCorruptCacheEnvelope
-		}
-		return json.Number(text), nil
-	case "int", "int64", "json-number":
-		parsed, err := strconv.ParseInt(text, 10, 64)
-		if err != nil {
-			return nil, ErrCorruptCacheEnvelope
-		}
-		switch kind {
-		case "int":
-			if strconv.IntSize == 32 && (parsed < math.MinInt32 || parsed > math.MaxInt32) {
-				return nil, ErrCorruptCacheEnvelope
-			}
-			return int(parsed), nil
-		case "json-number":
-			return json.Number(text), nil
-		default:
-			return parsed, nil
-		}
-	case "uint", "uint64":
-		parsed, err := strconv.ParseUint(text, 10, 64)
-		if err != nil || kind == "uint" && strconv.IntSize == 32 && parsed > math.MaxUint32 {
-			return nil, ErrCorruptCacheEnvelope
-		}
-		if kind == "uint" {
-			return uint(parsed), nil
-		}
-		return parsed, nil
-	default:
-		return nil, ErrCorruptCacheEnvelope
-	}
+	return contract.DecodePreciseCacheInteger(value, encoding)
 }
 
 // decodeCacheValueEnvelope 同时兼容内存结构、JSON 后端 map 和升级前原始值。
@@ -196,6 +138,9 @@ func cacheDriverSupportsAtomicFencing(driver Driver) bool {
 	if capability, ok := driver.(interface{ supportsAtomicFencing() bool }); ok {
 		return capability.supportsAtomicFencing()
 	}
+	if capability, ok := driver.(interface{ SupportsAtomicFencing() bool }); ok {
+		return capability.SupportsAtomicFencing()
+	}
 	_, atomic := driver.(AtomicUpdater)
 	_, preservesTTL := driver.(TTLAtomicUpdater)
 	return atomic && preservesTTL
@@ -214,6 +159,10 @@ func (c *Cache) nextFenceGeneration(driver Driver) (uint64, error) {
 }
 
 func (c *Cache) nextFenceGenerationContext(ctx context.Context, driver Driver) (uint64, error) {
+	return c.incFenceSequenceContext(ctx, driver, 1)
+}
+
+func (c *Cache) incFenceSequenceContext(ctx context.Context, driver Driver, step int64) (uint64, error) {
 	if ctx == nil {
 		return 0, ErrInvalidCacheContext
 	}
@@ -223,9 +172,9 @@ func (c *Cache) nextFenceGenerationContext(ctx context.Context, driver Driver) (
 	var generation int64
 	var err error
 	if contextual, ok := driver.(ContextualIncrementer); ok {
-		generation, err = contextual.IncContext(ctx, c.fenceSequenceKey(), 1)
+		generation, err = contextual.IncContext(ctx, c.fenceSequenceKey(), step)
 	} else {
-		generation, err = driver.Inc(c.fenceSequenceKey(), 1)
+		generation, err = driver.Inc(c.fenceSequenceKey(), step)
 	}
 	if err != nil {
 		return 0, err
@@ -234,6 +183,60 @@ func (c *Cache) nextFenceGenerationContext(ctx context.Context, driver Driver) (
 		return 0, ErrCacheFenceUnavailable
 	}
 	return uint64(generation), nil
+}
+
+func (c *Cache) currentFenceSequenceContext(ctx context.Context, driver Driver) (uint64, error) {
+	raw, found, err := getCacheValueContext(ctx, driver, c.fenceSequenceKey())
+	if err != nil || !found {
+		return 0, err
+	}
+	if f, ok := raw.(float64); ok && f > math.MaxInt64 {
+		return math.MaxInt64, nil
+	}
+	return parseFenceGenerationValue(raw)
+}
+
+// raiseFenceSequenceFloorContext 在代际序列键被淘汰或重建后原子抬升序列基值，避免后续写入永久报 ErrCacheLockLost。
+func (c *Cache) raiseFenceSequenceFloorContext(ctx context.Context, driver Driver, floor uint64) error {
+	if floor == 0 {
+		return nil
+	}
+	if floor >= uint64(math.MaxInt64) {
+		return ErrCacheFenceUnavailable
+	}
+	floorValue := int64(floor)
+	err := atomicUpdateCacheValueContext(ctx, driver, c.fenceSequenceKey(), 0, func(raw interface{}, found bool) (interface{}, bool, error) {
+		if found {
+			if f, ok := raw.(float64); ok && f >= float64(floor) {
+				return nil, false, errCacheFenceNoChange
+			}
+			if current, parseErr := parseFenceGenerationValue(raw); parseErr == nil && current >= floor {
+				return nil, false, errCacheFenceNoChange
+			}
+		}
+		return floorValue, false, nil
+	})
+	if errors.Is(err, errCacheFenceNoChange) {
+		return nil
+	}
+	return err
+}
+
+// allocateFenceGenerationAboveContext 分配严格大于 floor 的单调代际；若序列回退则原子自愈后重试。
+func (c *Cache) allocateFenceGenerationAboveContext(ctx context.Context, driver Driver, floor uint64) (uint64, error) {
+	for attempt := 0; attempt < maxCacheAtomicRebaseAttempts; attempt++ {
+		generation, err := c.nextFenceGenerationContext(ctx, driver)
+		if err != nil {
+			return 0, err
+		}
+		if generation > floor {
+			return generation, nil
+		}
+		if err := c.raiseFenceSequenceFloorContext(ctx, driver, floor); err != nil {
+			return 0, err
+		}
+	}
+	return 0, ErrCacheFenceUnavailable
 }
 
 func (c *Cache) currentInvalidationGeneration(ctx context.Context, driver Driver) (uint64, error) {
@@ -272,25 +275,43 @@ func parseFenceGenerationValue(raw interface{}) (uint64, error) {
 	return 0, ErrCacheFenceUnavailable
 }
 
-// beginFenceInvalidationContext 先发布单调失效代际，再允许删除旧值。
+// beginFenceInvalidationContext 先发布单调失效代际，再允许删除旧值；序列回退时基于已有全局水位自愈。
 func (c *Cache) beginFenceInvalidationContext(ctx context.Context, driver Driver) (uint64, error) {
-	generation, err := c.nextFenceGenerationContext(ctx, driver)
-	if err != nil {
-		return 0, err
-	}
-	err = atomicUpdateCacheValueContext(ctx, driver, c.fenceInvalidationKey(), 0, func(raw interface{}, found bool) (interface{}, bool, error) {
-		if found {
-			current, parseErr := parseFenceGenerationValue(raw)
-			if parseErr != nil {
-				return nil, false, parseErr
-			}
-			if current >= generation {
-				return raw, false, nil
-			}
+	var floor uint64
+	for attempt := 0; attempt < maxCacheAtomicRebaseAttempts; attempt++ {
+		generation, err := c.allocateFenceGenerationAboveContext(ctx, driver, floor)
+		if err != nil {
+			return 0, err
 		}
-		return strconv.FormatUint(generation, 10), false, nil
-	})
-	return generation, err
+		var observed uint64
+		err = atomicUpdateCacheValueContext(ctx, driver, c.fenceInvalidationKey(), 0, func(raw interface{}, found bool) (interface{}, bool, error) {
+			if found {
+				current, parseErr := parseFenceGenerationValue(raw)
+				if parseErr != nil {
+					return nil, false, parseErr
+				}
+				if current >= generation {
+					observed = current
+					return nil, false, errCacheSequenceBehindEnvelope
+				}
+			}
+			return strconv.FormatUint(generation, 10), false, nil
+		})
+		if errors.Is(err, errCacheSequenceBehindEnvelope) {
+			currentSeq, seqErr := c.currentFenceSequenceContext(ctx, driver)
+			if seqErr != nil {
+				return 0, seqErr
+			}
+			if currentSeq >= observed && observed > generation {
+				// 另一并发全局清理已推进更高水位，无需覆盖，但返回实际生效的本轮栅栏。
+				return generation, nil
+			}
+			floor = max(floor, observed)
+			continue
+		}
+		return generation, err
+	}
+	return 0, ErrCacheFenceUnavailable
 }
 
 func atomicUpdateCacheValueContext(ctx context.Context, driver Driver, key string, ttl time.Duration, update func(interface{}, bool) (interface{}, bool, error)) error {
@@ -342,32 +363,62 @@ func (c *Cache) writeFencedCacheValueContext(ctx context.Context, driver Driver,
 	if !cacheDriverSupportsAtomicFencing(driver) {
 		return setCacheValueContext(ctx, driver, key, value, ttl)
 	}
-	generation, err := c.nextFenceGenerationContext(ctx, driver)
+	floor, err := c.invalidationForKey(ctx, driver, key)
 	if err != nil {
 		return err
 	}
-	if err = c.commitFencedValueContext(ctx, driver, key, value, ttl, generation); err != nil {
-		return err
+	for attempt := 0; attempt < maxCacheAtomicRebaseAttempts; attempt++ {
+		generation, err := c.allocateFenceGenerationAboveContext(ctx, driver, floor)
+		if err != nil {
+			return err
+		}
+		observed, commitErr := c.commitFencedValueObservedContext(ctx, driver, key, value, ttl, generation)
+		if errors.Is(commitErr, errCacheSequenceBehindEnvelope) {
+			currentSeq, seqErr := c.currentFenceSequenceContext(ctx, driver)
+			if seqErr != nil {
+				return seqErr
+			}
+			if observed > generation && currentSeq >= observed {
+				return ErrCacheLockLost
+			}
+			floor = max(floor, observed)
+			continue
+		}
+		if commitErr != nil {
+			return commitErr
+		}
+		return c.verifyFenceCommitContext(ctx, driver, key, generation)
 	}
-	return c.verifyFenceCommitContext(ctx, driver, key, generation)
+	return ErrCacheFenceUnavailable
 }
 
 func (c *Cache) commitFencedValueContext(ctx context.Context, driver Driver, key string, value interface{}, ttl time.Duration, generation uint64) error {
-	if err := validateCacheNumber(value); err != nil {
-		return err
+	_, err := c.commitFencedValueObservedContext(ctx, driver, key, value, ttl, generation)
+	if errors.Is(err, errCacheSequenceBehindEnvelope) {
+		return ErrCacheLockLost
 	}
-	return atomicUpdateCacheValueContext(ctx, driver, key, ttl, func(raw interface{}, found bool) (interface{}, bool, error) {
+	return err
+}
+
+func (c *Cache) commitFencedValueObservedContext(ctx context.Context, driver Driver, key string, value interface{}, ttl time.Duration, generation uint64) (uint64, error) {
+	if err := validateCacheNumber(value); err != nil {
+		return 0, err
+	}
+	var observed uint64
+	err := atomicUpdateCacheValueContext(ctx, driver, key, ttl, func(raw interface{}, found bool) (interface{}, bool, error) {
 		if found {
 			_, currentGeneration, enveloped, err := decodeCacheValueEnvelope(raw)
 			if err != nil {
 				return nil, false, err
 			}
-			if enveloped && currentGeneration > generation {
-				return nil, false, ErrCacheLockLost
+			if enveloped && currentGeneration >= generation {
+				observed = currentGeneration
+				return nil, false, errCacheSequenceBehindEnvelope
 			}
 		}
 		return newCacheValueEnvelope(generation, value), false, nil
 	})
+	return observed, err
 }
 
 func (c *Cache) writeFencedCacheValuesContext(ctx context.Context, driver Driver, keys []string, values map[string]interface{}, ttl time.Duration) error {
@@ -378,55 +429,106 @@ func (c *Cache) writeFencedCacheValuesContext(ctx context.Context, driver Driver
 	if !ok {
 		return ErrCacheAtomicUpdateUnsupported
 	}
-	generation, err := c.nextFenceGenerationContext(ctx, driver)
-	if err != nil {
-		return err
-	}
-	committed := make([]cacheBatchSnapshot, 0, len(keys))
+	keyInvalidations := make(map[string]uint64, len(keys))
+	var floor uint64
 	for _, key := range keys {
-		snapshot := cacheBatchSnapshot{key: key}
-		err = updater.UpdateWithExpiryContext(ctx, key, ttl, func(raw interface{}, found bool, expiry time.Time) (interface{}, bool, *time.Time, error) {
-			snapshot = cacheBatchSnapshot{key: key}
-			if found {
-				_, current, enveloped, decodeErr := decodeCacheValueEnvelope(raw)
-				if decodeErr != nil {
-					return nil, false, nil, decodeErr
-				}
-				if enveloped && current > generation {
-					return nil, false, nil, ErrCacheLockLost
-				}
-			}
-			snapshot = cacheBatchSnapshot{key: key, value: raw, found: found, expiry: expiry, captured: true}
-			return newCacheValueEnvelope(generation, values[key]), false, nil, nil
-		})
-		// 即使响应丢失，回调已执行的键也可能实际提交；条件回滚会核验真正的代际。
-		if snapshot.captured {
-			committed = append(committed, snapshot)
-		}
+		invalidation, err := c.invalidationForKey(ctx, driver, key)
 		if err != nil {
-			break
+			return err
 		}
+		keyInvalidations[key] = invalidation
+		floor = max(floor, invalidation)
 	}
-	if err == nil {
-		for _, snapshot := range committed {
-			latestInvalidation, fenceErr := c.invalidationForKey(ctx, driver, snapshot.key)
-			if fenceErr != nil {
-				err = fenceErr
+	for attempt := 0; attempt < maxCacheAtomicRebaseAttempts; attempt++ {
+		generation, err := c.allocateFenceGenerationAboveContext(ctx, driver, floor)
+		if err != nil {
+			return err
+		}
+		committed := make([]cacheBatchSnapshot, 0, len(keys))
+		var observed uint64
+		for _, key := range keys {
+			invalidation := keyInvalidations[key]
+			snapshot := cacheBatchSnapshot{key: key}
+			err = updater.UpdateWithExpiryContext(ctx, key, ttl, func(raw interface{}, found bool, expiry time.Time) (interface{}, bool, *time.Time, error) {
+				snapshot = cacheBatchSnapshot{key: key}
+				if found {
+					_, current, prevOrigin, enveloped, decodeErr := decodeCacheValueFence(raw)
+					if decodeErr != nil {
+						return nil, false, nil, decodeErr
+					}
+					if enveloped && current >= generation {
+						observed = current
+						return nil, false, nil, errCacheSequenceBehindEnvelope
+					}
+					if invalidation > 0 && prevOrigin <= invalidation {
+						// 旧物理项已被失效水位屏蔽，回滚时必须删除，不得借新批次代际复活脏值。
+						found = false
+						raw = nil
+					}
+				}
+				snapshot = cacheBatchSnapshot{key: key, value: raw, found: found, expiry: expiry, captured: true}
+				return newCacheValueEnvelope(generation, values[key]), false, nil, nil
+			})
+			// 即使响应丢失，回调已执行的键也可能实际提交；条件回滚会核验真正的代际。
+			if snapshot.captured {
+				committed = append(committed, snapshot)
+			}
+			if err != nil {
 				break
 			}
-			if latestInvalidation > generation {
-				err = ErrCacheLockLost
-				break
+		}
+		if errors.Is(err, errCacheSequenceBehindEnvelope) {
+			rollbackErr := c.rollbackCommittedBatchContext(ctx, driver, updater, committed, generation)
+			currentSeq, seqErr := c.currentFenceSequenceContext(ctx, driver)
+			if seqErr != nil {
+				return errors.Join(seqErr, rollbackErr)
+			}
+			if observed > generation && currentSeq >= observed {
+				return errors.Join(ErrCacheLockLost, rollbackErr)
+			}
+			if rollbackErr != nil {
+				return rollbackErr
+			}
+			floor = max(floor, observed)
+			continue
+		}
+		if err == nil {
+			for _, snapshot := range committed {
+				latestInvalidation, fenceErr := c.invalidationForKey(ctx, driver, snapshot.key)
+				if fenceErr != nil {
+					err = fenceErr
+					break
+				}
+				if latestInvalidation > generation {
+					err = ErrCacheLockLost
+					break
+				}
 			}
 		}
+		if err == nil {
+			return nil
+		}
+		return errors.Join(err, c.rollbackCommittedBatchContext(ctx, driver, updater, committed, generation))
 	}
-	if err == nil {
-		return nil
-	}
+	return ErrCacheFenceUnavailable
+}
+
+func (c *Cache) rollbackCommittedBatchContext(ctx context.Context, driver Driver, updater ExpiryAtomicUpdater, committed []cacheBatchSnapshot, generation uint64) error {
+	detached := context.WithoutCancel(ctx)
+	var resultErr error
 	for index := len(committed) - 1; index >= 0; index-- {
-		err = errors.Join(err, rollbackCacheBatchSnapshot(context.WithoutCancel(ctx), updater, committed[index], generation))
+		snapshot := committed[index]
+		if snapshot.found {
+			if latestInvalidation, invErr := c.invalidationForKey(detached, driver, snapshot.key); invErr == nil && latestInvalidation > 0 {
+				if _, _, prevOrigin, _, decErr := decodeCacheValueFence(snapshot.value); decErr == nil && prevOrigin <= latestInvalidation {
+					snapshot.found = false
+					snapshot.value = nil
+				}
+			}
+		}
+		resultErr = errors.Join(resultErr, rollbackCacheBatchSnapshot(detached, updater, snapshot, generation))
 	}
-	return err
+	return resultErr
 }
 
 func (c *Cache) verifyFenceCommitContext(ctx context.Context, driver Driver, key string, generation uint64) error {

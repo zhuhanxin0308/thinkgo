@@ -139,6 +139,28 @@ func (c *Cache) setCacheValueWithFenceContext(ctx context.Context, driver Driver
 func (c *Cache) changeCounterWithFence(driver Driver, key string, step int64, subtract bool) (value int64, resultErr error) {
 	resultErr = c.mutateWithTagRepairContext(context.Background(), driver, key, func() error {
 		if !cacheDriverSupportsAtomicFencing(driver) {
+			if updater, ok := driver.(ConditionalTTLAtomicUpdater); ok {
+				return updater.UpdatePreserveTTLConditionally(key, func(raw interface{}, found bool) (interface{}, bool, bool, error) {
+					current := int64(0)
+					if found {
+						var decodeErr error
+						current, decodeErr = strictCacheCounterValue(raw)
+						if decodeErr != nil {
+							return nil, false, false, decodeErr
+						}
+					}
+					var calculateErr error
+					if subtract {
+						value, calculateErr = subtractCacheCounter(current, step)
+					} else {
+						value, calculateErr = addCacheCounter(current, step)
+					}
+					if calculateErr != nil {
+						return nil, false, false, calculateErr
+					}
+					return value, false, found, nil
+				})
+			}
 			if subtract {
 				value, resultErr = driver.Dec(key, step)
 			} else {
