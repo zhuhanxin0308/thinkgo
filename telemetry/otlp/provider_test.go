@@ -30,6 +30,8 @@ func telemetryProviderTestApp(t *testing.T) (*framework.App, *config.Config) {
 
 // TestProviderExportsOTLPTraceAndShutsDown 验证关闭会刷新 Span，外部 Baggage 只进入上下文。
 func TestProviderExportsOTLPTraceAndShutsDown(t *testing.T) {
+	t.Setenv("OTEL_EXPORTER_OTLP_TRACES_COMPRESSION", "none")
+	t.Setenv("OTEL_EXPORTER_OTLP_COMPRESSION", "none")
 	const baggageKey = "client_supplied_baggage"
 	const baggageValue = "external-marker"
 	var exported atomic.Int32
@@ -89,8 +91,6 @@ func TestProviderExportsOTLPTraceAndShutsDown(t *testing.T) {
 	}
 	header := http.Header{}
 	header.Set("Baggage", baggageKey+"="+baggageValue)
-	t.Setenv("OTEL_EXPORTER_OTLP_TRACES_COMPRESSION", "none")
-	t.Setenv("OTEL_EXPORTER_OTLP_COMPRESSION", "none")
 	ctx, span := tracing.StartServer(context.Background(), header, "GET", "/orders/42", "api.example.com")
 	if span == nil {
 		t.Fatal("OTLP Provider 启用后必须创建 Span")
