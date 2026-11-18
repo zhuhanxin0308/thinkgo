@@ -27,7 +27,13 @@ func TestRedisClearingRecoversAfterFinishFailure(t *testing.T) {
 		if err := other.Write("new", value); !errors.Is(err, ErrSessionCleared) {
 			t.Fatalf("清理有效期内不应允许新写入: %v", err)
 		}
+		if _, found, readErr := other.Read("new"); !errors.Is(readErr, ErrSessionCleared) || found {
+			t.Fatalf("清理有效期内不应允许读取: found=%v err=%v", found, readErr)
+		}
 		server.FastForward(backend.timeout*redisSessionClearTimeoutFactor + time.Second)
+		if _, found, readErr := other.Read("new"); readErr != nil || found {
+			t.Fatalf("租约到期后读取未能恢复代际: found=%v err=%v", found, readErr)
+		}
 		if err := other.Write("new", value); err != nil {
 			t.Fatalf("结束失败永久阻断新会话: %v", err)
 		}
@@ -81,11 +87,21 @@ func TestRedisRecoversLegacyClearingMarkerWithoutLease(t *testing.T) {
 	if err := backend.client.Set(t.Context(), backend.generationKey(), redisSessionClearingPrefix+"legacy", 0).Err(); err != nil {
 		t.Fatal(err)
 	}
-	value := marshalRedisTestEnvelope(1, time.Now().Add(time.Minute))
-	if err := newRedisClearPeer(t, backend).Write("new", value); err != nil {
-		t.Fatalf("旧版本遗留的无租约状态无法自动恢复: %v", err)
+	peer := newRedisClearPeer(t, backend)
+	if _, found, err := peer.Read("missing"); err != nil || found {
+		t.Fatalf("旧版本遗留的无租约标记在 Read 时未能自动恢复: found=%v err=%v", found, err)
 	}
 	if generation, err := backend.client.Get(t.Context(), backend.generationKey()).Result(); err != nil || generation != redisSessionReadyPrefix+"legacy" {
+		t.Fatalf("Read 恢复旧代际错误: %q %v", generation, err)
+	}
+	if err := backend.client.Set(t.Context(), backend.generationKey(), redisSessionClearingPrefix+"legacy-write", 0).Err(); err != nil {
+		t.Fatal(err)
+	}
+	value := marshalRedisTestEnvelope(1, time.Now().Add(time.Minute))
+	if err := peer.Write("new", value); err != nil {
+		t.Fatalf("旧版本遗留的无租约状态无法自动恢复: %v", err)
+	}
+	if generation, err := backend.client.Get(t.Context(), backend.generationKey()).Result(); err != nil || generation != redisSessionReadyPrefix+"legacy-write" {
 		t.Fatalf("旧代际恢复错误: %q %v", generation, err)
 	}
 }

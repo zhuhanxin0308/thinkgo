@@ -63,6 +63,7 @@ type Session struct {
 	invalidCookie     bool
 	destroying        bool
 	destroyed         bool
+	rotating          chan struct{}
 	persisted         bool
 	responseSealing   bool
 	responseCommitted bool
@@ -270,6 +271,7 @@ func (s *Session) setEncoded(name string, encoded json.RawMessage) error {
 	if !s.requestState {
 		return ErrInvalidSessionDependency
 	}
+	s.waitRotationLocked()
 	if s.responseSealing || s.responseCommitted {
 		return ErrSessionCommitted
 	}
@@ -373,6 +375,7 @@ func (s *Session) Delete(name string) error {
 	if !s.requestState {
 		return ErrInvalidSessionDependency
 	}
+	s.waitRotationLocked()
 	if s.responseSealing || s.responseCommitted {
 		return ErrSessionCommitted
 	}
@@ -408,6 +411,7 @@ func (s *Session) Clear() error {
 	if !s.requestState {
 		return ErrInvalidSessionDependency
 	}
+	s.waitRotationLocked()
 	if s.responseSealing || s.responseCommitted {
 		return ErrSessionCommitted
 	}

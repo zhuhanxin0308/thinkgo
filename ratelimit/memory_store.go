@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"hash/maphash"
+	"math"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -16,6 +17,8 @@ const (
 	memoryShardCount = 64
 	// memoryExpirationTick 只量化回收时刻，GCRA 判定仍然使用精确 TAT。
 	memoryExpirationTick = 10 * time.Millisecond
+	// emptyExpirationTick 表示分片当前没有待回收节点；支持负相对 tick 以容忍墙钟回拨。
+	emptyExpirationTick int64 = math.MaxInt64
 	// regularCleanupBudget 限制普通请求顺手回收的最大堆节点数。
 	regularCleanupBudget = 4
 	// capacityCleanupBudget 限制容量满时在请求线程执行的最大堆节点数。
@@ -37,7 +40,7 @@ type memoryShard struct {
 	mu                 sync.Mutex
 	entries            map[string]*memoryEntry
 	expirations        expirationHeap
-	nextExpirationTick atomic.Uint64
+	nextExpirationTick atomic.Int64
 }
 
 // MemoryStore 是全局容量有界的分片精确 GCRA 存储，适用于单实例部署。
@@ -66,7 +69,7 @@ type expirationCleanupWork struct {
 type expirationNode struct {
 	key         string
 	generation  uint64
-	expiresTick uint64
+	expiresTick int64
 	index       int
 }
 
@@ -108,11 +111,15 @@ func NewMemoryStore(maxEntries int) (*MemoryStore, error) {
 	if maxEntries <= 0 {
 		return nil, fmt.Errorf("%w: maxEntries 必须大于零", ErrInvalidConfiguration)
 	}
-	return &MemoryStore{
+	store := &MemoryStore{
 		maxEntries: int64(maxEntries),
 		hashSeed:   maphash.MakeSeed(),
 		closeDone:  make(chan struct{}),
-	}, nil
+	}
+	for index := range store.shards {
+		store.shards[index].nextExpirationTick.Store(emptyExpirationTick)
+	}
+	return store, nil
 }
 
 // Take 在键所属分片内原子执行精确 GCRA 判定。
@@ -282,7 +289,7 @@ func (store *MemoryStore) Close() error {
 				shard.expirations[nodeIndex] = nil
 			}
 			shard.expirations = nil
-			shard.nextExpirationTick.Store(0)
+			shard.nextExpirationTick.Store(emptyExpirationTick)
 			shard.mu.Unlock()
 			if removed > 0 {
 				store.entryCount.Add(-int64(removed))
@@ -343,12 +350,12 @@ func (store *MemoryStore) scheduleExpirationLocked(shard *memoryShard, entry *me
 func (store *MemoryStore) cleanupForCapacity(now time.Time) expirationCleanupWork {
 	nowTick := store.currentTick(now)
 	selected := -1
-	var selectedTick uint64
+	var selectedTick int64
 	work := expirationCleanupWork{}
 	for index := range store.shards {
 		work.hintReads++
 		nextTick := store.shards[index].nextExpirationTick.Load()
-		if nextTick == 0 || nextTick > nowTick {
+		if nextTick == emptyExpirationTick || nextTick > nowTick {
 			continue
 		}
 		if selected < 0 || nextTick < selectedTick {
@@ -411,30 +418,36 @@ func (store *MemoryStore) removeEntryLocked(shard *memoryShard, entry *memoryEnt
 
 func (shard *memoryShard) publishNextExpiration() {
 	if len(shard.expirations) == 0 {
-		shard.nextExpirationTick.Store(0)
+		shard.nextExpirationTick.Store(emptyExpirationTick)
 		return
 	}
 	shard.nextExpirationTick.Store(shard.expirations[0].expiresTick)
 }
 
-func (store *MemoryStore) expirationTick(deadline time.Time) uint64 {
-	delta := deadline.Sub(store.origin)
-	if delta <= 0 {
-		return 1
-	}
-	ticks := uint64(delta / memoryExpirationTick)
-	if delta%memoryExpirationTick != 0 {
+func (store *MemoryStore) expirationTick(deadline time.Time) int64 {
+	delta := int64(deadline.Sub(store.origin))
+	const tick = int64(memoryExpirationTick)
+	ticks := delta / tick
+	if delta > 0 && delta%tick != 0 {
 		ticks++
 	}
-	return ticks + 1
+	if ticks >= emptyExpirationTick {
+		return emptyExpirationTick - 1
+	}
+	return ticks
 }
 
-func (store *MemoryStore) currentTick(now time.Time) uint64 {
-	delta := now.Sub(store.origin)
-	if delta < 0 {
-		return 0
+func (store *MemoryStore) currentTick(now time.Time) int64 {
+	delta := int64(now.Sub(store.origin))
+	const tick = int64(memoryExpirationTick)
+	ticks := delta / tick
+	if delta < 0 && delta%tick != 0 {
+		ticks--
 	}
-	return uint64(delta/memoryExpirationTick) + 1
+	if ticks >= emptyExpirationTick {
+		return emptyExpirationTick - 1
+	}
+	return ticks
 }
 
 func normalizeKey(key string) (string, error) {

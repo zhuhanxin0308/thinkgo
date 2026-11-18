@@ -91,6 +91,11 @@ func normalizeLocalConfig(configuration LocalConfig) (LocalConfig, error) {
 	if strings.TrimSpace(configuration.Root) == "" {
 		return LocalConfig{}, fmt.Errorf("%w: local.root 必须是非空字符串", ErrInvalidConfiguration)
 	}
+	if configuration.URL != "" {
+		if _, err := parseLocalURLPrefix(configuration.URL); err != nil {
+			return LocalConfig{}, err
+		}
+	}
 	if configuration.Visibility == "" {
 		configuration.Visibility = VisibilityPrivate
 	}
@@ -103,7 +108,27 @@ func normalizeLocalConfig(configuration LocalConfig) (LocalConfig, error) {
 		return LocalConfig{}, fmt.Errorf("%w: local.links 仅接受 disallow 或 skip", ErrInvalidConfiguration)
 	}
 	configuration.Permissions = withDefaultPermissions(configuration.Permissions)
+	if err := validatePermissions(configuration.Permissions); err != nil {
+		return LocalConfig{}, err
+	}
 	return configuration, nil
+}
+
+func validatePermissions(permissions Permissions) error {
+	for _, entry := range []struct {
+		name string
+		mode fs.FileMode
+	}{
+		{"permissions.file.public", permissions.FilePublic},
+		{"permissions.file.private", permissions.FilePrivate},
+		{"permissions.dir.public", permissions.DirectoryPublic},
+		{"permissions.dir.private", permissions.DirectoryPrivate},
+	} {
+		if entry.mode == 0 || entry.mode > 0o777 {
+			return fmt.Errorf("%w: %s: 权限必须位于 0001 到 0777", ErrInvalidConfiguration, entry.name)
+		}
+	}
+	return nil
 }
 
 func withDefaultPermissions(permissions Permissions) Permissions {

@@ -124,23 +124,30 @@ func backendOptions(options queue.EnqueueOptions, now time.Time) ([]backend.Opti
 	result := []backend.Option{
 		backend.Queue(options.NormalizedQueue()),
 		backend.MaxRetry(options.EffectiveMaxRetry()),
-		backend.Timeout(ceilBackendTimeout(options.EffectiveTimeout())),
+		backend.Timeout(ceilBackendDuration(options.EffectiveTimeout(), queue.MaximumTaskTimeout)),
 	}
 	if !options.ProcessAt.IsZero() {
 		result = append(result, backend.ProcessAt(options.ProcessAt))
 	}
 	if options.UniqueFor > 0 {
-		result = append(result, backend.Unique(options.UniqueFor))
+		result = append(result, backend.Unique(ceilBackendDuration(options.UniqueFor, queue.MaximumRetention)))
 	}
 	if options.Retention > 0 {
-		result = append(result, backend.Retention(options.Retention))
+		result = append(result, backend.Retention(ceilBackendDuration(options.Retention, queue.MaximumRetention)))
 	}
 	return result, nil
 }
 
-// ceilBackendTimeout 向上取整到 Asynq 存储支持的整秒，避免亚秒配置被视为零。
-func ceilBackendTimeout(timeout time.Duration) time.Duration {
-	return ((timeout + time.Second - 1) / time.Second) * time.Second
+// ceilBackendDuration 向上取整到 Asynq 存储支持的整秒，避免亚秒或小数秒配置向零截断。
+func ceilBackendDuration(value, maximum time.Duration) time.Duration {
+	if value <= 0 {
+		return 0
+	}
+	rounded := ((value + time.Second - 1) / time.Second) * time.Second
+	if maximum > 0 && rounded > maximum {
+		return maximum
+	}
+	return rounded
 }
 
 func backendTask(task queue.Task) (*backend.Task, error) {

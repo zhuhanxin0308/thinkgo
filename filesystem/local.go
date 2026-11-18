@@ -271,14 +271,14 @@ func (disk *Local) Delete(filePath string) error {
 	if err = disk.ensureOpenLocked(); err != nil {
 		return err
 	}
-	information, err := disk.root.Stat(logicalPath)
+	information, err := disk.root.Lstat(logicalPath)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	if err != nil {
 		return fmt.Errorf("读取删除目标失败: %w", err)
 	}
-	if information.IsDir() {
+	if information.IsDir() && information.Mode()&os.ModeSymlink == 0 {
 		return fmt.Errorf("删除文件目标是目录: %s", logicalPath)
 	}
 	if err = disk.root.Remove(logicalPath); err != nil {
@@ -519,12 +519,18 @@ func (disk *Local) Copy(source string, destination string, optionSets ...map[str
 	if !sourceInformation.Mode().IsRegular() {
 		return fmt.Errorf("复制源不是文件: %s", from)
 	}
-	visibility, err := disk.copyVisibilityLocked(from, sourceInformation, options)
+	visibility, updateIdentity, err := disk.copyVisibilityLocked(from, sourceInformation, options)
 	if err != nil {
 		return err
 	}
-	// 同路径仅省略实际写入，仍须满足与普通复制相同的前置条件。
+	// 同路径仅省略实际内容重写，仍须满足前置条件并应用显式可见性变更。
 	if from == to {
+		if updateIdentity {
+			if err = disk.operations.chmod(disk.root, to, disk.configuration.fileMode(visibility)); err != nil {
+				return fmt.Errorf("设置复制目标可见性失败: %w", err)
+			}
+			disk.rememberVisibility(to, visibility)
+		}
 		return nil
 	}
 	if err = disk.ensureAtomicParentDirectoryLocked(to, disk.configuration.Visibility); err != nil {
@@ -813,24 +819,24 @@ func (disk *Local) writeVisibility(options map[string]interface{}) (string, bool
 	return optionVisibility(options, "visibility", disk.configuration.Visibility, disk.visibilityConfigured)
 }
 
-func (disk *Local) copyVisibilityLocked(source string, information fs.FileInfo, options map[string]interface{}) (string, error) {
+func (disk *Local) copyVisibilityLocked(source string, information fs.FileInfo, options map[string]interface{}) (string, bool, error) {
 	if visibility, explicit, err := optionVisibility(options, "visibility", "", false); err != nil {
-		return "", err
+		return "", false, err
 	} else if explicit {
-		return visibility, nil
+		return visibility, true, nil
 	}
 	retainVisibility := true
 	if raw, exists := options["retain_visibility"]; exists {
 		value, ok := raw.(bool)
 		if !ok {
-			return "", fmt.Errorf("%w: retain_visibility 必须是布尔值", ErrInvalidConfiguration)
+			return "", false, fmt.Errorf("%w: retain_visibility 必须是布尔值", ErrInvalidConfiguration)
 		}
 		retainVisibility = value
 	}
 	if retainVisibility {
-		return disk.resolveRememberedVisibility(source, information), nil
+		return disk.resolveRememberedVisibility(source, information), false, nil
 	}
-	return disk.configuration.Visibility, nil
+	return disk.configuration.Visibility, true, nil
 }
 
 func (disk *Local) resolveRememberedVisibility(logicalPath string, information fs.FileInfo) string {

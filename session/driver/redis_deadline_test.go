@@ -22,7 +22,7 @@ func TestSessionRedisReadHonorsInFlightDeadline(t *testing.T) {
 	var enterOnce sync.Once
 	t.Cleanup(func() { close(release) })
 	backend.Server().SetPreHook(func(_ *server.Peer, command string, _ ...string) bool {
-		if strings.EqualFold(command, "get") {
+		if strings.EqualFold(command, "get") || strings.EqualFold(command, "eval") {
 			enterOnce.Do(func() { close(entered) })
 			<-release
 		}

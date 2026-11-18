@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"mime/multipart"
-	"path/filepath"
 	"strings"
 	"time"
 )
@@ -52,7 +51,7 @@ func (disk *Local) PutFile(directory string, file *multipart.FileHeader, argumen
 	if err != nil {
 		return "", err
 	}
-	return disk.PutFileAs(directory, file, name, options)
+	return disk.putTrustedUpload(directory, file, name, false, options)
 }
 
 // PutFileAs 使用指定文件名保存上传文件，并返回磁盘内的相对路径。
@@ -73,7 +72,11 @@ func (disk *Local) PutFileAs(directory string, file *multipart.FileHeader, name 
 	if policy != nil {
 		return disk.putFileWithPolicy(directory, file, name, nil, false, options, policy)
 	}
-	storedPath, err := normalizeFilePath(strings.Trim(directory+"/"+name, "/"))
+	return disk.putTrustedUpload(directory, file, name, true, options)
+}
+
+func (disk *Local) putTrustedUpload(directory string, file *multipart.FileHeader, name string, singleSegment bool, options map[string]interface{}) (string, error) {
+	storedPath, err := resolveUploadDestination(directory, name, singleSegment, false)
 	if err != nil {
 		return "", err
 	}
@@ -91,6 +94,41 @@ func (disk *Local) PutFileAs(directory string, file *multipart.FileHeader, name 
 		return "", err
 	}
 	return storedPath, nil
+}
+
+func resolveUploadDestination(directory, name string, singleSegment, policyError bool) (string, error) {
+	normalizedDir, err := normalizePath(directory)
+	if err != nil {
+		return "", err
+	}
+	slashedName := strings.ReplaceAll(name, "\\", "/")
+	for _, part := range strings.Split(slashedName, "/") {
+		if part == ".." {
+			return "", fmt.Errorf("%w: 上传文件名不能包含父目录段", ErrInvalidPath)
+		}
+	}
+	if singleSegment && strings.Contains(slashedName, "/") {
+		sepErr := fmt.Errorf("%w: 上传文件名不能包含路径分隔符", ErrInvalidPath)
+		if policyError {
+			return "", errors.Join(ErrUploadTypeNotAllowed, sepErr)
+		}
+		return "", sepErr
+	}
+	normalizedName, err := normalizeFilePath(name)
+	if err != nil {
+		if policyError && errors.Is(err, errWindowsPathAlias) {
+			return "", errors.Join(ErrUploadTypeNotAllowed, err)
+		}
+		return "", err
+	}
+	if normalizedDir == "" {
+		return normalizedName, nil
+	}
+	key := normalizedDir + "/" + normalizedName
+	if !strings.HasPrefix(key, normalizedDir+"/") {
+		return "", fmt.Errorf("%w: 上传目标超出指定目录", ErrInvalidPath)
+	}
+	return key, nil
 }
 
 func uploadHashName(file *multipart.FileHeader, rule interface{}) (string, error) {
@@ -146,7 +184,7 @@ func uploadHashName(file *multipart.FileHeader, rule interface{}) (string, error
 	if baseName == "" {
 		return "", fmt.Errorf("%w: 上传文件名规则返回空名称", ErrInvalidConfiguration)
 	}
-	extension := strings.TrimPrefix(filepath.Ext(file.Filename), ".")
+	extension := uploadExtension(file.Filename)
 	if extension != "" {
 		baseName += "." + extension
 	}

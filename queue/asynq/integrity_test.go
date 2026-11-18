@@ -58,7 +58,17 @@ func (store *integrityTestStore) Claim(ctx context.Context, identity TaskIdentit
 		record = &integrityTestRecord{identity: identity}
 		store.records[identity.ID] = record
 	}
-	if record.identity != identity || record.active || record.done || record.attempts >= identity.MaxAttempts || !time.Now().Before(identity.ExpiresAt) {
+	deadline := identity.ExpiresAt
+	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.After(deadline) {
+		deadline = ctxDeadline
+	}
+	if record.identity != identity || record.done || !time.Now().Before(deadline) {
+		return nil, ErrTaskReplay
+	}
+	if record.active {
+		return nil, ErrTaskInProgress
+	}
+	if record.attempts >= identity.MaxAttempts {
 		return nil, ErrTaskReplay
 	}
 	record.attempts++
