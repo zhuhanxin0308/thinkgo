@@ -52,6 +52,11 @@ func TestErrorTextCredentialPrefixes(t *testing.T) {
 		{"凭据内出现键值", `password="abcd token=efghijkl"`, `password="abcd[REDACTED]"`},
 		{"已遮蔽", "Authorization: Bearer abcd[REDACTED]", "Authorization: Bearer abcd[REDACTED]"},
 		{"已全部遮蔽", "password=[REDACTED]", "password=[REDACTED]"},
+		{"短别名pass", "pass=abcdefgh host=db", "pass=abcd[REDACTED] host=db"},
+		{"短别名auth", "auth=abcdefgh mode=strict", "auth=abcd[REDACTED] mode=strict"},
+		{"下划线短别名", "user_pass=abcdefgh login.auth=ijklmnop", "user_pass=abcd[REDACTED] login.auth=ijkl[REDACTED]"},
+		{"驼峰与冒号短别名", "userPwd=abcdefgh basicAuth: ijklmnop db:pass=qrstuvwx", "userPwd=abcd[REDACTED] basicAuth: ijkl[REDACTED] db:pass=qrst[REDACTED]"},
+		{"普通字段不误伤", "passport=A12345678 author=alice auth_status=ok pass_rate=0.99 compass=north bypass=false", "passport=A12345678 author=alice auth_status=ok pass_rate=0.99 compass=north bypass=false"},
 		{"非敏感文本", "database unavailable host=db", "database unavailable host=db"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {

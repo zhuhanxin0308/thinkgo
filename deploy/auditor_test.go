@@ -100,13 +100,15 @@ func TestProductionAndHostChecksRejectUnsafeConfiguration(t *testing.T) {
 		t.Fatalf("通配 Host 必须阻断部署: %#v", result)
 	}
 
-	configuration.Set("app.app_env", "production")
-	configuration.Set("app.app_debug", false)
-	configuration.Set("app.app_trace", false)
-	configuration.Set("app.security_profile", string(framework.SecurityProfileStatelessAPI))
-	configuration.Set("app.server.allowed_hosts", []interface{}{"api.example.com"})
-	if result := checkProductionConfiguration(context.Background(), app); result.Level != LevelPass {
-		t.Fatalf("安全生产配置应通过: %#v", result)
+	for _, envName := range []string{"production", "prod", " release "} {
+		configuration.Set("app.app_env", envName)
+		configuration.Set("app.app_debug", false)
+		configuration.Set("app.app_trace", false)
+		configuration.Set("app.security_profile", string(framework.SecurityProfileStatelessAPI))
+		configuration.Set("app.server.allowed_hosts", []interface{}{"api.example.com"})
+		if result := checkProductionConfiguration(context.Background(), app); result.Level != LevelPass {
+			t.Fatalf("安全生产配置 (%q) 应通过: %#v", envName, result)
+		}
 	}
 	if result := checkAllowedHosts(context.Background(), app); result.Level != LevelPass {
 		t.Fatalf("显式 Host 应通过: %#v", result)
@@ -220,6 +222,9 @@ func TestDefaultAuditorEnforcesPostgreSQLTLSForNamedConnections(t *testing.T) {
 	}{
 		{name: "默认 verify-full", level: LevelPass},
 		{name: "显式 verify-full", params: map[string]interface{}{"sslmode": "verify-full"}, level: LevelPass},
+		{name: "强类型 map[string]string verify-full", params: map[string]string{"sslmode": "verify-full"}, level: LevelPass},
+		{name: "强类型空 map[string]string", params: map[string]string{}, level: LevelPass},
+		{name: "强类型 map[string]string disable", params: map[string]string{"sslmode": "disable"}, level: LevelFail},
 		{name: "禁用 TLS", params: map[string]interface{}{"sslmode": "disable"}, level: LevelFail},
 		{name: "允许降级明文", params: map[string]interface{}{"sslmode": "prefer"}, level: LevelFail},
 		{name: "仅加密", params: map[string]interface{}{"sslmode": "require"}, level: LevelFail},
@@ -288,5 +293,15 @@ func TestDefaultAuditorEnforcesMongoTLSForNamedConnections(t *testing.T) {
 				t.Fatalf("审计应指出连接名，避免输出参数值: %#v", result)
 			}
 		})
+	}
+	app, configuration := newDeployTestApp(t)
+	if err := configuration.Set("database.connections.analytics_typed.type", "mongo"); err != nil {
+		t.Fatal(err)
+	}
+	if err := configuration.Set("database.connections.analytics_typed.params", map[string]string{"tls": "true", "tlsAllowInvalidCertificates": "false"}); err != nil {
+		t.Fatal(err)
+	}
+	if result := checkDatabaseTLS(t.Context(), app); result.Level != LevelPass {
+		t.Fatalf("强类型 map[string]string Mongo TLS 参数应通过: %#v", result)
 	}
 }

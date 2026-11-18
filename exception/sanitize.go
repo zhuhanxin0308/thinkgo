@@ -191,7 +191,7 @@ func sanitizeJSONValue(key string, value interface{}) interface{} {
 }
 
 func isSensitiveKey(key string) bool {
-	lowerKey := strings.ToLower(strings.NewReplacer("-", "", "_", "", ".", "").Replace(strings.TrimSpace(key)))
+	lowerKey := strings.ToLower(strings.NewReplacer("-", "", "_", "", ".", "", ":", "", "/", "").Replace(strings.TrimSpace(key)))
 	if lowerKey == "" {
 		return false
 	}

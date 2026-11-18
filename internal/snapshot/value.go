@@ -16,6 +16,9 @@ import (
 // MaxDepth 限制递归快照的嵌套深度。
 const MaxDepth = 64
 
+// MaxNodes 限制单次配置快照展开的总节点预算，防止共享容器指数级膨胀。
+const MaxNodes = 65536
+
 // ErrUnsupportedValue 表示源值无法安全复制。
 var ErrUnsupportedValue = errors.New("数据无法安全复制")
 
@@ -36,11 +39,15 @@ type span struct {
 }
 
 // Spans 跟踪可访问的存储范围，用于跨独立快照分支校验内部别名。
-type Spans []span
+type Spans struct {
+	ranges []span
+	seen   map[visitKey]struct{}
+}
 
 type valueCopier struct {
-	visited map[visitKey]copiedReference
-	spans   *Spans
+	visited   map[visitKey]copiedReference
+	spans     *Spans
+	remaining *int
 }
 
 // Copy 完整验证并复制单个 Go 值。
@@ -60,11 +67,16 @@ func Copy(input interface{}) (interface{}, error) {
 
 // CopyAt 从指定深度复制分支，调用方负责在所有分支完成后校验共用的 Spans。
 func CopyAt(input interface{}, depth int, spans *Spans) (interface{}, error) {
+	return CopyAtWithBudget(input, depth, spans, nil)
+}
+
+// CopyAtWithBudget 从指定深度和剩余节点预算复制分支。
+func CopyAtWithBudget(input interface{}, depth int, spans *Spans, remaining *int) (interface{}, error) {
 	if input == nil {
 		return nil, nil
 	}
 	value := reflect.ValueOf(input)
-	copier := valueCopier{spans: spans}
+	copier := valueCopier{spans: spans, remaining: remaining}
 	deepest := depth
 	copied, err := copier.copyValue(value, depth, &deepest)
 	if err != nil {
@@ -74,6 +86,12 @@ func CopyAt(input interface{}, depth int, spans *Spans) (interface{}, error) {
 }
 
 func (copier *valueCopier) copyValue(value reflect.Value, depth int, deepest *int) (reflect.Value, error) {
+	if copier.remaining != nil {
+		*copier.remaining--
+		if *copier.remaining < 0 {
+			return reflect.Value{}, fmt.Errorf("%w: 快照节点数超过上限", ErrUnsupportedValue)
+		}
+	}
 	if depth > MaxDepth {
 		return reflect.Value{}, fmt.Errorf("%w: 值嵌套过深", ErrUnsupportedValue)
 	}
@@ -260,35 +278,50 @@ func structHasIdentity(typ reflect.Type) bool {
 	return pointer.Implements(reflect.TypeFor[sync.Locker]()) || pointer.Implements(reflect.TypeFor[io.Closer]())
 }
 
-// Record 记录可访问的指针和切片存储范围。
+// Record 记录可访问的指针和切片存储范围；完全相同的切片视图或指针身份只登记一次。
 func (spans *Spans) Record(value reflect.Value) {
 	if spans == nil {
 		return
 	}
 	var size uintptr
+	visit := visitKey{typ: value.Type()}
 	switch value.Kind() {
 	case reflect.Pointer:
+		visit.pointer = value.Pointer()
 		size = value.Type().Elem().Size()
 	case reflect.Slice:
+		visit.pointer = value.Pointer()
+		visit.length, visit.capacity = value.Len(), value.Cap()
 		size = uintptr(value.Cap()) * value.Type().Elem().Size()
 	}
-	if size != 0 {
-		start := value.Pointer()
-		*spans = append(*spans, span{start: start, end: start + size})
+	if size == 0 {
+		return
 	}
+	if spans.seen == nil {
+		spans.seen = make(map[visitKey]struct{})
+	}
+	if _, exists := spans.seen[visit]; exists {
+		return
+	}
+	spans.seen[visit] = struct{}{}
+	start := visit.pointer
+	spans.ranges = append(spans.ranges, span{start: start, end: start + size})
 }
 
 // Validate 拒绝无法通过独立复制保留的重叠存储范围。
-func (spans Spans) Validate() error {
-	slices.SortFunc(spans, func(left, right span) int {
-		return cmp.Compare(left.start, right.start)
+func (spans *Spans) Validate() error {
+	if spans == nil || len(spans.ranges) == 0 {
+		return nil
+	}
+	slices.SortFunc(spans.ranges, func(left, right span) int {
+		return cmp.Or(cmp.Compare(left.start, right.start), cmp.Compare(left.end, right.end))
 	})
 	var end uintptr
-	for _, span := range spans {
-		if span.start < end {
+	for _, current := range spans.ranges {
+		if current.start < end {
 			return fmt.Errorf("%w: 指针或切片视图含有重叠存储", ErrUnsupportedValue)
 		}
-		end = span.end
+		end = current.end
 	}
 	return nil
 }

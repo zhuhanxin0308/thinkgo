@@ -35,7 +35,9 @@ func (service *thinkPHPStyleErrorService) Boot() error {
 // TestAppRegisterSupportsThinkPHPStyleService 验证应用服务只需嵌入 Service 并实现
 // 无参数 Register、Boot，不需要接触底层 ServiceProvider 生命周期签名。
 func TestAppRegisterSupportsThinkPHPStyleService(t *testing.T) {
-	application := NewApp(t.TempDir())
+	basePath := t.TempDir()
+	writeTestAppConfigFiles(t, basePath)
+	application := NewApp(basePath)
 	t.Cleanup(func() { _ = application.Close() })
 	service := &thinkPHPStyleService{}
 	if err := application.Register(service); err != nil {

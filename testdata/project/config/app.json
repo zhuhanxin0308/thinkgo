@@ -1,4 +1,6 @@
 {
+    "app_env": "development",
+    "app_debug": false,
     "app_namespace": "",
     "with_route": true,
     "public_path": "public",

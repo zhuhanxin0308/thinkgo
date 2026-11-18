@@ -28,15 +28,44 @@ func checkDatabaseTLS(_ context.Context, app *framework.App) Result {
 			}
 			continue
 		}
-		if connection["type"] != "pgsql" || connection["params"] == nil {
+		if !strings.EqualFold(strings.TrimSpace(kind), "pgsql") || connection["params"] == nil {
 			continue
 		}
-		params, ok := connection["params"].(map[string]interface{})
-		// 未覆盖 sslmode 时，PostgreSQL 连接器使用 verify-full。
-		mode, explicit := params["sslmode"]
-		if !ok || explicit && mode != "verify-full" {
+		if !validPostgreSQLProductionTLSParams(connection["params"]) {
 			return fail(fmt.Sprintf("PostgreSQL 连接 %q 的生产配置必须使用 sslmode=verify-full", name))
 		}
 	}
 	return pass("PostgreSQL 和 MongoDB 连接配置均符合生产 TLS 模式要求")
+}
+
+// validPostgreSQLProductionTLSParams 兼容 JSON 动态映射与 Config.Set 写入的 map[string]string。
+func validPostgreSQLProductionTLSParams(raw interface{}) bool {
+	switch params := raw.(type) {
+	case map[string]string:
+		for key, value := range params {
+			if strings.TrimSpace(key) == "" {
+				return false
+			}
+			if strings.EqualFold(strings.TrimSpace(key), "sslmode") && value != "verify-full" {
+				return false
+			}
+		}
+		return true
+	case map[string]interface{}:
+		for key, rawValue := range params {
+			if strings.TrimSpace(key) == "" {
+				return false
+			}
+			value, ok := rawValue.(string)
+			if !ok {
+				return false
+			}
+			if strings.EqualFold(strings.TrimSpace(key), "sslmode") && value != "verify-full" {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
 }

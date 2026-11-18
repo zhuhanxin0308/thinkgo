@@ -162,6 +162,11 @@ func TestOperationalCIDRAuditRejectsMappedGlobalAndCanonicalDuplicates(t *testin
 		{[]string{"::ffff:127.0.0.0/96"}, LevelFail},
 		{[]string{"::ffff:127.0.0.0/95"}, LevelFail},
 		{[]string{"::ffff:127.0.0.1/120", "127.0.0.0/24"}, LevelFail},
+		{[]string{"0.0.0.0/1", "128.0.0.0/1"}, LevelFail},
+		{[]string{"0.0.0.0/2", "64.0.0.0/2", "128.0.0.0/1"}, LevelFail},
+		{[]string{"::/1", "8000::/1"}, LevelFail},
+		{[]string{"0.0.0.0/1"}, LevelWarn},
+		{[]string{"::/1"}, LevelWarn},
 	} {
 		if err := configuration.Set("app.operational_routes_allowed_cidrs", tc.allowed); err != nil {
 			t.Fatal(err)
@@ -273,11 +278,29 @@ func TestReleaseMetadataRequiresCompleteBoundedFiles(t *testing.T) {
 	if result := checkReleaseMetadata(context.Background(), app); result.Level != LevelPass {
 		t.Fatalf("完整发布元数据应通过: %#v", result)
 	}
-	if err := os.WriteFile(filepath.Join(app.BasePath, "go.mod"), []byte("module thinkgo\n"), 0o600); err != nil {
-		t.Fatalf("写入占位模块路径失败: %v", err)
+	if err := os.WriteFile(filepath.Join(app.BasePath, "go.mod"), []byte("module github.com/example/service // inline comment\n\ngo 1.27.4\n"), 0o600); err != nil {
+		t.Fatalf("写入带行尾注释的模块路径失败: %v", err)
 	}
-	if result := checkReleaseMetadata(context.Background(), app); result.Level != LevelFail {
-		t.Fatalf("占位模块路径必须失败: %#v", result)
+	if result := checkReleaseMetadata(context.Background(), app); result.Level != LevelPass {
+		t.Fatalf("带行尾注释的合法 go.mod 应通过: %#v", result)
+	}
+	if err := os.WriteFile(filepath.Join(app.BasePath, "go.mod"), []byte("module (\n\tgithub.com/example/service // block comment\n)\n\ngo 1.27.4\n"), 0o600); err != nil {
+		t.Fatalf("写入块语法模块路径失败: %v", err)
+	}
+	if result := checkReleaseMetadata(context.Background(), app); result.Level != LevelPass {
+		t.Fatalf("块语法合法 go.mod 应通过: %#v", result)
+	}
+	for _, placeholder := range []string{
+		"module thinkgo\n",
+		"module \"thinkgo\"\n\ngo 1.27.4\n",
+		"module (\n\t\"thinkgo\"\n)\n",
+	} {
+		if err := os.WriteFile(filepath.Join(app.BasePath, "go.mod"), []byte(placeholder), 0o600); err != nil {
+			t.Fatalf("写入占位模块路径失败: %v", err)
+		}
+		if result := checkReleaseMetadata(context.Background(), app); result.Level != LevelFail {
+			t.Fatalf("占位模块路径 %q 必须失败: %#v", placeholder, result)
+		}
 	}
 	oversizedPath := filepath.Join(app.BasePath, "oversized.mod")
 	if err := os.WriteFile(oversizedPath, []byte(strings.Repeat("x", 1024*1024+1)), 0o600); err != nil {

@@ -334,3 +334,55 @@ func TestApplyEnvironmentRejectsUnsafeTypedSnapshotBeforeCommit(t *testing.T) {
 		t.Fatal("错误的环境覆盖改变了配置")
 	}
 }
+
+func TestDynamicMapAllowsIdenticalSharedSlicesRejectsCyclesAndBoundsDiamondDAG(t *testing.T) {
+	items := []int{1, 2, 3}
+	sharedList := []interface{}{"x", "y"}
+	cfg := NewConfig()
+
+	if err := cfg.Set("map_holder", map[string]interface{}{"a": items, "b": items, "la": sharedList, "lb": sharedList}); err != nil {
+		t.Fatalf("动态 map 中合法共享同一切片头不应报错: %v", err)
+	}
+	a := cfg.Get("map_holder.a").([]int)
+	b := cfg.Get("map_holder.b").([]int)
+	a[0] = 99
+	if b[0] != 1 || items[0] != 1 {
+		t.Fatalf("动态分支之间的深拷贝未彼此隔离: a=%v b=%v items=%v", a, b, items)
+	}
+	if err := cfg.Set("map_holder.a", []int{9, 9}); err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Get("map_holder.b").([]int); got[0] != 1 {
+		t.Fatalf("修改一个动态分支影响了另一个共享来源分支: %v", got)
+	}
+
+	if err := cfg.Set("overlap", map[string]interface{}{"a": items[0:2], "b": items[1:3]}); !errors.Is(err, ErrConfigUnsupportedValue) {
+		t.Fatalf("部分错位重叠切片仍必须被拒绝: %v", err)
+	}
+
+	selfMap := map[string]interface{}{}
+	selfMap["self"] = selfMap
+	if err := cfg.Set("self_map", selfMap); !errors.Is(err, ErrConfigUnsupportedValue) || errors.Is(err, ErrConfigJSONTooDeep) {
+		t.Fatalf("自引用动态 map 应返回 ErrConfigUnsupportedValue，实际为 %v", err)
+	}
+
+	selfSlice := make([]interface{}, 1)
+	selfSlice[0] = selfSlice
+	if err := cfg.Set("self_slice", selfSlice); !errors.Is(err, ErrConfigUnsupportedValue) || errors.Is(err, ErrConfigJSONTooDeep) {
+		t.Fatalf("自引用动态 slice 应返回 ErrConfigUnsupportedValue，实际为 %v", err)
+	}
+
+	// 构造 35 层无环菱形共享 map[string]any（展开树达 2^35 节点），验证节点预算快速受控拒绝而不发生指数级 OOM。
+	leaf := map[string]interface{}{"v": 1}
+	current := leaf
+	for range 35 {
+		current = map[string]interface{}{"left": current, "right": current}
+	}
+	start := time.Now()
+	if err := cfg.Set("diamond", current); !errors.Is(err, ErrConfigUnsupportedValue) {
+		t.Fatalf("超大规模共享菱形 DAG 应受节点预算拦截并返回 ErrConfigUnsupportedValue，实际为 %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("35 层共享菱形 DAG 处理耗时过长: %s", elapsed)
+	}
+}

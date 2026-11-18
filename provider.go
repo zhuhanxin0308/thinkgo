@@ -253,9 +253,8 @@ func (app *App) initializeLateProvider(registration *providerRegistration) error
 	return initializeErr
 }
 
-// BootProviders 关闭注册阶段，等待在途 Register，并按确定顺序启动全部 Provider。
-// 该公开方法保留只启动已注册 Provider 的历史契约；App.Run 和 HTTP
-// 使用 EnsureReady 执行完整项目初始化。已经失败的初始化不允许绕过。
+// BootProviders 确保框架构造器创建的应用先完成 Initialize，再关闭注册阶段并按确定顺序启动全部 Provider。
+// 手工构造的零值 App 仍保留仅启动已注册 Provider 的底层契约；已经失败的初始化不允许绕过。
 func (app *App) BootProviders() error {
 	if app == nil {
 		return ErrNilApplication
@@ -264,6 +263,8 @@ func (app *App) BootProviders() error {
 	defer app.lifecycle.transitionLock.Unlock()
 	app.lifecycle.lock.Lock()
 	state := app.lifecycle.state
+	requiresInitialization := app.lifecycle.requiresInitialization
+	initialized := app.lifecycle.initialized
 	closed := app.lifecycle.closed
 	app.lifecycle.lock.Unlock()
 	if closed || state == ApplicationStateClosing || state == ApplicationStateClosed {
@@ -275,9 +276,17 @@ func (app *App) BootProviders() error {
 	if state == ApplicationStateRunning {
 		return nil
 	}
-	if state == ApplicationStateInitializing {
+	if (requiresInitialization && !initialized) || state == ApplicationStateInitializing {
 		if err := app.initializeLocked(); err != nil {
 			return err
+		}
+	}
+	if requiresInitialization {
+		if startupErr := app.StartupError(); startupErr != nil {
+			app.lifecycle.lock.Lock()
+			app.lifecycle.state = ApplicationStateFailed
+			app.lifecycle.lock.Unlock()
+			return startupErr
 		}
 	}
 	return app.bootProviders()

@@ -40,8 +40,7 @@ func (service *stagedApplicationService) Boot() {
 type alternateStagedApplicationService struct{ *stagedApplicationService }
 
 func TestApplicationServiceConcurrentRegistrationPreservesBootOrder(t *testing.T) {
-	app := NewAppUninitialized(t.TempDir())
-	t.Cleanup(func() { _ = app.Close() })
+	app := newStagedServiceTestApp(t)
 	started, release := make(chan struct{}), make(chan struct{})
 	var bootOrder []string
 	first := &stagedApplicationService{

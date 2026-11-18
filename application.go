@@ -370,6 +370,9 @@ func (app *App) loadNativeApplication() error {
 	if err := app.config.ApplyEnvironment(app.env); err != nil {
 		return fmt.Errorf("合并应用 %q 环境配置失败: %w", name, err)
 	}
+	if err := applyStandardApplicationEnvironment(app.config, app.env); err != nil {
+		return fmt.Errorf("合并应用 %q 环境配置失败: %w", name, err)
+	}
 	app.registrationMu.Lock()
 	app.loadingNativeDefinition = true
 	app.registrationMu.Unlock()

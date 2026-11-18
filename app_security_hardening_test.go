@@ -2,6 +2,8 @@ package framework
 
 import (
 	stdctx "context"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -200,19 +202,68 @@ func TestProductionSecurityRejectsWildcardAllowedHosts(t *testing.T) {
 	}
 }
 
-// TestSecurityWarningsUseResolvedConfig 验证安全检查只消费统一合并后的配置快照。
+// TestSecurityWarningsUseResolvedConfig 验证显式开发/测试环境跳过检查，而缺省空 app_env 执行安全检查并输出告警，
+// 且当配置省略 app_env 时通过标准 APP_ENV=production/prod/release 严格阻断不安全启动。
 func TestSecurityWarningsUseResolvedConfig(t *testing.T) {
-	driver := &securityWarningDriver{}
-	logger := log.NewLog(driver)
-	defer logger.Close()
-	app := &App{config: config.NewConfig(), log: logger}
-	app.config.Set("app.app_env", "development")
-	app.config.Set("app.server", map[string]interface{}{"allowed_hosts": []interface{}{}})
-	app.warnProductionSecurity()
-	if err := logger.Flush(stdctx.Background()); err != nil {
-		t.Fatalf("刷新开发环境告警日志失败: %v", err)
+	for _, exempt := range []string{"development", "dev", "local", "testing", "test"} {
+		driver := &securityWarningDriver{}
+		logger := log.NewLog(driver)
+		app := &App{config: config.NewConfig(), log: logger}
+		app.config.Set("app.app_env", exempt)
+		app.config.Set("app.server", map[string]interface{}{"allowed_hosts": []interface{}{}})
+		app.warnProductionSecurity()
+		if err := logger.Flush(stdctx.Background()); err != nil {
+			t.Fatalf("刷新开发环境告警日志失败: %v", err)
+		}
+		if messages := driver.snapshot(); len(messages) != 0 {
+			t.Fatalf("显式豁免环境 %q 不应输出安全告警: %#v", exempt, messages)
+		}
+		_ = logger.Close()
 	}
-	if messages := driver.snapshot(); len(messages) != 0 {
-		t.Fatalf("显式开发环境不应输出生产安全告警: %#v", messages)
+
+	// app_env 缺省为空时，默认执行安全检查并记录去重告警，但不破坏未配置 app_env 的开发/测试启动。
+	emptyEnvDriver := &securityWarningDriver{}
+	emptyEnvLogger := log.NewLog(emptyEnvDriver)
+	defer emptyEnvLogger.Close()
+	emptyEnvApp := &App{config: config.NewConfig(), log: emptyEnvLogger}
+	emptyEnvApp.config.Set("app.server", map[string]interface{}{"allowed_hosts": []interface{}{}})
+	emptyEnvApp.warnProductionSecurity()
+	emptyEnvApp.warnProductionSecurity()
+	if err := emptyEnvLogger.Flush(stdctx.Background()); err != nil {
+		t.Fatalf("刷新缺省环境告警日志失败: %v", err)
 	}
+	if messages := emptyEnvDriver.snapshot(); len(messages) == 0 {
+		t.Fatal("缺省空 app_env 应执行安全检查并输出安全告警")
+	}
+	if err := emptyEnvApp.StartupError(); err != nil {
+		t.Fatalf("缺省空 app_env 在未启用 strict 时不应阻断启动: %v", err)
+	}
+
+	// 脚手架配置未声明 app_env 字段时，标准环境变量 APP_ENV=production/prod/release 必须严格阻断不安全启动。
+	for _, prodEnv := range []string{"production", "prod", "release"} {
+		t.Run("APP_ENV="+prodEnv, func(t *testing.T) {
+			basePath := t.TempDir()
+			writeTestAppConfigFiles(t, basePath)
+			scaffoldAppJSON := `{"default_app":"index","default_timezone":"Asia/Shanghai","with_route":true,"public_path":"public","server":{"host":"127.0.0.1","port":8000},"show_error_msg":false}`
+			if err := writePrivateSecurityFile(filepath.Join(basePath, "config", "app.json"), []byte(scaffoldAppJSON)); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("APP_ENV", prodEnv)
+			t.Setenv("APP_DEBUG", "true")
+
+			app, err := initializeTestConsoleApp(t, basePath)
+			if err == nil || app.State() != ApplicationStateFailed {
+				t.Fatalf("APP_ENV=%s 下脚手架不安全配置必须阻断启动: state=%s err=%v", prodEnv, app.State(), err)
+			}
+			for _, marker := range []string{"app_debug", "security_profile", "allowed_hosts"} {
+				if !strings.Contains(err.Error(), marker) {
+					t.Fatalf("APP_ENV=%s 启动阻断缺少检查项 %q: %v", prodEnv, marker, err)
+				}
+			}
+		})
+	}
+}
+
+func writePrivateSecurityFile(path string, data []byte) error {
+	return os.WriteFile(path, data, 0o600)
 }

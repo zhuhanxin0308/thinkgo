@@ -94,6 +94,25 @@ func createAppLogChannel(app *App, channelConfig map[string]interface{}, addCons
 	return logger, nil
 }
 
+// applyEffectiveChannelLogLevels 在通道自身未声明非空 level 时继承顶层 log.level，
+// 避免空的顶层 log.level 覆盖通道级显式级别配置。
+func applyEffectiveChannelLogLevels(logger *log.Log, channelConfig map[string]interface{}, globalLevels []string) {
+	if logger == nil {
+		return
+	}
+	channelLevels, err := readLogLevels(channelConfig["level"])
+	if err != nil {
+		return
+	}
+	if len(channelLevels) > 0 {
+		logger.SetLevels(channelLevels)
+		return
+	}
+	if len(globalLevels) > 0 {
+		logger.SetLevels(globalLevels)
+	}
+}
+
 func validateThinkPHPLogChannelOptions(config map[string]interface{}) error {
 	for _, name := range []string{"single", "json", "close", "realtime_write"} {
 		if raw, exists := config[name]; exists {

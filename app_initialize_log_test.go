@@ -202,3 +202,75 @@ func TestInitializeReportsMissingDefaultLogChannel(t *testing.T) {
 		t.Fatalf("缺失默认日志通道应产生启动错误，实际为 %v", err)
 	}
 }
+
+// TestLogChannelLevelPrecedencePreservesDefaultChannelAndInheritsGlobalLevel 验证顶层 log.level
+// 省略或为空时不会抹掉默认通道的 level，且未声明通道 level 时继承顶层非空 log.level。
+func TestLogChannelLevelPrecedencePreservesDefaultChannelAndInheritsGlobalLevel(t *testing.T) {
+	t.Run("仅默认通道声明level且省略顶层level", func(t *testing.T) {
+		basePath := t.TempDir()
+		writeTestAppConfigFiles(t, basePath)
+		logConfig := `{"default":"file","channels":{"file":{"type":"file","level":["error"]}}}`
+		if err := os.WriteFile(filepath.Join(basePath, "config", "log.json"), []byte(logConfig), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		app := mustBuildTestConsoleApp(t, basePath)
+		t.Cleanup(func() { _ = app.Close() })
+		if app.Log().IsLevelEnabled("debug") || app.Log().IsLevelEnabled("info") || !app.Log().IsLevelEnabled("error") {
+			t.Fatalf("默认通道 level=[\"error\"] 被重置: debug=%t info=%t error=%t",
+				app.Log().IsLevelEnabled("debug"), app.Log().IsLevelEnabled("info"), app.Log().IsLevelEnabled("error"))
+		}
+	})
+
+	t.Run("仅默认通道声明level且顶层level为空数组", func(t *testing.T) {
+		basePath := t.TempDir()
+		writeTestAppConfigFiles(t, basePath)
+		logConfig := `{"default":"file","level":[],"channels":{"file":{"type":"file","level":["error"]}}}`
+		if err := os.WriteFile(filepath.Join(basePath, "config", "log.json"), []byte(logConfig), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		app := mustBuildTestConsoleApp(t, basePath)
+		t.Cleanup(func() { _ = app.Close() })
+		if app.Log().IsLevelEnabled("debug") || app.Log().IsLevelEnabled("warning") || !app.Log().IsLevelEnabled("error") {
+			t.Fatalf("顶层空 level=[] 不应覆盖默认通道 level: debug=%t warning=%t error=%t",
+				app.Log().IsLevelEnabled("debug"), app.Log().IsLevelEnabled("warning"), app.Log().IsLevelEnabled("error"))
+		}
+	})
+
+	t.Run("仅设顶层level时默认通道与未声明level的命名通道继承该级别", func(t *testing.T) {
+		basePath := t.TempDir()
+		writeTestAppConfigFiles(t, basePath)
+		logConfig := `{"default":"file","level":["warning"],"channels":{"file":{"type":"file"},"audit":{"type":"file","path":"runtime/audit-log"}}}`
+		if err := os.WriteFile(filepath.Join(basePath, "config", "log.json"), []byte(logConfig), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		app := mustBuildTestConsoleApp(t, basePath)
+		t.Cleanup(func() { _ = app.Close() })
+		for name, logger := range map[string]interface {
+			IsLevelEnabled(string) bool
+		}{"default": app.Log(), "audit": app.Log().Channel("audit")} {
+			if logger.IsLevelEnabled("info") || !logger.IsLevelEnabled("warning") {
+				t.Fatalf("通道 %s 未正确继承顶层 warning 级别: info=%t warning=%t", name, logger.IsLevelEnabled("info"), logger.IsLevelEnabled("warning"))
+			}
+		}
+	})
+
+	t.Run("顶层level与通道level同时存在时通道级显式配置优先", func(t *testing.T) {
+		basePath := t.TempDir()
+		writeTestAppConfigFiles(t, basePath)
+		logConfig := `{"default":"file","level":["warning"],"channels":{"file":{"type":"file","level":["error"]},"audit":{"type":"file","path":"runtime/audit-log"}}}`
+		if err := os.WriteFile(filepath.Join(basePath, "config", "log.json"), []byte(logConfig), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		app := mustBuildTestConsoleApp(t, basePath)
+		t.Cleanup(func() { _ = app.Close() })
+		if app.Log().IsLevelEnabled("warning") || !app.Log().IsLevelEnabled("error") {
+			t.Fatalf("默认通道显式 level=[\"error\"] 应优先于顶层 warning: warning=%t error=%t",
+				app.Log().IsLevelEnabled("warning"), app.Log().IsLevelEnabled("error"))
+		}
+		audit := app.Log().Channel("audit")
+		if audit.IsLevelEnabled("info") || !audit.IsLevelEnabled("warning") {
+			t.Fatalf("未声明 level 的命名通道仍应继承顶层 warning: info=%t warning=%t",
+				audit.IsLevelEnabled("info"), audit.IsLevelEnabled("warning"))
+		}
+	})
+}

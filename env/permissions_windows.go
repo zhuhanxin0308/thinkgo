@@ -31,6 +31,16 @@ func verifyEnvFilePermissions(file *os.File, _ os.FileInfo) error {
 	if err != nil {
 		return err
 	}
+	return verifyEnvSecurityDescriptor(owner, acl, current.User.Sid)
+}
+
+func verifyEnvSecurityDescriptor(owner *windows.SID, acl *windows.ACL, currentUser *windows.SID) error {
+	if acl == nil {
+		return fmt.Errorf("%w: 文件没有限制访问的 DACL", ErrEnvPermissionsTooOpen)
+	}
+	if !isTrustedEnvPrincipal(owner, currentUser) {
+		return fmt.Errorf("%w: 文件所有者 %s 不受信任", ErrEnvPermissionsTooOpen, owner)
+	}
 	for index := uint16(0); index < acl.AceCount; index++ {
 		var ace *windows.ACCESS_ALLOWED_ACE
 		if err := windows.GetAce(acl, uint32(index), &ace); err != nil {
@@ -46,11 +56,18 @@ func verifyEnvFilePermissions(file *os.File, _ os.FileInfo) error {
 			continue
 		}
 		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
-		if !sid.Equals(owner) && !sid.Equals(current.User.Sid) &&
-			!sid.IsWellKnown(windows.WinCreatorOwnerRightsSid) && !sid.IsWellKnown(windows.WinLocalSystemSid) &&
-			!sid.IsWellKnown(windows.WinBuiltinAdministratorsSid) {
+		if !isTrustedEnvPrincipal(sid, currentUser) && !sid.IsWellKnown(windows.WinCreatorOwnerRightsSid) {
 			return fmt.Errorf("%w: DACL 授权给未受信的安全主体 %s", ErrEnvPermissionsTooOpen, sid)
 		}
 	}
 	return nil
+}
+
+func isTrustedEnvPrincipal(sid, currentUser *windows.SID) bool {
+	if sid == nil {
+		return false
+	}
+	return (currentUser != nil && sid.Equals(currentUser)) ||
+		sid.IsWellKnown(windows.WinLocalSystemSid) ||
+		sid.IsWellKnown(windows.WinBuiltinAdministratorsSid)
 }

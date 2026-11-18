@@ -24,9 +24,25 @@ func TestParsePrefixesNormalizesMappedAddressesAndNetworkBits(t *testing.T) {
 		{"::ffff:192.0.2.17/96"},
 		{"::ffff:192.0.2.17/95"},
 		{"::ffff:192.0.2.17/120", "192.0.2.0/24"},
+		{"0.0.0.0/1", "128.0.0.0/1"},
+		{"128.0.0.0/1", "0.0.0.0/2", "64.0.0.0/2"},
+		{"0.0.0.0/1", "64.0.0.0/2", "128.0.0.0/1"},
+		{"::ffff:0.0.0.0/97", "::ffff:128.0.0.0/97"},
+		{"::/1", "8000::/1"},
+		{"8000::/1", "::/2", "4000::/2"},
+		{"::/1", "4000::/2", "8000::/1"},
 	} {
 		if prefixes, err := ParsePrefixes(values); err == nil || prefixes != nil {
-			t.Errorf("非法或重复 CIDR 应无部分结果: %v, %v", prefixes, err)
+			t.Errorf("非法、互补全网段或重复 CIDR 应无部分结果: %v -> %v, %v", values, prefixes, err)
+		}
+	}
+	for _, allowed := range [][]string{
+		{"0.0.0.0/2", "128.0.0.0/2"},
+		{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"},
+		{"::1/128", "fd00::/8", "2001:db8::/64", "2001:db8:1::/80"},
+	} {
+		if prefixes, err := ParsePrefixes(allowed); err != nil || len(prefixes) != len(allowed) {
+			t.Errorf("非全网段的合法 CIDR 集合不应被误拒: %v -> %v, %v", allowed, prefixes, err)
 		}
 	}
 }

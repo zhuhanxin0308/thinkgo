@@ -22,7 +22,7 @@ const (
 
 var timeType = reflect.TypeOf(time.Time{})
 
-var logKeyNormalizer = strings.NewReplacer("-", "_", ".", "_")
+var logKeyNormalizer = strings.NewReplacer("-", "_", ".", "_", ":", "_", "/", "_")
 
 var sensitiveLogKeyParts = [...]string{
 	"authorization",

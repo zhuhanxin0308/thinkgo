@@ -85,6 +85,7 @@ func (provider *appLogProvider) Initialize(app *App) error {
 		}
 	}
 
+	defaultChannelInstalled := false
 	channels, channelsValid := logConfig["channels"].(map[string]interface{})
 	if !channelsValid {
 		initializeErrors = append(initializeErrors, errors.New("日志配置 channels 必须是对象"))
@@ -108,10 +109,14 @@ func (provider *appLogProvider) Initialize(app *App) error {
 			if err != nil {
 				initializeErrors = append(initializeErrors, fmt.Errorf("初始化默认日志通道 %q 失败: %w", defaultChannel, err))
 			} else {
+				if levelsErr == nil {
+					applyEffectiveChannelLogLevels(configuredLog, channelConfig, globalLevels)
+				}
 				previousLog := app.log
 				if err := app.installManagedService(serviceKeyLog, configuredLog); err != nil {
 					return err
 				}
+				defaultChannelInstalled = true
 				if previousLog != nil && previousLog != configuredLog {
 					if err := app.resources.retire(previousLog); err != nil {
 						initializeErrors = append(initializeErrors, fmt.Errorf("关闭初始日志通道失败: %w", err))
@@ -120,7 +125,7 @@ func (provider *appLogProvider) Initialize(app *App) error {
 			}
 		}
 	}
-	if levelsErr == nil && app.log != nil {
+	if !closeLogging && !defaultChannelInstalled && levelsErr == nil && len(globalLevels) > 0 && app.log != nil {
 		app.log.SetLevels(globalLevels)
 	}
 	if channelsValid && !closeLogging && app.log != nil {
@@ -137,6 +142,9 @@ func (provider *appLogProvider) Initialize(app *App) error {
 			if err != nil {
 				initializeErrors = append(initializeErrors, fmt.Errorf("初始化日志通道 %q 失败: %w", name, err))
 				continue
+			}
+			if levelsErr == nil {
+				applyEffectiveChannelLogLevels(channel, channelConfig, globalLevels)
 			}
 			if err := app.log.RegisterChannel(name, channel); err != nil {
 				_ = channel.Close()
