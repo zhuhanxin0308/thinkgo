@@ -268,6 +268,16 @@ func (m *Model) applyGetters(row map[string]interface{}) map[string]interface{} 
 	return row
 }
 
+func (m *Model) hasGetters() bool {
+	if m == nil {
+		return false
+	}
+	m.mu.RLock()
+	registered := len(m.getterSnapshot) > 0
+	m.mu.RUnlock()
+	return registered
+}
+
 // applySetters 对写入数据应用修改器转换。
 func (m *Model) applySetters(data map[string]interface{}) map[string]interface{} {
 	if m == nil || data == nil {
