@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"reflect"
 	"regexp"
+	"slices"
+	"sort"
 	"strings"
 	"sync"
 
@@ -54,15 +56,22 @@ type Route struct {
 	name               string
 	patterns           map[string]string
 	compiled           map[string]*regexp.Regexp
+	explicitPatterns   map[string]bool
 	domain             string
+	explicitDomain     bool
 	ext                string
 	extensionRequired  bool
+	explicitExt        bool
 	literalExtension   bool
 	jsonContract       bool
 	pathParts          []routePart
 	trailingSlash      bool
 	controllerLayer    string
 	order              int
+	removed            bool
+	isMiss             bool
+	missPrefix         string
+	missParts          []routePart
 }
 
 type routePart struct {
@@ -120,6 +129,7 @@ type Router struct {
 	cachedNames   map[string]*Route
 	missRoute     *Route
 	missRoutes    map[string]*Route
+	missList      []*Route
 	frozen        bool
 	freezeErr     error
 
@@ -137,18 +147,24 @@ type Router struct {
 
 // Group 是不可变的路由注册作用域，可安全嵌套且不会污染其他协程的注册上下文。
 type Group struct {
-	router      *Router
-	prefix      string
-	domain      string
-	middlewares []routeMiddleware
+	router            *Router
+	prefix            string
+	domain            string
+	ext               string
+	extensionRequired bool
+	patterns          map[string]string
+	middlewares       []routeMiddleware
 }
 
 type routeDefinition struct {
-	method      string
-	path        string
-	handler     HandlerFunc
-	middlewares []routeMiddleware
-	domain      string
+	method            string
+	path              string
+	handler           HandlerFunc
+	middlewares       []routeMiddleware
+	domain            string
+	ext               string
+	extensionRequired bool
+	patterns          map[string]string
 }
 
 // NewRouter 创建处于注册状态的路由器；默认强制显式路由，不进行自动控制器调度。
@@ -217,6 +233,15 @@ func (r *Router) SetCaseSensitive(caseSensitive bool) error {
 	defer r.mu.Unlock()
 	if r.frozen {
 		return ErrRouterFrozen
+	}
+	if !caseSensitive && r.caseSensitive {
+		for index := 0; index < len(r.routes); index++ {
+			for previous := 0; previous < index; previous++ {
+				if sameRouteIdentityWithCase(r.routes[previous], r.routes[index], false) {
+					return fmt.Errorf("%w: %s %s domain=%q", ErrDuplicateRoute, r.routes[index].method, r.routes[index].path, r.routes[index].domain)
+				}
+			}
+		}
 	}
 	r.caseSensitive = caseSensitive
 	return nil
@@ -353,18 +378,54 @@ func (r *Router) Redirect(path, target string, codes ...int) (*Route, error) {
 	return r.rootGroup().Redirect(path, target, codes...)
 }
 
+// RootGroup 返回路由器根注册作用域副本，供门面层派生链式前置修饰分组。
+func (r *Router) RootGroup() *Group {
+	if r == nil {
+		return nil
+	}
+	return r.rootGroup()
+}
+
 func (r *Router) rootGroup() *Group {
 	return &Group{router: r}
 }
 
+func (g *Group) clone() *Group {
+	if g == nil {
+		return nil
+	}
+	copied := *g
+	copied.middlewares = slices.Clone(g.middlewares)
+	copied.patterns = cloneRoutePatterns(g.patterns)
+	return &copied
+}
+
+func cloneRoutePatterns(patterns map[string]string) map[string]string {
+	if len(patterns) == 0 {
+		return nil
+	}
+	cloned := make(map[string]string, len(patterns))
+	for name, pattern := range patterns {
+		cloned[name] = pattern
+	}
+	return cloned
+}
+
+func (g *Group) newDefinition(method, path string, handler HandlerFunc, handlers []middleware.Handler) routeDefinition {
+	return routeDefinition{
+		method:            method,
+		path:              joinRoutePath(g.prefix, path),
+		handler:           handler,
+		middlewares:       mergeMiddleware(g.middlewares, handlers),
+		domain:            g.domain,
+		ext:               g.ext,
+		extensionRequired: g.extensionRequired,
+		patterns:          cloneRoutePatterns(g.patterns),
+	}
+}
+
 func (g *Group) Add(method, path string, handler HandlerFunc, handlers ...middleware.Handler) (*Route, error) {
-	definitions := []routeDefinition{{
-		method:      method,
-		path:        joinRoutePath(g.prefix, path),
-		handler:     handler,
-		middlewares: mergeMiddleware(g.middlewares, handlers),
-		domain:      g.domain,
-	}}
+	definitions := []routeDefinition{g.newDefinition(method, path, handler, handlers)}
 	routes, err := g.router.registerDefinitions(definitions)
 	if err != nil {
 		return nil, err
@@ -441,12 +502,251 @@ func (g *Group) scoped(domain, prefix string, fn func(*Group) error, handlers ..
 		}
 	}
 	next := &Group{
-		router:      g.router,
-		prefix:      nextPrefix,
-		domain:      nextDomain,
-		middlewares: mergeMiddleware(g.middlewares, handlers),
+		router:            g.router,
+		prefix:            nextPrefix,
+		domain:            nextDomain,
+		ext:               g.ext,
+		extensionRequired: g.extensionRequired,
+		patterns:          cloneRoutePatterns(g.patterns),
+		middlewares:       mergeMiddleware(g.middlewares, handlers),
 	}
 	return fn(next)
+}
+
+// WithDomain 派生精确域名约束的分组作用域。
+func (g *Group) WithDomain(domain string) (*Group, error) {
+	if g == nil || g.router == nil {
+		return nil, ErrInvalidRoute
+	}
+	normalized, err := normalizeAndValidateRouteDomain(domain)
+	if err != nil {
+		return nil, err
+	}
+	if normalized == "" {
+		return nil, fmt.Errorf("%w: 单路由域名不能为空", ErrInvalidRouteDomain)
+	}
+	g.router.mu.RLock()
+	defer g.router.mu.RUnlock()
+	if g.router.frozen {
+		return nil, ErrRouterFrozen
+	}
+	next := g.clone()
+	next.domain = normalized
+	return next, nil
+}
+
+// ApplyDomainToRoutes 将分组后置域名约束原子回填到未显式覆盖域名的组内路由。
+func (g *Group) ApplyDomainToRoutes(routes []*Route, domain string) (*Group, error) {
+	if g == nil || g.router == nil {
+		return nil, ErrInvalidRoute
+	}
+	normalized, err := normalizeAndValidateRouteDomain(domain)
+	if err != nil {
+		return nil, err
+	}
+	if normalized == "" {
+		return nil, fmt.Errorf("%w: 单路由域名不能为空", ErrInvalidRouteDomain)
+	}
+	g.router.mu.Lock()
+	defer g.router.mu.Unlock()
+	if g.router.frozen {
+		return nil, ErrRouterFrozen
+	}
+	active := uniqueActiveRoutes(routes)
+	mutating := make(map[*Route]struct{}, len(active))
+	candidates := make([]*Route, 0, len(active))
+	for _, registered := range active {
+		if registered.isMiss || registered.explicitDomain {
+			continue
+		}
+		mutating[registered] = struct{}{}
+		copied := *registered
+		copied.domain = normalized
+		candidates = append(candidates, &copied)
+	}
+	for _, candidate := range candidates {
+		if g.router.findBatchMutationDuplicateLocked(candidate, mutating, candidates) != nil {
+			return nil, fmt.Errorf("%w: %s %s domain=%q", ErrDuplicateRoute, candidate.method, candidate.path, normalized)
+		}
+	}
+	for _, registered := range active {
+		if !registered.explicitDomain {
+			registered.domain = normalized
+		}
+	}
+	next := g.clone()
+	next.domain = normalized
+	return next, nil
+}
+
+// WithExtension 派生扩展名约束的分组作用域。
+func (g *Group) WithExtension(extension string) (*Group, error) {
+	if g == nil || g.router == nil {
+		return nil, ErrInvalidRoute
+	}
+	normalized, err := normalizeRouteExtension(extension)
+	if err != nil {
+		return nil, err
+	}
+	g.router.mu.RLock()
+	defer g.router.mu.RUnlock()
+	if g.router.frozen {
+		return nil, ErrRouterFrozen
+	}
+	next := g.clone()
+	next.ext = normalized
+	next.extensionRequired = true
+	return next, nil
+}
+
+// ApplyExtensionToRoutes 将分组后置扩展名约束原子回填到未显式覆盖扩展名的组内路由。
+func (g *Group) ApplyExtensionToRoutes(routes []*Route, extension string) (*Group, error) {
+	if g == nil || g.router == nil {
+		return nil, ErrInvalidRoute
+	}
+	normalized, err := normalizeRouteExtension(extension)
+	if err != nil {
+		return nil, err
+	}
+	g.router.mu.Lock()
+	defer g.router.mu.Unlock()
+	if g.router.frozen {
+		return nil, ErrRouterFrozen
+	}
+	active := uniqueActiveRoutes(routes)
+	mutating := make(map[*Route]struct{}, len(active))
+	candidates := make([]*Route, 0, len(active))
+	for _, registered := range active {
+		if registered.isMiss || registered.explicitExt {
+			continue
+		}
+		mutating[registered] = struct{}{}
+		copied := *registered
+		copied.ext = normalized
+		candidates = append(candidates, &copied)
+	}
+	for _, candidate := range candidates {
+		if g.router.findBatchMutationDuplicateLocked(candidate, mutating, candidates) != nil {
+			return nil, fmt.Errorf("%w: %s %s extension=%q", ErrDuplicateRoute, candidate.method, candidate.path, normalized)
+		}
+	}
+	for _, registered := range active {
+		if !registered.explicitExt {
+			registered.ext = normalized
+			registered.extensionRequired = true
+		}
+	}
+	next := g.clone()
+	next.ext = normalized
+	next.extensionRequired = true
+	return next, nil
+}
+
+// WithPatterns 派生携带变量正则约束的分组作用域。
+func (g *Group) WithPatterns(patterns map[string]string) (*Group, error) {
+	if g == nil || g.router == nil {
+		return nil, ErrInvalidRoute
+	}
+	compiledMap, normalizedMap, err := compileGroupPatterns(patterns)
+	if err != nil {
+		return nil, err
+	}
+	_ = compiledMap
+	g.router.mu.RLock()
+	defer g.router.mu.RUnlock()
+	if g.router.frozen {
+		return nil, ErrRouterFrozen
+	}
+	next := g.clone()
+	if len(normalizedMap) > 0 {
+		if next.patterns == nil {
+			next.patterns = make(map[string]string, len(normalizedMap))
+		}
+		for param, pattern := range normalizedMap {
+			next.patterns[param] = pattern
+		}
+	}
+	return next, nil
+}
+
+// ApplyPatternsToRoutes 将分组后置变量正则约束原子回填到包含对应变量且未显式覆盖约束的组内路由。
+func (g *Group) ApplyPatternsToRoutes(routes []*Route, patterns map[string]string) (*Group, error) {
+	if g == nil || g.router == nil {
+		return nil, ErrInvalidRoute
+	}
+	compiledMap, normalizedMap, err := compileGroupPatterns(patterns)
+	if err != nil {
+		return nil, err
+	}
+	g.router.mu.Lock()
+	defer g.router.mu.Unlock()
+	if g.router.frozen {
+		return nil, ErrRouterFrozen
+	}
+	keys := make([]string, 0, len(normalizedMap))
+	for param := range normalizedMap {
+		keys = append(keys, param)
+	}
+	sort.Strings(keys)
+	for _, registered := range uniqueActiveRoutes(routes) {
+		if registered.isMiss {
+			continue
+		}
+		for _, param := range keys {
+			if registered.explicitPatterns[param] || !routeHasParam(registered.path, param) {
+				continue
+			}
+			registered.patterns[param] = normalizedMap[param]
+			registered.compiled[param] = compiledMap[param]
+		}
+	}
+	next := g.clone()
+	if len(normalizedMap) > 0 {
+		if next.patterns == nil {
+			next.patterns = make(map[string]string, len(normalizedMap))
+		}
+		for param, pattern := range normalizedMap {
+			next.patterns[param] = pattern
+		}
+	}
+	return next, nil
+}
+
+func compileGroupPatterns(patterns map[string]string) (map[string]*regexp.Regexp, map[string]string, error) {
+	if len(patterns) == 0 {
+		return nil, nil, nil
+	}
+	keys := make([]string, 0, len(patterns))
+	for rawParam := range patterns {
+		keys = append(keys, rawParam)
+	}
+	sort.Strings(keys)
+	compiledMap := make(map[string]*regexp.Regexp, len(patterns))
+	normalizedMap := make(map[string]string, len(patterns))
+	for _, rawParam := range keys {
+		param := strings.TrimSpace(rawParam)
+		if !isValidAutoRouteSegment(param) || strings.Contains(param, ":") {
+			return nil, nil, fmt.Errorf("%w: 参数名 %q 非法", ErrInvalidRoutePattern, rawParam)
+		}
+		regex, err := compileRoutePattern(param, patterns[rawParam])
+		if err != nil {
+			return nil, nil, err
+		}
+		compiledMap[param] = regex
+		normalizedMap[param] = patterns[rawParam]
+	}
+	return compiledMap, normalizedMap, nil
+}
+
+func compileRoutePattern(param, pattern string) (*regexp.Regexp, error) {
+	if pattern == "" || len(pattern) > maxRoutePatternLength || strings.Contains(pattern, "(?P<") || strings.Contains(pattern, "(?<") {
+		return nil, fmt.Errorf("%w: 参数 %q 的约束非法", ErrInvalidRoutePattern, param)
+	}
+	compiled, err := regexp.Compile("^(?:" + pattern + ")$")
+	if err != nil {
+		return nil, fmt.Errorf("%w: 参数 %q: %v", ErrInvalidRoutePattern, param, err)
+	}
+	return compiled, nil
 }
 
 func (g *Group) Rule(path string, handler HandlerFunc, methods string, handlers ...middleware.Handler) ([]*Route, error) {
@@ -460,13 +760,7 @@ func (g *Group) Rule(path string, handler HandlerFunc, methods string, handlers 
 		if method == "" {
 			return nil, fmt.Errorf("%w: methods 包含空项", ErrInvalidRoute)
 		}
-		definitions = append(definitions, routeDefinition{
-			method:      method,
-			path:        joinRoutePath(g.prefix, path),
-			handler:     handler,
-			middlewares: mergeMiddleware(g.middlewares, handlers),
-			domain:      g.domain,
-		})
+		definitions = append(definitions, g.newDefinition(method, path, handler, handlers))
 	}
 	return g.router.registerDefinitions(definitions)
 }
@@ -561,6 +855,20 @@ func (r *Router) Freeze() error {
 	for method := range dynamicRoutes {
 		sortRoutes(dynamicRoutes[method])
 	}
+	for _, miss := range r.missList {
+		if miss == nil || miss.removed {
+			continue
+		}
+		if miss.missPrefix != "" {
+			parts, _, err := parseRoutePath(miss.missPrefix)
+			if err != nil {
+				r.freezeErr = err
+				r.frozen = true
+				return err
+			}
+			miss.missParts = parts
+		}
+	}
 	r.staticRoutes = staticRoutes
 	r.dynamicRoutes = dynamicRoutes
 	r.dynamicIndex = buildRouteIndex(dynamicRoutes)
@@ -604,20 +912,71 @@ func (r *Router) registerDefinitions(definitions []routeDefinition) ([]*Route, e
 
 func (r *Router) findDuplicateLocked(candidate, ignored *Route, candidates []*Route) *Route {
 	for _, existing := range r.routes {
-		if existing != ignored && sameRouteIdentity(existing, candidate) {
+		if existing != ignored && r.sameRouteIdentity(existing, candidate) {
 			return existing
 		}
 	}
 	for _, existing := range candidates {
-		if existing != candidate && existing != ignored && sameRouteIdentity(existing, candidate) {
+		if existing != candidate && existing != ignored && r.sameRouteIdentity(existing, candidate) {
 			return existing
 		}
 	}
 	return nil
 }
 
-func sameRouteIdentity(left, right *Route) bool {
-	return left.method == right.method && left.path == right.path && left.domain == right.domain && left.ext == right.ext
+func (r *Router) findBatchMutationDuplicateLocked(candidate *Route, mutating map[*Route]struct{}, candidates []*Route) *Route {
+	for _, existing := range r.routes {
+		if _, inBatch := mutating[existing]; inBatch {
+			continue
+		}
+		if r.sameRouteIdentity(existing, candidate) {
+			return existing
+		}
+	}
+	for _, existing := range candidates {
+		if existing != candidate && r.sameRouteIdentity(existing, candidate) {
+			return existing
+		}
+	}
+	return nil
+}
+
+func (r *Router) sameRouteIdentity(left, right *Route) bool {
+	return sameRouteIdentityWithCase(left, right, r == nil || r.caseSensitive)
+}
+
+func sameRouteIdentityWithCase(left, right *Route, caseSensitive bool) bool {
+	return left.method == right.method &&
+		left.domain == right.domain &&
+		left.ext == right.ext &&
+		sameRoutePath(left.path, right.path, caseSensitive)
+}
+
+func sameRoutePath(leftPath, rightPath string, caseSensitive bool) bool {
+	if leftPath == rightPath {
+		return true
+	}
+	if caseSensitive {
+		return false
+	}
+	leftParts := strings.Split(strings.Trim(leftPath, "/"), "/")
+	rightParts := strings.Split(strings.Trim(rightPath, "/"), "/")
+	if len(leftParts) != len(rightParts) {
+		return false
+	}
+	for index := range leftParts {
+		leftPart, rightPart := leftParts[index], rightParts[index]
+		if strings.HasPrefix(leftPart, ":") || strings.HasPrefix(rightPart, ":") {
+			if leftPart != rightPart {
+				return false
+			}
+			continue
+		}
+		if routeLiteralFoldKey(leftPart) != routeLiteralFoldKey(rightPart) {
+			return false
+		}
+	}
+	return true
 }
 
 // mutableRouter 返回路由所属的可配置路由器，零值路由统一以错误方式安全失败。
@@ -664,20 +1023,21 @@ func (r *Route) WithPattern(param, pattern string) error {
 	if !routeHasParam(r.path, param) {
 		return fmt.Errorf("%w: 路径 %s 不包含参数 %q", ErrInvalidRoutePattern, r.path, param)
 	}
-	if pattern == "" || len(pattern) > maxRoutePatternLength || strings.Contains(pattern, "(?P<") || strings.Contains(pattern, "(?<") {
-		return fmt.Errorf("%w: 参数 %q 的约束非法", ErrInvalidRoutePattern, param)
-	}
-	compiled, err := regexp.Compile("^(?:" + pattern + ")$")
+	compiled, err := compileRoutePattern(param, pattern)
 	if err != nil {
-		return fmt.Errorf("%w: 参数 %q: %v", ErrInvalidRoutePattern, param, err)
+		return err
 	}
 	router.mu.Lock()
 	defer router.mu.Unlock()
 	if router.frozen {
 		return ErrRouterFrozen
 	}
+	if r.explicitPatterns == nil {
+		r.explicitPatterns = make(map[string]bool)
+	}
 	r.patterns[param] = pattern
 	r.compiled[param] = compiled
+	r.explicitPatterns[param] = true
 	return nil
 }
 
@@ -699,12 +1059,15 @@ func (r *Route) WithDomain(domain string) error {
 	if router.frozen {
 		return ErrRouterFrozen
 	}
-	candidate := *r
-	candidate.domain = normalized
-	if router.findDuplicateLocked(&candidate, r, nil) != nil {
-		return fmt.Errorf("%w: %s %s domain=%q", ErrDuplicateRoute, r.method, r.path, normalized)
+	if !r.isMiss {
+		candidate := *r
+		candidate.domain = normalized
+		if router.findDuplicateLocked(&candidate, r, nil) != nil {
+			return fmt.Errorf("%w: %s %s domain=%q", ErrDuplicateRoute, r.method, r.path, normalized)
+		}
 	}
 	r.domain = normalized
+	r.explicitDomain = true
 	return nil
 }
 
@@ -723,13 +1086,16 @@ func (r *Route) WithExtension(extension string) error {
 	if router.frozen {
 		return ErrRouterFrozen
 	}
-	candidate := *r
-	candidate.ext = normalized
-	if router.findDuplicateLocked(&candidate, r, nil) != nil {
-		return fmt.Errorf("%w: %s %s extension=%q", ErrDuplicateRoute, r.method, r.path, normalized)
+	if !r.isMiss {
+		candidate := *r
+		candidate.ext = normalized
+		if router.findDuplicateLocked(&candidate, r, nil) != nil {
+			return fmt.Errorf("%w: %s %s extension=%q", ErrDuplicateRoute, r.method, r.path, normalized)
+		}
 	}
 	r.ext = normalized
 	r.extensionRequired = true
+	r.explicitExt = true
 	return nil
 }
 
@@ -790,6 +1156,7 @@ func (r *Route) ControllerLayer() string {
 }
 
 func (r *Router) removeRouteLocked(target *Route) {
+	target.removed = true
 	for index, registered := range r.routes {
 		if registered == target {
 			r.routes = append(r.routes[:index], r.routes[index+1:]...)

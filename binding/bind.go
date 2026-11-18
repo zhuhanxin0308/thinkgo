@@ -141,8 +141,8 @@ func Bind(request *fwcontext.Request, target any, options ...validate.Option) er
 		if !exists {
 			continue
 		}
-		if raw != nil && data != nil {
-			data[item.name] = raw
+		if data != nil {
+			data[item.name] = validationFieldValue(item.node, raw)
 		}
 		state.assign(item.node, fieldValue(next, item.index), raw, path, 0)
 	}
@@ -197,6 +197,10 @@ func (state *bindState) parameter(plan *node, values []string, path string) (any
 		return values[0], true
 	}
 	if plan.typ.Kind() == reflect.Slice || plan.typ.Kind() == reflect.Array {
+		if plan.typ.Kind() == reflect.Slice && len(values) > maxSliceBindingElements {
+			state.fail(path, "length", fmt.Sprintf("数组元素数量超过上限 %d", maxSliceBindingElements))
+			return nil, false
+		}
 		result := make([]any, 0, len(values))
 		for index, text := range values {
 			value, ok := state.parameter(plan.elem, []string{text}, fmt.Sprintf("%s[%d]", path, index))
@@ -254,6 +258,10 @@ func (state *bindState) assign(plan *node, target reflect.Value, raw any, path s
 		return
 	}
 	if plan.rawJSON {
+		if message, ok := raw.(json.RawMessage); ok {
+			target.SetBytes(append([]byte(nil), message...))
+			return
+		}
 		encoded, err := json.Marshal(raw)
 		if err != nil {
 			state.fail(path, "json", "JSON 字段编码无效")
@@ -335,8 +343,8 @@ func (state *bindState) assign(plan *node, target reflect.Value, raw any, path s
 			if !exists {
 				continue
 			}
-			if value != nil && data != nil {
-				data[item.name] = value
+			if data != nil {
+				data[item.name] = validationFieldValue(item.node, value)
 			}
 			state.assign(item.node, fieldValue(target, item.index), value, path+"."+item.name, depth+1)
 		}
@@ -349,6 +357,10 @@ func (state *bindState) assign(plan *node, target reflect.Value, raw any, path s
 			return
 		}
 		if target.Kind() == reflect.Slice {
+			if len(values) > maxSliceBindingElements {
+				state.fail(path, "length", fmt.Sprintf("数组元素数量超过上限 %d", maxSliceBindingElements))
+				return
+			}
 			target.Set(reflect.MakeSlice(target.Type(), len(values), len(values)))
 		}
 		for index, value := range values {
@@ -372,6 +384,27 @@ func (state *bindState) assign(plan *node, target reflect.Value, raw any, path s
 			state.fail(path, "type", "字段类型或数值范围无效")
 		}
 	}
+}
+
+func validationFieldValue(plan *node, raw any) any {
+	if raw == nil {
+		return nil
+	}
+	if underlyingNode(plan).rawJSON {
+		if message, ok := raw.(json.RawMessage); ok {
+			trimmed := strings.TrimSpace(string(message))
+			if trimmed == "" || trimmed == "null" {
+				return nil
+			}
+			return json.RawMessage(trimmed)
+		}
+		encoded, err := json.Marshal(raw)
+		if err != nil || len(encoded) == 0 || string(encoded) == "null" {
+			return nil
+		}
+		return json.RawMessage(encoded)
+	}
+	return raw
 }
 
 func (state *bindState) validate(plan *node, data map[string]any, target reflect.Value, path func(field) string) {

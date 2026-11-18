@@ -11,8 +11,17 @@ func (r *Route) AddWithCommit(method, path string, handler route.HandlerFunc, co
 	if r == nil || r.router == nil {
 		return nil, route.ErrInvalidRoute
 	}
+	var (
+		registered *route.Route
+		err        error
+	)
 	if group := r.currentScope(); group != nil {
-		return group.AddWithCommit(method, path, handler, commit, handlers...)
+		registered, err = group.AddWithCommit(method, path, handler, commit, handlers...)
+	} else {
+		registered, err = r.router.AddWithCommit(method, path, handler, commit, handlers...)
 	}
-	return r.router.AddWithCommit(method, path, handler, commit, handlers...)
+	if err == nil && registered != nil {
+		r.recordRoutes(registered)
+	}
+	return registered, err
 }

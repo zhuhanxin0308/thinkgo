@@ -1,6 +1,7 @@
 package binding
 
 import (
+	"bytes"
 	"encoding"
 	"encoding/json"
 	"errors"
@@ -17,8 +18,9 @@ import (
 )
 
 const (
-	maximumDepth  = 64
-	maximumFields = 1024
+	maximumDepth            = 64
+	maximumFields           = 1024
+	maxSliceBindingElements = 65536
 )
 
 var (
@@ -320,10 +322,22 @@ func compileFields(typ reflect.Type, root, output bool, building map[planKey]*no
 			if !json.Valid([]byte(encoded)) {
 				return nil, fmt.Errorf("%w: 字段 %s 默认值不是单一 JSON 值", ErrDefinition, spec.Name)
 			}
-			decoder := json.NewDecoder(strings.NewReader(encoded))
-			decoder.UseNumber()
-			if err := decoder.Decode(&item.defaultValue); err != nil {
-				return nil, fmt.Errorf("%w: 字段 %s 默认值无效", ErrDefinition, spec.Name)
+			if underlyingNode(child).rawJSON {
+				if strings.TrimSpace(encoded) == "null" {
+					item.defaultValue = nil
+				} else {
+					var compact bytes.Buffer
+					if err := json.Compact(&compact, []byte(encoded)); err != nil {
+						return nil, fmt.Errorf("%w: 字段 %s 默认值无效", ErrDefinition, spec.Name)
+					}
+					item.defaultValue = json.RawMessage(compact.Bytes())
+				}
+			} else {
+				decoder := json.NewDecoder(strings.NewReader(encoded))
+				decoder.UseNumber()
+				if err := decoder.Decode(&item.defaultValue); err != nil {
+					return nil, fmt.Errorf("%w: 字段 %s 默认值无效", ErrDefinition, spec.Name)
+				}
 			}
 			probe := reflect.New(spec.Type).Elem()
 			state := bindState{}
@@ -332,7 +346,7 @@ func compileFields(typ reflect.Type, root, output bool, building map[planKey]*no
 				return nil, fmt.Errorf("%w: 字段 %s 默认值类型无效", ErrDefinition, spec.Name)
 			}
 			if item.rules != "" {
-				validation, err := validate.ValidateRules(map[string]interface{}{item.name: item.defaultValue}, map[string]string{item.name: item.rules})
+				validation, err := validate.ValidateRules(map[string]interface{}{item.name: validationFieldValue(child, item.defaultValue)}, map[string]string{item.name: item.rules})
 				if err != nil || !validation.Valid() {
 					return nil, fmt.Errorf("%w: 字段 %s 默认值不符合规则", ErrDefinition, spec.Name)
 				}

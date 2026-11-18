@@ -23,13 +23,7 @@ func (g *Group) AddWithCommit(method, path string, handler HandlerFunc, commit f
 	if g == nil || g.router == nil || commit == nil {
 		return nil, ErrInvalidRoute
 	}
-	definitions := []routeDefinition{{
-		method:      method,
-		path:        joinRoutePath(g.prefix, path),
-		handler:     handler,
-		middlewares: mergeMiddleware(g.middlewares, handlers),
-		domain:      g.domain,
-	}}
+	definitions := []routeDefinition{g.newDefinition(method, path, handler, handlers)}
 	routes, err := g.router.registerDefinitionsWithCommit(definitions, commit)
 	if err != nil {
 		return nil, err
@@ -65,6 +59,28 @@ func (r *Router) registerDefinitionsWithCommit(definitions []routeDefinition, co
 		if err != nil {
 			return nil, err
 		}
+		ext := ""
+		extensionRequired := false
+		if definition.ext != "" {
+			ext, err = normalizeRouteExtension(definition.ext)
+			if err != nil {
+				return nil, err
+			}
+			extensionRequired = definition.extensionRequired
+		}
+		patterns := make(map[string]string)
+		compiled := make(map[string]*regexp.Regexp)
+		for param, pattern := range definition.patterns {
+			if !routeHasParam(path, param) {
+				continue
+			}
+			regex, compileErr := compileRoutePattern(param, pattern)
+			if compileErr != nil {
+				return nil, compileErr
+			}
+			patterns[param] = pattern
+			compiled[param] = regex
+		}
 		_, jsonContract := definition.handler.(*JSONHandler)
 		prepared = append(prepared, &Route{
 			router:             r,
@@ -73,9 +89,12 @@ func (r *Router) registerDefinitionsWithCommit(definitions []routeDefinition, co
 			handler:            definition.handler,
 			middlewares:        slices.Clone(definition.middlewares),
 			middlewarePipeline: buildMiddlewarePipeline(definition.middlewares),
-			patterns:           make(map[string]string),
-			compiled:           make(map[string]*regexp.Regexp),
+			patterns:           patterns,
+			compiled:           compiled,
+			explicitPatterns:   make(map[string]bool),
 			domain:             domain,
+			ext:                ext,
+			extensionRequired:  extensionRequired,
 			jsonContract:       jsonContract,
 			trailingSlash:      routeHasTrailingSlash(definition.path),
 		})
@@ -94,11 +113,13 @@ func (r *Router) registerDefinitionsWithCommit(definitions []routeDefinition, co
 	if commit != nil {
 		candidate := prepared[0]
 		if err := commit(RouteInfo{
-			Method:          candidate.method,
-			Path:            candidate.path,
-			Handler:         candidate.handler,
-			Domain:          candidate.domain,
-			MiddlewareCount: len(candidate.middlewares),
+			Method:            candidate.method,
+			Path:              candidate.path,
+			Handler:           candidate.handler,
+			Domain:            candidate.domain,
+			Extension:         candidate.ext,
+			ExtensionRequired: candidate.extensionRequired,
+			MiddlewareCount:   len(candidate.middlewares),
 		}); err != nil {
 			return nil, err
 		}

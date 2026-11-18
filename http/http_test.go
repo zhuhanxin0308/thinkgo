@@ -509,8 +509,8 @@ func TestServeHTTPRejectsEncodedStaticSeparator(t *testing.T) {
 	handler := newTestHTTPHandler(t, newTestHTTPApp(t, basePath, map[string]interface{}{"enable": false}))
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, httptest.NewRequest(stdhttp.MethodGet, "http://example.com/assets%2Fprivate.txt", nil))
-	if recorder.Code != stdhttp.StatusNotFound || strings.Contains(recorder.Body.String(), "private-static") {
-		t.Fatalf("编码路径分隔符不得命中静态文件，status=%d body=%q", recorder.Code, recorder.Body.String())
+	if recorder.Code != stdhttp.StatusBadRequest || strings.Contains(recorder.Body.String(), "private-static") {
+		t.Fatalf("编码路径分隔符不得命中静态文件且应拒绝非法路径，status=%d body=%q", recorder.Code, recorder.Body.String())
 	}
 }
 

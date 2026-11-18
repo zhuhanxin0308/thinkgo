@@ -319,7 +319,7 @@ func ownedMergeStaticRouteMatch(router *Router, request *fwcontext.Request) (*Ro
 			return matched, nil, nil
 		}
 	}
-	if miss := router.matchMissRoute(method); miss != nil {
+	if miss := router.matchMissRoute(method, requestParts, host); miss != nil {
 		return miss, nil, nil
 	}
 	if method == http.MethodOptions {

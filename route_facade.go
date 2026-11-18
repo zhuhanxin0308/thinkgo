@@ -20,7 +20,7 @@ type Route struct {
 	app        *App
 	router     *frameworkRoute.Router
 	scopeMu    sync.RWMutex
-	scopeStack []*frameworkRoute.Group
+	scopeStack []*RuleGroup
 }
 
 // RuleItem 对应 ThinkPHP 的 think\route\RuleItem，并提供链式规则配置。
@@ -30,8 +30,11 @@ type RuleItem struct {
 
 // RuleGroup 对应 ThinkPHP 的 think\route\RuleGroup。
 type RuleGroup struct {
-	route *Route
-	group *frameworkRoute.Group
+	route     *Route
+	group     *frameworkRoute.Group
+	rulesMu   *sync.Mutex
+	rules     *[]*frameworkRoute.Route
+	completed bool
 }
 
 // Resource 对应 ThinkPHP 的资源路由注册对象。
@@ -70,15 +73,73 @@ func mustRouteConfiguration(err error) {
 	}
 }
 
+func newScopedRuleGroup(facade *Route, group *frameworkRoute.Group) *RuleGroup {
+	collected := make([]*frameworkRoute.Route, 0)
+	return &RuleGroup{
+		route:   facade,
+		group:   group,
+		rulesMu: &sync.Mutex{},
+		rules:   &collected,
+	}
+}
+
+func (g *RuleGroup) appendCollectedRoutes(rules ...*frameworkRoute.Route) {
+	if g == nil || g.rules == nil || len(rules) == 0 {
+		return
+	}
+	g.rulesMu.Lock()
+	*g.rules = append(*g.rules, rules...)
+	g.rulesMu.Unlock()
+}
+
+func (g *RuleGroup) snapshotRules() []*frameworkRoute.Route {
+	if g == nil || g.rules == nil {
+		return nil
+	}
+	g.rulesMu.Lock()
+	defer g.rulesMu.Unlock()
+	return append([]*frameworkRoute.Route(nil), (*g.rules)...)
+}
+
+func (g *RuleGroup) withUpdatedGroup(group *frameworkRoute.Group) *RuleGroup {
+	return &RuleGroup{
+		route:     g.route,
+		group:     group,
+		rulesMu:   g.rulesMu,
+		rules:     g.rules,
+		completed: g.completed,
+	}
+}
+
+func (g *RuleGroup) recordRoutes(rules ...*frameworkRoute.Route) {
+	if len(rules) == 0 {
+		return
+	}
+	if g != nil && g.completed {
+		g.appendCollectedRoutes(rules...)
+	}
+	if g != nil && g.route != nil {
+		g.route.recordRoutes(rules...)
+	}
+}
+
 // Add 注册指定 HTTP 方法的路由。
 func (r *Route) Add(method, rule string, handler frameworkRoute.HandlerFunc, handlers ...middleware.Handler) *RuleItem {
 	if r == nil || r.router == nil {
 		panic(frameworkRoute.ErrInvalidRoute)
 	}
+	var (
+		registered *frameworkRoute.Route
+		err        error
+	)
 	if group := r.currentScope(); group != nil {
-		return mustRouteRule(group.Add(method, rule, handler, handlers...))
+		registered, err = group.Add(method, rule, handler, handlers...)
+	} else {
+		registered, err = r.router.Add(method, rule, handler, handlers...)
 	}
-	return mustRouteRule(r.router.Add(method, rule, handler, handlers...))
+	item := mustRouteRule(registered, err)
+	r.recordRoutes(registered)
+	return item
 }
 
 // Rule 注册一个或多个 HTTP 方法；未指定方法时与 ThinkPHP 一致匹配任意方法。
@@ -93,10 +154,18 @@ func (r *Route) Rule(rule string, handler frameworkRoute.HandlerFunc, methods ..
 	if len(methods) == 1 {
 		method = strings.TrimSpace(methods[0])
 	}
+	var (
+		registered []*frameworkRoute.Route
+		err        error
+	)
 	if group := r.currentScope(); group != nil {
-		return mustRouteRules(group.Rule(rule, handler, method))
+		registered, err = group.Rule(rule, handler, method)
+	} else {
+		registered, err = r.router.Rule(rule, handler, method)
 	}
-	return mustRouteRules(r.router.Rule(rule, handler, method))
+	item := mustRouteRules(registered, err)
+	r.recordRoutes(registered...)
+	return item
 }
 
 // Any 注册任意方法路由。
@@ -197,13 +266,21 @@ func (r *Route) Redirect(rule, target string, status ...int) *RuleItem {
 	if len(status) == 0 {
 		status = []int{301}
 	}
+	var (
+		registered *frameworkRoute.Route
+		err        error
+	)
 	if group := r.currentScope(); group != nil {
-		return mustRouteRule(group.Redirect(rule, target, status...))
+		registered, err = group.Redirect(rule, target, status...)
+	} else {
+		registered, err = r.router.Redirect(rule, target, status...)
 	}
-	return mustRouteRule(r.router.Redirect(rule, target, status...))
+	item := mustRouteRule(registered, err)
+	r.recordRoutes(registered)
+	return item
 }
 
-// Miss 注册未匹配路由处理器，并支持 ThinkPHP 的 method 可选参数。
+// Miss 注册未匹配路由处理器，并支持 ThinkPHP 的 method 可选参数与当前分组作用域。
 func (r *Route) Miss(handler frameworkRoute.HandlerFunc, methods ...string) *RuleItem {
 	if r == nil || r.router == nil {
 		panic(frameworkRoute.ErrInvalidRoute)
@@ -215,7 +292,18 @@ func (r *Route) Miss(handler frameworkRoute.HandlerFunc, methods ...string) *Rul
 	if len(methods) == 1 {
 		method = methods[0]
 	}
-	return mustRouteRule(r.router.SetMiss(method, handler))
+	var (
+		registered *frameworkRoute.Route
+		err        error
+	)
+	if group := r.currentScope(); group != nil {
+		registered, err = group.SetMiss(method, handler)
+	} else {
+		registered, err = r.router.SetMiss(method, handler)
+	}
+	item := mustRouteRule(registered, err)
+	r.recordRoutes(registered)
+	return item
 }
 
 // Resource 注册完整 RESTful 资源路由。
@@ -231,7 +319,67 @@ func (r *Route) Resource(rule, controller string) *Resource {
 		resource, err = r.router.Resource(rule, controller)
 	}
 	mustRouteConfiguration(err)
+	r.recordRoutes(resource.Routes()...)
 	return &Resource{resource: resource}
+}
+
+// Middleware 创建携带匿名中间件的注册分组，支持链式前置分组定义。
+func (r *Route) Middleware(handlers ...middleware.Handler) *RuleGroup {
+	return r.baseRuleGroup().Middleware(handlers...)
+}
+
+// NamedMiddleware 创建携带命名中间件的注册分组，支持链式前置分组定义。
+func (r *Route) NamedMiddleware(name string, handler middleware.Handler) *RuleGroup {
+	return r.baseRuleGroup().NamedMiddleware(name, handler)
+}
+
+// Ext 创建携带扩展名约束的注册分组，支持链式前置分组定义。
+func (r *Route) Ext(extension string) *RuleGroup {
+	return r.baseRuleGroup().Ext(extension)
+}
+
+// Pattern 创建携带路由变量规则的注册分组，支持链式前置分组定义。
+func (r *Route) Pattern(patterns map[string]string) *RuleGroup {
+	return r.baseRuleGroup().Pattern(patterns)
+}
+
+// Where 创建携带路由变量规则的注册分组，对应 ThinkPHP Route::where。
+func (r *Route) Where(patterns map[string]string) *RuleGroup {
+	return r.Pattern(patterns)
+}
+
+func (r *Route) baseRuleGroup() *RuleGroup {
+	if r == nil || r.router == nil {
+		panic(frameworkRoute.ErrInvalidRoute)
+	}
+	group := r.currentScope()
+	if group == nil {
+		group = r.router.RootGroup()
+	}
+	return &RuleGroup{route: r, group: group}
+}
+
+func parseRouteGroupArguments(arguments []interface{}) (interface{}, []middleware.Handler) {
+	callback := arguments[0]
+	if callback == nil {
+		panic(frameworkRoute.ErrInvalidRoute)
+	}
+	handlers := make([]middleware.Handler, 0, len(arguments)-1)
+	for _, raw := range arguments[1:] {
+		if raw == nil {
+			panic(frameworkRoute.ErrInvalidRouteMiddleware)
+		}
+		handler, ok := raw.(middleware.Handler)
+		if !ok {
+			if fn, fnOK := raw.(func(*frameworkContext.Request, func(*frameworkContext.Request) *frameworkContext.Response) *frameworkContext.Response); fnOK {
+				handler = middleware.Handler(fn)
+			} else {
+				panic(fmt.Errorf("%w: 分组中间件类型 %T 非法", frameworkRoute.ErrInvalidRouteMiddleware, raw))
+			}
+		}
+		handlers = append(handlers, handler)
+	}
+	return callback, handlers
 }
 
 // Group 创建路由前缀分组。回调既支持 ThinkPHP 原生的 func() 写法，也保留
@@ -242,8 +390,9 @@ func (r *Route) Group(prefix string, callback interface{}, handlers ...middlewar
 	}
 	var result *RuleGroup
 	register := func(group *frameworkRoute.Group) error {
-		result = &RuleGroup{route: r, group: group}
-		r.withScope(group, func() { invokeRouteGroupCallback(callback, result) })
+		result = newScopedRuleGroup(r, group)
+		r.withScope(result, func() { invokeRouteGroupCallback(callback, result) })
+		result.completed = true
 		return nil
 	}
 	var err error
@@ -256,15 +405,20 @@ func (r *Route) Group(prefix string, callback interface{}, handlers ...middlewar
 	return result
 }
 
-// Domain 创建域名路由分组。
-func (r *Route) Domain(domain string, callback interface{}, handlers ...middleware.Handler) *RuleGroup {
-	if r == nil || r.router == nil || callback == nil {
+// Domain 创建域名路由分组；仅传入域名时返回链式前置分组。
+func (r *Route) Domain(domain string, arguments ...interface{}) *RuleGroup {
+	if r == nil || r.router == nil {
 		panic(frameworkRoute.ErrInvalidRoute)
 	}
+	if len(arguments) == 0 {
+		return r.baseRuleGroup().Domain(domain)
+	}
+	callback, handlers := parseRouteGroupArguments(arguments)
 	var result *RuleGroup
 	register := func(group *frameworkRoute.Group) error {
-		result = &RuleGroup{route: r, group: group}
-		r.withScope(group, func() { invokeRouteGroupCallback(callback, result) })
+		result = newScopedRuleGroup(r, group)
+		r.withScope(result, func() { invokeRouteGroupCallback(callback, result) })
+		result.completed = true
 		return nil
 	}
 	var err error
@@ -284,8 +438,9 @@ func (r *Route) DomainGroup(domain, prefix string, callback interface{}, handler
 	}
 	var result *RuleGroup
 	register := func(group *frameworkRoute.Group) error {
-		result = &RuleGroup{route: r, group: group}
-		r.withScope(group, func() { invokeRouteGroupCallback(callback, result) })
+		result = newScopedRuleGroup(r, group)
+		r.withScope(result, func() { invokeRouteGroupCallback(callback, result) })
+		result.completed = true
 		return nil
 	}
 	var err error
@@ -307,11 +462,23 @@ func (r *Route) currentScope() *frameworkRoute.Group {
 	if len(r.scopeStack) == 0 {
 		return nil
 	}
-	return r.scopeStack[len(r.scopeStack)-1]
+	return r.scopeStack[len(r.scopeStack)-1].group
 }
 
-func (r *Route) withScope(group *frameworkRoute.Group, callback func()) {
-	if r == nil || group == nil || callback == nil {
+func (r *Route) recordRoutes(rules ...*frameworkRoute.Route) {
+	if r == nil || len(rules) == 0 {
+		return
+	}
+	r.scopeMu.RLock()
+	stack := append([]*RuleGroup(nil), r.scopeStack...)
+	r.scopeMu.RUnlock()
+	for _, scope := range stack {
+		scope.appendCollectedRoutes(rules...)
+	}
+}
+
+func (r *Route) withScope(group *RuleGroup, callback func()) {
+	if r == nil || group == nil || group.group == nil || callback == nil {
 		panic(frameworkRoute.ErrInvalidRoute)
 	}
 	r.scopeMu.Lock()
@@ -403,6 +570,11 @@ func (r *RuleItem) Pattern(patterns map[string]string) *RuleItem {
 	return r
 }
 
+// Where 设置路由变量规则并返回当前规则，对应 ThinkPHP Rule::where。
+func (r *RuleItem) Where(patterns map[string]string) *RuleItem {
+	return r.Pattern(patterns)
+}
+
 // Domain 设置精确域名约束并返回当前规则。
 func (r *RuleItem) Domain(domain string) *RuleItem {
 	if r == nil || len(r.rules) == 0 {
@@ -490,44 +662,52 @@ func (r *RuleItem) Method() string {
 	return strings.Join(methods, "|")
 }
 
+// Add 注册分组内指定 HTTP 方法路由。
+func (g *RuleGroup) Add(method, rule string, handler frameworkRoute.HandlerFunc, handlers ...middleware.Handler) *RuleItem {
+	registered, err := g.require().Add(method, rule, handler, handlers...)
+	item := mustRouteRule(registered, err)
+	g.recordRoutes(registered)
+	return item
+}
+
 // Get 注册分组内 GET 路由。
 func (g *RuleGroup) Get(rule string, handler frameworkRoute.HandlerFunc, handlers ...middleware.Handler) *RuleItem {
-	return mustRouteRule(g.require().Get(rule, handler, handlers...))
+	return g.Add(http.MethodGet, rule, handler, handlers...)
 }
 
 // Post 注册分组内 POST 路由。
 func (g *RuleGroup) Post(rule string, handler frameworkRoute.HandlerFunc, handlers ...middleware.Handler) *RuleItem {
-	return mustRouteRule(g.require().Post(rule, handler, handlers...))
+	return g.Add(http.MethodPost, rule, handler, handlers...)
 }
 
 // Put 注册分组内 PUT 路由。
 func (g *RuleGroup) Put(rule string, handler frameworkRoute.HandlerFunc, handlers ...middleware.Handler) *RuleItem {
-	return mustRouteRule(g.require().Put(rule, handler, handlers...))
+	return g.Add(http.MethodPut, rule, handler, handlers...)
 }
 
 // Delete 注册分组内 DELETE 路由。
 func (g *RuleGroup) Delete(rule string, handler frameworkRoute.HandlerFunc, handlers ...middleware.Handler) *RuleItem {
-	return mustRouteRule(g.require().Delete(rule, handler, handlers...))
+	return g.Add(http.MethodDelete, rule, handler, handlers...)
 }
 
 // Patch 注册分组内 PATCH 路由。
 func (g *RuleGroup) Patch(rule string, handler frameworkRoute.HandlerFunc, handlers ...middleware.Handler) *RuleItem {
-	return mustRouteRule(g.require().Patch(rule, handler, handlers...))
+	return g.Add(http.MethodPatch, rule, handler, handlers...)
 }
 
 // Head 注册分组内 HEAD 路由。
 func (g *RuleGroup) Head(rule string, handler frameworkRoute.HandlerFunc, handlers ...middleware.Handler) *RuleItem {
-	return mustRouteRule(g.require().Head(rule, handler, handlers...))
+	return g.Add(http.MethodHead, rule, handler, handlers...)
 }
 
 // Options 注册分组内 OPTIONS 路由。
 func (g *RuleGroup) Options(rule string, handler frameworkRoute.HandlerFunc, handlers ...middleware.Handler) *RuleItem {
-	return mustRouteRule(g.require().Options(rule, handler, handlers...))
+	return g.Add(http.MethodOptions, rule, handler, handlers...)
 }
 
 // Any 注册分组内任意方法路由。
 func (g *RuleGroup) Any(rule string, handler frameworkRoute.HandlerFunc, handlers ...middleware.Handler) *RuleItem {
-	return mustRouteRule(g.require().Any(rule, handler, handlers...))
+	return g.Add("*", rule, handler, handlers...)
 }
 
 // Rule 注册分组内一个或多个 HTTP 方法。
@@ -539,7 +719,10 @@ func (g *RuleGroup) Rule(rule string, handler frameworkRoute.HandlerFunc, method
 	if len(methods) == 1 {
 		method = strings.TrimSpace(methods[0])
 	}
-	return mustRouteRules(g.require().Rule(rule, handler, method))
+	registered, err := g.require().Rule(rule, handler, method)
+	item := mustRouteRules(registered, err)
+	g.recordRoutes(registered...)
+	return item
 }
 
 // Redirect 注册分组内重定向路由。
@@ -547,21 +730,109 @@ func (g *RuleGroup) Redirect(rule, target string, status ...int) *RuleItem {
 	if len(status) == 0 {
 		status = []int{301}
 	}
-	return mustRouteRule(g.require().Redirect(rule, target, status...))
+	registered, err := g.require().Redirect(rule, target, status...)
+	item := mustRouteRule(registered, err)
+	g.recordRoutes(registered)
+	return item
+}
+
+// Miss 注册分组内未匹配路由处理器，继承当前分组的前缀、域名、扩展名与中间件。
+func (g *RuleGroup) Miss(handler frameworkRoute.HandlerFunc, methods ...string) *RuleItem {
+	method := "*"
+	if len(methods) > 1 {
+		panic(frameworkRoute.ErrInvalidRoute)
+	}
+	if len(methods) == 1 {
+		method = methods[0]
+	}
+	registered, err := g.require().SetMiss(method, handler)
+	item := mustRouteRule(registered, err)
+	g.recordRoutes(registered)
+	return item
 }
 
 // Resource 注册分组内资源路由。
 func (g *RuleGroup) Resource(rule, controller string) *Resource {
 	resource, err := g.require().Resource(rule, controller)
 	mustRouteConfiguration(err)
+	g.recordRoutes(resource.Routes()...)
 	return &Resource{resource: resource}
 }
 
-// NamedMiddleware 返回继承命名中间件的注册分组。
+// Middleware 为当前分组追加匿名中间件；对已完成回调的分组会同步回填全部组内已注册路由。
+func (g *RuleGroup) Middleware(handlers ...middleware.Handler) *RuleGroup {
+	if g != nil && g.completed {
+		group, err := g.require().ApplyMiddlewareToRoutes(g.snapshotRules(), handlers...)
+		mustRouteConfiguration(err)
+		return g.withUpdatedGroup(group)
+	}
+	group, err := g.require().WithMiddleware(handlers...)
+	mustRouteConfiguration(err)
+	return &RuleGroup{route: g.route, group: group}
+}
+
+// NamedMiddleware 返回继承命名中间件的注册分组；对已完成回调的分组会同步回填全部组内已注册路由。
 func (g *RuleGroup) NamedMiddleware(name string, handler middleware.Handler) *RuleGroup {
+	if g != nil && g.completed {
+		group, err := g.require().ApplyNamedMiddlewareToRoutes(g.snapshotRules(), name, handler)
+		mustRouteConfiguration(err)
+		return g.withUpdatedGroup(group)
+	}
 	group, err := g.require().WithNamedMiddleware(name, handler)
 	mustRouteConfiguration(err)
 	return &RuleGroup{route: g.route, group: group}
+}
+
+// WithoutNamedMiddleware 按注册名称移除当前分组及组内已注册路由的中间件。
+func (g *RuleGroup) WithoutNamedMiddleware(names ...string) *RuleGroup {
+	if g != nil && g.completed {
+		group, err := g.require().ApplyWithoutNamedMiddlewareToRoutes(g.snapshotRules(), names...)
+		mustRouteConfiguration(err)
+		return g.withUpdatedGroup(group)
+	}
+	group, err := g.require().WithoutNamedMiddleware(names...)
+	mustRouteConfiguration(err)
+	return &RuleGroup{route: g.route, group: group}
+}
+
+// WithoutMiddleware 保留旧入口，无法确认函数身份时触发注册错误。
+// Deprecated: 使用 NamedMiddleware 和 WithoutNamedMiddleware。
+func (g *RuleGroup) WithoutMiddleware(handlers ...middleware.Handler) *RuleGroup {
+	group, err := g.require().WithoutMiddleware(handlers...)
+	mustRouteConfiguration(err)
+	if g.completed {
+		return g.withUpdatedGroup(group)
+	}
+	return &RuleGroup{route: g.route, group: group}
+}
+
+// Ext 为当前分组设置扩展名约束，并回填已完成回调的组内已注册路由。
+func (g *RuleGroup) Ext(extension string) *RuleGroup {
+	if g != nil && g.completed {
+		group, err := g.require().ApplyExtensionToRoutes(g.snapshotRules(), extension)
+		mustRouteConfiguration(err)
+		return g.withUpdatedGroup(group)
+	}
+	group, err := g.require().WithExtension(extension)
+	mustRouteConfiguration(err)
+	return &RuleGroup{route: g.route, group: group}
+}
+
+// Pattern 为当前分组设置变量正则约束，并回填已完成回调的组内已注册路由。
+func (g *RuleGroup) Pattern(patterns map[string]string) *RuleGroup {
+	if g != nil && g.completed {
+		group, err := g.require().ApplyPatternsToRoutes(g.snapshotRules(), patterns)
+		mustRouteConfiguration(err)
+		return g.withUpdatedGroup(group)
+	}
+	group, err := g.require().WithPatterns(patterns)
+	mustRouteConfiguration(err)
+	return &RuleGroup{route: g.route, group: group}
+}
+
+// Where 为当前分组设置变量正则约束，对应 ThinkPHP RuleGroup::where。
+func (g *RuleGroup) Where(patterns map[string]string) *RuleGroup {
+	return g.Pattern(patterns)
 }
 
 // Group 创建嵌套路由分组。
@@ -571,34 +842,73 @@ func (g *RuleGroup) Group(prefix string, callback interface{}, handlers ...middl
 	}
 	var result *RuleGroup
 	err := g.require().Group(prefix, func(group *frameworkRoute.Group) error {
-		result = &RuleGroup{route: g.route, group: group}
+		result = newScopedRuleGroup(g.route, group)
 		if g.route != nil {
-			g.route.withScope(group, func() { invokeRouteGroupCallback(callback, result) })
+			g.route.withScope(result, func() { invokeRouteGroupCallback(callback, result) })
 		} else {
 			invokeRouteGroupCallback(callback, result)
 		}
+		result.completed = true
 		return nil
 	}, handlers...)
 	mustRouteConfiguration(err)
+	if g.completed && result != nil {
+		g.appendCollectedRoutes(result.snapshotRules()...)
+	}
 	return result
 }
 
-// Domain 创建嵌套域名分组。
-func (g *RuleGroup) Domain(domain string, callback interface{}, handlers ...middleware.Handler) *RuleGroup {
+// Domain 设置当前分组的精确域名约束，或在传入回调时创建嵌套域名分组。
+func (g *RuleGroup) Domain(domain string, arguments ...interface{}) *RuleGroup {
+	if len(arguments) == 0 {
+		if g != nil && g.completed {
+			group, err := g.require().ApplyDomainToRoutes(g.snapshotRules(), domain)
+			mustRouteConfiguration(err)
+			return g.withUpdatedGroup(group)
+		}
+		group, err := g.require().WithDomain(domain)
+		mustRouteConfiguration(err)
+		return &RuleGroup{route: g.route, group: group}
+	}
+	callback, handlers := parseRouteGroupArguments(arguments)
+	var result *RuleGroup
+	err := g.require().Domain(domain, func(group *frameworkRoute.Group) error {
+		result = newScopedRuleGroup(g.route, group)
+		if g.route != nil {
+			g.route.withScope(result, func() { invokeRouteGroupCallback(callback, result) })
+		} else {
+			invokeRouteGroupCallback(callback, result)
+		}
+		result.completed = true
+		return nil
+	}, handlers...)
+	mustRouteConfiguration(err)
+	if g.completed && result != nil {
+		g.appendCollectedRoutes(result.snapshotRules()...)
+	}
+	return result
+}
+
+// DomainGroup 创建嵌套域名与路径前缀分组。
+func (g *RuleGroup) DomainGroup(domain, prefix string, callback interface{}, handlers ...middleware.Handler) *RuleGroup {
 	if callback == nil {
 		panic(frameworkRoute.ErrInvalidRoute)
 	}
 	var result *RuleGroup
-	err := g.require().Domain(domain, func(group *frameworkRoute.Group) error {
-		result = &RuleGroup{route: g.route, group: group}
+	err := g.require().DomainGroup(domain, prefix, func(group *frameworkRoute.Group) error {
+		result = newScopedRuleGroup(g.route, group)
 		if g.route != nil {
-			g.route.withScope(group, func() { invokeRouteGroupCallback(callback, result) })
+			g.route.withScope(result, func() { invokeRouteGroupCallback(callback, result) })
 		} else {
 			invokeRouteGroupCallback(callback, result)
 		}
+		result.completed = true
 		return nil
 	}, handlers...)
 	mustRouteConfiguration(err)
+	if g.completed && result != nil {
+		g.appendCollectedRoutes(result.snapshotRules()...)
+	}
 	return result
 }
 

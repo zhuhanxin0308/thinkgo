@@ -111,11 +111,14 @@ func TestLiteralSuffixKeepsEquivalentRegistrationOrder(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			first, err := router.Get(pair.rule+".html", handler)
+			first, err := router.Get(pair.rule+".html", "Page@First")
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := router.Get(pair.rule+".HTML", "Page@Other"); err != nil {
+			if err := first.WithExtension("html"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := router.Get(pair.rule+".HTML", handler); err != nil {
 				t.Fatal(err)
 			}
 			req := fwcontext.MustNewRequest(httptest.NewRequest(http.MethodGet, "http://example.test"+pair.path+".html", nil))
