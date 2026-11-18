@@ -63,6 +63,18 @@ func TestRedisStoreLargePeriodBurstDoesNotOverflowResetAfter(t *testing.T) {
 		t.Fatalf("旧版微秒 TAT 未被正确兼容解析: res=%+v err=%v", legacyRes, err)
 	}
 
+	// 验证新版写入的 Redis TAT 仍保持纯十进制微秒整数格式，保证滚动升级期间旧实例 tonumber() 双向兼容。
+	if _, err := store.Take(ctx, "rolling", Limit{Rate: 1, Period: 5 * time.Second, Burst: 1}, fixedNow); err != nil {
+		t.Fatal(err)
+	}
+	rawRolling, err := server.Get(store.prefix + "rolling")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsedRolling, err := strconv.ParseInt(rawRolling, 10, 64); err != nil || parsedRolling != fixedNow.Add(5*time.Second).UnixMicro() {
+		t.Fatalf("新版存储格式必须兼容旧版纯数字微秒解析: raw=%q parsed=%d err=%v", rawRolling, parsedRolling, err)
+	}
+
 	// 验证微秒向上取整后 Burst * intervalMicros 越过 int64 时安全拒绝。
 	if _, _, err := redisRateLimitDurations(time.Duration(math.MaxInt64), 1001); !errors.Is(err, ErrInvalidConfiguration) {
 		t.Fatalf("Burst*intervalMicros 溢出应返回 ErrInvalidConfiguration，实际为 %v", err)

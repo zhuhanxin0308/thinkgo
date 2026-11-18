@@ -79,16 +79,20 @@ local stored = redis.call("GET", KEYS[1])
 local tat_sec = now_sec
 local tat_usec = now_usec
 if stored then
-    local s_str, u_str = string.match(stored, "^(%d+):(%d+)$")
-    if s_str and u_str then
-        tat_sec = tonumber(s_str)
-        tat_usec = tonumber(u_str)
-        if not tat_sec or not tat_usec or tat_usec >= 1000000 then
+    if string.match(stored, "^%d+$") then
+        if #stored > 6 then
+            tat_sec = tonumber(string.sub(stored, 1, -7))
+            tat_usec = tonumber(string.sub(stored, -6))
+        else
+            tat_sec = 0
+            tat_usec = tonumber(stored)
+        end
+        if not tat_sec or not tat_usec or tat_sec == math.huge or tat_usec >= 1000000 then
             return redis.error_reply("invalid stored TAT")
         end
     else
         local legacy = tonumber(stored)
-        if not legacy or legacy < 0 then
+        if not legacy or legacy < 0 or legacy == math.huge or legacy ~= math.floor(legacy) then
             return redis.error_reply("invalid stored TAT")
         end
         tat_sec = math.floor(legacy / 1000000)
@@ -146,7 +150,13 @@ if ttl_ms < 1 then
 elseif ttl_ms > 9223372036854 then
     ttl_ms = 9223372036854
 end
-redis.call("SET", KEYS[1], string.format("%.0f:%.0f", new_tat_sec, new_tat_usec), "PX", ttl_ms)
+local encoded_tat
+if new_tat_sec > 0 then
+    encoded_tat = string.format("%.0f%06d", new_tat_sec, new_tat_usec)
+else
+    encoded_tat = string.format("%d", new_tat_usec)
+end
+redis.call("SET", KEYS[1], encoded_tat, "PX", ttl_ms)
 return {1, remaining, 0, 0, debt_sec, debt_usec}
 `)
 
