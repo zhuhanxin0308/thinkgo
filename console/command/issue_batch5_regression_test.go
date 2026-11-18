@@ -356,7 +356,8 @@ func TestIssue565CreateProjectRestrictsConfigFilePermissions(t *testing.T) {
 	publicFiles := []string{
 		filepath.Join(projectDir, "main.go"),
 		filepath.Join(projectDir, "app", "index", "controller", "index.go"),
-		filepath.Join(projectDir, "public", "index.html"),
+		filepath.Join(projectDir, "app", "index", "view", "index.html"),
+		filepath.Join(projectDir, "public", "robots.txt"),
 	}
 
 	for _, cfgPath := range configFiles {
@@ -385,14 +386,12 @@ func TestIssue565CreateProjectRestrictsConfigFilePermissions(t *testing.T) {
 		if isDistributionConfig(strings.TrimPrefix(filepath.ToSlash(strings.TrimPrefix(pubPath, projectDir)), "/")) {
 			t.Fatalf("非配置文件 %s 不应被归类为敏感配置", pubPath)
 		}
-		if runtime.GOOS != "windows" {
-			info, err := os.Stat(pubPath)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if info.Mode().Perm() != 0o644 {
-				t.Fatalf("源码/静态资源 %s 权限应保持 0644，实际为 %#o", pubPath, info.Mode().Perm())
-			}
+		info, err := os.Stat(pubPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if runtime.GOOS != "windows" && info.Mode().Perm() != 0o644 {
+			t.Fatalf("源码/静态资源 %s 权限应保持 0644，实际为 %#o", pubPath, info.Mode().Perm())
 		}
 	}
 }
