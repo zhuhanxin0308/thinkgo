@@ -244,6 +244,8 @@ func (c *Cache) ConfigureStore(name string, options StoreOptions) error {
 	if options.Prefix != "" {
 		return fmt.Errorf("%w: ConfigureStore 不支持 Prefix；请在注册前使用 NewNamespaceDriver 显式隔离键空间", ErrInvalidCacheStore)
 	}
+	c.state.tagMu.Lock()
+	defer c.state.tagMu.Unlock()
 	c.state.storesMu.Lock()
 	defer c.state.storesMu.Unlock()
 	if c.state.closed {

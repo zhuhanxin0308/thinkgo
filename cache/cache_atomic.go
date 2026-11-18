@@ -105,6 +105,7 @@ func (c *Cache) UpdateContext(ctx context.Context, key string, ttl time.Duration
 		_, cleanupErr := c.unbindKeyFromAllTagsLockedContext(ctx, driver, key)
 		return removed, cleanupErr
 	}
+	ctx = withTagPrefixContext(ctx, c.resolveTagPrefixContext(ctx))
 	tags, err := c.reverseTagsLockedContext(ctx, driver, key)
 	if err != nil {
 		return err

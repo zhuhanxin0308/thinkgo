@@ -1450,3 +1450,58 @@ func TestIssue602WatermarkRetirementBlocksInFlightOlderWriters(t *testing.T) {
 		})
 	}
 }
+
+// TestIssue603ConcurrentConfigureStoreTagPrefixKeepsMetadataConsistent 验证并发切换 TagPrefix 不会导致正反向标签元数据跨前缀撕裂。
+func TestIssue603ConcurrentConfigureStoreTagPrefixKeepsMetadataConsistent(t *testing.T) {
+	raw := cacheDriver.NewMemory()
+	store := NewCache(nil, raw)
+	prefixes := []string{"tag:", "ns_a:", "ns_b:"}
+
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; ; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			_ = store.ConfigureStore("default", StoreOptions{TagPrefix: prefixes[i%len(prefixes)]})
+		}
+	}()
+
+	for i := 0; i < 60; i++ {
+		tagged, err := store.Tag("hot")
+		if err != nil {
+			t.Fatal(err)
+		}
+		key := fmt.Sprintf("item_%d", i%6)
+		if err := tagged.Set(key, i, time.Hour); err != nil {
+			t.Fatalf("concurrent TaggedCache.Set failed: %v", err)
+		}
+	}
+	close(stop)
+	wg.Wait()
+
+	// 依次清理所有使用过的 TagPrefix 命名空间后，所有带标签写入的业务键与正反向元数据必须全部被干净回收。
+	for _, p := range prefixes {
+		if err := store.ConfigureStore("default", StoreOptions{TagPrefix: p}); err != nil {
+			t.Fatal(err)
+		}
+		tagged, err := store.Tag("hot")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := tagged.Flush(); err != nil {
+			t.Fatalf("Flush under prefix %q failed: %v", p, err)
+		}
+	}
+	for i := 0; i < 6; i++ {
+		key := fmt.Sprintf("item_%d", i)
+		if val, found, err := store.Get(key); err != nil || found {
+			t.Fatalf("key %s survived flushing all tag prefixes (torn forward/reverse metadata!): val=%#v found=%t err=%v", key, val, found, err)
+		}
+	}
+}
