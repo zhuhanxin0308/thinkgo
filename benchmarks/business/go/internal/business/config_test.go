@@ -23,10 +23,11 @@ func TestDatasetRejectsUnknownAndInvalidLimits(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, content := range map[string]string{
-		"未知配置":    strings.Replace(string(data), `"schema_version": 1`, `"schema_version": 1, "unrecognized": 5`, 1),
-		"负连接数":    strings.Replace(string(data), `"database_connection_budget": 24`, `"database_connection_budget": -1`, 1),
-		"错误比例":    strings.Replace(string(data), `"catalog": 40`, `"catalog": 41`, 1),
-		"不完整JSON": "{",
+		"未知配置":            strings.Replace(string(data), `"schema_version": 1`, `"schema_version": 1, "unrecognized": 5`, 1),
+		"负连接数":            strings.Replace(string(data), `"database_connection_budget": 24`, `"database_connection_budget": -1`, 1),
+		"错误比例":            strings.Replace(string(data), `"catalog": 40`, `"catalog": 41`, 1),
+		"超出PostgreSQL整数列": strings.Replace(string(data), `"maximum_item_quantity": 10`, `"maximum_item_quantity": 2147483648`, 1),
+		"不完整JSON":         "{",
 	} {
 		t.Run(name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "dataset.json")
@@ -37,6 +38,14 @@ func TestDatasetRejectsUnknownAndInvalidLimits(t *testing.T) {
 				t.Fatal("错误数据规模配置被接受")
 			}
 		})
+	}
+	maxValidPath := filepath.Join(t.TempDir(), "dataset.json")
+	maxValidContent := strings.Replace(string(data), `"maximum_item_quantity": 10`, `"maximum_item_quantity": 2147483647`, 1)
+	if err := os.WriteFile(maxValidPath, []byte(maxValidContent), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if loaded, err := LoadDataset(maxValidPath); err != nil || loaded.MaximumItemQuantity != 2147483647 {
+		t.Fatalf("PostgreSQL integer 上界 2147483647 应合法: got=%d err=%v", loaded.MaximumItemQuantity, err)
 	}
 }
 

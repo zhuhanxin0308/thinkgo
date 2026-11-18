@@ -23,14 +23,15 @@ func (c *MakeController) Configure() {
 
 // Execute 校验名称后安全创建控制器文件。
 func (c *MakeController) Execute(input *console.Input, output *console.Output) error {
-	target, err := normalizedGeneratorTarget(&c.Command, input, output, "")
+	suffix := ""
+	if c.App != nil && c.App.Config() != nil && c.App.Config().GetBool("route.controller_suffix", false) {
+		suffix = "Controller"
+	}
+	target, err := normalizedGeneratorTarget(&c.Command, input, output, suffix)
 	if err != nil {
 		return fmt.Errorf("invalid controller name: %w", err)
 	}
 	name := target.name
-	if c.App != nil && c.App.Config() != nil && c.App.Config().GetBool("route.controller_suffix", false) {
-		name += "Controller"
-	}
 	actionSuffix := ""
 	if c.App != nil && c.App.Config() != nil {
 		rawSuffix := c.App.Config().GetString("route.action_suffix", "")

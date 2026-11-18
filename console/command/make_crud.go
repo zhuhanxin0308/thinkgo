@@ -71,6 +71,6 @@ func (c *MakeCRUD) Execute(input *console.Input, output *console.Output) error {
 	if err := RefreshControllerDiscovery(c.App); err != nil {
 		return rollback(err)
 	}
-	output.Success(fmt.Sprintf("CRUD API %s created. Register it with api.Register%sRoutes(router, registry).", target.name, target.name))
+	output.Success(fmt.Sprintf("CRUD API %s created. Register it with %s.Register%sRoutes(router, registry).", target.name, plan.PackageName, target.name))
 	return nil
 }

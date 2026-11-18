@@ -1,6 +1,7 @@
 package framework
 
 import (
+	stdcontext "context"
 	"errors"
 	"fmt"
 
@@ -12,6 +13,44 @@ type appDatabaseProvider struct{}
 
 // Register 保留 Provider 注册阶段，数据库连接必须等待最终配置和日志完成后创建。
 func (provider *appDatabaseProvider) Register(app *App) error {
+	return nil
+}
+
+// UseDatabase 在初始化前注入由应用托管生命周期的默认数据库连接。
+func (app *App) UseDatabase(database *db.DB) error {
+	if app == nil {
+		return ErrNilApplication
+	}
+	if database == nil {
+		return db.ErrDatabaseUnavailable
+	}
+	app.registrationMu.Lock()
+	defer app.registrationMu.Unlock()
+	if app.registrationClosed || app.Initialized() {
+		return ErrApplicationRegistrationClosed
+	}
+	if app.injectedDatabase != nil {
+		return fmt.Errorf("%w: 默认数据库连接", ErrDuplicateRegistration)
+	}
+	app.injectedDatabase = database
+	app.injectedDatabaseOwned = false
+	return nil
+}
+
+func (app *App) closeUnmountedInjectedDatabase() error {
+	if app == nil {
+		return nil
+	}
+	app.registrationMu.Lock()
+	database := app.injectedDatabase
+	owned := app.injectedDatabaseOwned
+	if database != nil && !owned {
+		app.injectedDatabaseOwned = true
+	}
+	app.registrationMu.Unlock()
+	if database != nil && !owned {
+		return database.Close()
+	}
 	return nil
 }
 
@@ -42,6 +81,38 @@ func (provider *appDatabaseProvider) Initialize(app *App) error {
 
 	if err := app.installManagedService(serviceKeyDBManager, db.NewManager(defaultConnection)); err != nil {
 		return fmt.Errorf("绑定数据库管理器服务失败: %w", err)
+	}
+	if app.injectedDatabase != nil {
+		if databaseConfigured && app.config.Has("database.connections") {
+			return fmt.Errorf("%w: 显式注入的 Database 与 database.connections 不能同时配置", db.ErrInvalidDatabaseConfig)
+		}
+		if databaseConfigErr != nil {
+			return fmt.Errorf("初始化数据库配置失败: %w", databaseConfigErr)
+		}
+		app.injectedDatabase.SetLocation(app.Location())
+		app.injectedDatabase.SetLogger(app.log)
+		if err := app.dbManager.Add(defaultConnection, app.injectedDatabase); err != nil {
+			return fmt.Errorf("注册显式数据库连接失败: %w", err)
+		}
+		app.registrationMu.Lock()
+		app.injectedDatabaseOwned = true
+		app.registrationMu.Unlock()
+		app.db = app.injectedDatabase
+		if app.databaseStartupPolicy != DatabaseStartupDisabled {
+			if app.databaseStartupPolicy == DatabaseStartupRequired || app.databaseStartupPolicy == DatabaseStartupDegraded {
+				pingErr := app.injectedDatabase.PingContext(stdcontext.Background())
+				app.setDatabaseReadinessError(pingErr)
+				if pingErr != nil && app.databaseStartupPolicy == DatabaseStartupRequired {
+					app.registerDatabaseReadinessCheck()
+					return fmt.Errorf("required 数据库启动策略连接不可用: %w", pingErr)
+				}
+			}
+			app.registerDatabaseReadinessCheck()
+		}
+		if err := app.installManagedService(serviceKeyDB, app.db); err != nil {
+			return fmt.Errorf("绑定默认数据库服务失败: %w", err)
+		}
+		return nil
 	}
 	if !databaseConfigured && !app.skipDatabaseInit {
 		missingConfigErr := fmt.Errorf("%w: 未提供 database 配置", db.ErrDatabaseUnavailable)

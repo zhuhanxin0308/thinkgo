@@ -130,6 +130,9 @@ func buildApplication(basePath string, args []string, register func(*framework.A
 	if NeedsOnlySource(args) {
 		return application, nil
 	}
+	if SkipsConfigurationCache(args) {
+		application.SkipConfigurationCache()
+	}
 	if NeedsBusiness(args) || custom != nil {
 		if register == nil {
 			return nil, errors.Join(fmt.Errorf("业务命令需要 %s 构建标签", runtimeBuildTag), application.Close())
@@ -239,47 +242,25 @@ func NeedsDatabase(args []string) bool {
 	}
 }
 
+// SkipsConfigurationCache 判断命令是否必须忽略已有 runtime 配置缓存以支持清理或重建。
+func SkipsConfigurationCache(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	switch args[0] {
+	case "clear", "optimize", "optimize:config":
+		return true
+	default:
+		return false
+	}
+}
+
 // RegisterCommands 注册全部内置命令，任何定义冲突都会阻止 CLI 启动。
 func RegisterCommands(cli *console.Console) error {
 	if cli == nil {
 		return fmt.Errorf("%w: Console 不能为空", console.ErrInvalidCommand)
 	}
-	commands := []console.ICommand{
-		&command.Version{},
-		&command.Help{Console: cli},
-		&command.List{Console: cli},
-		&command.Build{},
-		&command.Create{},
-		&command.MakeApp{},
-		&command.Clear{},
-		&command.Run{},
-		&command.MakeController{},
-		&command.MakeModel{},
-		&command.MakeCRUD{},
-		&command.OpenAPIGenerate{},
-		&command.MakeCommand{},
-		&command.MakeValidate{},
-		&command.MakeMiddleware{},
-		&command.MakeEvent{},
-		&command.MakeListener{},
-		&command.MakeSubscribe{},
-		&command.MakeService{},
-		&command.Optimize{},
-		&command.OptimizeConfig{},
-		&command.OptimizeRoute{},
-		&command.OptimizeSchema{},
-		&command.RouteExport{},
-		&command.SchemaValidate{},
-		&command.RouteList{},
-		&command.ServiceDiscover{},
-		&command.VendorPublish{},
-		&command.ConfigDump{},
-		&command.Migrate{},
-		&command.MigrateRollback{},
-		&command.MigrateStatus{},
-		&command.DeployCheck{},
-	}
-	for _, current := range commands {
+	for _, current := range command.BuiltinCommands(cli) {
 		if err := cli.Register(current); err != nil {
 			return fmt.Errorf("注册内置命令失败: %w", err)
 		}

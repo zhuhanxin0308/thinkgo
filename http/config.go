@@ -147,9 +147,11 @@ func parseServerConfig(values map[string]interface{}) (serverConf, error) {
 	if config.Host, err = configString(values, "host", config.Host); err != nil {
 		return serverConf{}, err
 	}
-	if !isValidBindHost(config.Host) {
+	normalizedHost, validHost := normalizeBindHost(config.Host)
+	if !validHost {
 		return serverConf{}, invalidHTTPConfig("app.server.host %q 非法", config.Host)
 	}
+	config.Host = normalizedHost
 	port, err := configInteger(values, "port", int64(config.Port), 1, 65535)
 	if err != nil {
 		return serverConf{}, err
@@ -461,12 +463,24 @@ func validCompressionLevel(algorithm string, level int64) bool {
 	}
 }
 
-func isValidBindHost(host string) bool {
-	if host == "" {
-		return false
+func normalizeBindHost(host string) (string, bool) {
+	if host == "" || strings.ContainsAny(host, "/\\@?#\x00\r\n\t ") {
+		return "", false
 	}
-	trimmed := strings.Trim(host, "[]")
-	return net.ParseIP(trimmed) != nil || isValidHostname(trimmed)
+	if strings.ContainsAny(host, "[]") {
+		if !strings.HasPrefix(host, "[") || !strings.HasSuffix(host, "]") {
+			return "", false
+		}
+		inner := host[1 : len(host)-1]
+		if inner == "" || strings.ContainsAny(inner, "[]") || !strings.Contains(inner, ":") || net.ParseIP(inner) == nil {
+			return "", false
+		}
+		return inner, true
+	}
+	if net.ParseIP(host) != nil || isValidHostname(host) {
+		return host, true
+	}
+	return "", false
 }
 
 func normalizeAllowedHosts(hosts []string) ([]string, error) {

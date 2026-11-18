@@ -68,15 +68,24 @@ def validate(protocol, records, binaries, current_commit):
         require(isinstance(checksum, str) and SHA256.fullmatch(checksum) and
                 checksum == binaries.get(identifier), f"二进制摘要与实验清单不一致: {identifier}")
         revision = variant.get("source_revision", "HEAD")
+        explicit_control = revision != "HEAD"
         revision = current_commit if revision == "HEAD" else revision
         require(record["source_commit"] == revision, f"二进制源码提交不符合协议: {identifier}")
+        build_commit = revision
+        if "build_commit" in record or "build_tree" in record:
+            require(explicit_control and isinstance(record.get("build_commit"), str) and
+                    GIT_OBJECT.fullmatch(record["build_commit"]) and
+                    isinstance(record.get("build_tree"), str) and
+                    GIT_OBJECT.fullmatch(record["build_tree"]),
+                    f"对照组构建提交身份无效: {identifier}")
+            build_commit = record["build_commit"]
         info = parse_build_info(record.get("build_info"))
         settings = info["settings"]
         require(info["go_version"] == configuration["go_version"], f"Go 工具链不符合协议: {identifier}")
         require(info["mod"] == configuration["module"] and
                 info["path"] == configuration["module"] + "/cmd/" + variant.get("command", identifier),
                 f"Go 构建包或模块不符合协议: {identifier}")
-        require(settings.get("vcs") == "git" and settings.get("vcs.revision") == revision and
+        require(settings.get("vcs") == "git" and settings.get("vcs.revision") == build_commit and
                 settings.get("vcs.modified") == "false", f"Go 构建未绑定清洁的指定源码: {identifier}")
         require(all(settings.get(key) == value for key, value in configuration["settings"].items()),
                 f"Go 构建参数不符合协议: {identifier}")
@@ -110,8 +119,25 @@ def collect(repository, root, protocol, binaries, go_tool):
         information = subprocess.check_output([str(go_tool), "version", "-m", str(binary)], text=True)
         # 在来源采集后复核字节，防止身份采集期间二进制被另一构建覆盖。
         require(digest(binary) == binaries[identifier], f"来源采集期间二进制已变化: {identifier}")
+        parsed = parse_build_info(information)
+        vcs_revision = parsed["settings"].get("vcs.revision", "")
+        build_commit = commit
+        extra = {}
+        if revision != "HEAD" and GIT_OBJECT.fullmatch(vcs_revision) and vcs_revision != commit:
+            build_commit = git(vcs_revision + "^{commit}")
+            changed = subprocess.check_output(
+                ["git", "diff-tree", "-r", "--name-only", "--no-commit-id", "-z", commit, build_commit],
+                cwd=repository,
+            ).split(b"\0")
+            outside = [
+                path.decode("utf-8", errors="replace")
+                for path in changed
+                if path and not path.decode("utf-8", errors="replace").startswith(BUSINESS_GO_PATH + "/")
+            ]
+            require(not outside, f"对照组构建提交修改了框架源码: {identifier}: {outside[:3]}")
+            extra = {"build_commit": build_commit, "build_tree": git(build_commit + "^{tree}")}
         records[identifier] = {"source_commit": commit, "source_tree": git(commit + "^{tree}"),
-                               "benchmark_go_tree": git(commit + ":" + BUSINESS_GO_PATH),
-                               "binary_sha256": binaries[identifier], "build_info": information}
+                               "benchmark_go_tree": git(build_commit + ":" + BUSINESS_GO_PATH),
+                               "binary_sha256": binaries[identifier], "build_info": information, **extra}
     validate(protocol, records, binaries, current_commit)
     return records

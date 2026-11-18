@@ -138,12 +138,12 @@ func discoverNativeApplications(semanticContext *applicationSemanticContext, app
 	applications := make([]discoveredNativeApplication, 0)
 	aliases := make(map[string]string)
 	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
 		name := entry.Name()
 		if entry.Type()&os.ModeSymlink != 0 {
 			return nil, fmt.Errorf("应用目录 %q 不能是符号链接", name)
+		}
+		if !entry.IsDir() || strings.HasPrefix(name, ".") || name == "internal" || name == "testdata" {
+			continue
 		}
 		hasSource, err := nativeApplicationDirectoryHasSource(root, semanticContext, filepath.Join(applicationDirectory, name))
 		if err != nil {

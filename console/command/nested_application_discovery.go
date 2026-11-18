@@ -82,7 +82,7 @@ func nestedComponentDirectories(root *os.Root, base string) ([]string, error) {
 			if entry.Type()&os.ModeSymlink != 0 {
 				return fmt.Errorf("组件路径不能是符号链接: %s", filepath.Join(directory, entry.Name()))
 			}
-			if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") || entry.Name() == "testdata" {
+			if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") || entry.Name() == "testdata" || entry.Name() == "internal" {
 				continue
 			}
 			if err := validateNativeApplicationPackageName(entry.Name()); err != nil {

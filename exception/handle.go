@@ -2,6 +2,7 @@ package exception
 
 import (
 	"bytes"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -35,6 +36,9 @@ const (
 	omittedBinaryBodyText      = "[BINARY BODY OMITTED]"
 	truncatedRequestBodySuffix = "\n[TRUNCATED]"
 )
+
+//go:embed tpl/exception.html
+var embeddedDebugTemplate string
 
 var (
 	// ErrInvalidExceptionWriter 表示异常响应缺少可用的底层写入器。
@@ -476,8 +480,7 @@ func (h *Handle) renderDebugPage(w http.ResponseWriter, r *http.Request, err int
 	}
 
 	var output bytes.Buffer
-	tplPath := h.getTemplatePath()
-	tpl, errLoad := template.ParseFiles(tplPath)
+	tpl, errLoad := h.loadDebugTemplate()
 	if errLoad != nil {
 		h.Report(errLoad)
 		renderFallbackDebug(&output, data)
@@ -515,15 +518,22 @@ h1{color:#e06c75}pre{background:#282c34;padding:20px;border-radius:8px;overflow:
 	fmt.Fprint(w, `</body></html>`)
 }
 
-// getTemplatePath 返回异常模板路径。
-func (h *Handle) getTemplatePath() string {
-	if h.TplDir != "" {
-		path := filepath.Join(h.TplDir, "exception.html")
-		if _, err := os.Stat(path); err == nil {
-			return path
+// loadDebugTemplate 优先加载宿主磁盘自定义模板，仅当磁盘未提供模板文件时回退到内嵌默认模板；
+// 若已存在的自定义模板读取或解析失败，仍返回错误以触发安全降级页和异常报告。
+func (h *Handle) loadDebugTemplate() (*template.Template, error) {
+	candidates := make([]string, 0, 2)
+	if h != nil && strings.TrimSpace(h.TplDir) != "" {
+		candidates = append(candidates, filepath.Join(h.TplDir, "exception.html"))
+	}
+	candidates = append(candidates, filepath.Join("framework", "exception", "tpl", "exception.html"))
+	for _, candidate := range candidates {
+		if _, err := os.Lstat(candidate); err == nil {
+			return template.ParseFiles(candidate)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return nil, err
 		}
 	}
-	return filepath.Join("framework", "exception", "tpl", "exception.html")
+	return template.New("exception.html").Parse(embeddedDebugTemplate)
 }
 
 // renderJSONError 渲染通用 JSON 异常响应。

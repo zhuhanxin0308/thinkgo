@@ -65,6 +65,7 @@ func TestConfigRejectsInvalidBudgets(t *testing.T) {
 		func(c *Config) { c.Secret = "" },
 		func(c *Config) { c.RunID = "" },
 		func(c *Config) { c.ErrorSampleLimit = -1 },
+		func(c *Config) { c.MaximumItemQuantity = int(int64(math.MaxInt32) + 1) },
 	}
 	for index, change := range tests {
 		configuration := testConfig()
@@ -72,6 +73,11 @@ func TestConfigRejectsInvalidBudgets(t *testing.T) {
 		if err := configuration.Validate(); err == nil {
 			t.Errorf("无效配置 #%d 被接受", index)
 		}
+	}
+	maxValid := testConfig()
+	maxValid.MaximumItemQuantity = math.MaxInt32
+	if err := maxValid.Validate(); err != nil {
+		t.Fatalf("PostgreSQL integer 上界 2147483647 应被接受: %v", err)
 	}
 }
 

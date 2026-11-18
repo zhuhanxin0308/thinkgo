@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
-	"sort"
 	"strings"
 
 	"github.com/zhuhanxin0308/thinkgo/v3"
@@ -83,6 +82,7 @@ func (command *OptimizeConfig) Execute(input *console.Input, output *console.Out
 			return err
 		}
 	}
+	runtimeBase := command.App.ProjectRuntimePath()
 	for _, currentDirectory := range directories {
 		snapshot, err := optimizedConfigSnapshot(command.App, currentDirectory)
 		if err != nil {
@@ -93,44 +93,51 @@ func (command *OptimizeConfig) Execute(input *console.Input, output *console.Out
 			return fmt.Errorf("序列化配置缓存失败: %w", err)
 		}
 		content = append(content, '\n')
-		target := filepath.Join(command.App.GetRootPath(), "runtime", currentDirectory, "config.json")
-		if err := writeProjectFileAtomicallyWithMode(command.App, target, content, 0o600); err != nil {
+		target := filepath.Join(runtimeBase, currentDirectory, "config.json")
+		if err := writeRuntimeFileAtomicallyWithMode(command.App, runtimeBase, target, content, 0o600); err != nil {
 			return fmt.Errorf("写入应用 %q 配置缓存失败: %w", currentDirectory, err)
+		}
+	}
+	if directory == "" {
+		if err := pruneStaleNativeConfigCaches(command.App, runtimeBase, directories); err != nil {
+			return err
 		}
 	}
 	output.Info("Succeed!")
 	return output.Err()
 }
 
-func optimizedConfigSnapshot(app *framework.App, directory string) (map[string]interface{}, error) {
-	configuration, err := resolveApplicationConfig(app)
-	if err != nil {
-		return nil, fmt.Errorf("应用配置不可用: %w", err)
+func pruneStaleNativeConfigCaches(app *framework.App, runtimeBase string, writtenDirectories []string) error {
+	written := make(map[string]bool, len(writtenDirectories))
+	for _, dir := range writtenDirectories {
+		written[dir] = true
 	}
-	snapshot := app.ProjectConfig()
-	if len(snapshot) == 0 {
-		snapshot = configuration.GetMap("")
-	}
-	if directory == "" {
-		return snapshot, nil
-	}
-	working := config.NewConfig()
-	keys := make([]string, 0, len(snapshot))
-	for key := range snapshot {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	for _, key := range keys {
-		if err := working.Set(key, snapshot[key]); err != nil {
-			return nil, fmt.Errorf("复制配置命名空间 %q 失败: %w", key, err)
+	for _, name := range app.ApplicationNames() {
+		if written[name] {
+			continue
+		}
+		stalePath := filepath.Join(runtimeBase, name, "config.json")
+		if err := os.Remove(stalePath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("清理应用 %q 过期配置缓存失败: %w", name, err)
 		}
 	}
-	path := filepath.Join(app.GetBasePath(), directory, "config")
-	if err := working.LoadAll(path); err != nil {
-		return nil, fmt.Errorf("%s directory does not exist or cannot be loaded: %w", path, err)
+	return nil
+}
+
+func optimizedConfigSnapshot(app *framework.App, directory string) (map[string]interface{}, error) {
+	if _, err := resolveApplicationConfig(app); err != nil {
+		return nil, fmt.Errorf("应用配置不可用: %w", err)
 	}
-	if err := working.ApplyEnvironment(app.Env()); err != nil {
-		return nil, fmt.Errorf("合并环境配置失败: %w", err)
+	// 始终直接从 config 源目录重新解析纯净配置，不复用已加载的 runtime/config.json 或临时进程环境变量。
+	working := config.NewConfig()
+	if err := working.LoadAll(app.GetConfigPath()); err != nil {
+		return nil, fmt.Errorf("加载项目源配置失败: %w", err)
+	}
+	if directory != "" {
+		path := filepath.Join(app.NativeApplicationPath(directory), "config")
+		if err := working.LoadAll(path); err != nil {
+			return nil, fmt.Errorf("%s directory does not exist or cannot be loaded: %w", path, err)
+		}
 	}
 	return working.GetMap(""), nil
 }

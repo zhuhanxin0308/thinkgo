@@ -67,6 +67,27 @@ final class InputAuthTest extends TestCase
     {
         $items = (new Input($this->contract()))->order('{"items":[{"product_id":9,"quantity":2},{"product_id":1,"quantity":1}]}', str_repeat('a', 32));
         self::assertSame([['product_id'=>9,'quantity'=>2],['product_id'=>1,'quantity'=>1]], $items);
+
+        $temporary = sys_get_temp_dir() . '/thinkgo-order-max-' . bin2hex(random_bytes(6));
+        mkdir($temporary, 0770, true);
+        try {
+            $dataset = json_decode((string)file_get_contents(dirname(__DIR__, 3) . '/contracts/dataset.json'), true, flags: JSON_THROW_ON_ERROR);
+            $dataset['maximum_item_quantity'] = 2147483647;
+            file_put_contents($temporary . '/dataset.json', json_encode($dataset, JSON_THROW_ON_ERROR));
+            copy(dirname(__DIR__, 3) . '/contracts/queries.json', $temporary . '/queries.json');
+            $wideInput = new Input(Contract::load($temporary));
+            self::assertSame([['product_id' => 1, 'quantity' => 2147483647]], $wideInput->order('{"items":[{"product_id":1,"quantity":2147483647}]}', str_repeat('a', 32)));
+            try {
+                $wideInput->order('{"items":[{"product_id":1,"quantity":2147483648}]}', str_repeat('a', 32));
+                self::fail('超出 PostgreSQL integer 上限的数量未被拒绝');
+            } catch (ApiError $error) {
+                self::assertSame(422, $error->status);
+            }
+        } finally {
+            @unlink($temporary . '/dataset.json');
+            @unlink($temporary . '/queries.json');
+            @rmdir($temporary);
+        }
     }
 
     #[DataProvider('invalidBodies')]

@@ -85,6 +85,35 @@ func TestOpenWindowExcludesBoundaryArrival(t *testing.T) {
 	if err != nil || report.Expected != 7 || report.Totals.Planned != 7 {
 		t.Fatalf("浮点误差在窗口右边界多产生请求: err=%v expected=%d planned=%d", err, report.Expected, report.Totals.Planned)
 	}
+
+	// 验证 float64(sequence)/Rate*1e9 发生向上舍入触碰 Duration 时，有理数向下取整偏移仍严格落在窗口内且零丢包。
+	boundaryCases := []struct {
+		duration time.Duration
+		rate     float64
+		expected uint64
+	}{
+		{duration: 7 * time.Second, rate: 0.4285714285714286, expected: 4},
+		{duration: 70 * time.Millisecond, rate: 42.85714285714286, expected: 4},
+	}
+	for _, tc := range boundaryCases {
+		cfg := configuration
+		cfg.Duration, cfg.Rate = tc.duration, tc.rate
+		if got := plannedRequestCount(cfg); got != tc.expected {
+			t.Fatalf("plannedRequestCount(%v, %v) = %d, want %d", tc.duration, tc.rate, got, tc.expected)
+		}
+		rateRat := parseRateRational(tc.rate)
+		lastOffset := scheduledOffset(tc.expected-1, rateRat)
+		if lastOffset >= tc.duration {
+			t.Fatalf("末个计划请求偏移越界: offset=%v duration=%v", lastOffset, tc.duration)
+		}
+	}
+
+	configuration.Duration, configuration.Rate = 80*time.Millisecond, 37.5
+	configuration.MaxInflight = 16
+	roundedReport, err := Run(context.Background(), configuration)
+	if err != nil || roundedReport.Expected != 3 || roundedReport.Totals.Dropped != 0 || roundedReport.Totals.Success != 3 {
+		t.Fatalf("非整到达率运行丢包: err=%v expected=%d totals=%#v errors=%#v", err, roundedReport.Expected, roundedReport.Totals, roundedReport.Errors)
+	}
 }
 
 func TestClosedRunnerErrorsAndRedaction(t *testing.T) {

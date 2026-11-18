@@ -20,16 +20,44 @@ func writeProjectFileAtomically(app *framework.App, target string, content []byt
 
 // writeProjectFileAtomicallyWithMode 的非零 mode 也应用于已有文件，避免保留历史宽松权限。
 func writeProjectFileAtomicallyWithMode(app *framework.App, target string, content []byte, mode os.FileMode) (returnErr error) {
-	return writeProjectFileWithPublication(app, target, content, mode, func(root *os.Root, temporary, relative string) (bool, error) {
+	if app == nil {
+		return framework.ErrNilApplication
+	}
+	return writeRootedFileWithPublication(app.GetRootPath(), target, content, mode, func(root *os.Root, temporary, relative string) (bool, error) {
 		err := root.Rename(temporary, relative)
 		return err == nil, err
 	})
 }
 
+// writeRuntimeFileAtomicallyWithMode 优先在项目根目录边界内写入，若显式配置了外部 runtime 目录则在该 runtime 根边界内原子替换。
+func writeRuntimeFileAtomicallyWithMode(app *framework.App, runtimeBase, target string, content []byte, mode os.FileMode) error {
+	if app == nil {
+		return framework.ErrNilApplication
+	}
+	if _, err := projectRelativePath(app.GetRootPath(), target); err == nil {
+		return writeProjectFileAtomicallyWithMode(app, target, content, mode)
+	}
+	if strings.TrimSpace(runtimeBase) != "" {
+		if _, err := projectRelativePath(runtimeBase, target); err == nil {
+			if err := os.MkdirAll(runtimeBase, 0o750); err != nil {
+				return fmt.Errorf("创建运行时根目录失败: %w", err)
+			}
+			return writeRootedFileWithPublication(runtimeBase, target, content, mode, func(root *os.Root, temporary, relative string) (bool, error) {
+				err := root.Rename(temporary, relative)
+				return err == nil, err
+			})
+		}
+	}
+	return writeProjectFileAtomicallyWithMode(app, target, content, mode)
+}
+
 // writeProjectFileExclusively 用同目录硬链接原子发布；只有最终目标碰撞才返回 false,nil。
 func writeProjectFileExclusively(app *framework.App, target string, content []byte) (bool, error) {
+	if app == nil {
+		return false, framework.ErrNilApplication
+	}
 	created := false
-	err := writeProjectFileWithPublication(app, target, content, 0, func(root *os.Root, temporary, relative string) (bool, error) {
+	err := writeRootedFileWithPublication(app.GetRootPath(), target, content, 0, func(root *os.Root, temporary, relative string) (bool, error) {
 		linkErr := root.Link(temporary, relative)
 		if errors.Is(linkErr, os.ErrExist) {
 			return false, nil
@@ -45,11 +73,16 @@ func writeProjectFileWithPublication(app *framework.App, target string, content 
 	if app == nil {
 		return framework.ErrNilApplication
 	}
-	relative, err := projectRelativePath(app.GetRootPath(), target)
+	return writeRootedFileWithPublication(app.GetRootPath(), target, content, mode, publish)
+}
+
+func writeRootedFileWithPublication(basePath, target string, content []byte, mode os.FileMode,
+	publish func(*os.Root, string, string) (bool, error)) (returnErr error) {
+	relative, err := projectRelativePath(basePath, target)
 	if err != nil {
 		return err
 	}
-	root, err := os.OpenRoot(app.GetRootPath())
+	root, err := os.OpenRoot(basePath)
 	if err != nil {
 		return fmt.Errorf("打开项目根目录失败: %w", err)
 	}

@@ -122,6 +122,48 @@ func (h *Http) ListenContext(ctx stdcontext.Context) error {
 	return errors.Join(runErr, h.waitApplicationRequestTasks())
 }
 
+// PrepareServing 完成无端口内存宿主的 HTTP 路由预检、运行租约获取与运行时服务刷新。
+// 调用方在关闭应用前必须调用返回的释放函数以排空请求任务并释放运行租约。
+func (h *Http) PrepareServing() (func() error, error) {
+	if h == nil || h.app == nil {
+		return nil, errors.New("HTTP 内核未初始化")
+	}
+	if err := h.beginListening(); err != nil {
+		return nil, err
+	}
+	succeeded := false
+	defer func() {
+		if !succeeded {
+			h.endListening()
+		}
+	}()
+	if err := h.ensureInitialized(); err != nil {
+		return nil, err
+	}
+	if h.route == nil {
+		return nil, errors.New("HTTP 路由服务未初始化")
+	}
+	leases, err := h.acquireApplicationRunLeases()
+	if err != nil {
+		return nil, err
+	}
+	if err := h.reloadApplicationRuntimeServices(); err != nil {
+		leases.Release()
+		return nil, err
+	}
+	succeeded = true
+	var releaseOnce sync.Once
+	var releaseErr error
+	return func() error {
+		releaseOnce.Do(func() {
+			defer h.endListening()
+			defer leases.Release()
+			releaseErr = h.waitApplicationRequestTasks()
+		})
+		return releaseErr
+	}, nil
+}
+
 func (h *Http) beginListening() error {
 	h.listenMu.Lock()
 	defer h.listenMu.Unlock()

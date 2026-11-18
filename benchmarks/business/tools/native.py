@@ -338,6 +338,9 @@ class Environment:
         self.work = pathlib.Path(work).resolve()
         self.protocol = protocol
         self.dataset = json.loads((self.root / "contracts/dataset.json").read_text())
+        maximum_item_quantity = self.dataset.get("maximum_item_quantity")
+        if type(maximum_item_quantity) is not int or not (1 <= maximum_item_quantity <= 2147483647):
+            raise ValueError("dataset.maximum_item_quantity 超出 PostgreSQL integer 范围")
         self.infrastructure = {}
         self.application = {}
         self.php_contract_snapshot = None

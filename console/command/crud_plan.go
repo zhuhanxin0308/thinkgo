@@ -40,21 +40,23 @@ type crudField struct {
 type crudImport struct{ Alias, Path string }
 
 type crudPlan struct {
-	Name        string
-	FileName    string
-	Path        string
-	ModelImport string
-	KeyInput    string
-	Key         crudField
-	Write       []crudField
-	Update      []crudField
-	Read        []crudField
-	Create      []crudField
-	Imports     []crudImport
-	PageSize    int
-	MaxPage     int
-	MaxPageSize int
-	semantic    *applicationSemanticContext
+	Name           string
+	FileName       string
+	PackageName    string
+	APIPackagePath string
+	Path           string
+	ModelImport    string
+	KeyInput       string
+	Key            crudField
+	Write          []crudField
+	Update         []crudField
+	Read           []crudField
+	Create         []crudField
+	Imports        []crudImport
+	PageSize       int
+	MaxPage        int
+	MaxPageSize    int
+	semantic       *applicationSemanticContext
 }
 
 // buildCRUDPlan 通过现有 go/types 上下文解析模型，保留类型身份、构建约束和字段标签。
@@ -82,8 +84,14 @@ func buildCRUDPlan(basePath string, target generatorTarget, input *console.Input
 	if err != nil {
 		return nil, err
 	}
-	modelDirectory := filepath.Join("app", target.application, "model")
+	modelDirectory := filepath.Join("app", target.application, "model", target.directory)
 	modelImport := semantic.packagePath(modelDirectory)
+	apiDirectory := filepath.Join("app", target.application, "api", target.directory)
+	apiPackageName := "api"
+	if target.directory != "" {
+		apiPackageName = filepath.Base(target.directory)
+	}
+	apiPackagePath := semantic.packagePath(apiDirectory)
 	modelPackage, err := semantic.Import(modelImport)
 	if err != nil {
 		return nil, err
@@ -130,7 +138,7 @@ func buildCRUDPlan(basePath string, target generatorTarget, input *console.Input
 	if err != nil {
 		return nil, err
 	}
-	plan := &crudPlan{Name: target.name, FileName: db.ToSnakeCase(target.name), Path: path, ModelImport: modelImport,
+	plan := &crudPlan{Name: target.name, FileName: db.ToSnakeCase(target.name), PackageName: apiPackageName, APIPackagePath: apiPackagePath, Path: path, ModelImport: modelImport,
 		Key: key, Write: write, Read: read, PageSize: db.DefaultPageSize, MaxPage: crudMaxPage, MaxPageSize: crudMaxPageSize, semantic: semantic}
 	used := map[string]bool{"Input": true}
 	for _, field := range write {

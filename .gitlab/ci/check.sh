@@ -93,7 +93,9 @@ case "${1:-}" in
     ;;
   security)
     go run -mod=readonly honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
-    go run -mod=readonly github.com/securego/gosec/v2/cmd/gosec@v2.25.0 -fmt=json -out="$report_dir/gosec.json" -stdout -verbose=text -color=false -exclude-dir=tmp -exclude-dir=bin ./...
+    # 按独立模块解析包目录并扫描，避免在根模块越界加载嵌套基准模块或使用过旧扫描器。
+    python3 -B -m unittest discover -s scripts -p 'test_gosec_modules.py'
+    python3 -B scripts/gosec_modules.py --reports-dir "$report_dir/gosec-modules"
     go list -deps ./... > "$report_dir/dependencies.txt"
     if grep -Fxq 'golang.org/x/crypto/openpgp' "$report_dir/dependencies.txt"; then
       echo 'Unsupported openpgp dependency entered the framework' >&2
@@ -125,8 +127,8 @@ case "${1:-}" in
     go test -mod=readonly -run '^$' -fuzz '^FuzzPostgresRebindLexicalIsolation$' -fuzztime=20s ./db/builder
     ;;
   live)
-    packages=(. ./cache ./cache/driver/redis ./session/driver ./db ./db/builder ./migration ./queue/asynq)
-    symbols=(RedisOperationContract RedisConditionalClear RedisScopedInvalidation RedisAtomicReservationOrder RedisAtomicTTLPolicy RedisSessionDriver RedisQueueRetriesFailedTask RedisQueueShutdownRestartPreservesTask MySQLQueryAndTransactionContract MySQLColdStatementIsolation MySQLReadinessRecovery MySQLMigrationRecovery PostgreSQLQueryAndTransactionContract PostgresRebindLexicalContract MongoOperationContract MongoStreamingContract NeoStrictAndDetachDelete)
+    packages=(. ./cache ./cache/driver/redis ./context ./session/driver ./db ./db/builder ./http ./migration ./queue/asynq)
+    symbols=(RedisOperationContract RedisConditionalClear RedisScopedInvalidation RedisAtomicReservationOrder RedisAtomicTTLPolicy RedisTokenRejectsConcurrentReplay RedisSessionDriver RedisQueueRetriesFailedTask RedisQueueShutdownRestartPreservesTask RedisQueueIntegrityWireContract MySQLQueryAndTransactionContract MySQLColdStatementIsolation MySQLReadinessRecovery MySQLRequestBodyBoundary MySQLMigrationRecovery MySQLDataMigrationsRollbackAllStatements MySQLDataMigrationRejectsLegacyMyISAMJournal MySQLRawSQLBoundary PostgreSQLQueryAndTransactionContract PostgreSQLGeneratedColumnSchema PostgreSQLRawSQLBoundary PostgresRebindLexicalContract MongoOperationContract MongoStreamingContract NeoStrictAndDetachDelete)
     go test -mod=readonly -tags integration -list '^TestLive' "${packages[@]}" > "$report_dir/listed-live-tests.txt"
     required=()
     for symbol in "${symbols[@]}"; do

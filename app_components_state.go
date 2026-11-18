@@ -29,25 +29,26 @@ import (
 
 // appMetadataState 管理应用元数据、多应用编目、项目配置基线与时区/运行起点指标。
 type appMetadataState struct {
-	metadataMu            sync.RWMutex
-	debugOverrideSet      bool
-	debugOverride         bool
-	applicationName       string
-	applicationDefinition ApplicationDefinition
-	applicationCatalog    *applicationCatalog
-	nativeApplicationPath string
-	nativeRuntimeBasePath string
-	projectConfiguration  *projectConfigurationState
-	projectConfigSnapshot *config.Config
-	namespace             string
-	baseEnvName           string
-	envName               string
-	configExt             string
-	consoleMode           bool
-	beginTime             atomic.Uint64
-	beginMem              atomic.Uint64
-	locationMu            sync.RWMutex
-	location              *time.Location
+	metadataMu             sync.RWMutex
+	debugOverrideSet       bool
+	debugOverride          bool
+	applicationName        string
+	applicationDefinition  ApplicationDefinition
+	applicationCatalog     *applicationCatalog
+	nativeApplicationPath  string
+	nativeRuntimeBasePath  string
+	projectConfiguration   *projectConfigurationState
+	projectConfigSnapshot  *config.Config
+	namespace              string
+	baseEnvName            string
+	envName                string
+	configExt              string
+	consoleMode            bool
+	skipConfigurationCache bool
+	beginTime              atomic.Uint64
+	beginMem               atomic.Uint64
+	locationMu             sync.RWMutex
+	location               *time.Location
 }
 
 // appServiceHolders 聚合由容器统一托管的核心服务实例快照。
@@ -125,5 +126,7 @@ type appDatabaseRuntimeState struct {
 	// skipDatabaseInit 为 true 时，Initialize 跳过数据库连接。
 	// 供不需要数据库的控制台命令（version/list/make:* 等）使用，
 	// 避免每次执行命令都尝试连库并打印连接失败日志。
-	skipDatabaseInit bool
+	skipDatabaseInit      bool
+	injectedDatabase      *db.DB
+	injectedDatabaseOwned bool
 }

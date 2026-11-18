@@ -201,12 +201,14 @@ jobs:
           THINKGO_LIVE_NEO4J_SCHEME: bolt
         run: |
           set -euo pipefail
+          live_packages=(. ./cache ./cache/driver/redis ./context ./session/driver ./db ./db/builder ./http ./migration ./queue/asynq)
           required_live_symbols=(
             "TestLiveRedisOperationContract"
             "TestLiveRedisConditionalClear"
             "TestLiveRedisScopedInvalidation"
             "TestLiveRedisAtomicReservationOrder"
             "TestLiveRedisAtomicTTLPolicy"
+            "TestLiveRedisTokenRejectsConcurrentReplay"
             "TestLiveRedisSessionDriver"
             "TestLiveRedisQueueRetriesFailedTask"
             "TestLiveRedisQueueShutdownRestartPreservesTask"
@@ -214,24 +216,31 @@ jobs:
             "TestLiveMySQLQueryAndTransactionContract"
             "TestLiveMySQLColdStatementIsolation"
             "TestLiveMySQLReadinessRecovery"
+            "TestLiveMySQLRequestBodyBoundary"
             "TestLiveMySQLMigrationRecovery"
+            "TestLiveMySQLDataMigrationsRollbackAllStatements"
+            "TestLiveMySQLDataMigrationRejectsLegacyMyISAMJournal"
             "TestLiveMySQLRawSQLBoundary"
             "TestLivePostgreSQLQueryAndTransactionContract"
+            "TestLivePostgreSQLGeneratedColumnSchema"
             "TestLivePostgreSQLRawSQLBoundary"
+            "TestLivePostgresRebindLexicalContract"
             "TestLiveMongoOperationContract"
             "TestLiveMongoStreamingContract"
             "TestLiveNeoStrictAndDetachDelete"
           )
+          listed="$(GOWORK=off go test -tags integration -run '^$' -list '^TestLive' "${live_packages[@]}")"
           for symbol in "${required_live_symbols[@]}"; do
-            listed="$(GOWORK=off go test -tags integration -run '^$' -list "^${symbol}$" . ./cache ./cache/driver/redis ./session/driver ./db ./migration ./queue/asynq)"
             if ! grep -Fxq "$symbol" <<<"$listed"; then
               printf '缺少必须执行的真实服务测试: %s\n' "$symbol" >&2
               exit 1
             fi
           done
-          GOWORK=off go test -tags integration -race -run '^TestLive(RedisOperationContract|RedisConditionalClear|RedisScopedInvalidation|RedisAtomicReservationOrder|RedisAtomicTTLPolicy|RedisSessionDriver|RedisQueueRetriesFailedTask|RedisQueueShutdownRestartPreservesTask|MySQLQueryAndTransactionContract|MySQLColdStatementIsolation|MySQLReadinessRecovery|MySQLMigrationRecovery|PostgreSQLQueryAndTransactionContract|MongoOperationContract|MongoStreamingContract|NeoStrictAndDetachDelete)$' -shuffle=on -count=1 . ./cache ./cache/driver/redis ./session/driver ./db ./migration ./queue/asynq
-          GOWORK=off go test -tags integration -race -run '^TestLive(MySQL|PostgreSQL)RawSQLBoundary$' -v -count=1 ./db
-          GOWORK=off go test -tags integration -race -run '^TestLiveRedisQueueIntegrityWireContract$' -v -count=1 ./queue/asynq
+          live_report="$(mktemp)"
+          trap 'rm -f "$live_report"' EXIT
+          pattern="$(IFS='|'; echo "${required_live_symbols[*]}")"
+          GOWORK=off go test -json -tags integration -race -run "^(${pattern})$" -shuffle=on -count=1 -timeout=30m "${live_packages[@]}" | tee "$live_report"
+          GOWORK=off go run -mod=readonly .gitlab/ci/assert_tests.go "${required_live_symbols[@]}" < "$live_report"
 
       - name: Fuzz route index parity
         shell: bash

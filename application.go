@@ -254,8 +254,45 @@ func copyApplicationConstructionOptions(target, source *App) {
 	target.configExt = source.configExt
 	target.consoleMode = source.consoleMode
 	target.nativeRuntimeBasePath = source.nativeRuntimeBasePath
+	target.skipConfigurationCache = source.skipConfigurationCache
 	source.metadataMu.RUnlock()
 	target.projectConfiguration = projectConfiguration
+}
+
+// SkipConfigurationCache 让当前应用及关联的原生多应用忽略已存在的 runtime 配置缓存，
+// 直接从 config 源目录重新解析配置，供 clear 与 optimize:config 自愈坏缓存使用。
+func (app *App) SkipConfigurationCache() {
+	if app == nil {
+		return
+	}
+	app.metadataMu.Lock()
+	app.skipConfigurationCache = true
+	app.metadataMu.Unlock()
+	if catalog := app.applicationCatalog; catalog != nil {
+		catalog.lock.Lock()
+		applications := make([]*App, 0, len(catalog.applications))
+		for _, child := range catalog.applications {
+			if child != nil && child != app {
+				applications = append(applications, child)
+			}
+		}
+		catalog.lock.Unlock()
+		for _, child := range applications {
+			child.metadataMu.Lock()
+			child.skipConfigurationCache = true
+			child.metadataMu.Unlock()
+		}
+	}
+}
+
+func (app *App) skipsConfigurationCache() bool {
+	if app == nil {
+		return false
+	}
+	app.metadataMu.RLock()
+	skip := app.skipConfigurationCache
+	app.metadataMu.RUnlock()
+	return skip
 }
 
 func cloneApplicationMap(applications map[string]*App) map[string]*App {
@@ -347,9 +384,13 @@ func (app *App) loadNativeApplication() error {
 
 	// 项目快照已在切换运行目录前捕获；应用缓存包含合并后的根配置，
 	// 因此只能加载到当前应用工作副本，不能写回项目 owner 或共享基线。
-	cached, err := app.loadConfigurationCache()
-	if err != nil {
-		return fmt.Errorf("加载应用 %q 配置缓存失败: %w", name, err)
+	cached := false
+	var err error
+	if !app.skipsConfigurationCache() {
+		cached, err = app.loadConfigurationCache()
+		if err != nil {
+			return fmt.Errorf("加载应用 %q 配置缓存失败: %w", name, err)
+		}
 	}
 	if cached {
 		if err := app.reapplyProjectApplicationOverrides(); err != nil {

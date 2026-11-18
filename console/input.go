@@ -3,6 +3,7 @@ package console
 import (
 	"context"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"unicode"
@@ -270,8 +271,13 @@ func isNegativeNumber(token string) bool {
 	if len(token) < 2 || token[0] != '-' {
 		return false
 	}
-	_, err := strconv.ParseFloat(token, 64)
-	return err == nil
+	hasLeadingNumeric := (token[1] >= '0' && token[1] <= '9') ||
+		(token[1] == '.' && len(token) >= 3 && token[2] >= '0' && token[2] <= '9')
+	if !hasLeadingNumeric {
+		return false
+	}
+	value, err := strconv.ParseFloat(token, 64)
+	return err == nil && !math.IsNaN(value) && !math.IsInf(value, 0)
 }
 
 // ArgumentDefinition 描述一个位置参数。

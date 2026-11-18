@@ -86,7 +86,8 @@ func ValidateOrder(input OrderInput, limits Dataset) ([]OrderItemInput, error) {
 		return 0
 	})
 	for index, item := range items {
-		if item.ProductID < 1 || item.Quantity < 1 || item.Quantity > limits.MaximumItemQuantity ||
+		if item.ProductID < 1 || item.Quantity < 1 || item.Quantity > maxPostgresInteger ||
+			item.Quantity > limits.MaximumItemQuantity ||
 			(index > 0 && items[index-1].ProductID == item.ProductID) {
 			return nil, InvalidInput("商品、数量或重复商品不合法")
 		}

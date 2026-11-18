@@ -29,6 +29,7 @@ func TestIssue27HTTPBindDefaultsAndOverrides(t *testing.T) {
 		{"explicit_external", map[string]interface{}{"server": map[string]interface{}{"host": "0.0.0.0"}}, "0.0.0.0:8000"},
 		{"explicit_hostname", map[string]interface{}{"server": map[string]interface{}{"host": "localhost"}}, "localhost:8000"},
 		{"explicit_ipv6", map[string]interface{}{"server": map[string]interface{}{"host": "::1"}}, "[::1]:8000"},
+		{"explicit_bracketed_ipv6", map[string]interface{}{"server": map[string]interface{}{"host": "[::1]"}}, "[::1]:8000"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			configuration, _, err := parseHTTPApplicationConfig(test.config)
@@ -41,7 +42,10 @@ func TestIssue27HTTPBindDefaultsAndOverrides(t *testing.T) {
 			}
 		})
 	}
-	for name, host := range map[string]interface{}{"empty": "", "spaces": " ", "null": nil, "number": 1} {
+	for name, host := range map[string]interface{}{
+		"empty": "", "spaces": " ", "null": nil, "number": 1,
+		"bracketed_ipv4": "[127.0.0.1]", "double_brackets": "[[::1]]", "unclosed_bracket": "[::1",
+	} {
 		t.Run("invalid_"+name, func(t *testing.T) {
 			_, _, err := parseHTTPApplicationConfig(map[string]interface{}{"server": map[string]interface{}{"host": host}})
 			if !errors.Is(err, ErrInvalidHTTPConfig) {

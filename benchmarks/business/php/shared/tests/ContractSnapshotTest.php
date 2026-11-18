@@ -167,6 +167,9 @@ final class ContractSnapshotTest extends TestCase
         file_put_contents($this->source.'/dataset.json','null');
         try { ContractSnapshot::compile($this->source,$this->cache); self::fail('非对象合同被接受'); }
         catch (\RuntimeException) { self::assertDirectoryDoesNotExist($this->cache); }
+        file_put_contents($this->source.'/dataset.json','{"maximum_item_quantity":2147483648}');
+        try { ContractSnapshot::compile($this->source,$this->cache); self::fail('超范围 maximum_item_quantity 被接受'); }
+        catch (\RuntimeException) { self::assertDirectoryDoesNotExist($this->cache); }
         file_put_contents($this->source.'/dataset.json','{"limit":1}');
         file_put_contents($this->cache,'blocked');
         $this->expectException(\RuntimeException::class);
