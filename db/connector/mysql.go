@@ -2,7 +2,6 @@ package connector
 
 import (
 	"fmt"
-	"net"
 	"regexp"
 	"strconv"
 	"strings"
@@ -58,7 +57,7 @@ func buildMysqlConfig(config db.Config) (*mysqlDriver.Config, error) {
 	mysqlConfig.User = config.Username
 	mysqlConfig.Passwd = config.Password
 	mysqlConfig.Net = "tcp"
-	mysqlConfig.Addr = joinHostPort(config.Hostname, config.Hostport)
+	mysqlConfig.Addr = mysqlHostPort(config.Hostname, config.Hostport)
 	mysqlConfig.DBName = config.Database
 	mysqlConfig.CheckConnLiveness = true
 	mysqlConfig.ParseTime = true
@@ -169,12 +168,4 @@ func buildMysqlDSN(config db.Config) (string, error) {
 		return "", err
 	}
 	return mysqlConfig.FormatDSN(), nil
-}
-
-// joinHostPort 在端口存在时使用标准库组合地址，避免 IPv6 或特殊主机名被拼错。
-func joinHostPort(host string, port string) string {
-	if port == "" {
-		return host
-	}
-	return net.JoinHostPort(host, port)
 }

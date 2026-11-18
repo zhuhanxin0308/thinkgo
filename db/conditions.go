@@ -71,12 +71,7 @@ func (g *ConditionGroup) WhereColumn(left string, op string, right string) *Cond
 	if g.err != nil {
 		return g
 	}
-	clause, err := compileColumnClause(left, op, right)
-	if err != nil {
-		g.err = err
-		return g
-	}
-	node, err := parsePredicateText(clause, nil)
+	node, err := compileColumnNode(left, op, right)
 	if err != nil {
 		g.err = err
 		return g
@@ -266,18 +261,18 @@ func compileTupleNodes(conditions [][]interface{}) (PredicateNode, int, error) {
 	return PredicateNode{Kind: PredicateBoolean, Operator: "AND", Children: nodes}, len(nodes), nil
 }
 
-func compileColumnClause(left string, op string, right string) (string, error) {
+func compileColumnNode(left string, op string, right string) (PredicateNode, error) {
 	if err := validateIdentifier(left); err != nil {
-		return "", fmt.Errorf("unsafe whereColumn left field: %w", err)
+		return PredicateNode{}, fmt.Errorf("unsafe whereColumn left field: %w", err)
 	}
 	if err := validateIdentifier(right); err != nil {
-		return "", fmt.Errorf("unsafe whereColumn right field: %w", err)
+		return PredicateNode{}, fmt.Errorf("unsafe whereColumn right field: %w", err)
 	}
 	normalizedOperator, err := normalizeOperator(op)
 	if err != nil {
-		return "", fmt.Errorf("unsafe whereColumn operator: %w", err)
+		return PredicateNode{}, fmt.Errorf("unsafe whereColumn operator: %w", err)
 	}
-	return fmt.Sprintf("%s %s %s", left, normalizedOperator, right), nil
+	return PredicateNode{Kind: PredicateColumn, Field: left, Operator: normalizedOperator, RightField: right}, nil
 }
 
 func compileExpressionClause(field string, op string, expression string) (string, error) {

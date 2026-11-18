@@ -39,6 +39,7 @@ var (
 	ErrDatabaseUnavailable     = db.ErrDatabaseUnavailable
 	ErrInvalidQuery            = db.ErrInvalidQuery
 	ErrInvalidPagination       = db.ErrInvalidPagination
+	ErrQueryResultTooMany      = db.ErrQueryResultTooMany
 	ErrUnsafeFullTableMutation = db.ErrUnsafeFullTableMutation
 	validateIdentifier         = db.ValidateDriverIdentifier
 	validateDataKeys           = db.ValidateDriverData

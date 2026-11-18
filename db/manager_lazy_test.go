@@ -126,3 +126,102 @@ func TestManagerCloseDoesNotBuildUnusedFactory(t *testing.T) {
 		t.Fatalf("关闭后访问应返回管理器关闭错误: connection=%#v err=%v", connection, err)
 	}
 }
+
+// TestManagerUnattachedAliasCleanupPreservesSharedActiveConnection 验证惰性工厂返回包装共享物理连接的 *DB
+// 在挂载失败或并发关闭时不会绕过主连接租约直接关闭共享物理连接 (#599)。
+func TestManagerUnattachedAliasCleanupPreservesSharedActiveConnection(t *testing.T) {
+	t.Run("并发关闭期间未挂载别名不得提前切断活跃共享连接", func(t *testing.T) {
+		shared := &blockingLifecycleConnection{
+			started: make(chan struct{}),
+			release: make(chan struct{}),
+			closed:  make(chan struct{}),
+		}
+		primary := NewDB(shared)
+		manager := NewManager("primary")
+		if err := manager.Add("primary", primary); err != nil {
+			t.Fatalf("add primary: %v", err)
+		}
+
+		factoryEntered := make(chan struct{})
+		allowFactoryReturn := make(chan struct{})
+		if err := manager.RegisterFactory("alias", func() (*DB, error) {
+			close(factoryEntered)
+			<-allowFactoryReturn
+			return NewDB(shared), nil
+		}); err != nil {
+			t.Fatalf("register alias factory: %v", err)
+		}
+
+		queryDone := make(chan error, 1)
+		go func() {
+			_, err := primary.Table("users").Select()
+			queryDone <- err
+		}()
+		<-shared.started
+
+		aliasDone := make(chan error, 1)
+		go func() {
+			_, err := manager.Connection("alias")
+			aliasDone <- err
+		}()
+		<-factoryEntered
+
+		closeDone := make(chan error, 1)
+		go func() {
+			closeDone <- manager.Close()
+		}()
+		deadline := time.Now().Add(time.Second)
+		for time.Now().Before(deadline) {
+			manager.lock.RLock()
+			closed := manager.closed
+			manager.lock.RUnlock()
+			if closed {
+				break
+			}
+			time.Sleep(time.Millisecond)
+		}
+
+		close(allowFactoryReturn)
+		aliasErr := <-aliasDone
+		if !errors.Is(aliasErr, ErrDatabaseManagerClosed) {
+			t.Fatalf("关闭期间惰性连接应返回 ErrDatabaseManagerClosed，实际为 %v", aliasErr)
+		}
+
+		select {
+		case <-shared.closed:
+			t.Fatal("primary 仍持有活跃查询租约时，alias 异常清理不得关闭共享物理连接")
+		case <-time.After(30 * time.Millisecond):
+		}
+
+		close(shared.release)
+		if err := <-queryDone; err != nil {
+			t.Fatalf("primary 查询应正常完成: %v", err)
+		}
+		if err := <-closeDone; err != nil {
+			t.Fatalf("manager close: %v", err)
+		}
+	})
+
+	t.Run("挂载重名冲突时不得关闭已托管共享物理连接", func(t *testing.T) {
+		shared := &identityCountingConnection{id: NewConnectionID("shared")}
+		manager := NewManager("primary")
+		t.Cleanup(func() { _ = manager.Close() })
+		if err := manager.Add("primary", NewDB(shared)); err != nil {
+			t.Fatalf("add primary: %v", err)
+		}
+		if err := manager.RegisterFactory("alias", func() (*DB, error) {
+			manager.lock.Lock()
+			manager.connections["alias"] = NewDB(&fakeManagerConnection{name: "winner"})
+			manager.lock.Unlock()
+			return NewDB(shared), nil
+		}); err != nil {
+			t.Fatalf("register alias factory: %v", err)
+		}
+		if _, err := manager.Connection("alias"); !errors.Is(err, ErrDuplicateConnection) {
+			t.Fatalf("期望重名错误 ErrDuplicateConnection，实际为 %v", err)
+		}
+		if got := shared.closeCalls.Load(); got != 0 {
+			t.Fatalf("primary 仍在运行时共享连接不得被关闭，closeCalls=%d", got)
+		}
+	})
+}

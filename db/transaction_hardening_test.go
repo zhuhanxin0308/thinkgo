@@ -355,3 +355,213 @@ func TestTransactionQueryDuringDatabaseCloseDoesNotDeadlock(t *testing.T) {
 		t.Fatal("事务结束后数据库未完成关闭")
 	}
 }
+
+type blockingRollbackDriver struct {
+	rollbackEntered chan struct{}
+	rollbackRelease chan struct{}
+	rollbackErr     error
+	enteredOnce     sync.Once
+}
+
+func (d *blockingRollbackDriver) Open(string) (driver.Conn, error) {
+	return &blockingRollbackConn{driver: d}, nil
+}
+
+type blockingRollbackConn struct {
+	driver *blockingRollbackDriver
+}
+
+func (c *blockingRollbackConn) Prepare(string) (driver.Stmt, error) {
+	return nil, errors.New("test driver does not support prepared statements")
+}
+func (c *blockingRollbackConn) Close() error { return nil }
+func (c *blockingRollbackConn) Begin() (driver.Tx, error) {
+	return &blockingRollbackTx{driver: c.driver}, nil
+}
+func (c *blockingRollbackConn) BeginTx(context.Context, driver.TxOptions) (driver.Tx, error) {
+	return &blockingRollbackTx{driver: c.driver}, nil
+}
+
+type blockingRollbackTx struct {
+	driver *blockingRollbackDriver
+}
+
+func (t *blockingRollbackTx) Commit() error { return nil }
+func (t *blockingRollbackTx) Rollback() error {
+	if t.driver.rollbackEntered != nil {
+		t.driver.enteredOnce.Do(func() { close(t.driver.rollbackEntered) })
+	}
+	if t.driver.rollbackRelease != nil {
+		<-t.driver.rollbackRelease
+	}
+	return t.driver.rollbackErr
+}
+
+type captureTxErrorLogger struct {
+	mu         sync.Mutex
+	operations []string
+}
+
+func (l *captureTxErrorLogger) ErrorCtx(_ string, ctx map[string]interface{}) {
+	l.mu.Lock()
+	if op, ok := ctx["operation"].(string); ok {
+		l.operations = append(l.operations, op)
+	}
+	l.mu.Unlock()
+}
+
+// TestTransactionContextCancellationPreservesBackendRollbackErrorWithoutErrTransactionDone
+// 验证 TransactionContext 取消时与后台 watchContext 幂等收敛，保留真实回滚错误且不混入 ErrTransactionDone (#599)。
+func TestTransactionContextCancellationPreservesBackendRollbackErrorWithoutErrTransactionDone(t *testing.T) {
+	t.Run("watchContext已完成自动回滚时合并后端错误", func(t *testing.T) {
+		errBackend := errors.New("backend rollback broken")
+		driverName := fmt.Sprintf("thinkgo_ctx_rb_done_%d", finalizationDriverSequence.Add(1))
+		sql.Register(driverName, &blockingRollbackDriver{rollbackErr: errBackend})
+		handle, err := sql.Open(driverName, "")
+		if err != nil {
+			t.Fatalf("open test driver: %v", err)
+		}
+		t.Cleanup(func() { _ = handle.Close() })
+
+		database := NewDB(&SQLConnection{DB: handle, Builder: &builder.Sqlite{}})
+		ctx, cancel := context.WithCancel(context.Background())
+		err = database.TransactionContext(ctx, func(tx *Tx) error {
+			cancel()
+			<-tx.Done()
+			return ctx.Err()
+		})
+		if !errors.Is(err, context.Canceled) || !errors.Is(err, errBackend) {
+			t.Fatalf("应同时包含 context.Canceled 与后端回滚错误，实际为 %v", err)
+		}
+		if errors.Is(err, ErrTransactionDone) {
+			t.Fatalf("不应混入虚假的 ErrTransactionDone，实际为 %v", err)
+		}
+	})
+
+	t.Run("watchContext回滚在途时等待完成后收敛错误", func(t *testing.T) {
+		errBackend := errors.New("in-flight rollback broken")
+		entered := make(chan struct{})
+		release := make(chan struct{})
+		driverName := fmt.Sprintf("thinkgo_ctx_rb_inflight_%d", finalizationDriverSequence.Add(1))
+		sql.Register(driverName, &blockingRollbackDriver{
+			rollbackEntered: entered,
+			rollbackRelease: release,
+			rollbackErr:     errBackend,
+		})
+		handle, err := sql.Open(driverName, "")
+		if err != nil {
+			t.Fatalf("open test driver: %v", err)
+		}
+		t.Cleanup(func() { _ = handle.Close() })
+
+		database := NewDB(&SQLConnection{DB: handle, Builder: &builder.Sqlite{}})
+		ctx, cancel := context.WithCancel(context.Background())
+
+		txDone := make(chan error, 1)
+		go func() {
+			txDone <- database.TransactionContext(ctx, func(*Tx) error {
+				cancel()
+				<-entered
+				return ctx.Err()
+			})
+		}()
+
+		select {
+		case premature := <-txDone:
+			close(release)
+			t.Fatalf("在途上下文回滚完成前 TransactionContext 不应提前返回: %v", premature)
+		case <-time.After(30 * time.Millisecond):
+		}
+
+		close(release)
+		err = <-txDone
+		if !errors.Is(err, context.Canceled) || !errors.Is(err, errBackend) || errors.Is(err, ErrTransactionDone) {
+			t.Fatalf("在途上下文回滚收敛结果错误: %v", err)
+		}
+	})
+
+	t.Run("闭包返回nil但上下文已自动回滚时返回取消错误而非ErrTransactionDone", func(t *testing.T) {
+		errBackend := errors.New("commit race rollback failed")
+		driverName := fmt.Sprintf("thinkgo_ctx_rb_nil_cb_%d", finalizationDriverSequence.Add(1))
+		sql.Register(driverName, &blockingRollbackDriver{rollbackErr: errBackend})
+		handle, err := sql.Open(driverName, "")
+		if err != nil {
+			t.Fatalf("open test driver: %v", err)
+		}
+		t.Cleanup(func() { _ = handle.Close() })
+
+		database := NewDB(&SQLConnection{DB: handle, Builder: &builder.Sqlite{}})
+		ctx, cancel := context.WithCancel(context.Background())
+		err = database.TransactionContext(ctx, func(tx *Tx) error {
+			cancel()
+			<-tx.Done()
+			return nil
+		})
+		if !errors.Is(err, context.Canceled) || !errors.Is(err, errBackend) || errors.Is(err, ErrTransactionDone) {
+			t.Fatalf("闭包返回 nil 时应返回取消及回滚错误且不含 ErrTransactionDone: %v", err)
+		}
+
+		for i := 0; i < 20; i++ {
+			raceCtx, raceCancel := context.WithCancel(context.Background())
+			err = database.TransactionContext(raceCtx, func(*Tx) error {
+				raceCancel()
+				return nil
+			})
+			if !errors.Is(err, context.Canceled) || !errors.Is(err, errBackend) || errors.Is(err, ErrTransactionDone) {
+				t.Fatalf("立即返回 nil 竞态轮次 %d 结果错误: %v", i, err)
+			}
+		}
+	})
+
+	t.Run("手工BeginTx取消回滚故障上报日志且手工重复提交仍返ErrTransactionDone", func(t *testing.T) {
+		errBackend := errors.New("standalone context rollback failed")
+		driverName := fmt.Sprintf("thinkgo_ctx_rb_standalone_%d", finalizationDriverSequence.Add(1))
+		sql.Register(driverName, &blockingRollbackDriver{rollbackErr: errBackend})
+		handle, err := sql.Open(driverName, "")
+		if err != nil {
+			t.Fatalf("open test driver: %v", err)
+		}
+		t.Cleanup(func() { _ = handle.Close() })
+
+		logger := &captureTxErrorLogger{}
+		database := NewDB(&SQLConnection{DB: handle, Builder: &builder.Sqlite{}})
+		database.SetLogger(logger)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		tx, err := database.BeginTx(ctx, nil)
+		if err != nil {
+			t.Fatalf("BeginTx: %v", err)
+		}
+		cancel()
+		<-tx.Done()
+		deadline := time.Now().Add(time.Second)
+		for time.Now().Before(deadline) {
+			logger.mu.Lock()
+			logged := len(logger.operations) > 0
+			logger.mu.Unlock()
+			if logged {
+				break
+			}
+			time.Sleep(time.Millisecond)
+		}
+		logger.mu.Lock()
+		ops := append([]string(nil), logger.operations...)
+		logger.mu.Unlock()
+		if len(ops) != 1 || ops[0] != "context_rollback" {
+			t.Fatalf("独立 BeginTx 自动回滚失败应上报 context_rollback，实际为 %v", ops)
+		}
+
+		// 闭包内业务代码手工重复提交后返回错误，仍应报告 ErrTransactionDone。
+		cleanDB := NewDB(newHardeningSQLConnection(t))
+		manualErr := errors.New("after manual commit")
+		got := cleanDB.TransactionContext(context.Background(), func(inner *Tx) error {
+			if commitErr := inner.Commit(); commitErr != nil {
+				return commitErr
+			}
+			return manualErr
+		})
+		if !errors.Is(got, manualErr) || !errors.Is(got, ErrTransactionDone) {
+			t.Fatalf("显式手工提交后再次收尾应保留 ErrTransactionDone: %v", got)
+		}
+	})
+}

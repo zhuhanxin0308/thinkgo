@@ -52,6 +52,16 @@ func newDialectMigrationLocker(session db.PinnedSQLConnection) (dialectMigration
 	}
 }
 
+func newDialectMigrationReadLocker(session db.PinnedSQLConnection) (dialectMigrationLocker, error) {
+	if session == nil {
+		return nil, fmt.Errorf("%w: pinned SQL 会话为空", ErrInvalidMigration)
+	}
+	if session.DialectName() == "sqlite" {
+		return &sqliteMigrationReadLocker{session: session}, nil
+	}
+	return newDialectMigrationLocker(session)
+}
+
 type mysqlMigrationLocker struct {
 	session  db.PinnedSQLConnection
 	lockName string
@@ -235,6 +245,57 @@ func (locker *sqliteMigrationLocker) Release(ctx context.Context, commit bool) e
 		return fmt.Errorf("%w: SQLite %s 或 busy_timeout 恢复失败: %w", ErrMigrationLockLost, statement, errors.Join(releaseErr, restoreErr))
 	}
 	return nil
+}
+
+type sqliteMigrationReadLocker struct {
+	session db.PinnedSQLConnection
+}
+
+func (locker *sqliteMigrationReadLocker) Acquire(ctx context.Context, _ time.Duration) error {
+	retryer := sqliteMigrationLocker{session: locker.session}
+	if err := retryer.executeWithRetry(ctx, "BEGIN DEFERRED"); err != nil {
+		return fmt.Errorf("%w: SQLite BEGIN DEFERRED 失败: %w", ErrMigrationLockUnavailable, err)
+	}
+	if err := retryer.queryWithRetry(ctx, "SELECT 1 FROM sqlite_master LIMIT 1"); err != nil {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), migrationCleanupTimeout)
+		_, _ = locker.session.ExecuteContext(cleanupCtx, "ROLLBACK")
+		cancel()
+		return fmt.Errorf("%w: SQLite 只读快照建立失败: %w", ErrMigrationLockUnavailable, err)
+	}
+	return nil
+}
+
+func (locker *sqliteMigrationReadLocker) Release(ctx context.Context, _ bool) error {
+	if _, err := locker.session.ExecuteContext(ctx, "ROLLBACK"); err != nil {
+		return fmt.Errorf("%w: SQLite 只读快照释放失败: %w", ErrMigrationLockLost, err)
+	}
+	return nil
+}
+
+func (locker *sqliteMigrationLocker) queryWithRetry(ctx context.Context, statement string) error {
+	delay := sqliteLockRetryInitial
+	for {
+		_, err := locker.session.QueryContext(ctx, statement)
+		if err == nil {
+			return nil
+		}
+		if !isSQLiteBusyOrLocked(err) {
+			return err
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return errors.Join(ctx.Err(), err)
+		case <-timer.C:
+		}
+		if delay < sqliteLockRetryMaximum {
+			delay *= 2
+			if delay > sqliteLockRetryMaximum {
+				delay = sqliteLockRetryMaximum
+			}
+		}
+	}
 }
 
 func (locker *sqliteMigrationLocker) executeWithRetry(ctx context.Context, statement string) error {

@@ -627,10 +627,10 @@ func (q *Query) countAdvanced() (int64, error) {
 	sub.limit = 0
 	sub.offset = 0
 	sub.lockMode = LockNone
-	// 非 DISTINCT 时投影降级为常量，避免 JOIN 下派生表出现重复列名；
+	// 非 DISTINCT 时投影降级为具名常量，避免 JOIN 下派生表出现重复列名并兼容 SQL Server 派生表列名约束；
 	// DISTINCT 必须保留原字段以正确去重。
 	if !sub.distinct {
-		sub.fields = "1"
+		sub.fields = "1 AS tg_one"
 	}
 
 	subSQL, subArgs, err := sub.BuildSelectSQL()

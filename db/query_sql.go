@@ -113,7 +113,7 @@ func quoteConditionIdentifiers(clause string, quote func(string) string) string 
 			isFunction = clause[index] == '('
 			break
 		}
-		if safeClauseKeywords[lower] || isFunction && allowedExpressionFunctions[lower] {
+		if safeClauseKeywords[lower] || isFunction && allowedExpressionFunctions[lower] || isAggregateDistinctModifier(clause, location[0], location[1]) {
 			result.WriteString(token)
 		} else {
 			result.WriteString(quote(token))
@@ -122,6 +122,43 @@ func quoteConditionIdentifiers(clause string, quote func(string) string) string 
 	}
 	result.WriteString(clause[last:])
 	return result.String()
+}
+
+func isAggregateDistinctModifier(clause string, start, end int) bool {
+	if !strings.EqualFold(clause[start:end], "distinct") {
+		return false
+	}
+	left := start - 1
+	for left >= 0 && (clause[left] == ' ' || clause[left] == '\t' || clause[left] == '\n' || clause[left] == '\r') {
+		left--
+	}
+	if left <= 0 || clause[left] != '(' {
+		return false
+	}
+	fnEnd := left
+	for fnEnd > 0 && (clause[fnEnd-1] == ' ' || clause[fnEnd-1] == '\t' || clause[fnEnd-1] == '\n' || clause[fnEnd-1] == '\r') {
+		fnEnd--
+	}
+	fnStart := fnEnd
+	for fnStart > 0 && ((clause[fnStart-1] >= 'A' && clause[fnStart-1] <= 'Z') || (clause[fnStart-1] >= 'a' && clause[fnStart-1] <= 'z') || clause[fnStart-1] == '_') {
+		fnStart--
+	}
+	switch strings.ToLower(clause[fnStart:fnEnd]) {
+	case "count", "sum", "avg", "min", "max":
+	default:
+		return false
+	}
+	right := end
+	hasSpace := false
+	for right < len(clause) && (clause[right] == ' ' || clause[right] == '\t' || clause[right] == '\n' || clause[right] == '\r') {
+		hasSpace = true
+		right++
+	}
+	if !hasSpace || right >= len(clause) {
+		return false
+	}
+	next := clause[right]
+	return (next >= 'A' && next <= 'Z') || (next >= 'a' && next <= 'z') || next == '_'
 }
 
 // ensureValid 检查查询构建器状态是否合法。

@@ -37,7 +37,7 @@ func (store *DatabaseStore) WithMigrationReadLock(ctx context.Context, callback 
 
 // withMigrationSession 集中管理锁生命周期，便于验证主错误、解锁错误与会话失效语义。
 func (store *DatabaseStore) withMigrationSession(ctx context.Context, session db.PinnedSQLConnection, callback func(Store) error) (resultErr error) {
-	return store.withAcquiredMigrationSession(ctx, session, func() (bool, error) {
+	return store.withAcquiredMigrationSession(ctx, session, false, func() (bool, error) {
 		bound := &DatabaseStore{
 			database:     store.database,
 			dialect:      store.dialect,
@@ -59,7 +59,7 @@ func (store *DatabaseStore) withMigrationSession(ctx context.Context, session db
 }
 
 func (store *DatabaseStore) withMigrationReadSession(ctx context.Context, session db.PinnedSQLConnection, callback func(Store) error) error {
-	return store.withAcquiredMigrationSession(ctx, session, func() (bool, error) {
+	return store.withAcquiredMigrationSession(ctx, session, true, func() (bool, error) {
 		bound := &DatabaseStore{database: store.database, dialect: store.dialect, executor: session, session: session}
 		callbackErr := callback(bound)
 		return callbackErr == nil, callbackErr
@@ -69,6 +69,7 @@ func (store *DatabaseStore) withMigrationReadSession(ctx context.Context, sessio
 func (store *DatabaseStore) withAcquiredMigrationSession(
 	ctx context.Context,
 	session db.PinnedSQLConnection,
+	readOnly bool,
 	callback func() (safeSQLiteCommit bool, resultErr error),
 ) (resultErr error) {
 	if store == nil || store.database == nil || ctx == nil || session == nil || callback == nil {
@@ -81,7 +82,15 @@ func (store *DatabaseStore) withAcquiredMigrationSession(
 		session.Invalidate()
 		return fmt.Errorf("%w: pinned 会话方言从 %q 变为 %q", ErrMigrationLockLost, store.dialect, session.DialectName())
 	}
-	locker, err := newDialectMigrationLocker(session)
+	var (
+		locker dialectMigrationLocker
+		err    error
+	)
+	if readOnly {
+		locker, err = newDialectMigrationReadLocker(session)
+	} else {
+		locker, err = newDialectMigrationLocker(session)
+	}
 	if err != nil {
 		return err
 	}

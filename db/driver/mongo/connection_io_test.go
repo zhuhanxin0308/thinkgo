@@ -524,3 +524,161 @@ func TestMongoConnectionValidationBoundaries(t *testing.T) {
 		}
 	})
 }
+
+func mongoMockMultiBatchResponses(namespace string, firstDocs, nextDocs []bson.D) (bson.D, bson.D) {
+	firstBatch := make(bson.A, len(firstDocs))
+	for i, d := range firstDocs {
+		firstBatch[i] = d
+	}
+	nextBatch := make(bson.A, len(nextDocs))
+	for i, d := range nextDocs {
+		nextBatch[i] = d
+	}
+	first := bson.D{
+		{Key: "ok", Value: 1},
+		{Key: "cursor", Value: bson.D{
+			{Key: "id", Value: int64(42)},
+			{Key: "ns", Value: namespace},
+			{Key: "firstBatch", Value: firstBatch},
+		}},
+	}
+	second := bson.D{
+		{Key: "ok", Value: 1},
+		{Key: "cursor", Value: bson.D{
+			{Key: "id", Value: int64(0)},
+			{Key: "ns", Value: namespace},
+			{Key: "nextBatch", Value: nextBatch},
+		}},
+	}
+	return first, second
+}
+
+// TestMongoSelectSparseLargeLimitAvoidsUpfrontOverAllocation 验证大 Limit 稀疏/空结果不会按上限预分配 (#563)。
+func TestMongoSelectSparseLargeLimitAvoidsUpfrontOverAllocation(t *testing.T) {
+	const maxLimit = 100000
+
+	t.Run("0行结果零底层数组预分配", func(t *testing.T) {
+		connection := newMongoMockConnection(t, mongoMockCursorResponse("app.users"))
+		rows, err := NewDB(connection).Name("users").Limit(maxLimit).Select()
+		if err != nil {
+			t.Fatalf("0 行查询失败: %v", err)
+		}
+		if rows == nil || len(rows) != 0 || cap(rows) != 0 {
+			t.Fatalf("0 行结果应为非 nil 且 cap=0，实际 len=%d cap=%d nil=%t", len(rows), cap(rows), rows == nil)
+		}
+	})
+
+	t.Run("1行结果按真实批次分配小容量", func(t *testing.T) {
+		id := bson.NewObjectID()
+		connection := newMongoMockConnection(t, mongoMockCursorResponse("app.users",
+			bson.D{{Key: "_id", Value: id}, {Key: "name", Value: "Ada"}},
+		))
+		rows, err := NewDB(connection).Name("users").Limit(maxLimit).Select()
+		if err != nil {
+			t.Fatalf("1 行查询失败: %v", err)
+		}
+		if len(rows) != 1 || cap(rows) > 8 {
+			t.Fatalf("1 行稀疏查询不应按 100000 预分配: len=%d cap=%d", len(rows), cap(rows))
+		}
+	})
+
+	t.Run("多批游标按实际文档数渐进扩容", func(t *testing.T) {
+		firstDocs := make([]bson.D, 16)
+		for i := range firstDocs {
+			firstDocs[i] = bson.D{{Key: "_id", Value: bson.NewObjectID()}, {Key: "seq", Value: int32(i)}}
+		}
+		nextDocs := make([]bson.D, 20)
+		for i := range nextDocs {
+			nextDocs[i] = bson.D{{Key: "_id", Value: bson.NewObjectID()}, {Key: "seq", Value: int32(16 + i)}}
+		}
+		firstResp, secondResp := mongoMockMultiBatchResponses("app.users", firstDocs, nextDocs)
+		connection := newMongoMockConnection(t, firstResp, secondResp)
+		rows, err := NewDB(connection).Name("users").Limit(maxLimit).Select()
+		if err != nil || len(rows) != 36 || cap(rows) > 128 {
+			t.Fatalf("多批查询结果或容量异常: len=%d cap=%d err=%v", len(rows), cap(rows), err)
+		}
+	})
+
+	t.Run("服务端错误路径不提前预分配", func(t *testing.T) {
+		connection := newMongoMockConnection(t, mongoMockCommandErrorResponse(13, "not authorized"))
+		if _, err := NewDB(connection).Name("users").Limit(maxLimit).Select(); err == nil {
+			t.Fatal("服务端命令失败必须返回错误")
+		}
+	})
+
+	t.Run("无显式Limit超过100000行触发保护上限", func(t *testing.T) {
+		if got := mongoBatchGrowCount(0, maxLimit, 0); got != 1 {
+			t.Fatalf("单行批次扩容数应为 1，实际 %d", got)
+		}
+		if got := mongoBatchGrowCount(99995, 0, 20); got != 5 {
+			t.Fatalf("接近 100000 行上限时扩容数应被截断为 5，实际 %d", got)
+		}
+		if got := mongoBatchGrowCount(0, 10, -3); got != 1 {
+			t.Fatalf("异常负剩余批次数应安全归一为 1，实际 %d", got)
+		}
+	})
+
+	t.Run("大批量接近上限与超限保护及Each流式语义", func(t *testing.T) {
+		const denseCount = 2000
+		docs := make([]bson.D, denseCount)
+		for i := range docs {
+			docs[i] = bson.D{{Key: "_id", Value: bson.NewObjectID()}, {Key: "seq", Value: int32(i)}}
+		}
+		connection := newMongoMockConnection(t,
+			mongoMockCursorResponse("app.users", docs...),
+			mongoMockCursorResponse("app.users", docs...),
+		)
+		database := NewDB(connection)
+		rows, err := database.Name("users").Limit(maxLimit).Select()
+		if err != nil || len(rows) != denseCount {
+			t.Fatalf("大批量查询结果异常: len=%d err=%v", len(rows), err)
+		}
+
+		streamed := 0
+		if err := database.Name("users").Limit(0).Each(func(map[string]interface{}) bool {
+			streamed++
+			return streamed < 50
+		}); err != nil || streamed != 50 {
+			t.Fatalf("Each 流式提前中止异常: streamed=%d err=%v", streamed, err)
+		}
+	})
+}
+
+func BenchmarkMongoSelectSparseLargeLimit(b *testing.B) {
+	id := bson.NewObjectID()
+	resp := mongoMockCursorResponse("app.users", bson.D{{Key: "_id", Value: id}, {Key: "status", Value: "pending"}})
+	b.ReportAllocs()
+	for b.Loop() {
+		deployment := drivertest.NewMockDeployment(resp)
+		opts := options.Client()
+		_ = xoptions.SetInternalClientOptions(opts, "deployment", deployment)
+		client, _ := mongo.Connect(opts)
+		conn := &MongoConnection{Client: client, Database: "app"}
+		rows, err := conn.Select(context.Background(), newSelectRequest("users", "*", newPredicate(), "_id", "", 100000, 0, nil))
+		if err != nil || len(rows) != 1 {
+			b.Fatalf("sparse select failed: len=%d err=%v", len(rows), err)
+		}
+		_ = conn.Close()
+	}
+}
+
+func BenchmarkMongoSelectDenseBatch(b *testing.B) {
+	docs := make([]bson.D, 1000)
+	for i := range docs {
+		docs[i] = bson.D{{Key: "_id", Value: bson.NewObjectID()}, {Key: "seq", Value: int32(i)}}
+	}
+	resp := mongoMockCursorResponse("app.users", docs...)
+	b.ReportAllocs()
+	for b.Loop() {
+		deployment := drivertest.NewMockDeployment(resp)
+		opts := options.Client()
+		_ = xoptions.SetInternalClientOptions(opts, "deployment", deployment)
+		client, _ := mongo.Connect(opts)
+		conn := &MongoConnection{Client: client, Database: "app"}
+		rows, err := conn.Select(context.Background(), newSelectRequest("users", "*", newPredicate(), "_id", "", 100000, 0, nil))
+		if err != nil || len(rows) != 1000 {
+			b.Fatalf("dense select failed: len=%d err=%v", len(rows), err)
+		}
+		_ = conn.Close()
+	}
+}

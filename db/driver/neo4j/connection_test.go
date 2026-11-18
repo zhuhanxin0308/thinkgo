@@ -618,3 +618,80 @@ func TestCloseNeo4jSessionUsesIndependentDeadline(t *testing.T) {
 		t.Fatal("会话清理上下文必须有截止时间")
 	}
 }
+
+// TestNeo4jNullPredicatesCompileToCypherIsNullAndRejectInvalidOperators 验证 Neo4j 对 nil 标量的三值逻辑处理 (#592)。
+func TestNeo4jNullPredicatesCompileToCypherIsNullAndRejectInvalidOperators(t *testing.T) {
+	connection := &Neo4jConnection{}
+	base := NewDB(connection).Table("users")
+	var typedNil *int64
+
+	valid := []struct {
+		name  string
+		query interface{ Predicate() (Predicate, error) }
+		want  string
+	}{
+		{"Where shorthand nil", base.Where("deleted_at", nil), "n.`deleted_at` IS NULL"},
+		{"Where typed nil", base.Where("deleted_at", typedNil), "n.`deleted_at` IS NULL"},
+		{"WhereField eq nil", base.WhereField("deleted_at", "=", nil), "n.`deleted_at` IS NULL"},
+		{"Where IS nil", base.Where("deleted_at", "IS", nil), "n.`deleted_at` IS NULL"},
+		{"WhereMap nil", base.WhereMap(map[string]any{"deleted_at": nil}), "n.`deleted_at` IS NULL"},
+		{"Where neq nil", base.Where("deleted_at", "!=", nil), "n.`deleted_at` IS NOT NULL"},
+		{"Where diamond nil", base.Where("deleted_at", "<>", nil), "n.`deleted_at` IS NOT NULL"},
+		{"Where IS NOT nil", base.Where("deleted_at", "IS NOT", nil), "n.`deleted_at` IS NOT NULL"},
+	}
+
+	for _, tc := range []struct {
+		name  string
+		query interface{ Predicate() (Predicate, error) }
+		want  string
+	}{
+		{"WhereIn single nil", base.WhereIn("id", []interface{}{nil}), "n.`id` IN $w0"},
+		{"WhereNotIn single nil", base.WhereNotIn("id", []interface{}{nil}), "NOT (n.`id` IN $w0)"},
+	} {
+		predicate, err := tc.query.Predicate()
+		if err != nil {
+			t.Fatalf("%s 构造谓词失败: %v", tc.name, err)
+		}
+		clause, params, err := connection.compilePredicate(predicate)
+		if err != nil || clause != tc.want || !reflect.DeepEqual(params["w0"], []interface{}{nil}) {
+			t.Fatalf("%s 编译失败: clause=%q params=%#v err=%v", tc.name, clause, params, err)
+		}
+	}
+
+	for _, tc := range valid {
+		t.Run(tc.name, func(t *testing.T) {
+			predicate, err := tc.query.Predicate()
+			if err != nil {
+				t.Fatalf("构造谓词失败: %v", err)
+			}
+			clause, params, err := connection.compilePredicate(predicate)
+			if err != nil {
+				t.Fatalf("Neo4j 编译 NULL 谓词失败: %v", err)
+			}
+			if clause != tc.want || len(params) != 0 {
+				t.Fatalf("Cypher 编译结果错误: got=%q params=%#v want=%q", clause, params, tc.want)
+			}
+		})
+	}
+
+	invalid := []interface{ Predicate() (Predicate, error) }{
+		base.Where("age", ">", nil),
+		base.Where("age", ">=", nil),
+		base.Where("age", "<", nil),
+		base.Where("age", "<=", nil),
+		base.Where("name", "LIKE", nil),
+		base.WhereBetween("age", nil, 18),
+		base.WhereBetween("age", 1, nil),
+		base.Where("age", "IS", 1),
+		base.Where("age", "IS NOT", true),
+	}
+	for index, query := range invalid {
+		predicate, err := query.Predicate()
+		if err != nil {
+			t.Fatalf("case %d 构造谓词失败: %v", index, err)
+		}
+		if _, _, err := connection.compilePredicate(predicate); !errors.Is(err, ErrInvalidQuery) {
+			t.Fatalf("case %d 应拒绝非法 NULL/IS 比较，实际 err=%v", index, err)
+		}
+	}
+}

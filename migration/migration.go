@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
+	"time"
 )
 
 var (
@@ -134,4 +136,37 @@ func validateReversibleMigration(current Migration) error {
 		return fmt.Errorf("%w: %s", ErrIrreversibleMigration, migration.name)
 	}
 	return nil
+}
+
+// compareMigrationNames 先比较下划线前的数字时间序列前缀，再比较后缀标识，
+// 避免 12~20 位变长前缀因 ASCII '_' 大于数字导致后建迁移抢先执行。
+func compareMigrationNames(left, right string) int {
+	leftPrefix, leftSuffix, leftOK := strings.Cut(left, "_")
+	rightPrefix, rightSuffix, rightOK := strings.Cut(right, "_")
+	if !leftOK || !rightOK {
+		return strings.Compare(left, right)
+	}
+	if cmp := strings.Compare(leftPrefix, rightPrefix); cmp != 0 {
+		return cmp
+	}
+	return strings.Compare(leftSuffix, rightSuffix)
+}
+
+func parseHistoryAppliedAt(raw string) (time.Time, bool) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return time.Time{}, false
+	}
+	for _, layout := range []string{
+		time.RFC3339Nano,
+		"2006-01-02 15:04:05.999999999 -0700 MST",
+		"2006-01-02 15:04:05.999999999-07:00",
+		"2006-01-02 15:04:05.999999999",
+		"2006-01-02T15:04:05.999999999",
+	} {
+		if parsed, err := time.Parse(layout, trimmed); err == nil {
+			return parsed.UTC(), true
+		}
+	}
+	return time.Time{}, false
 }

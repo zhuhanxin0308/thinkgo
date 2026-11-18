@@ -2,6 +2,7 @@ package neo4j
 
 import (
 	"fmt"
+	"reflect"
 	"regexp"
 	"strings"
 )
@@ -63,6 +64,22 @@ func compileCypherNode(node PredicateNode, index *int, params map[string]interfa
 		if node.Operator == "IS NULL" || node.Operator == "IS NOT NULL" {
 			return field + " " + node.Operator, nil
 		}
+		if node.Operator != "IN" && node.Operator != "NOT IN" && len(node.Values) == 1 && isNilCypherScalar(node.Values[0]) {
+			switch node.Operator {
+			case "=", "IS":
+				return field + " IS NULL", nil
+			case "!=", "<>", "IS NOT":
+				return field + " IS NOT NULL", nil
+			default:
+				return "", fmt.Errorf("%w: Neo4j 操作符 %q 不接受 NULL 值", ErrInvalidQuery, node.Operator)
+			}
+		}
+		if node.Operator == "IS" || node.Operator == "IS NOT" {
+			return "", fmt.Errorf("%w: Neo4j 操作符 %q 仅支持 nil 值", ErrInvalidQuery, node.Operator)
+		}
+		if node.Operator == "BETWEEN" && (len(node.Values) != 2 || isNilCypherScalar(node.Values[0]) || isNilCypherScalar(node.Values[1])) {
+			return "", fmt.Errorf("%w: Neo4j BETWEEN 不接受 NULL 值", ErrInvalidQuery)
+		}
 		name := nextCypherParameter(index)
 		switch node.Operator {
 		case "IN", "NOT IN":
@@ -99,4 +116,18 @@ func compileCypherNode(node PredicateNode, index *int, params map[string]interfa
 	default:
 		return "", fmt.Errorf("%w: Neo4j 不支持该条件节点", ErrInvalidQuery)
 	}
+}
+
+func isNilCypherScalar(value interface{}) bool {
+	if value == nil {
+		return true
+	}
+	current := reflect.ValueOf(value)
+	for current.Kind() == reflect.Pointer || current.Kind() == reflect.Interface {
+		if current.IsNil() {
+			return true
+		}
+		current = current.Elem()
+	}
+	return false
 }

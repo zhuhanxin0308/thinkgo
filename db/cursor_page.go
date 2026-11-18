@@ -62,7 +62,7 @@ func (q *Query) SeekPageWithCodec(pageSize int, pkField string, codec CursorCode
 	if err := validateIdentifier(pkField); err != nil {
 		return nil, q.reportError("seek_page", fmt.Errorf("unsafe pk field: %w", err), nil)
 	}
-	cursorField, err := q.resolveCursorResultField(pkField, strings.ContainsRune(pkField, '.') && q.canStreamSQLRows())
+	cursorField, err := q.resolveCursorResultField(pkField, q.canStreamSQLRows())
 	if err != nil {
 		return nil, q.reportError("seek_page", err, nil)
 	}
@@ -121,37 +121,72 @@ func (q *Query) SeekPageWithCodec(pageSize int, pkField string, codec CursorCode
 }
 
 type cursorResultField struct {
-	name       string
-	projection string
+	name          string
+	projection    string
+	oracleDialect bool
 }
 
 func (field cursorResultField) read(row map[string]interface{}) (interface{}, bool) {
 	if field.projection != "" {
-		return databaseResultField(row, field.projection)
+		return databaseResultField(row, field.projection, field.oracleDialect)
 	}
 	value, exists := row[field.name]
 	return value, exists
 }
 
-// resolveCursorResultField 确认 SQL 投影确实包含游标列，防止从其他表读取同名字段。
-func (q *Query) resolveCursorResultField(name string, qualifiedSQL bool) (cursorResultField, error) {
-	field := cursorResultField{name: name}
-	if !qualifiedSQL {
+// resolveCursorResultField 确认 SQL 投影确实包含游标列，追踪显式列别名并阻止其它列冒充游标。
+func (q *Query) resolveCursorResultField(name string, sqlProjection bool) (cursorResultField, error) {
+	field := cursorResultField{name: name, oracleDialect: q.isOracleDialect()}
+	if !sqlProjection {
 		return field, nil
 	}
 	projection := q.selectProjection()
+	mainTable := q.resolveTable()
 	separator := strings.LastIndexByte(name, '.')
-	qualifier, leaf := name[:separator], name[separator+1:]
+	var qualifier, leaf string
+	if separator >= 0 {
+		qualifier, leaf = name[:separator], name[separator+1:]
+	} else {
+		qualifier, leaf = mainTable, name
+	}
+
+	wildcardMatch := false
+	hijackedAlias := false
 	for item := range strings.SplitSeq(projection, ",") {
 		column, alias := splitIdentifierAlias(strings.TrimSpace(item))
-		if column == "*" || column == qualifier+".*" ||
-			column == name || len(q.joins) == 0 && column == leaf {
+		isDirect := false
+		if separator >= 0 {
+			isDirect = column == name || (len(q.joins) == 0 && (qualifier == mainTable || mainTable == "") && column == leaf)
+		} else {
+			isDirect = column == name || (mainTable != "" && column == mainTable+"."+name)
+		}
+		if isDirect {
 			field.projection = name
 			if alias != "" {
 				field.projection = alias
 			}
 			return field, nil
 		}
+		if column == "*" || (qualifier != "" && column == qualifier+".*") {
+			if !wildcardMatch {
+				field.projection = name
+				wildcardMatch = true
+			}
+			continue
+		}
+		outputName := column
+		if idx := strings.LastIndexByte(outputName, '.'); idx >= 0 {
+			outputName = outputName[idx+1:]
+		}
+		if alias != "" {
+			outputName = alias
+		}
+		if strings.EqualFold(outputName, leaf) {
+			hijackedAlias = true
+		}
+	}
+	if wildcardMatch && !hijackedAlias {
+		return field, nil
 	}
 	return cursorResultField{}, fmt.Errorf("%w: 投影未包含游标字段 %q", ErrInvalidDatabaseRow, name)
 }

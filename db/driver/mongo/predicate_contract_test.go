@@ -60,3 +60,65 @@ func TestMongoConnectionClosesConcurrently(t *testing.T) {
 	}
 	workers.Wait()
 }
+
+// TestMongoNullAndIsOperatorSemantics 验证 MongoDB 支持 IS/IS NOT nil 并拒绝与 nil 的顺序或模式比较 (#592)。
+func TestMongoNullAndIsOperatorSemantics(t *testing.T) {
+	connection := &MongoConnection{}
+	base := db.NewDB(connection).Table("users")
+	var typedNil *string
+
+	for _, tc := range []struct {
+		name   string
+		query  *db.Query
+		expect bson.M
+	}{
+		{"eq nil", base.Where("deleted_at", nil), bson.M{"deleted_at": nil}},
+		{"IS nil", base.Where("deleted_at", "IS", typedNil), bson.M{"deleted_at": nil}},
+		{"neq nil", base.Where("deleted_at", "!=", nil), bson.M{"deleted_at": bson.M{"$ne": nil}}},
+		{"IS NOT nil", base.Where("deleted_at", "IS NOT", nil), bson.M{"deleted_at": bson.M{"$ne": nil}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			predicate, err := tc.query.Predicate()
+			if err != nil {
+				t.Fatalf("构造谓词失败: %v", err)
+			}
+			filter, err := connection.compilePredicate(predicate, "_id", "id")
+			if err != nil {
+				t.Fatalf("编译 MongoDB NULL 条件失败: %v", err)
+			}
+			if len(filter) != 1 {
+				t.Fatalf("过滤结构不符: %#v", filter)
+			}
+			if tc.expect["deleted_at"] == nil {
+				if val, exists := filter["deleted_at"]; !exists || val != nil {
+					t.Fatalf("期望 deleted_at: nil，实际 %#v", filter)
+				}
+			} else {
+				cond, ok := filter["deleted_at"].(bson.M)
+				if !ok || cond["$ne"] != nil {
+					t.Fatalf("期望 $ne: nil，实际 %#v", filter)
+				}
+			}
+		})
+	}
+
+	for index, query := range []*db.Query{
+		base.Where("age", ">", nil),
+		base.Where("age", ">=", nil),
+		base.Where("age", "<", nil),
+		base.Where("age", "<=", nil),
+		base.Where("name", "LIKE", nil),
+		base.WhereBetween("age", nil, 10),
+		base.WhereBetween("age", 1, nil),
+		base.Where("age", "IS", 1),
+		base.Where("age", "IS NOT", true),
+	} {
+		predicate, err := query.Predicate()
+		if err != nil {
+			t.Fatalf("case %d 构造谓词失败: %v", index, err)
+		}
+		if _, err := connection.compilePredicate(predicate, "_id", "id"); !errors.Is(err, db.ErrInvalidQuery) {
+			t.Fatalf("case %d 应返回 ErrInvalidQuery，实际为 %v", index, err)
+		}
+	}
+}
