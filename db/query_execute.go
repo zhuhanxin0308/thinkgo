@@ -283,6 +283,9 @@ func (q *Query) insertResultInTx(request InsertRequest) (InsertResult, error) {
 		return InsertResult{}, snapshotErr
 	}
 	if request.WantsID() && !builder.SupportsLastInsertId() {
+		if builder.DialectName() == "oracle" {
+			return sqlConnection.insertOracleReturning(q.context(), q.txExecutor, request, data)
+		}
 		query, values, ok := builder.InsertReturning(request.Table(), data, request.PrimaryKey())
 		if !ok {
 			return InsertResult{}, ErrInsertIDUnavailable

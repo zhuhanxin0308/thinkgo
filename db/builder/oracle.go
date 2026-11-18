@@ -96,7 +96,7 @@ func (o *Oracle) SupportsLastInsertId() bool { return false }
 // MaxBindParams 保留历史批量绑定预算，限制单条语句大小及自动事务分批边界。
 func (o *Oracle) MaxBindParams() int { return 999 }
 
-// InsertReturning 使用 sql.Out 绑定 RETURNING INTO 的整数主键。
+// InsertReturning 构建 RETURNING INTO，根据显式主键值选择 sql.Out 类型。
 func (o *Oracle) InsertReturning(table string, data map[string]interface{}, primaryKey string) (string, []interface{}, bool) {
 	if primaryKey == "" {
 		primaryKey = "id"
@@ -109,8 +109,12 @@ func (o *Oracle) InsertReturning(table string, data map[string]interface{}, prim
 		values = append(values, data[key])
 		placeholders = append(placeholders, "?")
 	}
-	identifier := new(int64)
-	values = append(values, sql.Out{Dest: identifier})
+	destination := contract.OracleExplicitKeyDestination(data, primaryKey)
+	if destination == nil {
+		// 构建器没有数据库会话，保留默认占位；连接在执行前会按列类型设置绑定。
+		destination = new(int64)
+	}
+	values = append(values, sql.Out{Dest: destination})
 	query := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s) RETURNING %s INTO ?",
 		oracleQuote(table), strings.Join(keys, ", "), strings.Join(placeholders, ", "), oracleQuote(primaryKey))
 	return query, values, true
