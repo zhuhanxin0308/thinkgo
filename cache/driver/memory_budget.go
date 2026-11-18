@@ -38,12 +38,13 @@ func NewMemoryWithBudget(budget MemoryBudget) (*Memory, error) {
 }
 
 const (
-	memoryEntryCharge      = uint64(256)
-	memoryLockCharge       = uint64(128)
-	memoryGraphVisitCharge = uint64(128)
-	memoryTimeCharge       = uint64(64)
-	memoryGraphMaxDepth    = 64
-	memoryGraphMaxNodes    = 65536
+	memoryEntryCharge        = uint64(256)
+	memoryLockCharge         = uint64(128)
+	memoryGraphVisitCharge   = uint64(128)
+	memoryTimeCharge         = uint64(64)
+	memoryTimeLocationCharge = uint64(192)
+	memoryGraphMaxDepth      = 64
+	memoryGraphMaxNodes      = 65536
 )
 
 // budgetSnapshot first traverses the graph without allocating its payload, then
@@ -162,15 +163,12 @@ func (g *memoryGraphInspection) inspect(value reflect.Value, depth int) error {
 		}
 	case reflect.Struct:
 		if value.Type() == reflect.TypeFor[time.Time]() {
-			return g.add(memoryTimeCharge)
+			return g.inspectTime(value)
 		}
 		for i := 0; i < value.NumField(); i++ {
 			if value.Type().Field(i).PkgPath != "" {
 				if !budgetInlineType(value.Field(i).Type(), depth+1) {
 					return ErrUnsupportedMemoryValue
-				}
-				if err := g.chargeInlineTime(value.Field(i).Type(), depth+1); err != nil {
-					return err
 				}
 				continue
 			}
@@ -183,6 +181,78 @@ func (g *memoryGraphInspection) inspect(value reflect.Value, depth int) error {
 		reflect.Float32, reflect.Float64, reflect.Complex64, reflect.Complex128:
 	default:
 		return fmt.Errorf("%w: %s", ErrUnsupportedMemoryValue, value.Type())
+	}
+	return nil
+}
+
+func (g *memoryGraphInspection) inspectTime(value reflect.Value) error {
+	if !value.CanInterface() {
+		return ErrUnsupportedMemoryValue
+	}
+	if err := g.add(memoryTimeCharge); err != nil {
+		return err
+	}
+	tm := value.Interface().(time.Time)
+	loc := tm.Location()
+	if loc == nil || loc == time.UTC || loc == time.Local {
+		return nil
+	}
+	locVal := reflect.ValueOf(loc)
+	visit := budgetVisit(locVal)
+	if g.seen[visit] {
+		return nil
+	}
+	if err := g.add(memoryGraphVisitCharge); err != nil {
+		return err
+	}
+	g.seen[visit] = true
+	locName := loc.String()
+	if err := g.addProduct(len(locName), 1); err != nil {
+		return err
+	}
+	zoneName, offset := tm.Zone()
+	if locName == zoneName && reflect.DeepEqual(loc, time.FixedZone(zoneName, offset)) {
+		return g.add(memoryTimeLocationCharge)
+	}
+	if locName == "" {
+		return fmt.Errorf("%w: %s", ErrUnsupportedMemoryValue, value.Type())
+	}
+	stdLoc, err := time.LoadLocation(locName)
+	if err != nil || !reflect.DeepEqual(loc, stdLoc) {
+		return fmt.Errorf("%w: %s", ErrUnsupportedMemoryValue, value.Type())
+	}
+	elem := reflect.ValueOf(stdLoc).Elem()
+	if err := g.add(uint64(elem.Type().Size())); err != nil {
+		return err
+	}
+	return g.chargeLocationStruct(elem, true)
+}
+
+func (g *memoryGraphInspection) chargeLocationStruct(v reflect.Value, skipRootName bool) error {
+	switch v.Kind() {
+	case reflect.String:
+		return g.addProduct(v.Len(), 1)
+	case reflect.Slice:
+		if v.Cap() == 0 {
+			return nil
+		}
+		if err := g.addProduct(v.Cap(), uint64(v.Type().Elem().Size())); err != nil {
+			return err
+		}
+		for i := 0; i < v.Len(); i++ {
+			if err := g.chargeLocationStruct(v.Index(i), false); err != nil {
+				return err
+			}
+		}
+	case reflect.Struct:
+		for i := 0; i < v.NumField(); i++ {
+			if skipRootName && v.Type().Field(i).Name == "name" {
+				continue
+			}
+			if err := g.chargeLocationStruct(v.Field(i), false); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
@@ -207,40 +277,9 @@ func budgetMapKey(t reflect.Type) bool {
 	return false
 }
 
-func (g *memoryGraphInspection) chargeInlineTime(t reflect.Type, depth int) error {
-	if depth > memoryGraphMaxDepth {
-		return ErrMemoryValueTooLarge
-	}
-	if t == reflect.TypeFor[time.Time]() {
-		return g.add(memoryTimeCharge)
-	}
-	switch t.Kind() {
-	case reflect.Array:
-		count := t.Len()
-		if count <= 0 {
-			return nil
-		}
-		for i := 0; i < count; i++ {
-			if err := g.chargeInlineTime(t.Elem(), depth+1); err != nil {
-				return err
-			}
-		}
-	case reflect.Struct:
-		for i := 0; i < t.NumField(); i++ {
-			if err := g.chargeInlineTime(t.Field(i).Type, depth+1); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
 func budgetInlineType(t reflect.Type, depth int) bool {
 	if depth > memoryGraphMaxDepth {
 		return false
-	}
-	if t == reflect.TypeFor[time.Time]() {
-		return true
 	}
 	if budgetMapKey(t) {
 		return t.Kind() != reflect.String
@@ -334,11 +373,11 @@ func cloneBudgetValue(v reflect.Value, seen map[memoryCloneVisit]reflect.Value) 
 		}
 		return result
 	case reflect.Array, reflect.Struct:
+		if v.Type() == reflect.TypeFor[time.Time]() {
+			return cloneBudgetTime(v, seen)
+		}
 		result := reflect.New(v.Type()).Elem()
 		result.Set(v)
-		if v.Type() == reflect.TypeFor[time.Time]() {
-			return result
-		}
 		if v.Kind() == reflect.Array {
 			for i := 0; i < v.Len(); i++ {
 				result.Index(i).Set(cloneBudgetValue(v.Index(i), seen))
@@ -354,6 +393,33 @@ func cloneBudgetValue(v reflect.Value, seen map[memoryCloneVisit]reflect.Value) 
 	default:
 		return v
 	}
+}
+
+func cloneBudgetTime(v reflect.Value, seen map[memoryCloneVisit]reflect.Value) reflect.Value {
+	tm := v.Interface().(time.Time)
+	loc := tm.Location()
+	if loc == nil || loc == time.UTC || loc == time.Local {
+		result := reflect.New(v.Type()).Elem()
+		result.Set(v)
+		return result
+	}
+	locVal := reflect.ValueOf(loc)
+	visit := budgetVisit(locVal)
+	if cachedLoc, ok := seen[visit]; ok {
+		return reflect.ValueOf(tm.In(cachedLoc.Interface().(*time.Location)))
+	}
+	locName := strings.Clone(loc.String())
+	zoneName, offset := tm.Zone()
+	var clonedLoc *time.Location
+	if locName == zoneName && reflect.DeepEqual(loc, time.FixedZone(zoneName, offset)) {
+		clonedLoc = time.FixedZone(strings.Clone(zoneName), offset)
+	} else if loaded, err := time.LoadLocation(locName); err == nil {
+		clonedLoc = loaded
+	} else {
+		clonedLoc = time.FixedZone(strings.Clone(zoneName), offset)
+	}
+	seen[visit] = reflect.ValueOf(clonedLoc)
+	return reflect.ValueOf(tm.In(clonedLoc))
 }
 
 // storeBudgetItemLocked admits all records, including monotonic fencing metadata.

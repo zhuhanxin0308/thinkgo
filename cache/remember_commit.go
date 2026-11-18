@@ -42,7 +42,7 @@ func (c *Cache) commitRememberValue(ctx context.Context, key string, value inter
 			}
 			return nil
 		}
-		floor, err := c.invalidationForKey(ctx, driver, key)
+		floor, err := c.commitInvalidationForKey(ctx, driver, key)
 		if err != nil {
 			return err
 		}

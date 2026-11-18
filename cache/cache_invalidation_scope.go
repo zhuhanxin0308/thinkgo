@@ -19,6 +19,7 @@ const (
 	keyInvalidationScopePrefix    = "key:"
 	prefixInvalidationScopePrefix = "prefix:"
 	completedScopeWatermarkPrefix = "done:"
+	retiredScopeWatermarkKey      = "retired"
 )
 
 // ErrCacheInvalidationCapacity 表示失效范围元数据达到安全边界，调用方可先执行全 store Flush 回收。
@@ -65,6 +66,15 @@ func boundedScopeWatermarks(watermarks map[string]interface{}) (interface{}, boo
 	// 预留 uint64 最长十进制代际（及精确键完成态前缀）长度，已有 scope 换代或标记完成不会失去容量。
 	reservedBytes := len(encoded)
 	for scope, value := range watermarks {
+		if scope == retiredScopeWatermarkKey {
+			generation, parseErr := parseFenceGenerationValue(value)
+			if parseErr != nil {
+				return nil, false, parseErr
+			}
+			digits := strconv.FormatUint(generation, 10)
+			reservedBytes += len("18446744073709551615") - len(digits)
+			continue
+		}
 		generation, completed, err := parseScopeWatermark(value)
 		if err != nil {
 			return nil, false, err
@@ -232,6 +242,13 @@ func keyScopeWatermarks(raw interface{}, found bool, keys []string, generation u
 	if err != nil {
 		return nil, false, err
 	}
+	var retiredGen uint64
+	if existingRetired, ok := watermarks[retiredScopeWatermarkKey]; ok {
+		retiredGen, err = parseFenceGenerationValue(existingRetired)
+		if err != nil {
+			return nil, false, err
+		}
+	}
 	activeBatch := make(map[string]bool, len(keys))
 	generationText := strconv.FormatUint(generation, 10)
 	for _, key := range keys {
@@ -266,14 +283,6 @@ func keyScopeWatermarks(raw interface{}, found bool, keys []string, generation u
 		return reclaimable[i].scope < reclaimable[j].scope
 	})
 	evicted := 0
-	if excess := len(watermarks) - maxCacheInvalidationScopes; excess > 0 {
-		if excess > len(reclaimable) {
-			return nil, false, ErrCacheInvalidationCapacity
-		}
-		for ; evicted < excess; evicted++ {
-			delete(watermarks, reclaimable[evicted].scope)
-		}
-	}
 	for {
 		result, remove, checkErr := boundedScopeWatermarks(watermarks)
 		if checkErr == nil {
@@ -282,8 +291,13 @@ func keyScopeWatermarks(raw interface{}, found bool, keys []string, generation u
 		if !errors.Is(checkErr, ErrCacheInvalidationCapacity) || evicted >= len(reclaimable) {
 			return nil, false, checkErr
 		}
-		delete(watermarks, reclaimable[evicted].scope)
+		item := reclaimable[evicted]
 		evicted++
+		delete(watermarks, item.scope)
+		if item.generation > retiredGen {
+			retiredGen = item.generation
+		}
+		watermarks[retiredScopeWatermarkKey] = strconv.FormatUint(retiredGen, 10)
 	}
 }
 
@@ -298,12 +312,13 @@ func scopeWatermarks(raw interface{}, found bool) (map[string]interface{}, error
 	}
 	result := make(map[string]interface{}, len(values))
 	for scope, value := range values {
+		retiredScope := scope == retiredScopeWatermarkKey
 		keyScope := strings.HasPrefix(scope, keyInvalidationScopePrefix) && len(scope) == len(keyInvalidationScopePrefix)+sha256.Size*2
 		prefixScope := strings.HasPrefix(scope, prefixInvalidationScopePrefix) && len(scope) > len(prefixInvalidationScopePrefix)
-		if !keyScope && !prefixScope {
+		if !retiredScope && !keyScope && !prefixScope {
 			return nil, ErrCacheFenceUnavailable
 		}
-		if prefixScope {
+		if retiredScope || prefixScope {
 			if _, err := parseFenceGenerationValue(value); err != nil {
 				return nil, err
 			}
@@ -406,42 +421,69 @@ func (c *Cache) compactScopeBucketAtFence(ctx context.Context, driver Driver, ke
 	return err
 }
 
-// invalidationForKey 合并整 store、当前键与匹配前缀的水位，其他键的失效不参与判定。
+// invalidationForKey 合并整 store、当前键与匹配前缀的水位，其他键的失效不参与读取判定。
 func (c *Cache) invalidationForKey(ctx context.Context, driver Driver, key string) (uint64, error) {
+	readInv, _, err := c.keyInvalidationBarriers(ctx, driver, key)
+	return readInv, err
+}
+
+// commitInvalidationForKey 在可见失效水位之上合并当前桶已退休水位，阻止跨裁剪窗口暂停的旧代写者提交复活数据。
+func (c *Cache) commitInvalidationForKey(ctx context.Context, driver Driver, key string) (uint64, error) {
+	_, commitInv, err := c.keyInvalidationBarriers(ctx, driver, key)
+	return commitInv, err
+}
+
+func (c *Cache) keyInvalidationBarriers(ctx context.Context, driver Driver, key string) (readInvalidation, commitInvalidation uint64, err error) {
 	raw, found, err := getCacheValueContext(ctx, driver, c.keyInvalidationBucketKey(keyInvalidationBucket(key)))
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
-	exact, err := exactKeyInvalidation(raw, found, key)
+	exact, retired, err := bucketKeyInvalidations(raw, found, key)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	raw, found, err = getCacheValueContext(ctx, driver, c.scopedInvalidationKey())
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	watermarks, err := scopeWatermarks(raw, found)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	// 先读取范围，再读取全局水位；Flush 先发布全局水位再压缩范围，读取不能落入两者之间的空窗。
 	global, err := c.currentInvalidationGeneration(ctx, driver)
-	return max(exact, matchingPrefixInvalidation(watermarks, key), global), err
+	prefix := matchingPrefixInvalidation(watermarks, key)
+	readInvalidation = max(exact, prefix, global)
+	commitInvalidation = max(readInvalidation, retired)
+	return readInvalidation, commitInvalidation, err
 }
 
 func exactKeyInvalidation(raw interface{}, found bool, key string) (uint64, error) {
+	exact, _, err := bucketKeyInvalidations(raw, found, key)
+	return exact, err
+}
+
+func bucketKeyInvalidations(raw interface{}, found bool, key string) (exact, retired uint64, err error) {
 	if !found {
-		return 0, nil
+		return 0, 0, nil
 	}
 	watermarks, valid := raw.(map[string]interface{})
-	if !valid {
-		return 0, ErrCacheFenceUnavailable
+	if !valid || len(watermarks) > maxCacheInvalidationScopes {
+		return 0, 0, ErrCacheFenceUnavailable
 	}
 	if value, exists := watermarks[keyInvalidationScope(key)]; exists {
-		generation, _, err := parseScopeWatermark(value)
-		return generation, err
+		exact, _, err = parseScopeWatermark(value)
+		if err != nil {
+			return 0, 0, err
+		}
 	}
-	return 0, nil
+	if value, exists := watermarks[retiredScopeWatermarkKey]; exists {
+		retired, err = parseFenceGenerationValue(value)
+		if err != nil {
+			return 0, 0, err
+		}
+	}
+	return exact, retired, nil
 }
 
 func matchingPrefixInvalidation(watermarks map[string]interface{}, key string) uint64 {

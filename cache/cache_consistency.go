@@ -169,9 +169,9 @@ func (c *Cache) changeCounterWithFence(driver Driver, key string, step int64, su
 			return resultErr
 		}
 		committedOrigin := uint64(0)
-		generation, _, err := c.withFreshAtomicFence(context.Background(), driver, key, func(generation, started, invalidation uint64) error {
+		generation, _, err := c.withFreshAtomicFence(context.Background(), driver, key, func(generation, started, invalidation, commitInvalidation uint64) error {
 			return atomicUpdateCacheValueConditionalTTL(driver, key, func(raw interface{}, found bool) (interface{}, bool, bool, error) {
-				decoded, found, origin, decodeErr := decodeAtomicCacheValue(raw, found, generation, started, invalidation)
+				decoded, found, origin, decodeErr := decodeAtomicCacheValue(raw, found, generation, started, invalidation, commitInvalidation)
 				if decodeErr != nil {
 					return nil, false, false, decodeErr
 				}

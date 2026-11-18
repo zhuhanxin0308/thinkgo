@@ -363,7 +363,7 @@ func (c *Cache) writeFencedCacheValueContext(ctx context.Context, driver Driver,
 	if !cacheDriverSupportsAtomicFencing(driver) {
 		return setCacheValueContext(ctx, driver, key, value, ttl)
 	}
-	floor, err := c.invalidationForKey(ctx, driver, key)
+	floor, err := c.commitInvalidationForKey(ctx, driver, key)
 	if err != nil {
 		return err
 	}
@@ -371,6 +371,13 @@ func (c *Cache) writeFencedCacheValueContext(ctx context.Context, driver Driver,
 		generation, err := c.allocateFenceGenerationAboveContext(ctx, driver, floor)
 		if err != nil {
 			return err
+		}
+		preCommit, preErr := c.commitInvalidationForKey(ctx, driver, key)
+		if preErr != nil {
+			return preErr
+		}
+		if preCommit >= generation {
+			return ErrCacheLockLost
 		}
 		observed, commitErr := c.commitFencedValueObservedContext(ctx, driver, key, value, ttl, generation)
 		if errors.Is(commitErr, errCacheSequenceBehindEnvelope) {
@@ -432,12 +439,12 @@ func (c *Cache) writeFencedCacheValuesContext(ctx context.Context, driver Driver
 	keyInvalidations := make(map[string]uint64, len(keys))
 	var floor uint64
 	for _, key := range keys {
-		invalidation, err := c.invalidationForKey(ctx, driver, key)
+		invalidation, commitInv, err := c.keyInvalidationBarriers(ctx, driver, key)
 		if err != nil {
 			return err
 		}
 		keyInvalidations[key] = invalidation
-		floor = max(floor, invalidation)
+		floor = max(floor, commitInv)
 	}
 	for attempt := 0; attempt < maxCacheAtomicRebaseAttempts; attempt++ {
 		generation, err := c.allocateFenceGenerationAboveContext(ctx, driver, floor)
@@ -447,6 +454,15 @@ func (c *Cache) writeFencedCacheValuesContext(ctx context.Context, driver Driver
 		committed := make([]cacheBatchSnapshot, 0, len(keys))
 		var observed uint64
 		for _, key := range keys {
+			preCommit, preErr := c.commitInvalidationForKey(ctx, driver, key)
+			if preErr != nil {
+				err = preErr
+				break
+			}
+			if preCommit >= generation {
+				err = ErrCacheLockLost
+				break
+			}
 			invalidation := keyInvalidations[key]
 			snapshot := cacheBatchSnapshot{key: key}
 			err = updater.UpdateWithExpiryContext(ctx, key, ttl, func(raw interface{}, found bool, expiry time.Time) (interface{}, bool, *time.Time, error) {
@@ -493,8 +509,9 @@ func (c *Cache) writeFencedCacheValuesContext(ctx context.Context, driver Driver
 			continue
 		}
 		if err == nil {
+			detached := context.WithoutCancel(ctx)
 			for _, snapshot := range committed {
-				latestInvalidation, fenceErr := c.invalidationForKey(ctx, driver, snapshot.key)
+				latestInvalidation, fenceErr := c.commitInvalidationForKey(detached, driver, snapshot.key)
 				if fenceErr != nil {
 					err = fenceErr
 					break
@@ -536,14 +553,15 @@ func (c *Cache) verifyFenceCommitContext(ctx context.Context, driver Driver, key
 }
 
 func (c *Cache) verifyAtomicFenceCommitContext(ctx context.Context, driver Driver, key string, generation, origin uint64) error {
-	current, err := c.invalidationForKey(ctx, driver, key)
+	detached := context.WithoutCancel(ctx)
+	current, err := c.commitInvalidationForKey(detached, driver, key)
 	if err != nil {
 		return err
 	}
 	if current <= origin {
 		return nil
 	}
-	cleanupErr := c.deleteExactGenerationContext(context.WithoutCancel(ctx), driver, key, generation)
+	cleanupErr := c.deleteExactGenerationContext(detached, driver, key, generation)
 	return errors.Join(ErrCacheLockLost, cleanupErr)
 }
 

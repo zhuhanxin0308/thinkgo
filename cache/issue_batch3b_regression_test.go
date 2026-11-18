@@ -1338,3 +1338,115 @@ func TestIssue333RedisSequenceEvictionSelfHealsAllWriteAndInvalidationPaths(t *t
 		})
 	}
 }
+
+type pausedSequenceAndUpdateDriver struct {
+	*cacheDriver.Memory
+	pauseOnSeq bool
+	targetKey  string
+	pauseOnUpd bool
+	started    chan struct{}
+	release    chan struct{}
+	once       sync.Once
+}
+
+func (d *pausedSequenceAndUpdateDriver) Inc(key string, step int64) (int64, error) {
+	val, err := d.Memory.Inc(key, step)
+	if d.pauseOnSeq && strings.HasSuffix(key, ":sequence") {
+		d.once.Do(func() { close(d.started) })
+		<-d.release
+	}
+	return val, err
+}
+
+func (d *pausedSequenceAndUpdateDriver) Update(key string, ttl time.Duration, update func(interface{}, bool) (interface{}, bool, error)) error {
+	if d.pauseOnUpd && key == d.targetKey {
+		d.once.Do(func() { close(d.started) })
+		<-d.release
+	}
+	return d.Memory.Update(key, ttl, update)
+}
+
+// TestIssue602WatermarkRetirementBlocksInFlightOlderWriters 验证已完成水位被同桶后续失效裁剪后，仍在途的旧代写者绝不能复活已删除数据，且同桶存活键与新写者不受影响。
+func TestIssue602WatermarkRetirementBlocksInFlightOlderWriters(t *testing.T) {
+	for _, pauseStage := range []string{"after_generation_alloc", "before_atomic_commit"} {
+		t.Run(pauseStage, func(t *testing.T) {
+			raw := cacheDriver.NewMemory()
+			fast := NewCache(nil, raw)
+
+			const victim = "untagged_victim"
+			targetBucket := keyInvalidationBucket(victim)
+
+			survivor := ""
+			churnKeys := make([]string, 0, maxCacheInvalidationScopes+64)
+			for i := 0; len(churnKeys) < maxCacheInvalidationScopes+64 || survivor == ""; i++ {
+				candidate := fmt.Sprintf("bucket_peer_%d", i)
+				if keyInvalidationBucket(candidate) != targetBucket {
+					continue
+				}
+				if survivor == "" {
+					survivor = candidate
+					continue
+				}
+				churnKeys = append(churnKeys, candidate)
+			}
+
+			if err := fast.Set(survivor, int64(40), time.Hour); err != nil {
+				t.Fatal(err)
+			}
+			if err := fast.Set(victim, "initial", time.Hour); err != nil {
+				t.Fatal(err)
+			}
+
+			slowBackend := &pausedSequenceAndUpdateDriver{
+				Memory:     raw,
+				pauseOnSeq: pauseStage == "after_generation_alloc",
+				pauseOnUpd: pauseStage == "before_atomic_commit",
+				targetKey:  victim,
+				started:    make(chan struct{}),
+				release:    make(chan struct{}),
+			}
+			slow := NewCache(nil, slowBackend)
+
+			errCh := make(chan error, 1)
+			go func() {
+				errCh <- slow.Set(victim, "resurrected_stale", time.Hour)
+			}()
+			<-slowBackend.started
+
+			// Forget 删除 victim 并标记水位完成，随后同桶大量失效将该完成态水位裁剪出桶并推进 retired 水位。
+			if err := fast.Forget(victim); err != nil {
+				t.Fatalf("Forget(victim) failed: %v", err)
+			}
+			for i, k := range churnKeys {
+				if err := fast.Forget(k); err != nil {
+					t.Fatalf("churn Forget #%d (%s) failed: %v", i, k, err)
+				}
+			}
+
+			close(slowBackend.release)
+			writeErr := <-errCh
+			if !errors.Is(writeErr, ErrCacheLockLost) {
+				t.Fatalf("expected paused older Set to fail with ErrCacheLockLost after watermark retirement, got %v", writeErr)
+			}
+			if val, found, err := fast.Get(victim); err != nil || found {
+				t.Fatalf("older Set resurrected deleted key after watermark eviction! val=%#v found=%t err=%v", val, found, err)
+			}
+
+			// 同桶早期已提交且从未失效的存活键保持可读且可正常原子递增。
+			if val, found, err := fast.Get(survivor); err != nil || !found || val != int64(40) {
+				t.Fatalf("unrelated live key in same bucket lost visibility: val=%#v found=%t err=%v", val, found, err)
+			}
+			if next, err := fast.Inc(survivor, 2); err != nil || next != 42 {
+				t.Fatalf("Inc on live key in retired bucket failed: next=%d err=%v", next, err)
+			}
+
+			// 裁剪之后新发起的写入正常分配高于 retired 的代际并成功提交。
+			if err := fast.Set(victim, "fresh_after_forget", time.Hour); err != nil {
+				t.Fatalf("fresh Set after retirement failed: %v", err)
+			}
+			if val, found, err := fast.Get(victim); err != nil || !found || val != "fresh_after_forget" {
+				t.Fatalf("fresh Set value mismatch: val=%#v found=%t err=%v", val, found, err)
+			}
+		})
+	}
+}

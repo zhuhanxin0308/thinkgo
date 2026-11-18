@@ -60,9 +60,9 @@ func (c *Cache) UpdateContext(ctx context.Context, key string, ttl time.Duration
 	runUpdate := func(ctx context.Context, cleanMetadata bool) (bool, error) {
 		removed := false
 		committedOrigin := uint64(0)
-		generation, _, err := c.withFreshAtomicFence(ctx, driver, key, func(generation, started, invalidation uint64) error {
+		generation, _, err := c.withFreshAtomicFence(ctx, driver, key, func(generation, started, invalidation, commitInvalidation uint64) error {
 			wrapped := func(raw interface{}, found bool) (interface{}, bool, error) {
-				value, found, origin, decodeErr := decodeAtomicCacheValue(raw, found, generation, started, invalidation)
+				value, found, origin, decodeErr := decodeAtomicCacheValue(raw, found, generation, started, invalidation, commitInvalidation)
 				if decodeErr != nil {
 					return nil, false, decodeErr
 				}
@@ -87,13 +87,14 @@ func (c *Cache) UpdateContext(ctx context.Context, key string, ttl time.Duration
 			return false, err
 		}
 		if generation > 0 {
-			current, fenceErr := c.invalidationForKey(ctx, driver, key)
+			detached := context.WithoutCancel(ctx)
+			current, fenceErr := c.commitInvalidationForKey(detached, driver, key)
 			if fenceErr != nil {
 				return false, fenceErr
 			}
 			if current > committedOrigin {
 				if !removed {
-					fenceErr = c.deleteExactGenerationContext(context.WithoutCancel(ctx), driver, key, generation)
+					fenceErr = c.deleteExactGenerationContext(detached, driver, key, generation)
 				}
 				return false, errors.Join(ErrCacheLockLost, fenceErr)
 			}
