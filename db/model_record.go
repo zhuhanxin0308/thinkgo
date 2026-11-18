@@ -54,6 +54,7 @@ func (mq *ModelQuery) bindScannedRecord(candidate, destination reflect.Value, ra
 	bound := mq.model.cloneBinding()
 	bound.ctx = mq.query.context()
 	bound.transaction = mq.query.txOwner
+	bound.modelType = candidate.Type()
 	record := &modelRecord{owner: destination, persisted: true, original: original, loaded: make(map[string]bool, len(raw)), table: bound.table, primaryKey: bound.primaryKeyField(), database: bound.db, tx: mq.query.txOwner}
 	for key := range raw {
 		record.loaded[key] = true
@@ -87,7 +88,7 @@ func (m *Model) SaveFields(fields ...string) error {
 	if len(fields) == 0 {
 		return fmt.Errorf("%w: SaveFields 至少指定一个字段", ErrInvalidModel)
 	}
-	return m.saveRecord(fields)
+	return m.saveRecord(fields, false)
 }
 
 func (m *Model) recordForWrite() (*modelRecord, error) {
@@ -139,13 +140,16 @@ func (m *Model) validateRecordIdentity(r *modelRecord, snapshot map[string]any) 
 	if !r.persisted || !r.loaded[pk] || isZeroDBValue(r.identity) {
 		return ErrModelIdentityMissing
 	}
-	if r.table != m.table || r.database != m.db || r.primaryKey != pk || !reflect.DeepEqual(snapshot[pk], r.original[pk]) {
+	m.mu.RLock()
+	table, database := m.table, m.db
+	m.mu.RUnlock()
+	if r.table != table || r.database != database || r.primaryKey != pk || !reflect.DeepEqual(snapshot[pk], r.original[pk]) {
 		return ErrModelIdentityChanged
 	}
 	return nil
 }
 
-func (m *Model) saveRecord(fields []string) error {
+func (m *Model) saveRecord(fields []string, requirePersisted bool) error {
 	r, err := m.recordForWrite()
 	if err != nil {
 		return err
@@ -170,6 +174,9 @@ func (m *Model) saveRecord(fields []string) error {
 		selected[column] = true
 	}
 	if !r.persisted {
+		if requirePersisted {
+			return ErrModelIdentityMissing
+		}
 		if len(fields) != 0 {
 			return fmt.Errorf("%w: 新记录请使用 Save 或 Create 创建", ErrInvalidModel)
 		}
@@ -194,17 +201,22 @@ func (m *Model) saveRecord(fields []string) error {
 		if !r.loaded[column] && !selected[column] {
 			return fmt.Errorf("%w: %s；请显式使用 SaveFields", ErrModelFieldNotLoaded, column)
 		}
-		data[column] = modelFieldValue(r.owner, field.indexPath, false).Interface()
+		data[column] = modelFieldWriteValue(modelFieldValue(r.owner, field.indexPath, false))
 	}
 	if len(data) == 0 {
 		return nil
 	}
-	query := m.newModelQuery().Where(r.primaryKey+" = ?", r.identity)
+	query := m.newModelQuery().withModelType(r.owner.Type()).Where(r.primaryKey+" = ?", r.identity)
 	result, err := query.updateResult(data)
 	if err != nil {
 		return err
 	}
-	r.tx = m.transaction
+	m.mu.RLock()
+	tx := m.transaction
+	autoTS := m.autoTimestamp
+	updateField := m.updateTimeField
+	m.mu.RUnlock()
+	r.tx = tx
 	if result.MatchedKnown && result.Matched == 0 {
 		return ErrModelRecordMissing
 	}
@@ -230,10 +242,10 @@ func (m *Model) saveRecord(fields []string) error {
 		r.original[column] = current[column]
 		r.loaded[column] = true
 	}
-	if m.autoTimestamp {
-		if value, ok := updated[m.updateTimeField]; ok {
-			r.original[m.updateTimeField] = value
-			r.loaded[m.updateTimeField] = true
+	if autoTS {
+		if value, ok := updated[updateField]; ok {
+			r.original[updateField] = value
+			r.loaded[updateField] = true
 		}
 	}
 	return nil
@@ -244,7 +256,7 @@ func (m *Model) insertOwnedRecord(r *modelRecord) error {
 	if err != nil {
 		return err
 	}
-	binding, zero, err := m.preparePrimaryKey(r.owner)
+	binding, _, err := m.findPrimaryKeyBinding(r.owner)
 	if err != nil {
 		return err
 	}
@@ -253,15 +265,23 @@ func (m *Model) insertOwnedRecord(r *modelRecord) error {
 		return err
 	}
 	pk := m.primaryKeyField()
-	if zero {
-		delete(data, pk)
+	if _, exists := data[pk]; !exists {
+		data[pk] = modelFieldWriteValue(binding.field)
 	}
-	result, err := m.newModelQuery().insertResult(data, zero, true)
+	result, err := m.newModelQuery().withModelType(r.owner.Type()).insertStructResult(data, binding)
 	if err != nil {
 		r.uncertain = errors.Is(err, ErrPartialWrite)
 		return err
 	}
-	r.tx = m.transaction
+	m.mu.RLock()
+	tx := m.transaction
+	autoTS := m.autoTimestamp
+	createField := m.createTimeField
+	updateField := m.updateTimeField
+	table := m.table
+	database := m.db
+	m.mu.RUnlock()
+	r.tx = tx
 	if err := binding.assignInsertedKey(result, pk); err != nil {
 		r.uncertain = true
 		return err
@@ -278,8 +298,8 @@ func (m *Model) insertOwnedRecord(r *modelRecord) error {
 	r.persisted = true
 	// 回调在写入后对实例作出的修改仍是脏字段，仅数据库生成字段推进为最终值。
 	before[pk] = snapshot[pk]
-	if m.autoTimestamp {
-		for _, column := range []string{m.createTimeField, m.updateTimeField} {
+	if autoTS {
+		for _, column := range []string{createField, updateField} {
 			if value, exists := snapshot[column]; exists {
 				before[column] = value
 			}
@@ -296,17 +316,22 @@ func (m *Model) insertOwnedRecord(r *modelRecord) error {
 		r.loaded[column] = true
 	}
 	r.loaded[pk] = true
-	r.table, r.primaryKey, r.database = m.table, pk, m.db
+	r.table, r.primaryKey, r.database = table, pk, database
 	return nil
 }
 
 func (m *Model) syncRecordTimestamps(r *modelRecord, data map[string]any, inserted bool) error {
-	if !m.autoTimestamp {
+	m.mu.RLock()
+	autoTS := m.autoTimestamp
+	updateField := m.updateTimeField
+	createField := m.createTimeField
+	m.mu.RUnlock()
+	if !autoTS {
 		return nil
 	}
-	fields := []string{m.updateTimeField}
+	fields := []string{updateField}
 	if inserted {
-		fields = append(fields, m.createTimeField)
+		fields = append(fields, createField)
 	}
 	for _, column := range fields {
 		value, exists := data[column]
@@ -339,7 +364,7 @@ func (m *Model) deleteOwnedRecord(force, restore bool) error {
 	if err := m.validateRecordIdentity(r, current); err != nil {
 		return err
 	}
-	query := m.newModelQuery().Where(r.primaryKey+" = ?", r.identity)
+	query := m.newModelQuery().withModelType(r.owner.Type()).Where(r.primaryKey+" = ?", r.identity)
 	var count int64
 	var persisted map[string]any
 	switch {
@@ -358,20 +383,26 @@ func (m *Model) deleteOwnedRecord(force, restore bool) error {
 	if count == 0 {
 		return ErrModelRecordMissing
 	}
-	r.tx = m.transaction
+	m.mu.RLock()
+	tx := m.transaction
+	softDelete := m.softDelete
+	deleteField := m.deleteTimeField
+	updateField := m.updateTimeField
+	m.mu.RUnlock()
+	r.tx = tx
 	r.deleted = !restore
-	if m.softDelete && !force {
+	if softDelete && !force {
 		if err := m.syncRecordTimestamps(r, persisted, false); err != nil {
 			r.uncertain = true
 			return fmt.Errorf("%w: %w", ErrPartialWrite, err)
 		}
-		field, _, found, err := findModelColumn(r.owner, m.deleteTimeField)
+		field, _, found, err := findModelColumn(r.owner, deleteField)
 		if err != nil {
 			r.uncertain = true
 			return fmt.Errorf("%w: %w", ErrPartialWrite, err)
 		}
 		if found {
-			if err := assignModelScanValue(field, persisted[m.deleteTimeField]); err != nil {
+			if err := assignModelScanValue(field, persisted[deleteField]); err != nil {
 				r.uncertain = true
 				return fmt.Errorf("%w: %w", ErrPartialWrite, err)
 			}
@@ -381,7 +412,7 @@ func (m *Model) deleteOwnedRecord(force, restore bool) error {
 			r.uncertain = true
 			return fmt.Errorf("%w: %w", ErrPartialWrite, err)
 		}
-		for _, column := range []string{m.deleteTimeField, m.updateTimeField} {
+		for _, column := range []string{deleteField, updateField} {
 			if value, exists := snapshot[column]; exists {
 				r.original[column] = value
 				r.loaded[column] = true

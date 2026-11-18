@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"reflect"
+	"strings"
 )
 
 // ModelQuery 封装 Model 层的链式查询，保留获取器/修改器/事件/软删除能力。
@@ -13,6 +15,7 @@ type ModelQuery struct {
 	relations   []string
 	withTrashed bool // 从 Model 移到 ModelQuery，使查询状态独立
 	onlyTrashed bool // 从 Model 移到 ModelQuery
+	modelType   reflect.Type
 }
 
 func (mq *ModelQuery) validationError() error {
@@ -43,6 +46,10 @@ func (m *Model) newModelQuery() *ModelQuery {
 	primaryKey := m.primaryKey
 	primaryKeyExplicit := m.primaryKeyExplicit
 	configErr := m.configErr
+	modelType := m.modelType
+	if modelType == nil && m.record != nil && m.record.owner.IsValid() {
+		modelType = m.record.owner.Type()
+	}
 	m.mu.RUnlock()
 	q := m.runtimeQuery(database, table)
 	if configErr != nil {
@@ -64,8 +71,9 @@ func (m *Model) newModelQuery() *ModelQuery {
 		q.modelPrimaryKey = primaryKey
 	}
 	return &ModelQuery{
-		model: m,
-		query: q,
+		model:     m,
+		query:     q,
+		modelType: modelType,
 	}
 }
 
@@ -81,6 +89,32 @@ func (mq *ModelQuery) clone() *ModelQuery {
 		relations:   append([]string(nil), mq.relations...),
 		withTrashed: mq.withTrashed,
 		onlyTrashed: mq.onlyTrashed,
+		modelType:   mq.modelType,
+	}
+}
+
+func (mq *ModelQuery) withModelType(typ reflect.Type) *ModelQuery {
+	if mq == nil || typ == nil {
+		return mq
+	}
+	cloned := mq.clone()
+	cloned.modelType = typ
+	return cloned
+}
+
+func (mq *ModelQuery) seedTimestampFieldZeroValue(data map[string]interface{}, column string) {
+	if mq == nil || data == nil || column == "" || mq.modelType == nil {
+		return
+	}
+	if _, exists := data[column]; exists {
+		return
+	}
+	metadata, err := loadModelMetadata(mq.modelType)
+	if err != nil {
+		return
+	}
+	if fieldType, ok := metadata.writableColumnType(column); ok {
+		data[column] = reflect.Zero(fieldType).Interface()
 	}
 }
 
@@ -97,10 +131,16 @@ func (mq *ModelQuery) prepareQuery() *Query {
 	deleteTimeField := mq.model.deleteTimeField
 	mq.model.mu.RUnlock()
 	if softDelete && !mq.withTrashed {
+		field := deleteTimeField
+		if len(q.joins) > 0 && !strings.Contains(field, ".") {
+			if tableName := q.resolveTable(); tableName != "" {
+				field = tableName + "." + field
+			}
+		}
 		if mq.onlyTrashed {
-			q = q.Where(deleteTimeField + " IS NOT NULL")
+			q = q.Where(field + " IS NOT NULL")
 		} else {
-			q = q.Where(deleteTimeField + " IS NULL")
+			q = q.Where(field + " IS NULL")
 		}
 	}
 	return q
@@ -218,6 +258,48 @@ func (mq *ModelQuery) insertResult(data map[string]interface{}, wantID, requireO
 		return InsertResult{}, fmt.Errorf("before_insert 事件回调阻止了插入操作")
 	}
 	q := mq.prepareQuery()
+	if q.autoTimestamp {
+		mq.seedTimestampFieldZeroValue(workingData, q.createTimeField)
+		mq.seedTimestampFieldZeroValue(workingData, q.updateTimeField)
+	}
+	return mq.executeInsertResult(q, workingData, wantID, requireOneRow)
+}
+
+func (mq *ModelQuery) insertStructResult(data map[string]interface{}, binding primaryKeyBinding) (InsertResult, error) {
+	if err := mq.validationError(); err != nil {
+		return InsertResult{}, err
+	}
+	workingData, err := cloneDatabaseMap(data)
+	if err != nil {
+		return InsertResult{}, err
+	}
+	mq.model.applySetters(workingData)
+	var allowed bool
+	workingData, allowed, err = mq.model.dispatchBeforeEvent(ModelBeforeInsert, workingData)
+	if err != nil {
+		return InsertResult{}, err
+	}
+	if !allowed {
+		return InsertResult{}, fmt.Errorf("before_insert 事件回调阻止了插入操作")
+	}
+	pk := mq.model.primaryKeyField()
+	pkVal, hasPK := workingData[pk]
+	wantID := !hasPK || isZeroDBValue(pkVal)
+	if wantID {
+		delete(workingData, pk)
+		if err := mq.model.validateGeneratedPrimaryKey(binding); err != nil {
+			return InsertResult{}, err
+		}
+	}
+	q := mq.prepareQuery()
+	if q.autoTimestamp {
+		mq.seedTimestampFieldZeroValue(workingData, q.createTimeField)
+		mq.seedTimestampFieldZeroValue(workingData, q.updateTimeField)
+	}
+	return mq.executeInsertResult(q, workingData, wantID, true)
+}
+
+func (mq *ModelQuery) executeInsertResult(q *Query, workingData map[string]interface{}, wantID, requireOneRow bool) (InsertResult, error) {
 	result, err := q.insertResult(workingData, wantID)
 	if err != nil {
 		return InsertResult{}, err
@@ -297,8 +379,12 @@ func (mq *ModelQuery) deleteResult() (int64, map[string]any, error) {
 	mq.model.mu.RUnlock()
 	if softDelete {
 		data := map[string]interface{}{}
+		mq.seedTimestampFieldZeroValue(data, deleteTimeField)
 		if err := mq.model.setTimestamp(data, deleteTimeField, q.now()); err != nil {
 			return 0, nil, err
+		}
+		if q.autoTimestamp {
+			mq.seedTimestampFieldZeroValue(data, q.updateTimeField)
 		}
 		var result UpdateResult
 		result, err = q.UpdateResult(data)
@@ -386,7 +472,11 @@ func (mq *ModelQuery) restoreResult() (UpdateResult, error) {
 	}
 	q := mq.query.clone()
 	q = q.Where(deleteTimeField + " IS NOT NULL")
-	return q.UpdateResult(map[string]interface{}{deleteTimeField: nil})
+	data := map[string]interface{}{deleteTimeField: nil}
+	if q.autoTimestamp {
+		mq.seedTimestampFieldZeroValue(data, q.updateTimeField)
+	}
+	return q.UpdateResult(data)
 }
 
 // Sum 统计字段总和。
@@ -755,8 +845,21 @@ func (mq *ModelQuery) loadRelations(rows []map[string]interface{}) error {
 	return nil
 }
 
+func detachMountedRelationRow(row map[string]interface{}, mounted map[uintptr]bool) (map[string]interface{}, error) {
+	if row == nil {
+		return nil, nil
+	}
+	ptr := reflect.ValueOf(row).Pointer()
+	if !mounted[ptr] {
+		mounted[ptr] = true
+		return row, nil
+	}
+	return cloneDatabaseMap(row)
+}
+
 // loadRelation 预加载单个关系。
 func (mq *ModelQuery) loadRelation(rows []map[string]interface{}, relation RelationDefinition) error {
+	mounted := make(map[uintptr]bool)
 	switch relation.Type {
 	case relationHasOne, relationHasMany:
 		keys, err := collectRelationKeys(rows, relation.LocalKey)
@@ -790,16 +893,29 @@ func (mq *ModelQuery) loadRelation(rows []map[string]interface{}, relation Relat
 					return fmt.Errorf("%w: 一对一关联 %q 返回多条记录", ErrInvalidRelation, relation.Name)
 				}
 				if usable && len(records) == 1 {
-					row[relation.Name] = records[0]
+					detached, err := detachMountedRelationRow(records[0], mounted)
+					if err != nil {
+						return err
+					}
+					row[relation.Name] = detached
 				} else {
 					row[relation.Name] = map[string]interface{}(nil)
 				}
 				continue
 			}
-			if records == nil {
-				records = []map[string]interface{}{}
+			if !usable || len(records) == 0 {
+				row[relation.Name] = []map[string]interface{}{}
+				continue
 			}
-			row[relation.Name] = records
+			detachedList := make([]map[string]interface{}, len(records))
+			for idx, item := range records {
+				detached, err := detachMountedRelationRow(item, mounted)
+				if err != nil {
+					return err
+				}
+				detachedList[idx] = detached
+			}
+			row[relation.Name] = detachedList
 		}
 	case relationBelongsTo:
 		keys, err := collectRelationKeys(rows, relation.ForeignKey)
@@ -828,7 +944,11 @@ func (mq *ModelQuery) loadRelation(rows []map[string]interface{}, relation Relat
 				return err
 			}
 			if usable {
-				row[relation.Name] = indexed[key]
+				detached, err := detachMountedRelationRow(indexed[key], mounted)
+				if err != nil {
+					return err
+				}
+				row[relation.Name] = detached
 			} else {
 				row[relation.Name] = map[string]interface{}(nil)
 			}
@@ -877,7 +997,10 @@ func (mq *ModelQuery) loadRelation(rows []map[string]interface{}, relation Relat
 			if !localUsable || !relatedUsable {
 				continue
 			}
-			rk := relatedValue
+			rk, _, err := unwrapRelationKeyValue(relatedValue)
+			if err != nil {
+				return err
+			}
 			lk := localKey
 			pivotMap[lk] = append(pivotMap[lk], rk)
 			if !relatedKeySet[relatedKey] {
@@ -915,7 +1038,11 @@ func (mq *ModelQuery) loadRelation(rows []map[string]interface{}, relation Relat
 					return err
 				}
 				if r, ok := relatedIndex[relatedKey]; ok {
-					related = append(related, r)
+					detached, err := detachMountedRelationRow(r, mounted)
+					if err != nil {
+						return err
+					}
+					related = append(related, detached)
 				}
 			}
 			row[relation.Name] = related

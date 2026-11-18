@@ -1,6 +1,7 @@
 package db
 
 import (
+	"database/sql/driver"
 	"encoding/base64"
 	"fmt"
 	"math"
@@ -174,6 +175,65 @@ func validateImmediateRelation(current, related *Model, identifiers ...string) e
 	return nil
 }
 
+func unwrapRelationKeyValue(value interface{}) (interface{}, bool, error) {
+	for depth := 0; depth < maxDatabaseValueDepth; depth++ {
+		if value == nil {
+			return nil, false, nil
+		}
+		switch value.(type) {
+		case string, bool, int64, int, float64, float32, []byte, time.Time:
+			return value, true, nil
+		}
+		rv := reflect.ValueOf(value)
+		if !rv.IsValid() {
+			return nil, false, nil
+		}
+		if rv.Kind() == reflect.Pointer {
+			if rv.IsNil() {
+				return nil, false, nil
+			}
+			if valuer, ok := value.(driver.Valuer); ok {
+				resolved, err := valuer.Value()
+				if err != nil {
+					return nil, false, fmt.Errorf("%w: %w", ErrInvalidRelation, err)
+				}
+				value = resolved
+				continue
+			}
+			value = rv.Elem().Interface()
+			continue
+		}
+		if valuer, ok := value.(driver.Valuer); ok {
+			resolved, err := valuer.Value()
+			if err != nil {
+				return nil, false, fmt.Errorf("%w: %w", ErrInvalidRelation, err)
+			}
+			value = resolved
+			continue
+		}
+		switch rv.Kind() {
+		case reflect.String:
+			return rv.String(), true, nil
+		case reflect.Bool:
+			return rv.Bool(), true, nil
+		}
+		return value, true, nil
+	}
+	return nil, false, fmt.Errorf("%w: 关联键嵌套层级过深", ErrInvalidRelation)
+}
+
+func resolveRelationKeyValue(value interface{}) (interface{}, bool, error) {
+	unwrapped, present, err := unwrapRelationKeyValue(value)
+	if err != nil || !present {
+		return nil, false, err
+	}
+	_, usable, err := relationComparableValueKey(unwrapped)
+	if err != nil || !usable {
+		return nil, false, err
+	}
+	return unwrapped, true, nil
+}
+
 func collectRelationKeys(rows []map[string]interface{}, field string) ([]interface{}, error) {
 	seen := make(map[relationComparableKey]bool)
 	keys := make([]interface{}, 0)
@@ -182,7 +242,14 @@ func collectRelationKeys(rows []map[string]interface{}, field string) ([]interfa
 		if !ok {
 			return nil, fmt.Errorf("%w: 第 %d 行缺少关联字段 %q", ErrInvalidRelation, index, field)
 		}
-		key, usable, err := relationComparableValueKey(value)
+		unwrapped, present, err := unwrapRelationKeyValue(value)
+		if err != nil {
+			return nil, err
+		}
+		if !present {
+			continue
+		}
+		key, usable, err := relationComparableValueKey(unwrapped)
 		if err != nil {
 			return nil, err
 		}
@@ -190,7 +257,7 @@ func collectRelationKeys(rows []map[string]interface{}, field string) ([]interfa
 			continue
 		}
 		seen[key] = true
-		keys = append(keys, value)
+		keys = append(keys, unwrapped)
 	}
 	return keys, nil
 }
@@ -205,8 +272,11 @@ func relationFloatValueKey(typeName string, value float64, bitSize int) (string,
 
 // relationComparableValueKey 按整数数值关联不同位宽的数据库列，并保持非整数类型独立。
 func relationComparableValueKey(value interface{}) (relationComparableKey, bool, error) {
-	if value == nil {
-		return nil, false, nil
+	var present bool
+	var err error
+	value, present, err = unwrapRelationKeyValue(value)
+	if err != nil || !present {
+		return nil, false, err
 	}
 	if binary, ok := value.([]byte); ok {
 		return relationBytesKey(string(binary)), true, nil
@@ -234,8 +304,6 @@ func relationComparableValueKey(value interface{}) (relationComparableKey, bool,
 	}
 	reflected := reflect.ValueOf(value)
 	switch reflected.Kind() {
-	case reflect.String, reflect.Bool:
-		return value, true, nil
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		return reflected.Int(), true, nil
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
@@ -250,6 +318,11 @@ func relationComparableValueKey(value interface{}) (relationComparableKey, bool,
 			return nil, false, err
 		}
 		return relationFloatKey{typeName: reflected.Type().String(), text: key}, true, nil
+	case reflect.Slice:
+		if reflected.Type().Elem().Kind() == reflect.Uint8 {
+			return relationBytesKey(string(reflected.Bytes())), true, nil
+		}
+		return nil, false, fmt.Errorf("%w: 不支持关联键类型 %T", ErrInvalidRelation, value)
 	default:
 		return nil, false, fmt.Errorf("%w: 不支持关联键类型 %T", ErrInvalidRelation, value)
 	}

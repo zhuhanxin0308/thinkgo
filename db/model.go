@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"database/sql/driver"
 	"fmt"
 	"reflect"
 	"sort"
@@ -102,6 +103,7 @@ type Model struct {
 	ctx                context.Context
 	transaction        *Tx
 	record             *modelRecord
+	modelType          reflect.Type
 }
 
 // NewModel 创建模型实例。
@@ -387,6 +389,11 @@ func NewModelAuto(db *DB, model interface{}) (*Model, error) {
 	created := NewModel(db, table)
 	if err := created.validationError(); err != nil {
 		return nil, err
+	}
+	if typ := resolveModelStructType(model); typ != nil {
+		if _, err := loadModelMetadata(typ); err == nil {
+			created.modelType = typ
+		}
 	}
 	return created, nil
 }
@@ -674,11 +681,23 @@ func (m *Model) BelongsToMany(relatedModel *Model, pivotTable string, foreignKey
 	if err := validateImmediateRelation(m, relatedModel, pivotTable, foreignKey, relatedForeignKey); err != nil {
 		return nil, err
 	}
+	mq := m.newModelQuery()
+	relatedQuery := mq.relationModelQuery(relatedModel)
+	if err := relatedQuery.validationError(); err != nil {
+		return nil, err
+	}
+	keyValue, usable, err := resolveRelationKeyValue(localKeyValue)
+	if err != nil {
+		return nil, err
+	}
+	if !usable {
+		return []map[string]interface{}{}, nil
+	}
 	m.mu.RLock()
 	database := m.db
 	m.mu.RUnlock()
 	// 1. 查询中间表，获取关联模型的 ID 列表
-	pivotRows, err := m.newModelQuery().newRelationTableQuery(database, pivotTable).Field(relatedForeignKey).Where(foreignKey+" = ?", localKeyValue).Select()
+	pivotRows, err := mq.newRelationTableQuery(database, pivotTable).Field(relatedForeignKey).Where(foreignKey+" = ?", keyValue).Select()
 	if err != nil {
 		return nil, fmt.Errorf("查询中间表 %s 失败: %w", pivotTable, err)
 	}
@@ -696,7 +715,7 @@ func (m *Model) BelongsToMany(relatedModel *Model, pivotTable string, foreignKey
 	}
 
 	// 3. 查询关联模型
-	return m.newModelQuery().relationModelQuery(relatedModel).WhereIn(relatedModel.primaryKeyField(), relatedKeys).SelectMaps()
+	return relatedQuery.WhereIn(relatedModel.primaryKeyField(), relatedKeys).SelectMaps()
 }
 
 // query 返回当前模型对应的查询对象。
@@ -773,12 +792,29 @@ func (m *Model) Page(page int, pageSize int) *ModelQuery {
 	return m.newModelQuery().Page(page, pageSize)
 }
 
+// Join 连接查询。
+func (m *Model) Join(table, condition string) *ModelQuery {
+	return m.newModelQuery().Join(table, condition)
+}
+
+// LeftJoin 左外连接查询。
+func (m *Model) LeftJoin(table, condition string) *ModelQuery {
+	return m.newModelQuery().LeftJoin(table, condition)
+}
+
+// RightJoin 右外连接查询。
+func (m *Model) RightJoin(table, condition string) *ModelQuery {
+	return m.newModelQuery().RightJoin(table, condition)
+}
+
 // Create 从结构体创建记录。
 // 自动应用修改器并触发 before_insert/after_insert 事件。
-// 主键为零值时会被剔除，交由数据库自增生成，避免误插入 id=0。
+// 主键最终仍为零值时会被剔除，交由数据库自增生成，避免误插入 id=0。
 func (m *Model) Create(v interface{}) error {
-	if m.ownsRecord(v) {
-		r, err := m.recordForWrite()
+	if writer, owned, err := m.resolveOwnedRecordWriter(v); err != nil {
+		return err
+	} else if owned {
+		r, err := writer.recordForWrite()
 		if err != nil {
 			return err
 		}
@@ -789,7 +825,7 @@ func (m *Model) Create(v interface{}) error {
 		if _, err := snapshotModelFields(r.owner); err != nil {
 			return err
 		}
-		return m.insertOwnedRecord(r)
+		return writer.insertOwnedRecord(r)
 	}
 	if err := m.operationReady(); err != nil {
 		return err
@@ -798,25 +834,25 @@ func (m *Model) Create(v interface{}) error {
 	if err != nil {
 		return err
 	}
-	binding, primaryWasZero, err := m.preparePrimaryKey(value)
+	binding, _, err := m.findPrimaryKeyBinding(value)
 	if err != nil {
 		return err
 	}
-	return m.createWithBinding(v, binding, primaryWasZero)
+	return m.createWithBinding(v, value.Type(), binding)
 }
 
-func (m *Model) createWithBinding(v interface{}, binding primaryKeyBinding, primaryWasZero bool) error {
+func (m *Model) createWithBinding(v interface{}, structType reflect.Type, binding primaryKeyBinding) error {
 	data, err := m.structToMap(v)
 	if err != nil {
 		return err
 	}
 
 	pk := m.primaryKeyField()
-	if primaryWasZero {
-		delete(data, pk)
+	if _, exists := data[pk]; !exists {
+		data[pk] = modelFieldWriteValue(binding.field)
 	}
 
-	result, err := m.newModelQuery().insertResult(data, primaryWasZero, true)
+	result, err := m.newModelQuery().withModelType(structType).insertStructResult(data, binding)
 	if err != nil {
 		return err
 	}
@@ -828,13 +864,16 @@ func (m *Model) createWithBinding(v interface{}, binding primaryKeyBinding, prim
 // 避免无 WHERE 的全表更新和对主键的误写。
 // 自动应用修改器并触发 before_update/after_update 事件。
 func (m *Model) Update(v interface{}) error {
-	if m.ownsRecord(v) {
-		return m.saveRecord(nil)
+	if writer, owned, err := m.resolveOwnedRecordWriter(v); err != nil {
+		return err
+	} else if owned {
+		return writer.saveRecord(nil, true)
 	}
 	if err := m.operationReady(); err != nil {
 		return err
 	}
-	if _, err := writableModelStruct(v); err != nil {
+	value, err := writableModelStruct(v)
+	if err != nil {
 		return err
 	}
 	data, err := m.structToMap(v)
@@ -849,7 +888,7 @@ func (m *Model) Update(v interface{}) error {
 	}
 	delete(data, pk)
 
-	_, err = m.newModelQuery().Where(pk+" = ?", pkVal).updateResult(data)
+	_, err = m.newModelQuery().withModelType(value.Type()).Where(pk+" = ?", pkVal).updateResult(data)
 	return err
 }
 
@@ -858,7 +897,15 @@ func (m *Model) HasOne(relatedModel *Model, foreignKey string, localKey interfac
 	if err := validateImmediateRelation(m, relatedModel, foreignKey); err != nil {
 		return nil, err
 	}
-	return m.newModelQuery().relationModelQuery(relatedModel).Where(foreignKey+" = ?", localKey).FindMap()
+	mq := m.newModelQuery().relationModelQuery(relatedModel)
+	if err := mq.validationError(); err != nil {
+		return nil, err
+	}
+	keyValue, usable, err := resolveRelationKeyValue(localKey)
+	if err != nil || !usable {
+		return nil, err
+	}
+	return mq.Where(foreignKey+" = ?", keyValue).FindMap()
 }
 
 // HasMany 立即查询一对多关联。
@@ -866,7 +913,18 @@ func (m *Model) HasMany(relatedModel *Model, foreignKey string, localKey interfa
 	if err := validateImmediateRelation(m, relatedModel, foreignKey); err != nil {
 		return nil, err
 	}
-	return m.newModelQuery().relationModelQuery(relatedModel).Where(foreignKey+" = ?", localKey).SelectMaps()
+	mq := m.newModelQuery().relationModelQuery(relatedModel)
+	if err := mq.validationError(); err != nil {
+		return nil, err
+	}
+	keyValue, usable, err := resolveRelationKeyValue(localKey)
+	if err != nil {
+		return nil, err
+	}
+	if !usable {
+		return []map[string]interface{}{}, nil
+	}
+	return mq.Where(foreignKey+" = ?", keyValue).SelectMaps()
 }
 
 // BelongsTo 立即查询反向关联。
@@ -874,7 +932,30 @@ func (m *Model) BelongsTo(relatedModel *Model, foreignKey interface{}, ownerKey 
 	if err := validateImmediateRelation(m, relatedModel, ownerKey); err != nil {
 		return nil, err
 	}
-	return m.newModelQuery().relationModelQuery(relatedModel).Where(ownerKey+" = ?", foreignKey).FindMap()
+	mq := m.newModelQuery().relationModelQuery(relatedModel)
+	if err := mq.validationError(); err != nil {
+		return nil, err
+	}
+	keyValue, usable, err := resolveRelationKeyValue(foreignKey)
+	if err != nil || !usable {
+		return nil, err
+	}
+	return mq.Where(ownerKey+" = ?", keyValue).FindMap()
+}
+
+var modelDriverValuerType = reflect.TypeFor[driver.Valuer]()
+
+func modelFieldWriteValue(fieldValue reflect.Value) interface{} {
+	if !fieldValue.IsValid() || !fieldValue.CanInterface() {
+		return nil
+	}
+	typ := fieldValue.Type()
+	if typ.Kind() != reflect.Pointer && !typ.Implements(modelDriverValuerType) && reflect.PointerTo(typ).Implements(modelDriverValuerType) {
+		pointed := reflect.New(typ)
+		pointed.Elem().Set(fieldValue)
+		return pointed.Interface()
+	}
+	return fieldValue.Interface()
 }
 
 // structToMap 把结构体转换为列名→值的映射。
@@ -910,7 +991,7 @@ func (m *Model) structToMap(v interface{}) (map[string]interface{}, error) {
 		if !fieldValue.CanInterface() {
 			continue
 		}
-		data[field.column] = fieldValue.Interface()
+		data[field.column] = modelFieldWriteValue(fieldValue)
 	}
 	return data, nil
 }
@@ -949,7 +1030,22 @@ func isZeroDBValue(value interface{}) bool {
 	if value == nil {
 		return true
 	}
-	return reflect.ValueOf(value).IsZero()
+	if instant, ok := value.(time.Time); ok {
+		return instant.IsZero()
+	}
+	rv := reflect.ValueOf(value)
+	if !rv.IsValid() || rv.IsZero() {
+		return true
+	}
+	if rv.Kind() == reflect.Pointer {
+		return isZeroDBValue(rv.Elem().Interface())
+	}
+	if valuer, ok := value.(driver.Valuer); ok {
+		if resolved, err := valuer.Value(); err == nil && resolved == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // ToSnakeCase 把驼峰命名转换成下划线格式。

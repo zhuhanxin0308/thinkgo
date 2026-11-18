@@ -12,6 +12,7 @@ import (
 type modelFieldMetadata struct {
 	indexPath []int
 	column    string
+	fieldType reflect.Type
 	omitEmpty bool
 	readOnly  bool
 }
@@ -19,6 +20,26 @@ type modelFieldMetadata struct {
 type modelMetadata struct {
 	fields    []modelFieldMetadata
 	modelPath []int
+}
+
+func (m modelMetadata) writableColumnType(column string) (reflect.Type, bool) {
+	for _, field := range m.fields {
+		if !field.readOnly && field.column == column && field.fieldType != nil {
+			return field.fieldType, true
+		}
+	}
+	return nil, false
+}
+
+func resolveModelStructType(model any) reflect.Type {
+	typ := reflect.TypeOf(model)
+	for typ != nil && typ.Kind() == reflect.Pointer {
+		typ = typ.Elem()
+	}
+	if typ != nil && typ.Kind() == reflect.Struct {
+		return typ
+	}
+	return nil
 }
 
 type modelMetadataCacheEntry struct {
@@ -126,7 +147,7 @@ func buildModelMetadata(typ reflect.Type) (modelMetadata, error) {
 				return fmt.Errorf("%w: 字段 %s 与 %s 映射到重复列 %q", ErrInvalidModel, previous, field.Name, name)
 			}
 			columns[name] = field.Name
-			metadata.fields = append(metadata.fields, modelFieldMetadata{indexPath: fieldPath, column: name, omitEmpty: options["omitempty"], readOnly: options["readonly"]})
+			metadata.fields = append(metadata.fields, modelFieldMetadata{indexPath: fieldPath, column: name, fieldType: field.Type, omitEmpty: options["omitempty"], readOnly: options["readonly"]})
 		}
 		return nil
 	}

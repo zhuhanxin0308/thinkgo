@@ -1,6 +1,9 @@
 package db
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // Chunk 按 OFFSET 分批交付独立的类型化列表，显式 With 关联按当前批次加载。
 // 回调返回 false 正常停止，返回错误则终止并保留错误链；已消费批次不会自动回滚。
@@ -11,7 +14,13 @@ func Chunk[T any](query *ModelQuery, count int, callback func([]T) (bool, error)
 		return err
 	}
 	if query.query.order == "" {
-		query = query.Order(query.model.primaryKeyField())
+		pk := query.model.primaryKeyField()
+		if len(query.query.joins) > 0 && !strings.Contains(pk, ".") {
+			if tableName := query.query.resolveTable(); tableName != "" {
+				pk = tableName + "." + pk
+			}
+		}
+		query = query.Order(pk)
 	}
 	for page := 1; ; page++ {
 		data := query.clone()
