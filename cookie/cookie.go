@@ -10,6 +10,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/netip"
 	"reflect"
 	"strconv"
 	"strings"
@@ -324,6 +325,14 @@ func (c *Cookie) BuildHeader(name, value string, options ...CookieOptions) (stri
 	}
 	if err = validateCookieOptions(opts); err != nil {
 		return "", err
+	}
+	if c.config.Secret != "" && opts.Expire > c.config.SignMaxAge {
+		return "", fmt.Errorf(
+			"%w: expire (%d) 不能大于 sign_max_age (%d)，请调大 sign_max_age 或缩短 expire",
+			ErrInvalidCookieOptions,
+			opts.Expire,
+			c.config.SignMaxAge,
+		)
 	}
 
 	c.mu.RLock()
@@ -727,15 +736,32 @@ func isSecureCookieRequest(req *http.Request) bool {
 	if !isLoopbackRemoteAddr(req.RemoteAddr) {
 		return false
 	}
-	proto := strings.TrimSpace(strings.Split(req.Header.Get("X-Forwarded-Proto"), ",")[0])
+	values := req.Header.Values("X-Forwarded-Proto")
+	if len(values) == 0 {
+		return false
+	}
+	// 取最后一行最右侧的协议标记（本机可信反代追加值），防止外部客户端预置首个 X-Forwarded-Proto 伪造 https。
+	last := values[len(values)-1]
+	proto := strings.TrimSpace(last[strings.LastIndexByte(last, ',')+1:])
 	return strings.EqualFold(proto, "https")
 }
 
 func isLoopbackRemoteAddr(remoteAddr string) bool {
+	remoteAddr = strings.TrimSpace(remoteAddr)
+	if remoteAddr == "" {
+		return false
+	}
 	host, _, err := net.SplitHostPort(remoteAddr)
 	if err != nil {
-		host = strings.Trim(remoteAddr, "[]")
+		if strings.HasPrefix(remoteAddr, "[") && strings.HasSuffix(remoteAddr, "]") {
+			host = remoteAddr[1 : len(remoteAddr)-1]
+		} else {
+			host = remoteAddr
+		}
 	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
+	addr, err := netip.ParseAddr(host)
+	if err != nil {
+		return false
+	}
+	return addr.WithZone("").Unmap().IsLoopback()
 }

@@ -3,6 +3,7 @@ package http
 import (
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"reflect"
 	"sort"
@@ -592,6 +593,12 @@ func convertControllerActionValue(raw interface{}, target reflect.Type) (reflect
 		return reflect.Value{}, errors.New("参数值不能为空")
 	}
 	rawValue := reflect.ValueOf(raw)
+	if rawValue.IsValid() && (rawValue.Kind() == reflect.Float32 || rawValue.Kind() == reflect.Float64) {
+		number := rawValue.Float()
+		if math.IsNaN(number) || math.IsInf(number, 0) {
+			return reflect.Value{}, errors.New("参数值必须为有限浮点数")
+		}
+	}
 	if rawValue.IsValid() && rawValue.Type().AssignableTo(target) {
 		return rawValue, nil
 	}
@@ -654,7 +661,7 @@ func convertControllerActionValue(raw interface{}, target reflect.Type) (reflect
 		}
 		converted.SetUint(value)
 	case reflect.Float32, reflect.Float64:
-		value, parseErr := strconv.ParseFloat(text, target.Bits())
+		value, parseErr := binding.ParseFiniteFloat(text, target.Bits())
 		if parseErr != nil {
 			return reflect.Value{}, parseErr
 		}
@@ -686,7 +693,11 @@ func controllerActionScalarText(raw interface{}) (string, error) {
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 		return strconv.FormatUint(value.Uint(), 10), nil
 	case reflect.Float32, reflect.Float64:
-		return strconv.FormatFloat(value.Float(), 'g', -1, value.Type().Bits()), nil
+		number := value.Float()
+		if math.IsNaN(number) || math.IsInf(number, 0) {
+			return "", errors.New("参数值必须为有限浮点数")
+		}
+		return strconv.FormatFloat(number, 'g', -1, value.Type().Bits()), nil
 	default:
 		return "", fmt.Errorf("参数值类型 %T 不是可绑定标量", raw)
 	}

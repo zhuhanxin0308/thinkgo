@@ -56,7 +56,14 @@ func (s *Session) Handle(req *context.Request, next func(*context.Request) *cont
 			commit.registered = true
 		}
 	}
+	completed := false
+	defer func() {
+		if !completed {
+			commit.abort()
+		}
+	}()
 	response := next(req)
+	completed = true
 	if response == nil {
 		// HTTP 内核稍后生成统一错误响应时仍会触发已注册的提交钩子；独立调用保持 nil 契约。
 		return nil
@@ -87,10 +94,24 @@ type sessionCommitCoordinator struct {
 	requestSession *session.Session
 	registered     bool
 	executed       bool
+	aborted        bool
+}
+
+func (c *sessionCommitCoordinator) abort() {
+	if c == nil {
+		return
+	}
+	c.lock.Lock()
+	c.aborted = true
+	c.lock.Unlock()
 }
 
 func (c *sessionCommitCoordinator) beforeCommit(header http.Header) error {
 	c.lock.Lock()
+	if c.aborted {
+		c.lock.Unlock()
+		return nil
+	}
 	c.executed = true
 	c.lock.Unlock()
 

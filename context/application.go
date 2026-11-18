@@ -92,6 +92,16 @@ func (application ApplicationContext) applicationPath(path string) (string, erro
 			return "", fmt.Errorf("%w: 路径不能包含控制字符", ErrInvalidApplicationPath)
 		}
 	}
+	rawPathPart, _, _ := strings.Cut(path, "?")
+	if strings.ContainsRune(rawPathPart, '\\') {
+		return "", fmt.Errorf("%w: 路径不能包含反斜线", ErrInvalidApplicationPath)
+	}
+	lowerRawPath := strings.ToLower(rawPathPart)
+	for _, marker := range []string{"%00", "%2f", "%5c"} {
+		if strings.Contains(lowerRawPath, marker) {
+			return "", fmt.Errorf("%w: 路径包含禁止编码", ErrInvalidApplicationPath)
+		}
+	}
 	reference, err := url.Parse(path)
 	if err != nil || reference.IsAbs() || reference.Host != "" || reference.Fragment != "" || strings.HasPrefix(path, "//") {
 		return "", fmt.Errorf("%w: 路径必须是相对 HTTP 路径", ErrInvalidApplicationPath)
@@ -110,17 +120,23 @@ func (application ApplicationContext) applicationPath(path string) (string, erro
 	if !strings.HasPrefix(escapedPath, "/") {
 		escapedPath = "/" + escapedPath
 	}
-	for _, marker := range []string{"%00", "%5c", "%2e%2e"} {
-		if strings.Contains(strings.ToLower(escapedPath), marker) {
+	lowerEscaped := strings.ToLower(escapedPath)
+	for _, marker := range []string{"%00", "%2f", "%5c", "%2e%2e"} {
+		if strings.Contains(lowerEscaped, marker) {
 			return "", fmt.Errorf("%w: 路径包含禁止编码", ErrInvalidApplicationPath)
 		}
 	}
+	if hasDotPathSegment(parsed.Path) || hasEncodedDotPathSegment(escapedPath) {
+		return "", fmt.Errorf("%w: 路径不能包含点路径段", ErrInvalidApplicationPath)
+	}
 	prefix := application.urlPrefix
-	if prefix != "" && escapedPath != prefix && !strings.HasPrefix(escapedPath, prefix+"/") {
+	if prefix != "" {
 		if !validApplicationPathPrefix(prefix) {
 			return "", fmt.Errorf("%w: 应用前缀非法", ErrInvalidApplicationPath)
 		}
-		escapedPath = prefix + escapedPath
+		if escapedPath != prefix && !strings.HasPrefix(escapedPath, prefix+"/") {
+			escapedPath = prefix + escapedPath
+		}
 	}
 	if parsed.RawQuery != "" {
 		escapedPath += "?" + parsed.RawQuery
@@ -128,8 +144,33 @@ func (application ApplicationContext) applicationPath(path string) (string, erro
 	return escapedPath, nil
 }
 
+func hasDotPathSegment(path string) bool {
+	for _, segment := range strings.Split(path, "/") {
+		if segment == "." || segment == ".." {
+			return true
+		}
+	}
+	return false
+}
+
+func hasEncodedDotPathSegment(escapedPath string) bool {
+	for _, segment := range strings.Split(escapedPath, "/") {
+		if segment == "." || segment == ".." {
+			return true
+		}
+		decoded, err := url.PathUnescape(segment)
+		if err != nil || decoded == "." || decoded == ".." {
+			return true
+		}
+	}
+	return false
+}
+
 func validApplicationPathPrefix(prefix string) bool {
-	return strings.HasPrefix(prefix, "/") && !strings.ContainsAny(prefix, "\\%\r\n") && !strings.Contains(prefix, "..")
+	if !strings.HasPrefix(prefix, "/") || strings.HasPrefix(prefix, "//") || strings.ContainsAny(prefix, "\\%\r\n") {
+		return false
+	}
+	return !hasDotPathSegment(prefix)
 }
 
 // BuildApplicationPath 为指定应用前缀生成安全站内路径。

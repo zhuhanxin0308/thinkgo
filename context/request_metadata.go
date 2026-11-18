@@ -364,6 +364,9 @@ func (r *Request) serverValue(key string) string {
 	case "SERVER_PROTOCOL":
 		return r.Protocol()
 	case "REMOTE_ADDR":
+		if addr, ok := parseRemoteAddr(r.raw.RemoteAddr); ok {
+			return addr.String()
+		}
 		host, _, err := net.SplitHostPort(strings.TrimSpace(r.raw.RemoteAddr))
 		if err == nil {
 			return host

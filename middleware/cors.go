@@ -8,6 +8,8 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/zhuhanxin0308/thinkgo/v3/context"
 	"github.com/zhuhanxin0308/thinkgo/v3/internal/httpheader"
@@ -39,7 +41,7 @@ func DefaultCorsConfig() CorsConfig {
 	return CorsConfig{
 		AllowOrigins:     []string{"*"},
 		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"},
-		AllowHeaders:     []string{"Content-Type", "Authorization", "X-Requested-With", "Accept", "Origin", "token"},
+		AllowHeaders:     []string{"Content-Type", "Authorization", "X-Requested-With", "Accept", "Accept-Language", "Content-Language", "Origin", "token"},
 		ExposeHeaders:    []string{},
 		AllowCredentials: false,
 		MaxAge:           defaultCorsMaxAgeSeconds,
@@ -60,7 +62,7 @@ func normalizeCorsConfig(config CorsConfig) (CorsConfig, error) {
 	if config.MaxAge < 0 {
 		return CorsConfig{}, fmt.Errorf("%w: MaxAge 不能为负数", ErrInvalidCorsConfig)
 	}
-	config.AllowOrigins = normalizeCorsValues(config.AllowOrigins)
+	config.AllowOrigins = normalizeCorsOrigins(config.AllowOrigins)
 	config.AllowMethods = normalizeCorsMethods(config.AllowMethods)
 	config.AllowHeaders = normalizeCorsValues(config.AllowHeaders)
 	config.ExposeHeaders = normalizeCorsValues(config.ExposeHeaders)
@@ -71,22 +73,26 @@ func normalizeCorsConfig(config CorsConfig) (CorsConfig, error) {
 		return CorsConfig{}, fmt.Errorf("%w: AllowMethods 不能为空", ErrInvalidCorsConfig)
 	}
 	wildcard := false
-	for _, origin := range config.AllowOrigins {
+	initialOrigins := append([]string(nil), config.AllowOrigins...)
+	seenExact := make(map[string]struct{}, len(initialOrigins)*2)
+	for _, item := range initialOrigins {
+		seenExact[item] = struct{}{}
+	}
+	for _, origin := range initialOrigins {
 		if origin == "*" {
 			wildcard = true
 			continue
 		}
-		parsed, err := url.Parse(origin)
-		if err != nil || parsed.Scheme == "" || parsed.Host == "" || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
-			return CorsConfig{}, fmt.Errorf("%w: AllowOrigins 包含无效来源: %q", ErrInvalidCorsConfig, origin)
+		canonical, err := validateAllowedOrigin(origin)
+		if err != nil {
+			return CorsConfig{}, err
 		}
-		if !parsed.ForceQuery && !strings.HasSuffix(origin, "#") {
-			if canonical := canonicalBrowserOrigin(parsed); canonical != "" && canonical != origin {
-				config.AllowOrigins = append(config.AllowOrigins, canonical)
-			}
+		if _, exists := seenExact[canonical]; !exists {
+			seenExact[canonical] = struct{}{}
+			config.AllowOrigins = append(config.AllowOrigins, canonical)
 		}
 	}
-	if wildcard && len(config.AllowOrigins) != 1 {
+	if wildcard && len(initialOrigins) != 1 {
 		return CorsConfig{}, fmt.Errorf("%w: AllowOrigins 不能同时包含 * 和具体来源", ErrInvalidCorsConfig)
 	}
 	if wildcard && config.AllowCredentials {
@@ -104,43 +110,93 @@ func normalizeCorsConfig(config CorsConfig) (CorsConfig, error) {
 	return config, nil
 }
 
-// canonicalBrowserOrigin 生成同一 HTTP(S) 来源的浏览器规范写法。
+func normalizeCorsOrigins(values []string) []string {
+	result := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
+}
+
+func validateAllowedOrigin(origin string) (string, error) {
+	parsed, err := url.Parse(origin)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" || parsed.Opaque != "" || parsed.User != nil ||
+		parsed.Path != "" || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || strings.HasSuffix(origin, "#") {
+		return "", fmt.Errorf("%w: AllowOrigins 包含无效来源: %q", ErrInvalidCorsConfig, origin)
+	}
+	canonical := canonicalBrowserOrigin(parsed)
+	if canonical == "" {
+		return "", fmt.Errorf("%w: AllowOrigins 包含无效来源: %q", ErrInvalidCorsConfig, origin)
+	}
+	return canonical, nil
+}
+
+// canonicalBrowserOrigin 生成同一 HTTP(S) 来源的浏览器规范写法（含 RFC 5952 IPv6 压缩格式）。
 func canonicalBrowserOrigin(parsed *url.URL) string {
-	defaultPort := defaultHTTPOriginPort(parsed.Scheme)
-	host := parsed.Hostname()
-	if defaultPort == "" || host == "" {
+	if parsed == nil {
 		return ""
 	}
-	// 仅扩展可验证的 ASCII 主机别名，防止 Unicode 转小写后指向另一个域名。
-	authority := host
+	scheme := strings.ToLower(parsed.Scheme)
+	defaultPort := defaultHTTPOriginPort(scheme)
+	host := parsed.Hostname()
+	if defaultPort == "" || host == "" || !utf8.ValidString(host) {
+		return ""
+	}
+	// 仅对 ASCII 字母做小写折叠，防止 Unicode 转小写后指向另一个域名。
+	rawAuthority := host
+	canonicalAuthority := ""
 	if strings.HasPrefix(parsed.Host, "[") {
 		address, err := netip.ParseAddr(host)
 		if err != nil || !address.Is6() || address.Zone() != "" {
 			return ""
 		}
-		authority = "[" + host + "]"
+		rawAuthority = "[" + host + "]"
+		canonicalAuthority = "[" + strings.ToLower(address.String()) + "]"
 	} else {
+		var builder strings.Builder
+		builder.Grow(len(host))
 		for _, char := range host {
-			if !isCorsASCIIHostCharacter(char) {
+			if char < 0x80 {
+				if !isCorsASCIIHostCharacter(char) {
+					return ""
+				}
+				if char >= 'A' && char <= 'Z' {
+					char += 'a' - 'A'
+				}
+			} else if unicode.IsControl(char) || unicode.IsSpace(char) {
 				return ""
 			}
+			builder.WriteRune(char)
 		}
+		canonicalAuthority = builder.String()
 	}
 	rawPort := parsed.Port()
-	if parsed.Host != authority && parsed.Host != authority+":"+rawPort {
-		return ""
-	}
-	authority = strings.ToLower(authority)
-	if rawPort != "" {
+	if rawPort == "" {
+		if parsed.Host != rawAuthority {
+			return ""
+		}
+	} else {
+		if parsed.Host != rawAuthority+":"+rawPort {
+			return ""
+		}
 		port, err := strconv.ParseUint(rawPort, 10, 16)
-		if err != nil {
+		if err != nil || port == 0 {
 			return ""
 		}
 		if normalized := strconv.FormatUint(port, 10); normalized != defaultPort {
-			authority += ":" + normalized
+			canonicalAuthority += ":" + normalized
 		}
 	}
-	return parsed.Scheme + "://" + authority
+	return scheme + "://" + canonicalAuthority
 }
 
 func isCorsASCIIHostCharacter(char rune) bool {
@@ -211,7 +267,23 @@ func corsMethodAllowed(values []string, target string) bool {
 	return false
 }
 
+func canonicalCorsSafelistedHeader(name string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "accept":
+		return "Accept", true
+	case "accept-language":
+		return "Accept-Language", true
+	case "content-language":
+		return "Content-Language", true
+	default:
+		return "", false
+	}
+}
+
 func corsHeaderAllowed(values []string, target string) bool {
+	if _, ok := canonicalCorsSafelistedHeader(target); ok {
+		return true
+	}
 	for _, value := range values {
 		if strings.EqualFold(value, target) {
 			return true
@@ -230,11 +302,56 @@ func corsRequestedHeadersAllowed(allowed []string, requested string) bool {
 	}
 	for _, header := range strings.Split(requested, ",") {
 		header = strings.TrimSpace(header)
+		if header == "" {
+			continue
+		}
 		if !isCorsToken(header) || !corsHeaderAllowed(allowed, header) {
 			return false
 		}
 	}
 	return true
+}
+
+func corsRequestedHeaderValue(req *context.Request) string {
+	if req == nil {
+		return ""
+	}
+	if raw := req.Raw(); raw != nil {
+		if values := raw.Header.Values("Access-Control-Request-Headers"); len(values) > 1 {
+			return strings.Join(values, ",")
+		}
+	}
+	return req.Header("Access-Control-Request-Headers")
+}
+
+func effectiveCorsAllowHeaders(allowed []string, baseHeaders, requested string) string {
+	if corsContainsWildcard(allowed) || strings.TrimSpace(requested) == "" {
+		return baseHeaders
+	}
+	var extras []string
+	seen := make(map[string]struct{}, len(allowed)+3)
+	for _, item := range allowed {
+		seen[strings.ToLower(item)] = struct{}{}
+	}
+	for _, header := range strings.Split(requested, ",") {
+		canonicalSafe, ok := canonicalCorsSafelistedHeader(header)
+		if !ok {
+			continue
+		}
+		lower := strings.ToLower(canonicalSafe)
+		if _, exists := seen[lower]; exists {
+			continue
+		}
+		seen[lower] = struct{}{}
+		extras = append(extras, canonicalSafe)
+	}
+	if len(extras) == 0 {
+		return baseHeaders
+	}
+	if baseHeaders == "" {
+		return strings.Join(extras, ", ")
+	}
+	return baseHeaders + ", " + strings.Join(extras, ", ")
 }
 
 // NewCors 在应用启动阶段校验并冻结 CORS 策略。
@@ -277,7 +394,7 @@ func newCorsHandler(config CorsConfig) Handler {
 		origin := strings.TrimSpace(req.Header("Origin"))
 		requestedMethod := strings.TrimSpace(req.Header("Access-Control-Request-Method"))
 		if req.Method() == http.MethodOptions && origin != "" && requestedMethod != "" {
-			return corsPreflightResponse(config, isWildcard, origin, requestedMethod, req.Header("Access-Control-Request-Headers"), allowMethods, allowHeaders, maxAge)
+			return corsPreflightResponse(config, isWildcard, origin, requestedMethod, corsRequestedHeaderValue(req), allowMethods, allowHeaders, maxAge)
 		}
 
 		// 具体来源策略的所有响应都必须按 Origin 分区，包括没有 Origin 或未命中的请求。
@@ -321,6 +438,13 @@ func corsAllowedOrigin(allowed []string, wildcard bool, origin string) string {
 			return origin
 		}
 	}
+	if canonical, err := validateAllowedOrigin(origin); err == nil {
+		for _, candidate := range allowed {
+			if candidate == canonical {
+				return origin
+			}
+		}
+	}
 	return ""
 }
 
@@ -339,8 +463,8 @@ func corsPreflightResponse(config CorsConfig, wildcard bool, origin, requestedMe
 	response.Code(http.StatusNoContent)
 	response.Header("Access-Control-Allow-Origin", allowOrigin)
 	response.Header("Access-Control-Allow-Methods", methods)
-	if headers != "" {
-		response.Header("Access-Control-Allow-Headers", headers)
+	if effectiveHeaders := effectiveCorsAllowHeaders(config.AllowHeaders, headers, requestedHeaders); effectiveHeaders != "" {
+		response.Header("Access-Control-Allow-Headers", effectiveHeaders)
 	}
 	if maxAge != "" {
 		response.Header("Access-Control-Max-Age", maxAge)

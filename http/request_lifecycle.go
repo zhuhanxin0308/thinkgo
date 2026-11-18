@@ -128,18 +128,64 @@ func (h *Http) run(request *fwcontext.Request, publicOnly, defaultRequest bool) 
 			h.logHTTPError("切换请求应用上下文失败", err)
 			return fwcontext.NewResponse().Code(http.StatusBadRequest).Content(http.StatusText(http.StatusBadRequest))
 		}
+		var routeResponse *fwcontext.Response
 		if h.appMiddleware == nil {
-			return h.routeRequest(current)
+			routeResponse = h.routeRequest(current)
+		} else {
+			routeResponse = h.appMiddleware.Then(current, h.routeRequest)
 		}
-		return h.appMiddleware.Then(current, h.routeRequest)
+		if parseErr := current.ParseError(); parseErr != nil {
+			if writer, exists := current.ResponseWriter(); exists {
+				if responseWriterStarted(writer) {
+					if routeResponse != nil && routeResponse.Committed() {
+						return routeResponse
+					}
+					return fwcontext.NewCommittedResponse(responseWriterStatus(writer))
+				}
+			} else if routeResponse != nil && routeResponse.Committed() {
+				return routeResponse
+			}
+			return responseForRequestParseError(parseErr)
+		}
+		return routeResponse
 	})
 	if response == nil {
 		return internalServerErrorResponse()
 	}
-	if parseErr := request.ParseError(); parseErr != nil {
-		return responseForRequestParseError(parseErr)
-	}
 	return response
+}
+
+func responseWriterStarted(writer http.ResponseWriter) bool {
+	for current := writer; current != nil; {
+		switch typed := current.(type) {
+		case *CompressionResponseWriter:
+			if typed.hasStarted() {
+				return true
+			}
+		case *statusTrackingResponseWriter:
+			if typed.Written() {
+				return true
+			}
+		}
+		if bridge, ok := current.(interface{ FrameworkResponseWriter() http.ResponseWriter }); ok {
+			next := bridge.FrameworkResponseWriter()
+			if next == current {
+				break
+			}
+			current = next
+			continue
+		}
+		unwrapper, ok := current.(interface{ Unwrap() http.ResponseWriter })
+		if !ok {
+			break
+		}
+		next := unwrapper.Unwrap()
+		if next == current {
+			break
+		}
+		current = next
+	}
+	return false
 }
 
 // End 执行响应发送后的生命周期，对应 ThinkPHP Http::end。

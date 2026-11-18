@@ -37,7 +37,11 @@ func assignedFloatValue(plan *node, value reflect.Value) (json.Number, bool) {
 	if value.Kind() != reflect.Float32 && value.Kind() != reflect.Float64 {
 		return "", false
 	}
-	rational := new(big.Rat).SetFloat64(value.Float())
+	number := value.Float()
+	if math.IsNaN(number) || math.IsInf(number, 0) {
+		return "", false
+	}
+	rational := new(big.Rat).SetFloat64(number)
 	if rational == nil {
 		return "", false
 	}
@@ -84,8 +88,8 @@ func assignScalar(target reflect.Value, raw any) bool {
 		}
 		target.SetUint(value)
 	case reflect.Float32, reflect.Float64:
-		value, err := strconv.ParseFloat(text, target.Type().Bits())
-		if err != nil || math.IsInf(value, 0) || math.IsNaN(value) {
+		value, err := ParseFiniteFloat(text, target.Type().Bits())
+		if err != nil {
 			return false
 		}
 		target.SetFloat(value)
@@ -93,6 +97,31 @@ func assignScalar(target reflect.Value, raw any) bool {
 		return false
 	}
 	return true
+}
+
+// ParseFiniteFloat 按指定位宽（32 或 64）解析有限浮点数，显式拒绝 NaN 与 ±Inf。
+func ParseFiniteFloat(text string, bitSize int) (float64, error) {
+	if bitSize != 32 && bitSize != 64 {
+		return 0, strconv.ErrSyntax
+	}
+	if text == "" || strings.TrimSpace(text) != text {
+		return 0, strconv.ErrSyntax
+	}
+	value, err := strconv.ParseFloat(text, bitSize)
+	if err != nil {
+		return 0, err
+	}
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return 0, strconv.ErrRange
+	}
+	if bitSize == 32 {
+		narrow := float64(float32(value))
+		if math.IsNaN(narrow) || math.IsInf(narrow, 0) {
+			return 0, strconv.ErrRange
+		}
+		return narrow, nil
+	}
+	return value, nil
 }
 
 // scalarNumber 保留 JSON 数字原文；程序构造的数值按其真实位宽转成十进制，禁止隐式字符串转数值。

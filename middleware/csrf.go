@@ -291,15 +291,28 @@ func validateCSRFOrigin(request *http.Request, schemeOverride ...string) error {
 	if request == nil || request.URL == nil {
 		return ErrCSRFOriginMismatch
 	}
-	origin := strings.TrimSpace(request.Header.Get("Origin"))
-	fromReferer := false
-	if origin == "null" {
+	originValues := request.Header.Values("Origin")
+	if len(originValues) > 1 {
 		return ErrCSRFOriginMismatch
 	}
-	if origin == "" {
-		referer := strings.TrimSpace(request.Header.Get("Referer"))
-		if referer == "" {
+	origin := ""
+	fromReferer := false
+	if len(originValues) == 1 {
+		origin = strings.TrimSpace(originValues[0])
+		if origin == "" || origin == "null" || strings.ContainsAny(origin, " \t\r\n,") {
+			return ErrCSRFOriginMismatch
+		}
+	} else {
+		refererValues := request.Header.Values("Referer")
+		if len(refererValues) == 0 {
 			return nil
+		}
+		if len(refererValues) > 1 {
+			return ErrCSRFOriginMismatch
+		}
+		referer := strings.TrimSpace(refererValues[0])
+		if referer == "" || strings.ContainsAny(referer, " \t\r\n") {
+			return ErrCSRFOriginMismatch
 		}
 		origin = referer
 		fromReferer = true

@@ -18,9 +18,10 @@ func (r *Response) RedirectLocal(target string, code ...int) *Response {
 		return nil
 	}
 	if !validLocalRedirect(target) || len(code) > 1 || (len(code) == 1 && !isRedirectResponseStatus(code[0])) {
+		r.clearRedirectEntity()
 		r.addError(fmt.Errorf("%w: 必须使用无歧义的站内路径", ErrInvalidRedirect))
 		r.status = http.StatusInternalServerError
-		if r.header != nil {
+		if r.header != nil && r.header.values != nil {
 			r.header.values.Del("Location")
 		}
 		return r
