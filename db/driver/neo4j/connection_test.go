@@ -640,6 +640,24 @@ func TestNeo4jNullPredicatesCompileToCypherIsNullAndRejectInvalidOperators(t *te
 		{"Where IS NOT nil", base.Where("deleted_at", "IS NOT", nil), "n.`deleted_at` IS NOT NULL"},
 	}
 
+	for _, tc := range []struct {
+		name  string
+		query interface{ Predicate() (Predicate, error) }
+		want  string
+	}{
+		{"WhereIn single nil", base.WhereIn("id", []interface{}{nil}), "n.`id` IN $w0"},
+		{"WhereNotIn single nil", base.WhereNotIn("id", []interface{}{nil}), "NOT (n.`id` IN $w0)"},
+	} {
+		predicate, err := tc.query.Predicate()
+		if err != nil {
+			t.Fatalf("%s 构造谓词失败: %v", tc.name, err)
+		}
+		clause, params, err := connection.compilePredicate(predicate)
+		if err != nil || clause != tc.want || !reflect.DeepEqual(params["w0"], []interface{}{nil}) {
+			t.Fatalf("%s 编译失败: clause=%q params=%#v err=%v", tc.name, clause, params, err)
+		}
+	}
+
 	for _, tc := range valid {
 		t.Run(tc.name, func(t *testing.T) {
 			predicate, err := tc.query.Predicate()

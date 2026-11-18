@@ -64,7 +64,7 @@ func compileCypherNode(node PredicateNode, index *int, params map[string]interfa
 		if node.Operator == "IS NULL" || node.Operator == "IS NOT NULL" {
 			return field + " " + node.Operator, nil
 		}
-		if len(node.Values) == 1 && isNilCypherScalar(node.Values[0]) {
+		if node.Operator != "IN" && node.Operator != "NOT IN" && len(node.Values) == 1 && isNilCypherScalar(node.Values[0]) {
 			switch node.Operator {
 			case "=", "IS":
 				return field + " IS NULL", nil

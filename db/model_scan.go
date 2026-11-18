@@ -30,7 +30,8 @@ func (mq *ModelQuery) Find(target any) (bool, error) {
 	}
 	candidate := reflect.New(destination.Type()).Elem()
 	candidate.Set(destination)
-	if err := mapModelScanRow(ctx, candidate, row, metadata); err != nil {
+	oracleDialect := mq.isOracleDialect()
+	if err := mapModelScanRow(ctx, candidate, row, metadata, oracleDialect); err != nil {
 		return false, err
 	}
 	if err := mq.bindScannedRecord(candidate, destination, normalizeOracleModelRecordRow(mq, metadata, raw)); err != nil {
@@ -75,6 +76,7 @@ func (mq *ModelQuery) scanModelRows(ctx context.Context, sliceType reflect.Type,
 	if err := ctx.Err(); err != nil {
 		return reflect.Value{}, err
 	}
+	oracleDialect := mq.isOracleDialect()
 	staged := reflect.MakeSlice(sliceType, len(rows), len(rows))
 	for index, row := range rows {
 		if err := ctx.Err(); err != nil {
@@ -86,7 +88,7 @@ func (mq *ModelQuery) scanModelRows(ctx context.Context, sliceType reflect.Type,
 			record = record.Elem()
 		}
 		candidate := reflect.New(record.Type()).Elem()
-		if err := mapModelScanRow(ctx, candidate, row, metadata); err != nil {
+		if err := mapModelScanRow(ctx, candidate, row, metadata, oracleDialect); err != nil {
 			return reflect.Value{}, fmt.Errorf("第 %d 条模型结果映射失败: %w", index+1, err)
 		}
 		if err := mq.bindScannedRecord(candidate, record, normalizeOracleModelRecordRow(mq, metadata, rawRows[index])); err != nil {
@@ -154,12 +156,16 @@ func modelScanDestination(target any, multiple bool) (reflect.Value, modelMetada
 }
 
 // mapModelScanRow 按稳定的字段顺序映射，未选择的字段保留原值，未知结果列允许忽略。
-func mapModelScanRow(ctx context.Context, candidate reflect.Value, row map[string]any, metadata modelMetadata) error {
-	return mapModelScanFields(ctx, candidate, row, metadata, false, make(map[uintptr]bool))
+func mapModelScanRow(ctx context.Context, candidate reflect.Value, row map[string]any, metadata modelMetadata, oracleDialect bool) error {
+	return mapModelScanFieldsWithDialect(ctx, candidate, row, metadata, false, oracleDialect, make(map[uintptr]bool))
 }
 
 // mapModelScanFields 在只读投影内部递归转换，普通数据库字段保持严格的标量语义。
 func mapModelScanFields(ctx context.Context, candidate reflect.Value, row map[string]any, metadata modelMetadata, projection bool, visiting map[uintptr]bool) error {
+	return mapModelScanFieldsWithDialect(ctx, candidate, row, metadata, projection, false, visiting)
+}
+
+func mapModelScanFieldsWithDialect(ctx context.Context, candidate reflect.Value, row map[string]any, metadata modelMetadata, projection bool, oracleDialect bool, visiting map[uintptr]bool) error {
 	if projection {
 		identity := reflect.ValueOf(row).Pointer()
 		if visiting[identity] {
@@ -173,7 +179,7 @@ func mapModelScanFields(ctx context.Context, candidate reflect.Value, row map[st
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		source, exists := lookupModelScanColumn(row, field.column, projection)
+		source, exists := lookupModelScanColumn(row, field.column, projection, oracleDialect)
 		if !exists {
 			continue
 		}

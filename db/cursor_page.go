@@ -121,13 +121,14 @@ func (q *Query) SeekPageWithCodec(pageSize int, pkField string, codec CursorCode
 }
 
 type cursorResultField struct {
-	name       string
-	projection string
+	name          string
+	projection    string
+	oracleDialect bool
 }
 
 func (field cursorResultField) read(row map[string]interface{}) (interface{}, bool) {
 	if field.projection != "" {
-		return databaseResultField(row, field.projection)
+		return databaseResultField(row, field.projection, field.oracleDialect)
 	}
 	value, exists := row[field.name]
 	return value, exists
@@ -135,7 +136,7 @@ func (field cursorResultField) read(row map[string]interface{}) (interface{}, bo
 
 // resolveCursorResultField 确认 SQL 投影确实包含游标列，追踪显式列别名并阻止其它列冒充游标。
 func (q *Query) resolveCursorResultField(name string, sqlProjection bool) (cursorResultField, error) {
-	field := cursorResultField{name: name}
+	field := cursorResultField{name: name, oracleDialect: q.isOracleDialect()}
 	if !sqlProjection {
 		return field, nil
 	}

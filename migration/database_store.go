@@ -26,13 +26,15 @@ const (
 
 // DatabaseStore 使用固定 SQL 会话、方言锁和 durable journal 持久化迁移状态。
 type DatabaseStore struct {
-	database     *db.DB
-	dialect      string
-	executor     Executor
-	session      db.PinnedSQLConnection
-	fencingToken int64
-	sqliteLocked bool
-	schemaMu     sync.Mutex
+	database      *db.DB
+	dialect       string
+	executor      Executor
+	session       db.PinnedSQLConnection
+	fencingToken  int64
+	sqliteLocked  bool
+	schemaMu      sync.Mutex
+	appliedTimeMu sync.Mutex
+	lastAppliedAt time.Time
 }
 
 // NewDatabaseStore 为受支持的 SQL 方言创建迁移存储。
@@ -104,15 +106,16 @@ func (store *DatabaseStore) Inspect(ctx context.Context) ([]History, bool, error
 	return history, true, err
 }
 
-// Applied 返回按批次和名称升序排列的完整迁移历史。
+// Applied 返回按批次和实际应用顺序升序排列的完整迁移历史。
 func (store *DatabaseStore) Applied(ctx context.Context) ([]History, error) {
 	if store == nil || store.database == nil || ctx == nil {
 		return nil, fmt.Errorf("%w: 迁移存储或上下文为空", ErrInvalidMigration)
 	}
-	rows, err := store.activeExecutor().QueryContext(
-		ctx,
-		"SELECT name, checksum, batch, applied_at FROM "+migrationHistoryTable+" ORDER BY batch ASC, name ASC",
-	)
+	query := "SELECT name, checksum, batch, applied_at FROM " + migrationHistoryTable + " ORDER BY batch ASC, applied_at ASC, name ASC"
+	if store.dialect == "sqlite" {
+		query = "SELECT name, checksum, batch, applied_at FROM " + migrationHistoryTable + " ORDER BY batch ASC, applied_at ASC, rowid ASC"
+	}
+	rows, err := store.activeExecutor().QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
 	}
@@ -127,11 +130,19 @@ func (store *DatabaseStore) Applied(ctx context.Context) ([]History, error) {
 		}
 		history = append(history, History{Name: name, Checksum: checksum, Batch: batch, AppliedAt: appliedAt})
 	}
-	sort.Slice(history, func(left, right int) bool {
-		if history[left].Batch == history[right].Batch {
-			return compareMigrationNames(history[left].Name, history[right].Name) < 0
+	sort.SliceStable(history, func(left, right int) bool {
+		if history[left].Batch != history[right].Batch {
+			return history[left].Batch < history[right].Batch
 		}
-		return history[left].Batch < history[right].Batch
+		if leftTime, leftOK := parseHistoryAppliedAt(history[left].AppliedAt); leftOK {
+			if rightTime, rightOK := parseHistoryAppliedAt(history[right].AppliedAt); rightOK && !leftTime.Equal(rightTime) {
+				return leftTime.Before(rightTime)
+			}
+		}
+		if store.dialect == "sqlite" {
+			return false
+		}
+		return compareMigrationNames(history[left].Name, history[right].Name) < 0
 	})
 	return history, nil
 }

@@ -481,4 +481,26 @@ func TestOracleUppercaseResultColumnsWorkAcrossQueryAndORM(t *testing.T) {
 	if activeRecord.record.identity != int64(1) || !activeRecord.record.loaded["id"] || !activeRecord.record.loaded["name"] {
 		t.Fatalf("Oracle 活动记录未归一化主键与已加载列集: identity=%v loaded=%v", activeRecord.record.identity, activeRecord.record.loaded)
 	}
+
+	// 验证非 Oracle 方言（如 PostgreSQL）不会把大写别名 ID 误当作小写主键 id，且名为 distinct 的列名仍正常加引号
+	pgDB := newCursorProjectionTestDB(t, &builder.Pgsql{}, func(query string, _ []driver.NamedValue) ([]string, [][]driver.Value, error) {
+		return []string{"ID", "name"}, [][]driver.Value{{int64(999), "Ada"}}, nil
+	})
+	pgModel := NewModel(pgDB, "users")
+	var pgRec oracleUserRecord
+	found, err = pgModel.Field("external_id AS ID, name").Find(&pgRec)
+	if err != nil || !found || pgRec.ID != 0 {
+		t.Fatalf("PostgreSQL 大写别名 ID 不应映射到小写主键字段 id: found=%t rec=%+v err=%v", found, pgRec, err)
+	}
+	if err := pgRec.Save(); !errors.Is(err, ErrModelIdentityMissing) {
+		t.Fatalf("PostgreSQL 未加载真实主键 id 时 Save 必须返回 ErrModelIdentityMissing，实际为 %v", err)
+	}
+
+	distinctSQL, distinctArgs, err := pgDB.Name("metrics").Group("distinct").HavingField("distinct", ">", 1).HavingField("COUNT(DISTINCT distinct)", ">=", 2).BuildSelectSQL()
+	if err != nil || len(distinctArgs) != 2 {
+		t.Fatalf("构造 distinct 列名 HAVING SQL 失败: sql=%q args=%v err=%v", distinctSQL, distinctArgs, err)
+	}
+	if !strings.Contains(distinctSQL, `HAVING "distinct" > ? AND COUNT(DISTINCT "distinct") >= ?`) {
+		t.Fatalf("名为 distinct 的列未正确加引号或 DISTINCT 修饰符被误引: %s", distinctSQL)
+	}
 }

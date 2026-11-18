@@ -182,12 +182,28 @@ func (runner *Runner) rollbackLocked(ctx context.Context, store Store, batches i
 	if err != nil {
 		return Result{}, err
 	}
-	sort.Slice(history, func(left, right int) bool {
-		if history[left].Batch == history[right].Batch {
-			return compareMigrationNames(history[left].Name, history[right].Name) > 0
+	type indexedHistory struct {
+		entry History
+		order int
+	}
+	ordered := make([]indexedHistory, len(history))
+	for index, entry := range history {
+		ordered[index] = indexedHistory{entry: entry, order: index}
+	}
+	sort.SliceStable(ordered, func(left, right int) bool {
+		if ordered[left].entry.Batch != ordered[right].entry.Batch {
+			return ordered[left].entry.Batch > ordered[right].entry.Batch
 		}
-		return history[left].Batch > history[right].Batch
+		if leftTime, leftOK := parseHistoryAppliedAt(ordered[left].entry.AppliedAt); leftOK {
+			if rightTime, rightOK := parseHistoryAppliedAt(ordered[right].entry.AppliedAt); rightOK && !leftTime.Equal(rightTime) {
+				return leftTime.After(rightTime)
+			}
+		}
+		return ordered[left].order > ordered[right].order
 	})
+	for index := range ordered {
+		history[index] = ordered[index].entry
+	}
 	result := Result{}
 	for index, applied := range history {
 		if index == 0 || applied.Batch != history[index-1].Batch {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 )
 
 var (
@@ -149,4 +150,23 @@ func compareMigrationNames(left, right string) int {
 		return cmp
 	}
 	return strings.Compare(leftSuffix, rightSuffix)
+}
+
+func parseHistoryAppliedAt(raw string) (time.Time, bool) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return time.Time{}, false
+	}
+	for _, layout := range []string{
+		time.RFC3339Nano,
+		"2006-01-02 15:04:05.999999999 -0700 MST",
+		"2006-01-02 15:04:05.999999999-07:00",
+		"2006-01-02 15:04:05.999999999",
+		"2006-01-02T15:04:05.999999999",
+	} {
+		if parsed, err := time.Parse(layout, trimmed); err == nil {
+			return parsed.UTC(), true
+		}
+	}
+	return time.Time{}, false
 }

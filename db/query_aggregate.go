@@ -143,7 +143,7 @@ func (q *Query) Value(field string) (interface{}, error) {
 	if len(rows) == 0 {
 		return nil, nil
 	}
-	value, exists := databaseResultField(rows[0], field)
+	value, exists := databaseResultField(rows[0], field, q.isOracleDialect())
 	if !exists {
 		return nil, q.reportError("value", fmt.Errorf("%w: 结果缺少字段 %q", ErrInvalidDatabaseRow, field), nil)
 	}
@@ -191,12 +191,13 @@ func (q *Query) Column(field string, key ...string) (interface{}, error) {
 		return nil, err
 	}
 
+	oracleDialect := q.isOracleDialect()
 	// 带 key 时返回 map[string]interface{}
 	if len(key) > 0 && key[0] != "" {
 		result := make(map[string]interface{}, len(rows))
 		for index, row := range rows {
-			keyValue, keyExists := databaseResultField(row, key[0])
-			fieldValue, fieldExists := databaseResultField(row, field)
+			keyValue, keyExists := databaseResultField(row, key[0], oracleDialect)
+			fieldValue, fieldExists := databaseResultField(row, field, oracleDialect)
 			if !keyExists || keyValue == nil || !fieldExists {
 				return nil, q.reportError("column", fmt.Errorf("%w: 第 %d 行缺少 key 或目标字段", ErrInvalidDatabaseRow, index), nil)
 			}
@@ -212,7 +213,7 @@ func (q *Query) Column(field string, key ...string) (interface{}, error) {
 	// 无 key 时返回 []interface{}
 	result := make([]interface{}, 0, len(rows))
 	for index, row := range rows {
-		value, exists := databaseResultField(row, field)
+		value, exists := databaseResultField(row, field, oracleDialect)
 		if !exists {
 			return nil, q.reportError("column", fmt.Errorf("%w: 第 %d 行缺少字段 %q", ErrInvalidDatabaseRow, index, field), nil)
 		}
@@ -272,6 +273,7 @@ func (q *Query) canStreamSQLRows() bool {
 
 // columnFromStream 逐行提取 Column 结果，只保留调用方要求的值而不保存完整行集合。
 func (q *Query) columnFromStream(field string, key ...string) (interface{}, error) {
+	oracleDialect := q.isOracleDialect()
 	if len(key) > 0 && key[0] != "" {
 		result := make(map[string]interface{})
 		var callbackErr error
@@ -281,8 +283,8 @@ func (q *Query) columnFromStream(field string, key ...string) (interface{}, erro
 				callbackErr = fmt.Errorf("%w: 结果行数超过 %d", ErrQueryResultTooMany, maxQueryResultRows)
 				return false
 			}
-			keyValue, keyExists := databaseResultField(row, key[0])
-			fieldValue, fieldExists := databaseResultField(row, field)
+			keyValue, keyExists := databaseResultField(row, key[0], oracleDialect)
+			fieldValue, fieldExists := databaseResultField(row, field, oracleDialect)
 			if !keyExists || keyValue == nil || !fieldExists {
 				callbackErr = fmt.Errorf("%w: 第 %d 行缺少 key 或目标字段", ErrInvalidDatabaseRow, index)
 				return false
@@ -313,7 +315,7 @@ func (q *Query) columnFromStream(field string, key ...string) (interface{}, erro
 			callbackErr = fmt.Errorf("%w: 结果行数超过 %d", ErrQueryResultTooMany, maxQueryResultRows)
 			return false
 		}
-		value, exists := databaseResultField(row, field)
+		value, exists := databaseResultField(row, field, oracleDialect)
 		if !exists {
 			callbackErr = fmt.Errorf("%w: 第 %d 行缺少字段 %q", ErrInvalidDatabaseRow, index, field)
 			return false
@@ -332,8 +334,8 @@ func (q *Query) columnFromStream(field string, key ...string) (interface{}, erro
 }
 
 // databaseResultField 优先读取完整字段名，兼容 SQL 驱动把限定字段 table.column
-// 返回为末段 column，并在精确键缺失时回退匹配 Oracle 等方言的大写列键。
-func databaseResultField(row map[string]interface{}, field string) (interface{}, bool) {
+// 返回为末段 column，并仅在 Oracle 方言精确键缺失时回退匹配大写列键。
+func databaseResultField(row map[string]interface{}, field string, oracleDialect bool) (interface{}, bool) {
 	if value, exists := row[field]; exists {
 		return value, true
 	}
@@ -344,6 +346,9 @@ func databaseResultField(row map[string]interface{}, field string) (interface{},
 		if value, exists := row[leaf]; exists {
 			return value, true
 		}
+	}
+	if !oracleDialect {
+		return nil, false
 	}
 	if upper := strings.ToUpper(field); upper != field {
 		if value, exists := row[upper]; exists {

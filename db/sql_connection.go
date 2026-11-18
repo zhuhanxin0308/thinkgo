@@ -130,7 +130,8 @@ func (c *SQLConnection) selectColumn(ctx context.Context, request SelectRequest,
 		return nil, err
 	}
 	naiveTimeAsWallClock := c.Builder != nil && strings.EqualFold(strings.TrimSpace(c.Builder.DialectName()), "postgres")
-	return scanSQLColumnRows(rows, c.Location(), naiveTimeAsWallClock, field, key)
+	oracleDialect := c.Builder != nil && strings.EqualFold(strings.TrimSpace(c.Builder.DialectName()), "oracle")
+	return scanSQLColumnRows(rows, c.Location(), naiveTimeAsWallClock, oracleDialect, field, key)
 }
 
 // selectRowsContext 统一构造结构化 SELECT 的结果集，供物化和流式扫描共享校验与语句缓存路径。
@@ -587,7 +588,7 @@ func walkSQLRows(rows *sql.Rows, location *time.Location, naiveTimeAsWallClock b
 }
 
 // scanSQLColumnRows 只扫描 Column 所需的列，避免大结果集为每行创建完整 map。
-func scanSQLColumnRows(rows *sql.Rows, location *time.Location, naiveTimeAsWallClock bool, field, key string) (result interface{}, resultErr error) {
+func scanSQLColumnRows(rows *sql.Rows, location *time.Location, naiveTimeAsWallClock, oracleDialect bool, field, key string) (result interface{}, resultErr error) {
 	if rows == nil {
 		return nil, fmt.Errorf("%w: 结果集不能为 nil", ErrInvalidDatabaseRow)
 	}
@@ -609,14 +610,14 @@ func scanSQLColumnRows(rows *sql.Rows, location *time.Location, naiveTimeAsWallC
 		}
 		seenColumns[column] = struct{}{}
 	}
-	fieldIndex, fieldFound := findSQLResultColumnIndex(columns, field)
+	fieldIndex, fieldFound := findSQLResultColumnIndex(columns, field, oracleDialect)
 	if !fieldFound {
 		return nil, fmt.Errorf("%w: 结果缺少字段 %q", ErrInvalidDatabaseRow, field)
 	}
 	keyIndex := -1
 	if key != "" {
 		var keyFound bool
-		keyIndex, keyFound = findSQLResultColumnIndex(columns, key)
+		keyIndex, keyFound = findSQLResultColumnIndex(columns, key, oracleDialect)
 		if !keyFound {
 			return nil, fmt.Errorf("%w: 结果缺少 key 字段 %q", ErrInvalidDatabaseRow, key)
 		}
@@ -687,8 +688,8 @@ func cloneScannedColumnValue(value interface{}, columnTypes []*sql.ColumnType, i
 }
 
 // findSQLResultColumnIndex 兼容限定字段在驱动结果中返回完整名或末段列名的差异，
-// 并在精确匹配缺失时回退匹配 Oracle 等方言返回的大写列名。
-func findSQLResultColumnIndex(columns []string, field string) (int, bool) {
+// 并仅在 Oracle 方言精确匹配缺失时回退匹配大写列名。
+func findSQLResultColumnIndex(columns []string, field string, oracleDialect bool) (int, bool) {
 	for index, column := range columns {
 		if column == field {
 			return index, true
@@ -703,6 +704,9 @@ func findSQLResultColumnIndex(columns []string, field string) (int, bool) {
 				return index, true
 			}
 		}
+	}
+	if !oracleDialect {
+		return -1, false
 	}
 	if upperField := strings.ToUpper(field); upperField != field {
 		for index, column := range columns {

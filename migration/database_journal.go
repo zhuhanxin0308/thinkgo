@@ -263,11 +263,22 @@ func (store *DatabaseStore) runSQLiteSavepoint(ctx context.Context, callback fun
 	return err
 }
 
+func (store *DatabaseStore) nextAppliedTimestamp() time.Time {
+	now := time.Now().UTC()
+	store.appliedTimeMu.Lock()
+	if !now.After(store.lastAppliedAt) {
+		now = store.lastAppliedAt.Add(time.Microsecond)
+	}
+	store.lastAppliedAt = now
+	store.appliedTimeMu.Unlock()
+	return now
+}
+
 func (store *DatabaseStore) insertHistory(ctx context.Context, executor Executor, name, checksum string, batch int64) error {
 	_, err := executor.ExecuteContext(
 		ctx,
 		"INSERT INTO "+migrationHistoryTable+" (name, checksum, batch, applied_at) VALUES (?, ?, ?, ?)",
-		name, checksum, batch, time.Now().UTC(),
+		name, checksum, batch, store.nextAppliedTimestamp(),
 	)
 	return err
 }

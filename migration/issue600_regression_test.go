@@ -35,7 +35,7 @@ type inMemoryHistoryRow struct {
 	name      string
 	checksum  string
 	batch     int64
-	appliedAt string
+	appliedAt any
 }
 
 // statefulMigrationSQLSession 模拟完整的 fence/journal/history 表状态机，
@@ -255,11 +255,15 @@ func (s *statefulMigrationSQLSession) ExecuteContext(_ context.Context, statemen
 		return 1, nil
 	case strings.HasPrefix(statement, "INSERT INTO "+migrationHistoryTable):
 		name := fmt.Sprint(args[0])
+		var appliedAt any = "2026-01-01T00:00:02Z"
+		if len(args) > 3 && args[3] != nil {
+			appliedAt = args[3]
+		}
 		s.history[name] = inMemoryHistoryRow{
 			name:      name,
 			checksum:  fmt.Sprint(args[1]),
 			batch:     args[2].(int64),
-			appliedAt: "2026-01-01T00:00:02Z",
+			appliedAt: appliedAt,
 		}
 		return 1, nil
 	case strings.HasPrefix(statement, "DELETE FROM "+migrationHistoryTable):
@@ -472,6 +476,45 @@ func TestVariableLengthMigrationPrefixesOrderChronologically(t *testing.T) {
 	}
 	if err != nil || !reflect.DeepEqual(rolledBack.Names, wantRollback) {
 		t.Fatalf("Rollback 变长前缀逆序错误:\ngot:  %v\nwant: %v\nerr:  %v", rolledBack.Names, wantRollback, err)
+	}
+
+	// 验证升级前已按旧 ASCII 顺序落盘的历史批次在回滚时严格遵循持久化 AppliedAt 逆序，不会先删表再撤销加列
+	legacyCreate, err := NewSQL("20260101120030_create_users", []string{"SELECT 1"}, []string{"SELECT 1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyAlter, err := NewSQL("202601011200_add_email", []string{"SELECT 1"}, []string{"SELECT 1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyReg := NewRegistry()
+	_ = legacyReg.Register(legacyCreate)
+	_ = legacyReg.Register(legacyAlter)
+	legacySession := newStatefulMigrationSQLSession("postgres")
+	legacySession.tables[migrationHistoryTable] = true
+	legacySession.tables[migrationJournalTable] = true
+	legacySession.tables[migrationFenceTable] = true
+	legacySession.fencingToken = 1
+	legacySession.history[legacyCreate.Name()] = inMemoryHistoryRow{
+		name: legacyCreate.Name(), checksum: legacyCreate.Checksum(), batch: 1, appliedAt: "2026-01-01T12:00:01Z",
+	}
+	legacySession.history[legacyAlter.Name()] = inMemoryHistoryRow{
+		name: legacyAlter.Name(), checksum: legacyAlter.Checksum(), batch: 1, appliedAt: "2026-01-01T12:00:02Z",
+	}
+	legacySession.journal[legacyCreate.Name()] = inMemoryJournalRow{
+		name: legacyCreate.Name(), checksum: legacyCreate.Checksum(), batch: 1, operation: "apply", state: "applied", fencingToken: 1, startedAt: "2026-01-01T12:00:01Z", finishedAt: "2026-01-01T12:00:01Z",
+	}
+	legacySession.journal[legacyAlter.Name()] = inMemoryJournalRow{
+		name: legacyAlter.Name(), checksum: legacyAlter.Checksum(), batch: 1, operation: "apply", state: "applied", fencingToken: 1, startedAt: "2026-01-01T12:00:02Z", finishedAt: "2026-01-01T12:00:02Z",
+	}
+	legacyBase := &DatabaseStore{database: db.NewDB(nil), dialect: "postgres", executor: legacySession, session: legacySession}
+	legacyRunner, err := NewRunner(legacyReg, &sessionPinnedDatabaseStore{base: legacyBase, session: legacySession})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyRollback, err := legacyRunner.Rollback(context.Background(), 1)
+	if err != nil || !reflect.DeepEqual(legacyRollback.Names, []string{legacyAlter.Name(), legacyCreate.Name()}) {
+		t.Fatalf("历史批次 Rollback 未保留真实应用逆序: got=%v err=%v", legacyRollback.Names, err)
 	}
 }
 
