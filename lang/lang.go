@@ -342,9 +342,10 @@ func selectAcceptLanguage(snapshot *languageDetectionSnapshot, header string) (s
 	}
 	bestExact := ""
 	bestExactQuality := 0.0
-	bestExactSpecificity := 0
 	bestPrefix := ""
 	bestPrefixQuality := 0.0
+	bestWildcard := ""
+	bestWildcardQuality := 0.0
 
 	for index := 0; index < entryCount; index++ {
 		entry := entries[index]
@@ -355,16 +356,16 @@ func selectAcceptLanguage(snapshot *languageDetectionSnapshot, header string) (s
 			if wildcardRejected {
 				continue
 			}
-			if entry.quality > bestExactQuality || (entry.quality == bestExactQuality && bestExactSpecificity == 0) {
+			if entry.quality > bestWildcardQuality {
 				if selected := selectWildcardLanguage(snapshot, rejectionEntries); selected != "" {
-					bestExact, bestExactQuality, bestExactSpecificity = selected, entry.quality, 1
+					bestWildcard, bestWildcardQuality = selected, entry.quality
 				}
 			}
 			continue
 		}
 		if exact := matchExactLanguageSnapshot(snapshot, entry.tag, rejectionEntries); exact != "" {
-			if entry.quality > bestExactQuality || (entry.quality == bestExactQuality && bestExactSpecificity < 2) {
-				bestExact, bestExactQuality, bestExactSpecificity = exact, entry.quality, 2
+			if entry.quality > bestExactQuality {
+				bestExact, bestExactQuality = exact, entry.quality
 			}
 			continue
 		}
@@ -379,11 +380,17 @@ func selectAcceptLanguage(snapshot *languageDetectionSnapshot, header string) (s
 		}
 	}
 
-	if bestExact != "" {
-		return bestExact, ""
+	concrete := bestExact
+	concreteQuality := bestExactQuality
+	if concrete == "" {
+		concrete = bestPrefix
+		concreteQuality = bestPrefixQuality
 	}
-	if bestPrefix != "" {
-		return bestPrefix, ""
+	if concrete != "" && (bestWildcard == "" || concreteQuality >= bestWildcardQuality) {
+		return concrete, ""
+	}
+	if bestWildcard != "" {
+		return bestWildcard, ""
 	}
 	if !wildcardRejected && hasRejection && isLanguageRejected(snapshot, snapshot.defaultLang, rejectionEntries, true) {
 		return "", selectWildcardLanguage(snapshot, rejectionEntries)

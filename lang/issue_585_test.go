@@ -123,6 +123,12 @@ func TestIssue585GetHasHonorAliasesAndRFC9110AcceptLanguage(t *testing.T) {
 	if got := manager.DetectLanguage("", "", "", "zh-HK;q=0.9, zh-Hant;q=0.9"); got != "zh-tw" {
 		t.Fatalf("同品质下别名精确匹配应优先于前缀降级匹配: got=%q want=\"zh-tw\"", got)
 	}
+	if got := manager.DetectLanguage("", "", "", "zh;q=1, *;q=0.1"); got != "zh-cn" {
+		t.Fatalf("具体主语言前缀高权重应优先于低权重通配符: got=%q want=\"zh-cn\"", got)
+	}
+	if got := manager.DetectLanguage("", "", "", "zh;q=0.8, *;q=0.8"); got != "zh-cn" {
+		t.Fatalf("同权重下具体主语言前缀应优先于通配符: got=%q want=\"zh-cn\"", got)
+	}
 
 	// 3. Accept-Language: q=0 显式拉黑默认语言、别名或主语言前缀
 	zhDefault := NewLang()
