@@ -399,4 +399,55 @@ func TestRouteFacadeParameterizedGroupMissExtractsParamsAndMiddleware(t *testing
 	if !reflect.DeepEqual(trace, []string{"system_miss"}) {
 		t.Fatalf("字面量分组 Miss 优先级异常: %v", trace)
 	}
+
+	// 4. 分组 Miss 自身链式调用 .Pattern(...) 可覆盖分组默认变量约束，且完成分组的后续子组注册仍受祖先分组后置修饰覆盖
+	appSub := NewConsoleAppUninitialized(t.TempDir())
+	t.Cleanup(func() { _ = appSub.Close() })
+	subRoutes := appSub.Route()
+	var subTrace []string
+	parentAuth := middleware.Handler(func(req *Request, next func(*Request) *Response) *Response {
+		subTrace = append(subTrace, "parent_auth")
+		return next(req)
+	})
+	parent := subRoutes.Group("/orgs/:org", func(group *RuleGroup) {
+		group.Miss(func(*Request) *Response {
+			subTrace = append(subTrace, "org_miss")
+			return NewResponse().Content("org_miss")
+		}).Pattern(map[string]string{"org": `[a-z]{2,4}`})
+	}).Pattern(map[string]string{"org": `[a-z0-9]+`})
+
+	child := parent.Group("/v1", func() {})
+	child.Get("/secret", func(*Request) *Response {
+		subTrace = append(subTrace, "secret")
+		return NewResponse().Content("secret")
+	})
+	parent.NamedMiddleware("auth", parentAuth)
+
+	// Miss 显式 Pattern([a-z]{2,4}) 优先生效：acme 命中 org_miss，longname 不命中
+	subTrace = subTrace[:0]
+	reqOrgMiss := fwcontext.MustNewRequest(httptest.NewRequest(http.MethodGet, "http://example.com/orgs/acme/unknown", nil))
+	matchedOrgMiss, orgParams, err := subRoutes.Match(reqOrgMiss)
+	if err != nil || matchedOrgMiss == nil || orgParams["org"] != "acme" {
+		t.Fatalf("Miss 显式 Pattern 匹配失败: matched=%#v params=%#v err=%v", matchedOrgMiss, orgParams, err)
+	}
+	_ = matchedOrgMiss.ExecuteMiddleware(reqOrgMiss, matchedOrgMiss.Handler().(func(*Request) *Response))
+	if !reflect.DeepEqual(subTrace, []string{"parent_auth", "org_miss"}) {
+		t.Fatalf("Miss 应同时继承祖先分组后置中间件: %v", subTrace)
+	}
+	reqLongOrg := fwcontext.MustNewRequest(httptest.NewRequest(http.MethodGet, "http://example.com/orgs/longname/unknown", nil))
+	if matchedLong, _, err := subRoutes.Match(reqLongOrg); err != nil || matchedLong != nil {
+		t.Fatalf("超出 Miss 显式 Pattern 的请求不应命中 org_miss: matched=%#v err=%v", matchedLong, err)
+	}
+
+	// child 完成后追加的 /secret 路由同样被祖先分组后续 NamedMiddleware 回填覆盖
+	subTrace = subTrace[:0]
+	reqChildSecret := fwcontext.MustNewRequest(httptest.NewRequest(http.MethodGet, "http://example.com/orgs/team1/v1/secret", nil))
+	matchedSecret, secretParams, err := subRoutes.Match(reqChildSecret)
+	if err != nil || matchedSecret == nil || secretParams["org"] != "team1" {
+		t.Fatalf("后续子组路由匹配失败: matched=%#v params=%#v err=%v", matchedSecret, secretParams, err)
+	}
+	_ = matchedSecret.ExecuteMiddleware(reqChildSecret, matchedSecret.Handler().(func(*Request) *Response))
+	if !reflect.DeepEqual(subTrace, []string{"parent_auth", "secret"}) {
+		t.Fatalf("后续子组路由未继承祖先分组后置中间件: %v", subTrace)
+	}
 }

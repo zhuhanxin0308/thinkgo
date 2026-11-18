@@ -31,6 +31,7 @@ type RuleItem struct {
 // RuleGroup 对应 ThinkPHP 的 think\route\RuleGroup。
 type RuleGroup struct {
 	route     *Route
+	parent    *RuleGroup
 	group     *frameworkRoute.Group
 	rulesMu   *sync.Mutex
 	rules     *[]*frameworkRoute.Route
@@ -73,13 +74,32 @@ func mustRouteConfiguration(err error) {
 	}
 }
 
-func newScopedRuleGroup(facade *Route, group *frameworkRoute.Group) *RuleGroup {
+func newScopedRuleGroup(facade *Route, parent *RuleGroup, group *frameworkRoute.Group) *RuleGroup {
 	collected := make([]*frameworkRoute.Route, 0)
 	return &RuleGroup{
 		route:   facade,
+		parent:  parent,
 		group:   group,
 		rulesMu: &sync.Mutex{},
 		rules:   &collected,
+	}
+}
+
+func derivedRuleGroup(source *RuleGroup, group *frameworkRoute.Group) *RuleGroup {
+	var routeFacade *Route
+	var parent *RuleGroup
+	if source != nil {
+		routeFacade = source.route
+		if source.rules != nil {
+			parent = source
+		} else {
+			parent = source.parent
+		}
+	}
+	return &RuleGroup{
+		route:  routeFacade,
+		parent: parent,
+		group:  group,
 	}
 }
 
@@ -90,6 +110,16 @@ func (g *RuleGroup) appendCollectedRoutes(rules ...*frameworkRoute.Route) {
 	g.rulesMu.Lock()
 	*g.rules = append(*g.rules, rules...)
 	g.rulesMu.Unlock()
+}
+
+func (g *RuleGroup) collectIntoAncestors(visited map[*[]*frameworkRoute.Route]bool, rules ...*frameworkRoute.Route) {
+	for current := g; current != nil; current = current.parent {
+		if current.rules == nil || visited[current.rules] {
+			continue
+		}
+		visited[current.rules] = true
+		current.appendCollectedRoutes(rules...)
+	}
 }
 
 func (g *RuleGroup) snapshotRules() []*frameworkRoute.Route {
@@ -104,6 +134,7 @@ func (g *RuleGroup) snapshotRules() []*frameworkRoute.Route {
 func (g *RuleGroup) withUpdatedGroup(group *frameworkRoute.Group) *RuleGroup {
 	return &RuleGroup{
 		route:     g.route,
+		parent:    g.parent,
 		group:     group,
 		rulesMu:   g.rulesMu,
 		rules:     g.rules,
@@ -115,11 +146,12 @@ func (g *RuleGroup) recordRoutes(rules ...*frameworkRoute.Route) {
 	if len(rules) == 0 {
 		return
 	}
-	if g != nil && g.completed {
-		g.appendCollectedRoutes(rules...)
+	visited := make(map[*[]*frameworkRoute.Route]bool)
+	if g != nil {
+		g.collectIntoAncestors(visited, rules...)
 	}
 	if g != nil && g.route != nil {
-		g.route.recordRoutes(rules...)
+		g.route.recordRoutesWithVisited(visited, rules...)
 	}
 }
 
@@ -352,11 +384,15 @@ func (r *Route) baseRuleGroup() *RuleGroup {
 	if r == nil || r.router == nil {
 		panic(frameworkRoute.ErrInvalidRoute)
 	}
-	group := r.currentScope()
+	parent := r.currentScopeRuleGroup()
+	var group *frameworkRoute.Group
+	if parent != nil {
+		group = parent.group
+	}
 	if group == nil {
 		group = r.router.RootGroup()
 	}
-	return &RuleGroup{route: r, group: group}
+	return &RuleGroup{route: r, parent: parent, group: group}
 }
 
 func parseRouteGroupArguments(arguments []interface{}) (interface{}, []middleware.Handler) {
@@ -388,16 +424,17 @@ func (r *Route) Group(prefix string, callback interface{}, handlers ...middlewar
 	if r == nil || r.router == nil || callback == nil {
 		panic(frameworkRoute.ErrInvalidRoute)
 	}
+	parent := r.currentScopeRuleGroup()
 	var result *RuleGroup
 	register := func(group *frameworkRoute.Group) error {
-		result = newScopedRuleGroup(r, group)
+		result = newScopedRuleGroup(r, parent, group)
 		r.withScope(result, func() { invokeRouteGroupCallback(callback, result) })
 		result.completed = true
 		return nil
 	}
 	var err error
-	if group := r.currentScope(); group != nil {
-		err = group.Group(prefix, register, handlers...)
+	if parent != nil && parent.group != nil {
+		err = parent.group.Group(prefix, register, handlers...)
 	} else {
 		err = r.router.Group(prefix, register, handlers...)
 	}
@@ -414,16 +451,17 @@ func (r *Route) Domain(domain string, arguments ...interface{}) *RuleGroup {
 		return r.baseRuleGroup().Domain(domain)
 	}
 	callback, handlers := parseRouteGroupArguments(arguments)
+	parent := r.currentScopeRuleGroup()
 	var result *RuleGroup
 	register := func(group *frameworkRoute.Group) error {
-		result = newScopedRuleGroup(r, group)
+		result = newScopedRuleGroup(r, parent, group)
 		r.withScope(result, func() { invokeRouteGroupCallback(callback, result) })
 		result.completed = true
 		return nil
 	}
 	var err error
-	if group := r.currentScope(); group != nil {
-		err = group.Domain(domain, register, handlers...)
+	if parent != nil && parent.group != nil {
+		err = parent.group.Domain(domain, register, handlers...)
 	} else {
 		err = r.router.Domain(domain, register, handlers...)
 	}
@@ -436,16 +474,17 @@ func (r *Route) DomainGroup(domain, prefix string, callback interface{}, handler
 	if r == nil || r.router == nil || callback == nil {
 		panic(frameworkRoute.ErrInvalidRoute)
 	}
+	parent := r.currentScopeRuleGroup()
 	var result *RuleGroup
 	register := func(group *frameworkRoute.Group) error {
-		result = newScopedRuleGroup(r, group)
+		result = newScopedRuleGroup(r, parent, group)
 		r.withScope(result, func() { invokeRouteGroupCallback(callback, result) })
 		result.completed = true
 		return nil
 	}
 	var err error
-	if group := r.currentScope(); group != nil {
-		err = group.DomainGroup(domain, prefix, register, handlers...)
+	if parent != nil && parent.group != nil {
+		err = parent.group.DomainGroup(domain, prefix, register, handlers...)
 	} else {
 		err = r.router.DomainGroup(domain, prefix, register, handlers...)
 	}
@@ -453,7 +492,7 @@ func (r *Route) DomainGroup(domain, prefix string, callback interface{}, handler
 	return result
 }
 
-func (r *Route) currentScope() *frameworkRoute.Group {
+func (r *Route) currentScopeRuleGroup() *RuleGroup {
 	if r == nil {
 		return nil
 	}
@@ -462,10 +501,21 @@ func (r *Route) currentScope() *frameworkRoute.Group {
 	if len(r.scopeStack) == 0 {
 		return nil
 	}
-	return r.scopeStack[len(r.scopeStack)-1].group
+	return r.scopeStack[len(r.scopeStack)-1]
+}
+
+func (r *Route) currentScope() *frameworkRoute.Group {
+	if scope := r.currentScopeRuleGroup(); scope != nil {
+		return scope.group
+	}
+	return nil
 }
 
 func (r *Route) recordRoutes(rules ...*frameworkRoute.Route) {
+	r.recordRoutesWithVisited(make(map[*[]*frameworkRoute.Route]bool), rules...)
+}
+
+func (r *Route) recordRoutesWithVisited(visited map[*[]*frameworkRoute.Route]bool, rules ...*frameworkRoute.Route) {
 	if r == nil || len(rules) == 0 {
 		return
 	}
@@ -473,7 +523,7 @@ func (r *Route) recordRoutes(rules ...*frameworkRoute.Route) {
 	stack := append([]*RuleGroup(nil), r.scopeStack...)
 	r.scopeMu.RUnlock()
 	for _, scope := range stack {
-		scope.appendCollectedRoutes(rules...)
+		scope.collectIntoAncestors(visited, rules...)
 	}
 }
 
@@ -768,7 +818,7 @@ func (g *RuleGroup) Middleware(handlers ...middleware.Handler) *RuleGroup {
 	}
 	group, err := g.require().WithMiddleware(handlers...)
 	mustRouteConfiguration(err)
-	return &RuleGroup{route: g.route, group: group}
+	return derivedRuleGroup(g, group)
 }
 
 // NamedMiddleware 返回继承命名中间件的注册分组；对已完成回调的分组会同步回填全部组内已注册路由。
@@ -780,7 +830,7 @@ func (g *RuleGroup) NamedMiddleware(name string, handler middleware.Handler) *Ru
 	}
 	group, err := g.require().WithNamedMiddleware(name, handler)
 	mustRouteConfiguration(err)
-	return &RuleGroup{route: g.route, group: group}
+	return derivedRuleGroup(g, group)
 }
 
 // WithoutNamedMiddleware 按注册名称移除当前分组及组内已注册路由的中间件。
@@ -792,7 +842,7 @@ func (g *RuleGroup) WithoutNamedMiddleware(names ...string) *RuleGroup {
 	}
 	group, err := g.require().WithoutNamedMiddleware(names...)
 	mustRouteConfiguration(err)
-	return &RuleGroup{route: g.route, group: group}
+	return derivedRuleGroup(g, group)
 }
 
 // WithoutMiddleware 保留旧入口，无法确认函数身份时触发注册错误。
@@ -803,7 +853,7 @@ func (g *RuleGroup) WithoutMiddleware(handlers ...middleware.Handler) *RuleGroup
 	if g.completed {
 		return g.withUpdatedGroup(group)
 	}
-	return &RuleGroup{route: g.route, group: group}
+	return derivedRuleGroup(g, group)
 }
 
 // Ext 为当前分组设置扩展名约束，并回填已完成回调的组内已注册路由。
@@ -815,7 +865,7 @@ func (g *RuleGroup) Ext(extension string) *RuleGroup {
 	}
 	group, err := g.require().WithExtension(extension)
 	mustRouteConfiguration(err)
-	return &RuleGroup{route: g.route, group: group}
+	return derivedRuleGroup(g, group)
 }
 
 // Pattern 为当前分组设置变量正则约束，并回填已完成回调的组内已注册路由。
@@ -827,7 +877,7 @@ func (g *RuleGroup) Pattern(patterns map[string]string) *RuleGroup {
 	}
 	group, err := g.require().WithPatterns(patterns)
 	mustRouteConfiguration(err)
-	return &RuleGroup{route: g.route, group: group}
+	return derivedRuleGroup(g, group)
 }
 
 // Where 为当前分组设置变量正则约束，对应 ThinkPHP RuleGroup::where。
@@ -840,9 +890,13 @@ func (g *RuleGroup) Group(prefix string, callback interface{}, handlers ...middl
 	if callback == nil {
 		panic(frameworkRoute.ErrInvalidRoute)
 	}
+	parent := g
+	if g != nil && g.rules == nil {
+		parent = g.parent
+	}
 	var result *RuleGroup
 	err := g.require().Group(prefix, func(group *frameworkRoute.Group) error {
-		result = newScopedRuleGroup(g.route, group)
+		result = newScopedRuleGroup(g.route, parent, group)
 		if g.route != nil {
 			g.route.withScope(result, func() { invokeRouteGroupCallback(callback, result) })
 		} else {
@@ -852,9 +906,6 @@ func (g *RuleGroup) Group(prefix string, callback interface{}, handlers ...middl
 		return nil
 	}, handlers...)
 	mustRouteConfiguration(err)
-	if g.completed && result != nil {
-		g.appendCollectedRoutes(result.snapshotRules()...)
-	}
 	return result
 }
 
@@ -868,12 +919,16 @@ func (g *RuleGroup) Domain(domain string, arguments ...interface{}) *RuleGroup {
 		}
 		group, err := g.require().WithDomain(domain)
 		mustRouteConfiguration(err)
-		return &RuleGroup{route: g.route, group: group}
+		return derivedRuleGroup(g, group)
 	}
 	callback, handlers := parseRouteGroupArguments(arguments)
+	parent := g
+	if g != nil && g.rules == nil {
+		parent = g.parent
+	}
 	var result *RuleGroup
 	err := g.require().Domain(domain, func(group *frameworkRoute.Group) error {
-		result = newScopedRuleGroup(g.route, group)
+		result = newScopedRuleGroup(g.route, parent, group)
 		if g.route != nil {
 			g.route.withScope(result, func() { invokeRouteGroupCallback(callback, result) })
 		} else {
@@ -883,9 +938,6 @@ func (g *RuleGroup) Domain(domain string, arguments ...interface{}) *RuleGroup {
 		return nil
 	}, handlers...)
 	mustRouteConfiguration(err)
-	if g.completed && result != nil {
-		g.appendCollectedRoutes(result.snapshotRules()...)
-	}
 	return result
 }
 
@@ -894,9 +946,13 @@ func (g *RuleGroup) DomainGroup(domain, prefix string, callback interface{}, han
 	if callback == nil {
 		panic(frameworkRoute.ErrInvalidRoute)
 	}
+	parent := g
+	if g != nil && g.rules == nil {
+		parent = g.parent
+	}
 	var result *RuleGroup
 	err := g.require().DomainGroup(domain, prefix, func(group *frameworkRoute.Group) error {
-		result = newScopedRuleGroup(g.route, group)
+		result = newScopedRuleGroup(g.route, parent, group)
 		if g.route != nil {
 			g.route.withScope(result, func() { invokeRouteGroupCallback(callback, result) })
 		} else {
@@ -906,9 +962,6 @@ func (g *RuleGroup) DomainGroup(domain, prefix string, callback interface{}, han
 		return nil
 	}, handlers...)
 	mustRouteConfiguration(err)
-	if g.completed && result != nil {
-		g.appendCollectedRoutes(result.snapshotRules()...)
-	}
 	return result
 }
 

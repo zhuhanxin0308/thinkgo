@@ -1135,8 +1135,12 @@ func (r *Route) WithPattern(param, pattern string) error {
 		return err
 	}
 	param = strings.TrimSpace(param)
-	if !routeHasParam(r.path, param) {
-		return fmt.Errorf("%w: 路径 %s 不包含参数 %q", ErrInvalidRoutePattern, r.path, param)
+	targetPath := r.path
+	if r.isMiss {
+		targetPath = r.missPrefix
+	}
+	if !routeHasParam(targetPath, param) {
+		return fmt.Errorf("%w: 路径 %s 不包含参数 %q", ErrInvalidRoutePattern, targetPath, param)
 	}
 	compiled, err := compileRoutePattern(param, pattern)
 	if err != nil {

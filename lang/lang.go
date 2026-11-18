@@ -206,15 +206,15 @@ func isLanguageLoadedAndAllowed(snapshot *languageDetectionSnapshot, language st
 	return allowed
 }
 
-func matchExactLanguageSnapshot(snapshot *languageDetectionSnapshot, normalized string, rejected []string) string {
-	if snapshot == nil || normalized == "" || isLanguageRejected(snapshot, normalized, rejected) {
+func matchExactLanguageSnapshot(snapshot *languageDetectionSnapshot, normalized string, entries []acceptLanguageEntry) string {
+	if snapshot == nil || normalized == "" || isLanguageRejected(snapshot, normalized, entries, false) {
 		return ""
 	}
 	resolved := normalized
 	if alias, exists := snapshot.aliases[normalized]; exists {
 		resolved = alias
 	}
-	if isLanguageRejected(snapshot, resolved, rejected) {
+	if isLanguageRejected(snapshot, resolved, entries, false) {
 		return ""
 	}
 	if isLanguageLoadedAndAllowed(snapshot, resolved) {
@@ -223,41 +223,71 @@ func matchExactLanguageSnapshot(snapshot *languageDetectionSnapshot, normalized 
 	return ""
 }
 
-func selectWildcardLanguage(snapshot *languageDetectionSnapshot, rejected []string) string {
+func selectWildcardLanguage(snapshot *languageDetectionSnapshot, entries []acceptLanguageEntry) string {
 	if snapshot == nil {
 		return ""
 	}
 	if snapshot.defaultLang != "" &&
 		isLanguageLoadedAndAllowed(snapshot, snapshot.defaultLang) &&
-		!isLanguageRejected(snapshot, snapshot.defaultLang, rejected) {
+		!isLanguageRejected(snapshot, snapshot.defaultLang, entries, true) {
 		return snapshot.defaultLang
 	}
 	for _, language := range snapshot.ordered {
-		if isLanguageLoadedAndAllowed(snapshot, language) && !isLanguageRejected(snapshot, language, rejected) {
+		if isLanguageLoadedAndAllowed(snapshot, language) && !isLanguageRejected(snapshot, language, entries, true) {
 			return language
 		}
 	}
 	return ""
 }
 
-func isLanguageRejected(snapshot *languageDetectionSnapshot, candidate string, rejected []string) bool {
-	if len(rejected) == 0 || candidate == "" {
+func rangeSpecificityForLanguage(snapshot *languageDetectionSnapshot, entry acceptLanguageEntry, candidate string, includeWildcard bool) int {
+	if entry.wildcard {
+		if includeWildcard {
+			return 1
+		}
+		return 0
+	}
+	resolvedCandidate := candidate
+	if snapshot != nil {
+		if alias, exists := snapshot.aliases[candidate]; exists {
+			resolvedCandidate = alias
+		}
+	}
+	if entry.tag == candidate || entry.tag == resolvedCandidate {
+		return 100
+	}
+	if snapshot != nil {
+		if alias, exists := snapshot.aliases[entry.tag]; exists && (alias == candidate || alias == resolvedCandidate) {
+			return 90
+		}
+	}
+	if strings.HasPrefix(candidate, entry.tag+"-") || (resolvedCandidate != candidate && strings.HasPrefix(resolvedCandidate, entry.tag+"-")) {
+		return 10 + strings.Count(entry.tag, "-")
+	}
+	return 0
+}
+
+func isLanguageRejected(snapshot *languageDetectionSnapshot, candidate string, entries []acceptLanguageEntry, includeWildcard bool) bool {
+	if len(entries) == 0 || candidate == "" {
 		return false
 	}
-	for _, item := range rejected {
-		if item == candidate {
-			return true
+	maxSpec := 0
+	rejected := false
+	for _, entry := range entries {
+		spec := rangeSpecificityForLanguage(snapshot, entry, candidate, includeWildcard)
+		if spec == 0 || spec < maxSpec {
+			continue
 		}
-		if snapshot != nil {
-			if alias, exists := snapshot.aliases[item]; exists && alias == candidate {
-				return true
-			}
+		if spec > maxSpec {
+			maxSpec = spec
+			rejected = entry.quality == 0
+			continue
 		}
-		if !strings.Contains(item, "-") && strings.HasPrefix(candidate, item+"-") {
-			return true
+		if entry.quality == 0 {
+			rejected = true
 		}
 	}
-	return false
+	return maxSpec > 0 && rejected
 }
 
 type acceptLanguageEntry struct {
@@ -272,9 +302,8 @@ func selectAcceptLanguage(snapshot *languageDetectionSnapshot, header string) (s
 		return "", ""
 	}
 	var entries [maxAcceptLanguageEntries]acceptLanguageEntry
-	var rejected [maxAcceptLanguageEntries]string
 	entryCount := 0
-	rejectedCount := 0
+	hasRejection := false
 	wildcardRejected := false
 
 	for part := range strings.SplitSeq(header, ",") {
@@ -290,7 +319,7 @@ func selectAcceptLanguage(snapshot *languageDetectionSnapshot, header string) (s
 		if tag == "*" {
 			if quality == 0 {
 				wildcardRejected = true
-				continue
+				hasRejection = true
 			}
 			entries[entryCount] = acceptLanguageEntry{tag: "*", quality: quality, wildcard: true}
 			entryCount++
@@ -301,15 +330,16 @@ func selectAcceptLanguage(snapshot *languageDetectionSnapshot, header string) (s
 			continue
 		}
 		if quality == 0 {
-			rejected[rejectedCount] = normalized
-			rejectedCount++
-			continue
+			hasRejection = true
 		}
 		entries[entryCount] = acceptLanguageEntry{tag: normalized, quality: quality}
 		entryCount++
 	}
 
-	rejectedSlice := rejected[:rejectedCount]
+	var rejectionEntries []acceptLanguageEntry
+	if hasRejection {
+		rejectionEntries = entries[:entryCount]
+	}
 	bestExact := ""
 	bestExactQuality := 0.0
 	bestExactSpecificity := 0
@@ -318,27 +348,30 @@ func selectAcceptLanguage(snapshot *languageDetectionSnapshot, header string) (s
 
 	for index := 0; index < entryCount; index++ {
 		entry := entries[index]
+		if entry.quality == 0 {
+			continue
+		}
 		if entry.wildcard {
 			if wildcardRejected {
 				continue
 			}
 			if entry.quality > bestExactQuality || (entry.quality == bestExactQuality && bestExactSpecificity == 0) {
-				if selected := selectWildcardLanguage(snapshot, rejectedSlice); selected != "" {
+				if selected := selectWildcardLanguage(snapshot, rejectionEntries); selected != "" {
 					bestExact, bestExactQuality, bestExactSpecificity = selected, entry.quality, 1
 				}
 			}
 			continue
 		}
-		if exact := matchExactLanguageSnapshot(snapshot, entry.tag, rejectedSlice); exact != "" {
+		if exact := matchExactLanguageSnapshot(snapshot, entry.tag, rejectionEntries); exact != "" {
 			if entry.quality > bestExactQuality || (entry.quality == bestExactQuality && bestExactSpecificity < 2) {
 				bestExact, bestExactQuality, bestExactSpecificity = exact, entry.quality, 2
 			}
 			continue
 		}
-		if entry.quality > bestPrefixQuality && !isLanguageRejected(snapshot, entry.tag, rejectedSlice) {
+		if entry.quality > bestPrefixQuality && !isLanguageRejected(snapshot, entry.tag, rejectionEntries, false) {
 			prefix, _, _ := strings.Cut(entry.tag, "-")
 			for _, language := range snapshot.prefixes[prefix] {
-				if !isLanguageRejected(snapshot, language, rejectedSlice) {
+				if !isLanguageRejected(snapshot, language, rejectionEntries, false) {
 					bestPrefix, bestPrefixQuality = language, entry.quality
 					break
 				}
@@ -352,8 +385,8 @@ func selectAcceptLanguage(snapshot *languageDetectionSnapshot, header string) (s
 	if bestPrefix != "" {
 		return bestPrefix, ""
 	}
-	if !wildcardRejected && rejectedCount > 0 && isLanguageRejected(snapshot, snapshot.defaultLang, rejectedSlice) {
-		return "", selectWildcardLanguage(snapshot, rejectedSlice)
+	if !wildcardRejected && hasRejection && isLanguageRejected(snapshot, snapshot.defaultLang, rejectionEntries, true) {
+		return "", selectWildcardLanguage(snapshot, rejectionEntries)
 	}
 	return "", ""
 }

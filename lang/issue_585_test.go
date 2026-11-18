@@ -145,6 +145,10 @@ func TestIssue585GetHasHonorAliasesAndRFC9110AcceptLanguage(t *testing.T) {
 		{"zh-hans;q=0, *;q=0.8", "en-us"},
 		{"zh-cn;q=0, zh-HK;q=0.9", "zh-tw"},
 		{"zh-cn;q=0", "en-us"},
+		{"en;q=0, en-US;q=1, zh-CN;q=0.5", "en-us"},
+		{"en-US;q=1, en;q=0, zh-CN;q=0.5", "en-us"},
+		{"en;q=0, en-GB;q=1, zh-CN;q=0.5", "zh-cn"},
+		{"*;q=0, en-US;q=0.8", "en-us"},
 	}
 	for _, tc := range qZeroCases {
 		if got := zhDefault.DetectLanguage("", "", "", tc.header); got != tc.want {
