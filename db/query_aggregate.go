@@ -331,16 +331,31 @@ func (q *Query) columnFromStream(field string, key ...string) (interface{}, erro
 	return result, nil
 }
 
-// databaseResultField 优先读取完整字段名，并兼容 SQL 驱动把限定字段
-// table.column 的结果列名返回为末段 column 的行为。
+// databaseResultField 优先读取完整字段名，兼容 SQL 驱动把限定字段 table.column
+// 返回为末段 column，并在精确键缺失时回退匹配 Oracle 等方言的大写列键。
 func databaseResultField(row map[string]interface{}, field string) (interface{}, bool) {
 	if value, exists := row[field]; exists {
 		return value, true
 	}
 	separator := strings.LastIndexByte(field, '.')
-	if separator < 0 || separator == len(field)-1 {
-		return nil, false
+	leaf := ""
+	if separator >= 0 && separator < len(field)-1 {
+		leaf = field[separator+1:]
+		if value, exists := row[leaf]; exists {
+			return value, true
+		}
 	}
-	value, exists := row[field[separator+1:]]
-	return value, exists
+	if upper := strings.ToUpper(field); upper != field {
+		if value, exists := row[upper]; exists {
+			return value, true
+		}
+	}
+	if leaf != "" {
+		if upperLeaf := strings.ToUpper(leaf); upperLeaf != leaf {
+			if value, exists := row[upperLeaf]; exists {
+				return value, true
+			}
+		}
+	}
+	return nil, false
 }

@@ -8,6 +8,7 @@ import (
 	"math"
 	"net"
 	"net/netip"
+	"net/url"
 	"reflect"
 	"strconv"
 	"strings"
@@ -181,16 +182,79 @@ func validateConnectorConfig(config db.Config, expectedType string, network, req
 	return config, nil
 }
 
-func sqlURLHostPort(host, port string) string {
+func normalizeHostLiteral(host string) (string, bool) {
 	literal := host
 	if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
 		literal = host[1 : len(host)-1]
 	}
 	if addr, err := netip.ParseAddr(literal); err == nil && addr.Is6() {
-		// 两个 SQL 驱动用 SplitHostPort 解析地址。保留空端口可拆除方括号并沿用驱动默认值。
+		return literal, true
+	}
+	return host, false
+}
+
+// joinHostPort 规范化主机与可选端口：裸 IPv6 无端口时自动包裹方括号，
+// 已带方括号的 IPv6 加端口时先剥离外层方括号再拼接，杜绝产生 [[::1]]:port。
+func joinHostPort(host, port string) string {
+	literal, isIPv6 := normalizeHostLiteral(host)
+	if port == "" {
+		if isIPv6 {
+			return "[" + literal + "]"
+		}
+		return host
+	}
+	if isIPv6 {
+		return net.JoinHostPort(literal, port)
+	}
+	return net.JoinHostPort(host, port)
+}
+
+func sqlURLHostPort(host, port string) string {
+	literal, isIPv6 := normalizeHostLiteral(host)
+	if isIPv6 {
+		// PostgreSQL 与 SQL Server 驱动使用 SplitHostPort 解析地址；保留空端口可拆除方括号并沿用驱动默认端口。
 		return net.JoinHostPort(literal, port)
 	}
 	return joinHostPort(host, port)
+}
+
+func mysqlHostPort(host, port string) string {
+	if host == "" {
+		return joinHostPort(host, port)
+	}
+	literal, isIPv6 := normalizeHostLiteral(host)
+	if isIPv6 {
+		if port == "" {
+			// go-sql-driver/mysql 在无端口时会对 [::1] 再次调用 net.JoinHostPort 生成非法 [[::1]]:3306，
+			// 因此对省略端口的 IPv6 显式补齐默认端口 3306。
+			port = "3306"
+		}
+		return net.JoinHostPort(literal, port)
+	}
+	return joinHostPort(host, port)
+}
+
+func buildOracleConnectString(config db.Config) (string, error) {
+	protocol := "tcps"
+	query := url.Values{}
+	for key, value := range config.Params {
+		if strings.EqualFold(key, "protocol") {
+			protocol = strings.ToLower(strings.TrimSpace(value))
+			continue
+		}
+		query.Set(key, value)
+	}
+	if protocol != "tcp" && protocol != "tcps" {
+		return "", fmt.Errorf("%w: Oracle protocol 只能是 tcp 或 tcps", db.ErrInvalidDatabaseConfig)
+	}
+	uri := url.URL{
+		Scheme:   protocol,
+		Host:     joinHostPort(config.Hostname, config.Hostport),
+		Path:     config.Database,
+		RawPath:  url.PathEscape(config.Database),
+		RawQuery: query.Encode(),
+	}
+	return uri.String(), nil
 }
 
 func mustRegisterConnector(name string, connector db.Connector) {

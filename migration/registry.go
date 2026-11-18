@@ -51,7 +51,7 @@ func (registry *Registry) freezeSnapshot() ([]Migration, error) {
 	}
 	registry.mu.Unlock()
 	sort.Slice(result, func(left, right int) bool {
-		return result[left].Name() < result[right].Name()
+		return compareMigrationNames(result[left].Name(), result[right].Name()) < 0
 	})
 	return result, nil
 }

@@ -210,11 +210,7 @@ func (q *Query) WhereOr(condition interface{}, args ...interface{}) *Query {
 
 func (q *Query) WhereColumn(left string, op string, right string) *Query {
 	q = q.clone()
-	clause, err := compileColumnClause(left, op, right)
-	if err != nil {
-		return q.setError(err)
-	}
-	node, err := parsePredicateText(clause, nil)
+	node, err := compileColumnNode(left, op, right)
 	if err != nil {
 		return q.setError(err)
 	}
@@ -523,15 +519,15 @@ func (q *Query) Group(group string) *Query {
 }
 
 // Having 设置默认安全的 HAVING 条件。
-// 仅接受参数化条件、NULL 谓词、BETWEEN 谓词以及 field,value 速记写法。
+// 仅接受参数化条件、NULL 谓词、BETWEEN 谓词、单参数聚合函数及速记/三元组写法。
 // 如需显式拼接复杂 HAVING 表达式，请调用 HavingRaw。
 func (q *Query) Having(having string, args ...interface{}) *Query {
 	q = q.clone()
-	normalized, err := normalizePredicateClause(having, len(args), "having")
+	normalized, compiledArgs, err := compileHavingClause(having, args)
 	if err != nil {
 		return q.setError(err)
 	}
-	if !q.replaceHavingArguments(args) {
+	if !q.replaceHavingArguments(compiledArgs) {
 		return q
 	}
 	q.having = q.quoteSafeClause(normalized)
@@ -552,26 +548,19 @@ func (q *Query) HavingRaw(having string, args ...interface{}) *Query {
 	return q
 }
 
-// HavingField 设置安全的 HAVING 条件，自动校验字段名和操作符。
-// 示例: HavingField("COUNT(id)", ">", 5) — 注意：聚合函数写法需使用 Having 原始方法。
-// 本方法适用于简单字段条件: HavingField("total", ">=", 100)
+// HavingField 追加安全的 HAVING 条件，自动校验字段或安全聚合表达式与操作符。
+// 对 nil 标量值自动编译为 IS NULL / IS NOT NULL，并在已有顶层 OR 条件上包裹括号以保持布尔优先级。
 func (q *Query) HavingField(field string, op string, value interface{}) *Query {
 	q = q.clone()
-	if err := validateIdentifier(field); err != nil {
-		return q.setError(fmt.Errorf("unsafe havingField field: %w", err))
-	}
-	normalizedOperator, err := normalizeOperator(op)
+	normalized, compiledArgs, err := compileHavingComparison(field, op, value)
 	if err != nil {
-		return q.setError(fmt.Errorf("unsafe havingField operator: %w", err))
+		return q.setError(fmt.Errorf("unsafe havingField: %w", err))
 	}
-	if !q.appendQueryArgument(&q.havingArgs, value) {
+	if !q.appendQueryArguments(&q.havingArgs, compiledArgs) {
 		return q
 	}
-	if q.having != "" {
-		q.having += fmt.Sprintf(" AND %s %s ?", q.quoteSafeClause(field), normalizedOperator)
-	} else {
-		q.having = fmt.Sprintf("%s %s ?", q.quoteSafeClause(field), normalizedOperator)
-	}
+	clause := q.quoteSafeClause(normalized)
+	q.having = joinHavingAnd(q.having, clause, sqlBuilderDialect(q.builder()))
 	return q
 }
 

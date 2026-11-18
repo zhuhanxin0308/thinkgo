@@ -2,6 +2,7 @@ package mongo
 
 import (
 	"fmt"
+	"reflect"
 	"regexp"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -69,6 +70,19 @@ func compileMongoNode(node PredicateNode) (bson.M, error) {
 				return nil, err
 			}
 		}
+		if len(node.Values) == 1 && isNilMongoScalar(node.Values[0]) && node.Operator != "IN" && node.Operator != "NOT IN" {
+			switch node.Operator {
+			case "=", "IS":
+				return bson.M{field: nil}, nil
+			case "!=", "<>", "IS NOT":
+				return bson.M{field: bson.M{"$ne": nil}}, nil
+			default:
+				return nil, fmt.Errorf("%w: MongoDB 操作符 %q 不接受 NULL 值", ErrInvalidQuery, node.Operator)
+			}
+		}
+		if node.Operator == "IS" || node.Operator == "IS NOT" {
+			return nil, fmt.Errorf("%w: MongoDB 操作符 %q 仅支持 nil 值", ErrInvalidQuery, node.Operator)
+		}
 		switch node.Operator {
 		case "IS NULL":
 			return bson.M{field: nil}, nil
@@ -79,6 +93,9 @@ func compileMongoNode(node PredicateNode) (bson.M, error) {
 		case "NOT IN":
 			return bson.M{field: bson.M{"$nin": node.Values}}, nil
 		case "BETWEEN":
+			if len(node.Values) != 2 || isNilMongoScalar(node.Values[0]) || isNilMongoScalar(node.Values[1]) {
+				return nil, fmt.Errorf("%w: MongoDB BETWEEN 不接受 NULL 值", ErrInvalidQuery)
+			}
 			return bson.M{field: bson.M{"$gte": node.Values[0], "$lte": node.Values[1]}}, nil
 		case "LIKE", "NOT LIKE":
 			pattern, err := mongoLikeRegex(node.Values[0])
@@ -104,3 +121,17 @@ func compileMongoNode(node PredicateNode) (bson.M, error) {
 }
 
 var mongoComparisonOperators = map[string]string{">=": "$gte", "<=": "$lte", "!=": "$ne", "<>": "$ne", ">": "$gt", "<": "$lt"}
+
+func isNilMongoScalar(value interface{}) bool {
+	if value == nil {
+		return true
+	}
+	current := reflect.ValueOf(value)
+	for current.Kind() == reflect.Pointer || current.Kind() == reflect.Interface {
+		if current.IsNil() {
+			return true
+		}
+		current = current.Elem()
+	}
+	return false
+}

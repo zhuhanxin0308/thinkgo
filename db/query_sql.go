@@ -9,7 +9,7 @@ import (
 var safeClauseKeywords = map[string]bool{
 	"and": true, "or": true, "between": true, "is": true, "not": true,
 	"null": true, "like": true, "in": true, "true": true, "false": true,
-	"current_timestamp": true, "current_date": true, "current_time": true,
+	"distinct": true, "current_timestamp": true, "current_date": true, "current_time": true,
 }
 
 // resolveTable 结合配置的前缀解析出最终的表名。

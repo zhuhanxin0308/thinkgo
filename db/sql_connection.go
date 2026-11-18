@@ -686,7 +686,8 @@ func cloneScannedColumnValue(value interface{}, columnTypes []*sql.ColumnType, i
 	return cloneScannedValueWithDatabaseType(value, location, naiveTimeAsWallClock, databaseType)
 }
 
-// findSQLResultColumnIndex 兼容限定字段在驱动结果中返回完整名或末段列名的差异。
+// findSQLResultColumnIndex 兼容限定字段在驱动结果中返回完整名或末段列名的差异，
+// 并在精确匹配缺失时回退匹配 Oracle 等方言返回的大写列名。
 func findSQLResultColumnIndex(columns []string, field string) (int, bool) {
 	for index, column := range columns {
 		if column == field {
@@ -694,13 +695,29 @@ func findSQLResultColumnIndex(columns []string, field string) (int, bool) {
 		}
 	}
 	separator := strings.LastIndexByte(field, '.')
-	if separator < 0 || separator == len(field)-1 {
-		return -1, false
+	shortField := ""
+	if separator >= 0 && separator < len(field)-1 {
+		shortField = field[separator+1:]
+		for index, column := range columns {
+			if column == shortField {
+				return index, true
+			}
+		}
 	}
-	shortField := field[separator+1:]
-	for index, column := range columns {
-		if column == shortField {
-			return index, true
+	if upperField := strings.ToUpper(field); upperField != field {
+		for index, column := range columns {
+			if column == upperField {
+				return index, true
+			}
+		}
+	}
+	if shortField != "" {
+		if upperShort := strings.ToUpper(shortField); upperShort != shortField {
+			for index, column := range columns {
+				if column == upperShort {
+					return index, true
+				}
+			}
 		}
 	}
 	return -1, false

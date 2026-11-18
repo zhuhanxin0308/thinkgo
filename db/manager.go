@@ -224,7 +224,7 @@ func (m *Manager) Connection(name string) (*DB, error) {
 	}
 	if err == nil {
 		if addErr := m.addConnection(name, connection, true); addErr != nil {
-			closeErr := connection.Close()
+			closeErr := m.closeUnattachedConnection(connection)
 			err = errors.Join(addErr, closeErr)
 			connection = nil
 			if closeErr != nil {
@@ -248,6 +248,24 @@ func (m *Manager) Connection(name string) (*DB, error) {
 	m.lock.Unlock()
 	m.factoryWG.Done()
 	return connection, err
+}
+
+func (m *Manager) closeUnattachedConnection(connection *DB) error {
+	if connection == nil {
+		return nil
+	}
+	candidateHandle, err := connection.managedConnectionHandle()
+	if err == nil && candidateHandle != nil && candidateHandle.id != "" {
+		m.lock.RLock()
+		_, shared := m.handles[candidateHandle.id]
+		m.lock.RUnlock()
+		if shared {
+			// 该物理连接已由 Manager 的共享句柄统一管理租约与关闭，仅封闭未挂载的包装器。
+			connection.markClosed()
+			return nil
+		}
+	}
+	return connection.Close()
 }
 
 func callConnectionFactorySafely(factory ConnectionFactory) (connection *DB, err error) {

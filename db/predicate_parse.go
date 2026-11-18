@@ -118,14 +118,24 @@ func parsePredicateBranch(expression string, args []interface{}, index *int, dep
 		if err := validateIdentifier(match[1]); err != nil {
 			return PredicateNode{}, err
 		}
-		if validateIdentifier(match[3]) == nil {
-			return PredicateNode{Kind: PredicateColumn, Field: match[1], Operator: match[2], RightField: match[3]}, nil
+		rightOperand := strings.TrimSpace(match[3])
+		if !isAllowedExpressionConstant(rightOperand) && validateIdentifier(rightOperand) == nil {
+			return PredicateNode{Kind: PredicateColumn, Field: match[1], Operator: match[2], RightField: rightOperand}, nil
 		}
-		if err := validateExpressionClause(match[3]); err != nil {
+		if err := validateExpressionClause(rightOperand); err != nil {
 			return PredicateNode{}, err
 		}
-		values, err := consume(strings.Count(match[3], "?"))
-		return PredicateNode{Kind: PredicateExpression, Field: match[1], Operator: match[2], SQL: match[3], Values: values}, err
+		values, err := consume(strings.Count(rightOperand, "?"))
+		return PredicateNode{Kind: PredicateExpression, Field: match[1], Operator: match[2], SQL: rightOperand, Values: values}, err
 	}
 	return PredicateNode{}, fmt.Errorf("条件不是受支持的参数化表达式: %q", leaf)
+}
+
+func isAllowedExpressionConstant(operand string) bool {
+	switch strings.ToLower(strings.TrimSpace(operand)) {
+	case "current_timestamp", "current_date", "current_time":
+		return true
+	default:
+		return false
+	}
 }

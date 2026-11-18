@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -97,6 +98,9 @@ func (store *DatabaseStore) Journal(ctx context.Context) ([]JournalEntry, error)
 			StartedAt: startedAt, FinishedAt: finishedAt, FailureCode: failureCode,
 		})
 	}
+	sort.Slice(entries, func(left, right int) bool {
+		return compareMigrationNames(entries[left].Name, entries[right].Name) < 0
+	})
 	return entries, nil
 }
 
@@ -140,13 +144,13 @@ func (store *DatabaseStore) recordApplyingWithExecutor(ctx context.Context, exec
 	if existing.State == JournalApplying || existing.State == JournalFailed {
 		return fmt.Errorf("%w: %s state=%s", ErrMigrationDirty, current.Name(), existing.State)
 	}
-	if existing.Checksum != current.Checksum() {
-		return fmt.Errorf("%w: %s", ErrMigrationDrift, current.Name())
-	}
 	validTransition := operation == JournalOperationApply && existing.State == JournalReverted ||
 		operation == JournalOperationRevert && existing.State == JournalApplied
 	if !validTransition {
 		return fmt.Errorf("%w: journal 状态 %s 不能执行 %s", ErrMigrationDrift, existing.State, operation)
+	}
+	if existing.State != JournalReverted && existing.Checksum != current.Checksum() {
+		return fmt.Errorf("%w: %s", ErrMigrationDrift, current.Name())
 	}
 	affected, err := executor.ExecuteContext(
 		ctx,

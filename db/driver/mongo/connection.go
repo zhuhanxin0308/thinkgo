@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -17,8 +18,9 @@ import (
 )
 
 const (
-	defaultMongoOpTimeout = 10 * time.Second
-	maxMongoLikeLength    = 4096
+	defaultMongoOpTimeout    = 10 * time.Second
+	maxMongoLikeLength       = 4096
+	maxMongoMaterializedRows = 100000
 )
 
 // MongoConnection 将统一查询接口映射为有界上下文的 MongoDB 操作。
@@ -299,23 +301,58 @@ func (c *MongoConnection) collection(name string) (*mongo.Collection, error) {
 }
 
 func (c *MongoConnection) selectRequest(parent context.Context, request SelectRequest) ([]map[string]interface{}, error) {
-	capacity := 0
-	if request.Limit() > 0 {
-		capacity = request.Limit()
-	}
-	rows := make([]map[string]interface{}, 0, capacity)
-	err := c.iterateMongoRequest(parent, request, func(row map[string]interface{}) bool {
+	var rows []map[string]interface{}
+	tooMany := false
+	err := c.iterateMongoCursor(parent, request, func(cursor *mongo.Cursor, row map[string]interface{}) bool {
+		if len(rows) >= maxMongoMaterializedRows {
+			tooMany = true
+			return false
+		}
+		if cap(rows) == len(rows) {
+			if grow := mongoBatchGrowCount(len(rows), request.Limit(), cursor.RemainingBatchLength()); grow > 0 {
+				rows = slices.Grow(rows, grow)
+			}
+		}
 		rows = append(rows, row)
 		return true
 	})
+	if tooMany {
+		err = errors.Join(err, fmt.Errorf("%w: 结果行数超过 %d", ErrQueryResultTooMany, maxMongoMaterializedRows))
+	}
 	if err != nil {
 		return nil, err
+	}
+	if rows == nil {
+		return []map[string]interface{}{}, nil
 	}
 	return rows, nil
 }
 
+func mongoBatchGrowCount(currentLen, limit, remainingInBatch int) int {
+	if remainingInBatch < 0 {
+		remainingInBatch = 0
+	}
+	needed := 1 + remainingInBatch
+	if limit > 0 && currentLen+needed > limit {
+		needed = limit - currentLen
+	}
+	if currentLen+needed > maxMongoMaterializedRows {
+		needed = maxMongoMaterializedRows - currentLen
+	}
+	if needed < 1 && currentLen < maxMongoMaterializedRows {
+		needed = 1
+	}
+	return needed
+}
+
 // iterateMongoRequest 统一管理 MongoDB 游标生命周期，让 Select 和 SelectEach 共享单行解码路径。
-func (c *MongoConnection) iterateMongoRequest(parent context.Context, request SelectRequest, callback func(map[string]interface{}) bool) (resultErr error) {
+func (c *MongoConnection) iterateMongoRequest(parent context.Context, request SelectRequest, callback func(map[string]interface{}) bool) error {
+	return c.iterateMongoCursor(parent, request, func(_ *mongo.Cursor, row map[string]interface{}) bool {
+		return callback(row)
+	})
+}
+
+func (c *MongoConnection) iterateMongoCursor(parent context.Context, request SelectRequest, callback func(*mongo.Cursor, map[string]interface{}) bool) (resultErr error) {
 	ctx, cancel, err := c.operationContext(parent)
 	if err != nil {
 		return err
@@ -346,7 +383,7 @@ func (c *MongoConnection) iterateMongoRequest(parent context.Context, request Se
 		if mongoProjectionExcludesID(request.Fields()) {
 			delete(row, "_id")
 		}
-		if !callback(row) {
+		if !callback(cursor, row) {
 			return nil
 		}
 	}

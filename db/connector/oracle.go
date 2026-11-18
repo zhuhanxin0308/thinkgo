@@ -5,9 +5,6 @@ package connector
 
 import (
 	"database/sql"
-	"fmt"
-	"net/url"
-	"strings"
 
 	"github.com/zhuhanxin0308/thinkgo/v3/db"
 	"github.com/zhuhanxin0308/thinkgo/v3/db/builder"
@@ -32,21 +29,9 @@ func (o *Oracle) Connect(config db.Config) (db.Connection, error) {
 }
 
 func buildOracleConnectionParams(config db.Config) (godror.ConnectionParams, error) {
-	protocol := "tcps"
-	query := url.Values{}
-	for key, value := range config.Params {
-		if strings.EqualFold(key, "protocol") {
-			protocol = strings.ToLower(strings.TrimSpace(value))
-			continue
-		}
-		query.Set(key, value)
-	}
-	if protocol != "tcp" && protocol != "tcps" {
-		return godror.ConnectionParams{}, fmt.Errorf("%w: Oracle protocol 只能是 tcp 或 tcps", db.ErrInvalidDatabaseConfig)
-	}
-	connectString := fmt.Sprintf("%s://%s/%s", protocol, joinHostPort(config.Hostname, config.Hostport), url.PathEscape(config.Database))
-	if encoded := query.Encode(); encoded != "" {
-		connectString += "?" + encoded
+	connectString, err := buildOracleConnectString(config)
+	if err != nil {
+		return godror.ConnectionParams{}, err
 	}
 	var params godror.ConnectionParams
 	params.Username = config.Username

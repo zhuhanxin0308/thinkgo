@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -126,6 +127,12 @@ func (store *DatabaseStore) Applied(ctx context.Context) ([]History, error) {
 		}
 		history = append(history, History{Name: name, Checksum: checksum, Batch: batch, AppliedAt: appliedAt})
 	}
+	sort.Slice(history, func(left, right int) bool {
+		if history[left].Batch == history[right].Batch {
+			return compareMigrationNames(history[left].Name, history[right].Name) < 0
+		}
+		return history[left].Batch < history[right].Batch
+	})
 	return history, nil
 }
 

@@ -184,7 +184,7 @@ func (runner *Runner) rollbackLocked(ctx context.Context, store Store, batches i
 	}
 	sort.Slice(history, func(left, right int) bool {
 		if history[left].Batch == history[right].Batch {
-			return history[left].Name > history[right].Name
+			return compareMigrationNames(history[left].Name, history[right].Name) > 0
 		}
 		return history[left].Batch > history[right].Batch
 	})

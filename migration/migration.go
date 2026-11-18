@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 )
 
 var (
@@ -134,4 +135,18 @@ func validateReversibleMigration(current Migration) error {
 		return fmt.Errorf("%w: %s", ErrIrreversibleMigration, migration.name)
 	}
 	return nil
+}
+
+// compareMigrationNames 先比较下划线前的数字时间序列前缀，再比较后缀标识，
+// 避免 12~20 位变长前缀因 ASCII '_' 大于数字导致后建迁移抢先执行。
+func compareMigrationNames(left, right string) int {
+	leftPrefix, leftSuffix, leftOK := strings.Cut(left, "_")
+	rightPrefix, rightSuffix, rightOK := strings.Cut(right, "_")
+	if !leftOK || !rightOK {
+		return strings.Compare(left, right)
+	}
+	if cmp := strings.Compare(leftPrefix, rightPrefix); cmp != 0 {
+		return cmp
+	}
+	return strings.Compare(leftSuffix, rightSuffix)
 }

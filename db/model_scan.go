@@ -33,7 +33,7 @@ func (mq *ModelQuery) Find(target any) (bool, error) {
 	if err := mapModelScanRow(ctx, candidate, row, metadata); err != nil {
 		return false, err
 	}
-	if err := mq.bindScannedRecord(candidate, destination, raw); err != nil {
+	if err := mq.bindScannedRecord(candidate, destination, normalizeOracleModelRecordRow(mq, metadata, raw)); err != nil {
 		return false, err
 	}
 	if err := ctx.Err(); err != nil {
@@ -89,7 +89,7 @@ func (mq *ModelQuery) scanModelRows(ctx context.Context, sliceType reflect.Type,
 		if err := mapModelScanRow(ctx, candidate, row, metadata); err != nil {
 			return reflect.Value{}, fmt.Errorf("第 %d 条模型结果映射失败: %w", index+1, err)
 		}
-		if err := mq.bindScannedRecord(candidate, record, rawRows[index]); err != nil {
+		if err := mq.bindScannedRecord(candidate, record, normalizeOracleModelRecordRow(mq, metadata, rawRows[index])); err != nil {
 			return reflect.Value{}, fmt.Errorf("第 %d 条模型记录绑定失败: %w", index+1, err)
 		}
 		record.Set(candidate)
@@ -173,7 +173,7 @@ func mapModelScanFields(ctx context.Context, candidate reflect.Value, row map[st
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		source, exists := row[field.column]
+		source, exists := lookupModelScanColumn(row, field.column, projection)
 		if !exists {
 			continue
 		}
