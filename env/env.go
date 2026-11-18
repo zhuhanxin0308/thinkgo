@@ -168,7 +168,11 @@ func (e *Env) Load(file string) (err error) {
 	section := ""
 	for scanner.Scan() {
 		lineNumber++
-		line := strings.TrimSpace(scanner.Text())
+		rawLine := scanner.Text()
+		if lineNumber == 1 {
+			rawLine = strings.TrimPrefix(rawLine, "\xef\xbb\xbf")
+		}
+		line := strings.TrimSpace(rawLine)
 		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
 			continue
 		}
@@ -252,17 +256,78 @@ func parseLine(line string) (string, string, error) {
 	if value == "" {
 		return key, "", nil
 	}
-	if value[0] == '\'' || value[0] == '"' {
-		quote := value[0]
-		if len(value) < 2 || value[len(value)-1] != quote {
-			return "", "", fmt.Errorf("环境变量 %s 的引号未闭合", key)
+	switch value[0] {
+	case '"':
+		unquoted, err := parseDoubleQuotedEnvValue(key, value)
+		if err != nil {
+			return "", "", err
 		}
-		value = value[1 : len(value)-1]
-	} else if value[len(value)-1] == '\'' || value[len(value)-1] == '"' {
-		return "", "", fmt.Errorf("环境变量 %s 的引号不匹配", key)
+		return key, unquoted, nil
+	case '\'':
+		unquoted, err := parseSingleQuotedEnvValue(key, value)
+		if err != nil {
+			return "", "", err
+		}
+		return key, unquoted, nil
+	default:
+		if value[len(value)-1] == '\'' || value[len(value)-1] == '"' {
+			return "", "", fmt.Errorf("环境变量 %s 的引号不匹配", key)
+		}
+		return key, value, nil
 	}
+}
 
-	return key, value, nil
+func parseDoubleQuotedEnvValue(key, value string) (string, error) {
+	var builder strings.Builder
+	escaped := false
+	for index := 1; index < len(value); index++ {
+		ch := value[index]
+		if escaped {
+			switch ch {
+			case '"':
+				builder.WriteByte('"')
+			case '\\':
+				builder.WriteByte('\\')
+			case 'n':
+				builder.WriteByte('\n')
+			case 'r':
+				builder.WriteByte('\r')
+			case 't':
+				builder.WriteByte('\t')
+			default:
+				builder.WriteByte('\\')
+				builder.WriteByte(ch)
+			}
+			escaped = false
+			continue
+		}
+		if ch == '\\' {
+			escaped = true
+			continue
+		}
+		if ch == '"' {
+			rest := strings.TrimSpace(value[index+1:])
+			if rest != "" && !strings.HasPrefix(rest, "#") && !strings.HasPrefix(rest, ";") {
+				return "", fmt.Errorf("环境变量 %s 的引号不匹配", key)
+			}
+			return builder.String(), nil
+		}
+		builder.WriteByte(ch)
+	}
+	return "", fmt.Errorf("环境变量 %s 的引号未闭合", key)
+}
+
+func parseSingleQuotedEnvValue(key, value string) (string, error) {
+	for index := 1; index < len(value); index++ {
+		if value[index] == '\'' {
+			rest := strings.TrimSpace(value[index+1:])
+			if rest != "" && !strings.HasPrefix(rest, "#") && !strings.HasPrefix(rest, ";") {
+				return "", fmt.Errorf("环境变量 %s 的引号不匹配", key)
+			}
+			return value[1:index], nil
+		}
+	}
+	return "", fmt.Errorf("环境变量 %s 的引号未闭合", key)
 }
 
 // Get 按“进程环境变量 > .env > 默认值”的优先级读取字符串。

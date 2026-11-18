@@ -6,7 +6,7 @@ ThinkGo 只发布根目录框架模块 `github.com/zhuhanxin0308/thinkgo/v3`。�
 
 ## 发布前置条件
 
-1. 根 `go.mod` 必须声明 `github.com/zhuhanxin0308/thinkgo/v3`，`version/version.go` 的 `Number` 必须与目标模块版本一致。
+1. 根 `go.mod` 必须声明 `github.com/zhuhanxin0308/thinkgo/v3`，`version/version.go` 的 `Number` 必须与目标模块版本一致（通过 `python3 scripts/check_release_version.py --tag v3.X.Y` 严格校验）。
 2. 根 `LICENSE`、`README.md` 和本文件必须存在。
 3. 工作树必须干净；仓库不得跟踪 `.env`、证书、私钥或其它凭据。`python3 scripts/check_release_files.py` 按 `git ls-files -z` 的原始文件名检查 `.env` 与 `.pem`、`.key`、`.p12`、`.pfx` 后缀，中文、引号及换行文件名不例外；Git 读取失败也会阻断门禁。
 4. 仓库根不含业务 `app/`、`public/`、`main.go`、`go.work` 或旧 `framework/` 子模块。根 `config/` 是框架 Go 包；测试用 JSON 配置放在 `testdata/project/config/`。
@@ -39,7 +39,7 @@ CI 验证生成器、框架集成、SQLite 业务路径、Windows/macOS 以及�
 
    是否使用 `-s` 签名标签由仓库治理策略决定；已经发布的标签不得移动或覆盖，原 v1、v2 标签保留。
 
-4. 等待 Framework CI and Release 工作流完成。工作流会再次验证版本和标签、模块隔离、格式、构建、测试、覆盖率、Race、fuzz、真实性能门禁、真实服务契约、静态与漏洞扫描。
+4. 等待 Framework CI and Release 工作流完成。**严禁在标签 CI 门禁全部通过前手工在 GitHub UI 或 CLI 创建公开 Release**；公开 Release 只能由工作流的 `publish` 阶段在版本一致性（`scripts/check_release_version.py --tag`）、模块隔离、格式、构建、测试、覆盖率、Race、fuzz、真实性能门禁、真实服务契约、静态与漏洞扫描全部通过后自动生成并挂载附件。工作流同时监听 `release`（`published`/`edited`）事件复核标签与源码版本，若标签门禁失败，绝不允许移动或重用旧标签，必须递进新的未使用补丁版本号重新提交并打标。
 5. 工作流从根模块生成 CycloneDX SBOM，附带 Apache-2.0 许可证、依赖闭包、序列号和生成时间；随后生成 SHA-256 校验和及 GitHub OIDC provenance。
 6. 发布前，工作流会在不含本仓库 `go.work` 和本地 `replace` 的临时模块中通过 `GOPROXY=direct` 获取目标模块标签，并运行一个真实导入 `ApplicationDefinition`、注册应用和读取应用清单的下游测试；只完成 `go get` 或 `go list` 不算下游编译验收。
 

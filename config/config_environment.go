@@ -86,7 +86,17 @@ func (c *Config) ApplyEnvironment(source EnvironmentSource) error {
 
 	changed := false
 	for _, environmentName := range environmentNames {
+		lookupName := environmentName
 		raw, exists := source.Lookup(environmentName)
+		if !exists {
+			if fallbackName, hasFallback := standardConfigEnvironmentFallback(environmentName, bindings); hasFallback {
+				if fallbackRaw, fallbackExists := source.Lookup(fallbackName); fallbackExists {
+					raw = fallbackRaw
+					exists = true
+					lookupName = fallbackName
+				}
+			}
+		}
 		if !exists {
 			continue
 		}
@@ -103,7 +113,7 @@ func (c *Config) ApplyEnvironment(source EnvironmentSource) error {
 		binding := candidates[0]
 		value, err := parseConfigEnvironmentValue(binding.path, raw, binding.prototype)
 		if err != nil {
-			return attachConfigEnvironmentName(environmentName, err)
+			return attachConfigEnvironmentName(lookupName, err)
 		}
 		binding.container[binding.key] = value
 		changed = true
@@ -149,6 +159,20 @@ func addConfigEnvironmentBinding(bindings map[string][]configEnvironmentBinding,
 	bindings[environmentName] = append(bindings[environmentName], configEnvironmentBinding{
 		path: path, container: container, key: key, prototype: prototype,
 	})
+}
+
+func standardConfigEnvironmentFallback(environmentName string, bindings map[string][]configEnvironmentBinding) (string, bool) {
+	switch environmentName {
+	case "APP_APP_ENV":
+		if len(bindings["APP_APP_ENV"]) == 1 && bindings["APP_APP_ENV"][0].path == "app.app_env" && len(bindings["APP_ENV"]) == 0 {
+			return "APP_ENV", true
+		}
+	case "APP_APP_DEBUG":
+		if len(bindings["APP_APP_DEBUG"]) == 1 && bindings["APP_APP_DEBUG"][0].path == "app.app_debug" && len(bindings["APP_DEBUG"]) == 0 {
+			return "APP_DEBUG", true
+		}
+	}
+	return "", false
 }
 
 func appendConfigPath(prefix []string, key string) []string {

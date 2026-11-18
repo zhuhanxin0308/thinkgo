@@ -126,6 +126,9 @@ func (state *projectConfigurationState) load() {
 	if err := owner.config.ApplyEnvironment(owner.env); err != nil {
 		loadErr = errors.Join(loadErr, fmt.Errorf("合并环境配置失败: %w", err))
 	}
+	if err := applyStandardApplicationEnvironment(owner.config, owner.env); err != nil {
+		loadErr = errors.Join(loadErr, fmt.Errorf("合并环境配置失败: %w", err))
+	}
 
 	// 先捕获环境，再冻结入口 Env；后续进程环境变化不会影响应用覆盖层。
 	state.environment = owner.env.Snapshot()
@@ -238,4 +241,57 @@ func (app *App) reapplyProjectApplicationOverrides() error {
 	}
 	app.config.ReplaceWithSnapshot(candidate)
 	return nil
+}
+
+// applyStandardApplicationEnvironment 在配置文件省略 app_env / app_debug 时，仍将
+// 标准部署环境变量 APP_APP_ENV / APP_ENV 与 APP_APP_DEBUG / APP_DEBUG 映射入配置快照。
+func applyStandardApplicationEnvironment(target *config.Config, source *env.Env) error {
+	if target == nil || source == nil {
+		return nil
+	}
+	if !target.Has("app.app_env") {
+		if raw, ok := source.Lookup("APP_APP_ENV"); ok {
+			if err := target.Set("app.app_env", raw); err != nil {
+				return err
+			}
+		} else if raw, ok := source.Lookup("APP_ENV"); ok {
+			if err := target.Set("app.app_env", raw); err != nil {
+				return err
+			}
+		}
+	}
+	if !target.Has("app.app_debug") {
+		envName := ""
+		raw := ""
+		if value, ok := source.Lookup("APP_APP_DEBUG"); ok {
+			envName, raw = "APP_APP_DEBUG", value
+		} else if value, ok := source.Lookup("APP_DEBUG"); ok {
+			envName, raw = "APP_DEBUG", value
+		}
+		if envName != "" {
+			parsed, ok := parseStandardApplicationBool(raw)
+			if !ok {
+				return &config.ConfigEnvironmentValueError{
+					EnvironmentName: envName,
+					Path:            "app.app_debug",
+					Expected:        "boolean",
+				}
+			}
+			if err := target.Set("app.app_debug", parsed); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func parseStandardApplicationBool(raw string) (bool, bool) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "true", "1", "on":
+		return true, true
+	case "false", "0", "off":
+		return false, true
+	default:
+		return false, false
+	}
 }

@@ -302,6 +302,12 @@ func TestEnvironmentExampleMatchesDeclaredConfigStructure(t *testing.T) {
 	if publicPath := configuration.GetString("app.public_path"); publicPath != "web" {
 		t.Fatalf("APP_PUBLIC_PATH 未覆盖声明的公共目录: %q", publicPath)
 	}
+	if !configuration.GetBool("app.app_debug") {
+		t.Fatal(".env.example 顶层 APP_DEBUG=true 应回退覆盖声明的 app.app_debug")
+	}
+	if envName := configuration.GetString("app.app_env"); envName != "development" {
+		t.Fatalf("testdata/project/config/app.json 应声明默认 app_env 示例，实际为 %q", envName)
+	}
 }
 
 // TestCreateAppCacheRegistersDefaultAliasAndNamedStores 验证默认驱动同时可通过配置名称访问，且不同 store 相互隔离。

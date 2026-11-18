@@ -298,3 +298,43 @@ func TestApplyEnvironmentAcceptsTypedNilSource(t *testing.T) {
 		t.Fatalf("类型化 nil 环境源不应返回错误: %v", err)
 	}
 }
+
+func TestApplyEnvironmentSupportsStandardAppEnvAndAppDebugFallbacks(t *testing.T) {
+	configuration := NewConfig()
+	if err := configuration.Set("app.app_env", "development"); err != nil {
+		t.Fatal(err)
+	}
+	if err := configuration.Set("app.app_debug", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := configuration.ApplyEnvironment(environmentStub{
+		"APP_ENV":   "production",
+		"APP_DEBUG": "false",
+	}); err != nil {
+		t.Fatalf("标准 APP_ENV / APP_DEBUG 回退覆盖失败: %v", err)
+	}
+	if got := configuration.GetString("app.app_env"); got != "production" {
+		t.Fatalf("APP_ENV 未回退覆盖 app.app_env，实际为 %q", got)
+	}
+	if configuration.GetBool("app.app_debug", true) {
+		t.Fatal("APP_DEBUG=false 未回退覆盖 app.app_debug")
+	}
+
+	if err := configuration.ApplyEnvironment(environmentStub{
+		"APP_APP_ENV":   "staging",
+		"APP_ENV":       "production",
+		"APP_APP_DEBUG": "true",
+		"APP_DEBUG":     "false",
+	}); err != nil {
+		t.Fatalf("显式 APP_APP_* 优先覆盖失败: %v", err)
+	}
+	if got := configuration.GetString("app.app_env"); got != "staging" || !configuration.GetBool("app.app_debug") {
+		t.Fatalf("APP_APP_* 应优先于 APP_ENV/APP_DEBUG: env=%q debug=%v", got, configuration.GetBool("app.app_debug"))
+	}
+
+	err := configuration.ApplyEnvironment(environmentStub{"APP_DEBUG": "not-bool"})
+	var valueErr *ConfigEnvironmentValueError
+	if !errors.As(err, &valueErr) || valueErr.EnvironmentName != "APP_DEBUG" {
+		t.Fatalf("非法 APP_DEBUG 应保留原变量名错误上下文: %v", err)
+	}
+}

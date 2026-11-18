@@ -7,11 +7,37 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/redact"
 )
 
 const visibleErrorCredentialRunes = 4
 
-var sensitiveErrorFieldPattern = regexp.MustCompile(`(?i)(proxy-authorization|authorization|set-cookie|cookie|password|passwd|secret|session|token|api[-_]?key|refresh[-_]?token|private[-_]?key|signing[-_]?key|encryption[-_]?key|access[-_]?key|credential|client[-_]?secret)(["']?[\t ]*[:=][\t ]*)`)
+var (
+	candidateErrorFieldPattern      = regexp.MustCompile(`([A-Za-z0-9_][A-Za-z0-9_.-]*)(["']?[\t ]*[:=][\t ]*)`)
+	sensitiveErrorFieldSuffixRegexp = regexp.MustCompile(`(?i)(proxy-authorization|authorization|set-cookie|cookie|password|passwd|secret|session|token|api[-_]?key|refresh[-_]?token|private[-_]?key|signing[-_]?key|encryption[-_]?key|access[-_]?key|credential|client[-_]?secret)$`)
+)
+
+func findSensitiveErrorFieldMatches(message string) [][]int {
+	candidates := candidateErrorFieldPattern.FindAllStringSubmatchIndex(message, -1)
+	if len(candidates) == 0 {
+		return nil
+	}
+	matches := make([][]int, 0, len(candidates))
+	for _, sub := range candidates {
+		rawKey := message[sub[2]:sub[3]]
+		if loc := sensitiveErrorFieldSuffixRegexp.FindStringIndex(rawKey); loc != nil {
+			keyStart := sub[2] + loc[0]
+			keyEnd := sub[2] + loc[1]
+			matches = append(matches, []int{keyStart, sub[1], keyStart, keyEnd})
+			continue
+		}
+		if redact.CredentialAlias(rawKey) {
+			matches = append(matches, []int{sub[2], sub[1], sub[2], sub[3]})
+		}
+	}
+	return matches
+}
 
 // redactErrorCredentials 按字段类型识别凭据边界，避免把认证方案或首项 Cookie 当成完整凭据。
 func redactErrorCredentials(message string) string {
@@ -23,7 +49,7 @@ func redactErrorCredentialsWithMask(message string, mask func(string) string) st
 	if !strings.ContainsAny(message, ":=") {
 		return message
 	}
-	matches := sensitiveErrorFieldPattern.FindAllStringSubmatchIndex(message, -1)
+	matches := findSensitiveErrorFieldMatches(message)
 	if len(matches) == 0 {
 		return message
 	}

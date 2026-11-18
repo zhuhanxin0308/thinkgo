@@ -147,36 +147,42 @@ func unavailableCSRFHandler(req *context.Request, next func(*context.Request) *c
 }
 
 // warnProductionSecurity 执行生产级安全检查；其他环境可通过 app.security_strict 显式启用。
-// 生产环境不能通过关闭此开关绕过检查，非法开关值仍会进入启动错误链。
+// 生产环境（含 APP_ENV=production/prod/release）与严格模式会阻断不安全启动；app_env 缺省或
+// 非显式开发/测试环境时默认执行安全检查并输出告警，仅显式 development/dev/local/testing/test 跳过。
 func (app *App) warnProductionSecurity() {
 	if app == nil {
 		return
 	}
 	strict := app.readApplicationBool("app.security_strict", false)
-	production := strings.EqualFold(app.securityWarningEnvironment(), securityEnvironmentProduction)
-	if !strict && !production {
+	normalizedEnv := app.securityWarningEnvironment()
+	production := strings.EqualFold(normalizedEnv, securityEnvironmentProduction)
+	enforce := strict || production
+	if !enforce && isExemptSecurityEnvironment(normalizedEnv) {
 		return
 	}
+	emit := func(category uint32, message string) {
+		app.emitSecurityCheckResult(category, message, strict, enforce)
+	}
 	if app.IsDebug() || (app.config != nil && app.config.GetBool("app.app_debug", false)) {
-		app.emitSecurityWarning(securityWarningDebug, "生产环境安全警告：必须关闭 app_debug")
+		emit(securityWarningDebug, "生产环境安全警告：必须关闭 app_debug")
 	}
 	profile := app.securityProfile
 	if app.config != nil && app.config.Has("app.security_profile") {
 		parsed, err := readSecurityProfile(app.config.Get("app.security_profile"))
 		if err != nil {
-			app.emitSecurityWarning(securityWarningProfile, "生产环境安全警告：security_profile 配置无效")
+			emit(securityWarningProfile, "生产环境安全警告：security_profile 配置无效")
 			return
 		}
 		profile = parsed
 	} else {
-		app.emitSecurityWarning(securityWarningProfile, "生产环境安全警告：必须显式配置 security_profile")
+		emit(securityWarningProfile, "生产环境安全警告：必须显式配置 security_profile")
 	}
 	if profile == "" {
 		profile = app.defaultSecurityProfile()
 	}
 
 	if !app.hasAllowedHosts() {
-		app.emitSecurityWarning(securityWarningAllowedHosts, "生产环境安全警告：allowed_hosts 未配置具体白名单或使用了 *")
+		emit(securityWarningAllowedHosts, "生产环境安全警告：allowed_hosts 未配置具体白名单或使用了 *")
 	}
 	sessionEnabled := app.sessionEnabled
 	csrfEnabled := app.csrfEnabled
@@ -186,15 +192,15 @@ func (app *App) warnProductionSecurity() {
 	}
 	if profile == SecurityProfileStatelessAPI {
 		if sessionEnabled || csrfEnabled {
-			app.emitSecurityWarning(securityWarningProfileMismatch, "生产环境安全警告：stateless_api 必须关闭 Session 与 CSRF Cookie")
+			emit(securityWarningProfileMismatch, "生产环境安全警告：stateless_api 必须关闭 Session 与 CSRF Cookie")
 		}
 		return
 	}
 	if !sessionEnabled {
-		app.emitSecurityWarning(securityWarningSessionDisabled, "生产环境安全警告：browser_cookie 必须启用 Session")
+		emit(securityWarningSessionDisabled, "生产环境安全警告：browser_cookie 必须启用 Session")
 	}
 	if production && app.session != nil && app.session.GetConfig().VarSessionID != "" {
-		app.emitSecurityWarning(securityWarningSessionPOSTID, "生产环境安全警告：browser_cookie 禁止配置 session.var_session_id")
+		emit(securityWarningSessionPOSTID, "生产环境安全警告：browser_cookie 禁止配置 session.var_session_id")
 	}
 
 	cookieSecret := ""
@@ -202,25 +208,25 @@ func (app *App) warnProductionSecurity() {
 		cookieSecret = strings.TrimSpace(app.cookie.GetConfig().Secret)
 	}
 	if cookieSecret == "" {
-		app.emitSecurityWarning(securityWarningCookieSecret, "生产环境安全警告：Cookie/Session 密钥为空")
+		emit(securityWarningCookieSecret, "生产环境安全警告：Cookie/Session 密钥为空")
 	}
 	if app.cookie == nil || !app.cookie.GetConfig().Secure {
-		app.emitSecurityWarning(securityWarningCookieTransport, "生产环境安全警告：Cookie/Session Cookie 未启用 Secure")
+		emit(securityWarningCookieTransport, "生产环境安全警告：Cookie/Session Cookie 未启用 Secure")
 	}
 	// 显式严格档案补齐通用 Cookie 与外部 Session ID 的安全策略。
 	// 保留原有生产配置的兼容性；启用 strict 后不能以空默认值绕过检查。
 	if strict {
 		if app.cookie == nil || !app.cookie.GetConfig().HttpOnly {
-			app.emitSecurityWarning(securityWarningCookieHTTPOnly, "生产环境安全警告：严格 browser_cookie 必须设置 cookie.httponly=true")
+			emit(securityWarningCookieHTTPOnly, "生产环境安全警告：严格 browser_cookie 必须设置 cookie.httponly=true")
 		}
 		if app.cookie == nil || !strictCookieSameSite(app.cookie.GetConfig().SameSite) {
-			app.emitSecurityWarning(securityWarningCookieSameSite, "生产环境安全警告：严格 browser_cookie 必须设置 cookie.samesite=Lax 或 Strict")
+			emit(securityWarningCookieSameSite, "生产环境安全警告：严格 browser_cookie 必须设置 cookie.samesite=Lax 或 Strict")
 		}
 		if app.session == nil || !app.session.GetConfig().RejectUnknownID {
-			app.emitSecurityWarning(securityWarningSessionID, "生产环境安全警告：严格 browser_cookie 必须设置 session.reject_unknown_id=true")
+			emit(securityWarningSessionID, "生产环境安全警告：严格 browser_cookie 必须设置 session.reject_unknown_id=true")
 		}
 		if app.session == nil || !strictCookieSameSite(app.session.GetConfig().SameSite) {
-			app.emitSecurityWarning(securityWarningSessionSameSite, "生产环境安全警告：严格 browser_cookie 必须设置 session.samesite=Lax 或 Strict")
+			emit(securityWarningSessionSameSite, "生产环境安全警告：严格 browser_cookie 必须设置 session.samesite=Lax 或 Strict")
 		}
 	}
 
@@ -234,13 +240,13 @@ func (app *App) warnProductionSecurity() {
 		csrfSecret = cookieSecret
 	}
 	if csrfSecret == "" {
-		app.emitSecurityWarning(securityWarningCSRFSecret, "生产环境安全警告：CSRF 密钥为空")
+		emit(securityWarningCSRFSecret, "生产环境安全警告：CSRF 密钥为空")
 	}
 
 	if !csrfEnabled {
-		app.emitSecurityWarning(securityWarningCSRFDisabled, "生产环境安全警告：CSRF 未启用")
+		emit(securityWarningCSRFDisabled, "生产环境安全警告：CSRF 未启用")
 	} else if !app.config.GetBool("csrf.secure", false) {
-		app.emitSecurityWarning(securityWarningCSRFTransport, "生产环境安全警告：CSRF Cookie 未启用 Secure")
+		emit(securityWarningCSRFTransport, "生产环境安全警告：CSRF Cookie 未启用 Secure")
 	}
 }
 
@@ -305,25 +311,51 @@ func hasConcreteAllowedHosts(values []string) bool {
 	return configured
 }
 
-func (app *App) emitSecurityWarning(category uint32, message string) {
+func isExemptSecurityEnvironment(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "development", "dev", "local", "testing", "test":
+		return true
+	default:
+		return false
+	}
+}
+
+func (app *App) emitSecurityCheckResult(category uint32, message string, strict, enforce bool) {
 	if app == nil {
 		return
+	}
+	formatted := message
+	failure := "生产环境安全检查失败"
+	if app.securityWarningEnvironment() != securityEnvironmentProduction {
+		if strict {
+			formatted = strings.Replace(message, "生产环境安全警告", "严格模式安全警告", 1)
+			failure = "严格模式安全检查失败"
+		} else {
+			formatted = strings.Replace(message, "生产环境安全警告", "安全配置检查警告", 1)
+		}
 	}
 	for {
 		current := atomic.LoadUint32(&app.securityWarningBits)
 		if current&category != 0 {
-			return
+			break
 		}
 		if atomic.CompareAndSwapUint32(&app.securityWarningBits, current, current|category) {
-			failure := "生产环境安全检查失败"
-			if app.securityWarningEnvironment() != securityEnvironmentProduction {
-				message = strings.Replace(message, "生产环境安全警告", "严格模式安全警告", 1)
-				failure = "严格模式安全检查失败"
-			}
 			if app.log != nil {
-				app.log.Warning(message)
+				app.log.Warning(formatted)
 			}
-			app.recordStartupError(fmt.Errorf("%s: %s", failure, message))
+			break
+		}
+	}
+	if !enforce {
+		return
+	}
+	for {
+		current := atomic.LoadUint32(&app.securityEnforcedBits)
+		if current&category != 0 {
+			return
+		}
+		if atomic.CompareAndSwapUint32(&app.securityEnforcedBits, current, current|category) {
+			app.recordStartupError(fmt.Errorf("%s: %s", failure, formatted))
 			return
 		}
 	}

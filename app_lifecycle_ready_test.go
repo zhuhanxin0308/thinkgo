@@ -111,8 +111,9 @@ func TestAppRunEnsuresReadyBeforeKernel(t *testing.T) {
 	}
 }
 
-// TestInitializeDoesNotOverlapProviderBoot 验证公开 Initialize 与
-// Provider-only Boot 共享同一转换锁，不会在服务已启动时继续装配半成品项目。
+// TestInitializeDoesNotOverlapProviderBoot 验证公开 Initialize 与 BootProviders
+// 共享同一转换锁：未初始化项目应用调用 BootProviders 会先在同一转换锁内完成 Initialize，
+// 后续并发 Initialize 不会与 Provider Boot 交叉，也不会因跳过初始化锁死生命周期。
 func TestInitializeDoesNotOverlapProviderBoot(t *testing.T) {
 	basePath := t.TempDir()
 	writeTestAppConfigFiles(t, basePath)
@@ -157,16 +158,69 @@ observationLoop:
 		t.Fatal("Initialize 不得在 Provider Boot 完成前进入 Initializing")
 	}
 	if bootErr != nil {
-		t.Fatalf("Provider-only Boot 应正常完成，实际为 %v", bootErr)
+		t.Fatalf("BootProviders 应先完成项目初始化并正常启动，实际为 %v", bootErr)
 	}
-	if !errors.Is(initializeErr, ErrProviderLifecycleClosed) {
-		t.Fatalf("已启动 Provider 后再初始化项目应失败闭锁，实际为 %v", initializeErr)
+	if initializeErr != nil {
+		t.Fatalf("BootProviders 已完成初始化后重复 Initialize 应幂等成功，实际为 %v", initializeErr)
 	}
-	if app.State() != ApplicationStateFailed {
-		t.Fatalf("交叉顺序非法后应保持 Failed，实际为 %s", app.State())
+	if app.State() != ApplicationStateInitialized {
+		t.Fatalf("串行完成后应保持 Initialized，实际为 %s", app.State())
+	}
+	if err := app.EnsureReady(); err != nil {
+		t.Fatalf("BootProviders 后调用 EnsureReady 不应失败: %v", err)
 	}
 	if err := app.Close(); err != nil {
 		t.Fatalf("关闭转换串行测试应用失败: %v", err)
+	}
+}
+
+// TestUninitializedAppBootCompletesInitializeAndPreservesEnsureReady 验证未初始化应用直接调用
+// Boot / BootProviders 时自动先执行 Initialize，后续 EnsureReady 与核心服务解析全部正常。
+func TestUninitializedAppBootCompletesInitializeAndPreservesEnsureReady(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		construct func(basePath ...string) *App
+		useBoot   bool
+	}{
+		{name: "ConsoleApp/Boot", construct: NewConsoleAppUninitialized, useBoot: true},
+		{name: "ConsoleApp/BootProviders", construct: NewConsoleAppUninitialized, useBoot: false},
+		{name: "App/Boot", construct: NewAppUninitialized, useBoot: true},
+		{name: "App/BootProviders", construct: NewAppUninitialized, useBoot: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			basePath := t.TempDir()
+			writeTestAppConfigFiles(t, basePath)
+			app := tc.construct(basePath)
+			t.Cleanup(func() { _ = app.Close() })
+
+			var err error
+			if tc.useBoot {
+				err = app.Boot()
+			} else {
+				err = app.BootProviders()
+			}
+			if err != nil {
+				t.Fatalf("未初始化应用调用启动入口失败: %v", err)
+			}
+			if !app.Initialized() || app.State() != ApplicationStateInitialized {
+				t.Fatalf("Boot 后应用必须完成初始化: initialized=%t state=%s", app.Initialized(), app.State())
+			}
+			if err := app.EnsureReady(); err != nil {
+				t.Fatalf("Boot 后调用 EnsureReady 不应锁死或失败: %v", err)
+			}
+			for _, service := range []ServiceName{ServiceConfig, ServiceLog, ServiceCache} {
+				if resolved, resolveErr := app.ResolveService(service); resolveErr != nil || resolved == nil {
+					t.Fatalf("解析核心服务 %q 失败: resolved=%v err=%v", service, resolved, resolveErr)
+				}
+			}
+		})
+	}
+
+	// 缺少有效配置目录的未初始化应用直接 Boot 应失败闭锁，不得假装 Initialized。
+	invalidApp := NewConsoleAppUninitialized(t.TempDir())
+	t.Cleanup(func() { _ = invalidApp.Close() })
+	if err := invalidApp.Boot(); err == nil || invalidApp.State() != ApplicationStateFailed {
+		t.Fatalf("无效项目直接 Boot 应进入 Failed 状态: state=%s err=%v", invalidApp.State(), err)
 	}
 }
 

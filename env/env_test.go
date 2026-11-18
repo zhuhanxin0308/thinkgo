@@ -560,3 +560,57 @@ func TestZeroValueEnvCanLoad(t *testing.T) {
 		t.Fatalf("Env 零值未保存加载结果，实际为 %q", got)
 	}
 }
+
+// TestLoadSupportsUTF8BOMAndEscapedDoubleQuotes 验证 UTF-8 BOM 首行剥离、双引号转义解码及未闭合转义引号拒绝。
+func TestLoadSupportsUTF8BOMAndEscapedDoubleQuotes(t *testing.T) {
+	bomFile := filepath.Join(t.TempDir(), ".env.bom")
+	content := "\xef\xbb\xbfAPP_DEBUG=true\nHOSTS=\"[\\\"a.com\\\",\\\"b.com\\\"]\"\nESCAPED_TAIL=\"abc\\\\\"\nLINES=\"first\\nsecond\\tthird\\rend\"\nRAW_SINGLE='[\"x.com\"]'\n"
+	if err := dotenvtest.WriteFile(bomFile, []byte(content)); err != nil {
+		t.Fatalf("写入带 BOM 测试文件失败: %v", err)
+	}
+	e := NewEnv()
+	if err := e.Load(bomFile); err != nil {
+		t.Fatalf("带 UTF-8 BOM 的合法 .env 加载失败: %v", err)
+	}
+	if got, err := e.GetBool("APP_DEBUG"); err != nil || !got {
+		t.Fatalf("BOM 首行 APP_DEBUG 解析失败: got=%v err=%v", got, err)
+	}
+	if got := e.Get("ESCAPED_TAIL"); got != `abc\` {
+		t.Fatalf("双反斜杠结尾解析错误: %q", got)
+	}
+	if got := e.Get("LINES"); got != "first\nsecond\tthird\rend" {
+		t.Fatalf("转义空白符解码错误: %q", got)
+	}
+	cfg := config.NewConfig()
+	if err := cfg.Set("hosts", []string{"localhost"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Set("raw_single", []string{"localhost"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.ApplyEnvironment(e); err != nil {
+		t.Fatalf("双引号转义 JSON 数组无法通过 Config.ApplyEnvironment: %v", err)
+	}
+	if got := cfg.Get("hosts"); len(got.([]string)) != 2 || got.([]string)[0] != "a.com" || got.([]string)[1] != "b.com" {
+		t.Fatalf("JSON 切片往返结果错误: %#v", got)
+	}
+	if got := cfg.Get("raw_single"); len(got.([]string)) != 1 || got.([]string)[0] != "x.com" {
+		t.Fatalf("单引号 JSON 切片往返结果错误: %#v", got)
+	}
+
+	for name, badContent := range map[string]string{
+		"unclosed_escaped_quote": "UNCLOSED=\"abc\\\"\n",
+		"trailing_after_double":  "BAD=\"abc\"extra\n",
+		"trailing_after_single":  "BAD='abc'extra\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			badFile := filepath.Join(t.TempDir(), ".env")
+			if err := dotenvtest.WriteFile(badFile, []byte(badContent)); err != nil {
+				t.Fatal(err)
+			}
+			if err := NewEnv().Load(badFile); err == nil {
+				t.Fatalf("畸形引号配置 %q 必须被拒绝", badContent)
+			}
+		})
+	}
+}

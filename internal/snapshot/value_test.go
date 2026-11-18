@@ -86,4 +86,18 @@ func TestCopyValidatesOverlappingViewsAcrossBranches(t *testing.T) {
 	if value, err := Copy(nil); value != nil || err != nil {
 		t.Fatalf("空输入应保持空值: %v, %v", value, err)
 	}
+	var identicalSpans Spans
+	if _, err := CopyAt(backing, 1, &identicalSpans); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CopyAt(backing, 1, &identicalSpans); err != nil {
+		t.Fatal(err)
+	}
+	if err := identicalSpans.Validate(); err != nil {
+		t.Fatalf("跨分支完全相同的切片视图不应被误判为重叠: %v", err)
+	}
+	budget := 1
+	if _, err := CopyAtWithBudget([]int{1, 2, 3}, 0, nil, &budget); !errors.Is(err, ErrUnsupportedValue) {
+		t.Fatalf("超出节点预算应返回 ErrUnsupportedValue: %v", err)
+	}
 }

@@ -210,10 +210,28 @@ func applyThinkPHPDatabaseDefaults(config map[string]interface{}, target *db.Con
 	return nil
 }
 
-// readDatabaseParams 要求 JSON 连接参数显式使用字符串，避免布尔值或浮点数被隐式改写。
+// readDatabaseParams 要求连接参数显式使用字符串，同时兼容 JSON 对象与代码注入的 map[string]string。
 func readDatabaseParams(raw interface{}) (map[string]string, error) {
 	if raw == nil {
 		return nil, nil
+	}
+	if typedParams, ok := raw.(map[string]string); ok {
+		if len(typedParams) == 0 {
+			return nil, nil
+		}
+		params := make(map[string]string, len(typedParams))
+		keys := make([]string, 0, len(typedParams))
+		for key := range typedParams {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			if strings.TrimSpace(key) == "" {
+				return nil, fmt.Errorf("%w: params 包含空键", db.ErrInvalidDatabaseConfig)
+			}
+			params[key] = typedParams[key]
+		}
+		return params, nil
 	}
 	rawParams, ok := raw.(map[string]interface{})
 	if !ok {

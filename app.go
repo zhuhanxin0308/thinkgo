@@ -3,25 +3,15 @@ package framework
 import (
 	"errors"
 	"fmt"
-	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
-	"reflect"
-	"sort"
 	"strings"
-	"sync"
-	"sync/atomic"
-	"time"
 
-	"github.com/zhuhanxin0308/thinkgo/v3/cache"
 	"github.com/zhuhanxin0308/thinkgo/v3/config"
-	"github.com/zhuhanxin0308/thinkgo/v3/cookie"
-	"github.com/zhuhanxin0308/thinkgo/v3/db"
 	"github.com/zhuhanxin0308/thinkgo/v3/debug"
 	"github.com/zhuhanxin0308/thinkgo/v3/env"
 	"github.com/zhuhanxin0308/thinkgo/v3/event"
-	"github.com/zhuhanxin0308/thinkgo/v3/filesystem"
 	"github.com/zhuhanxin0308/thinkgo/v3/health"
 	"github.com/zhuhanxin0308/thinkgo/v3/lang"
 	"github.com/zhuhanxin0308/thinkgo/v3/log"
@@ -29,99 +19,25 @@ import (
 	"github.com/zhuhanxin0308/thinkgo/v3/middleware"
 	"github.com/zhuhanxin0308/thinkgo/v3/migration"
 	"github.com/zhuhanxin0308/thinkgo/v3/route"
-	"github.com/zhuhanxin0308/thinkgo/v3/session"
 	"github.com/zhuhanxin0308/thinkgo/v3/telemetry"
-	"github.com/zhuhanxin0308/thinkgo/v3/view"
 )
 
-// defaultDatabaseConnectionName 是未配置数据库时空管理器使用的稳定内部默认名称。
-const defaultDatabaseConnectionName = "default"
-
-// App 应用实例
+// App 应用实例，按单一职责组合元数据、托管服务、启动状态、注册表、运行策略和数据库状态。
 // 对应 ThinkPHP 8 的 think\App
 type App struct {
-	container                  *Container
-	BasePath                   string
-	AppName                    string
-	ApplicationPath            string
-	RuntimePath                string
-	DebugMode                  bool
-	metadataMu                 sync.RWMutex
-	debugOverrideSet           bool
-	debugOverride              bool
-	applicationName            string
-	applicationDefinition      ApplicationDefinition
-	applicationCatalog         *applicationCatalog
-	nativeApplicationPath      string
-	nativeRuntimeBasePath      string
-	projectConfiguration       *projectConfigurationState
-	projectConfigSnapshot      *config.Config
-	namespace                  string
-	baseEnvName                string
-	envName                    string
-	configExt                  string
-	consoleMode                bool
-	beginTime                  atomic.Uint64
-	beginMem                   atomic.Uint64
-	route                      *route.Router
-	routeFacade                *Route
-	middleware                 *middleware.Pipeline
-	applicationMiddleware      *middleware.Pipeline
-	db                         *db.DB
-	dbManager                  *db.Manager
-	config                     *config.Config
-	env                        *env.Env
-	log                        *log.Log
-	metrics                    *metrics.Registry
-	health                     *health.Registry
-	view                       *view.View
-	cache                      *cache.Cache
-	filesystem                 *filesystem.Filesystem
-	event                      *event.Dispatcher
-	lang                       *lang.Lang
-	cookie                     *cookie.Cookie
-	session                    *session.Session
-	debug                      *debug.Debug
-	migrations                 *migration.Registry
-	telemetry                  *telemetry.Tracing
-	Kernel                     Kernel
-	registry                   applicationRegistry
-	registrationMu             sync.RWMutex
-	registrationClosed         bool
-	loadingNativeDefinition    bool
-	appInitOnce                sync.Once
-	appInitErr                 error
-	routeLoadOnce              sync.Once
-	routeLoadErr               error
-	startupMu                  sync.RWMutex
-	startupErr                 error
-	startupErrorCount          int
-	startupErrorOmitted        int
-	locationMu                 sync.RWMutex
-	location                   *time.Location
-	securityWarningBits        uint32
-	serviceMutationMu          sync.Mutex
-	resources                  serviceResources
-	applicationServiceMu       sync.RWMutex
-	applicationServices        []*applicationServiceProvider
-	applicationServiceInFlight map[reflect.Type]struct{}
-	providers                  providerLifecycle
-	lifecycle                  appLifecycle
-	sessionEnabled             bool
-	csrfEnabled                bool
-	traceEnabled               bool
-	metricsEnabled             bool
-	operationalRoutesEnabled   bool
-	securityProfile            SecurityProfile
-	databaseStartupPolicy      DatabaseStartupPolicy
-	operationalAccess          OperationalAccess
-	operationalAllowedPrefixes []netip.Prefix
-	databaseReadinessMu        sync.RWMutex
-	databaseReadinessErr       error
-	// skipDatabaseInit 为 true 时，Initialize 跳过数据库连接。
-	// 供不需要数据库的控制台命令（version/list/make:* 等）使用，
-	// 避免每次执行命令都尝试连库并打印连接失败日志。
-	skipDatabaseInit bool
+	BasePath        string
+	AppName         string
+	ApplicationPath string
+	RuntimePath     string
+	DebugMode       bool
+	Kernel          Kernel
+
+	appMetadataState
+	appServiceHolders
+	appStartupState
+	appRegistrationState
+	appRuntimePolicyState
+	appDatabaseRuntimeState
 }
 
 // NewApp 创建尚未初始化的应用实例。
@@ -199,32 +115,40 @@ func newAppWithOptions(skipDatabase bool, basePath ...string) *App {
 
 	router := route.NewRouter()
 	app := &App{
-		container:             NewContainer(),
-		BasePath:              path,
-		AppName:               defaultApplicationDisplayName,
-		ApplicationPath:       applicationPath,
-		RuntimePath:           runtimePath,
-		nativeRuntimeBasePath: runtimePath,
-		namespace:             "app",
-		configExt:             ".json",
-		consoleMode:           skipDatabase,
-		route:                 router,
-		middleware:            middleware.NewPipeline(),
-		applicationMiddleware: middleware.NewPipeline(),
-		config:                config.NewConfig(),
-		env:                   env.NewEnv(),
-		// 构造阶段只保留无驱动日志占位器，真实日志驱动由 Log Provider 按配置创建。
-		log:              log.NewLog(),
-		metrics:          metrics.NewRegistry(),
-		health:           health.NewRegistry(),
-		event:            event.NewDispatcher(),
-		lang:             lang.NewLang(),
-		debug:            debug.NewDebug(),
-		migrations:       migration.NewRegistry(),
-		telemetry:        telemetry.Disabled(),
-		location:         defaultApplicationLocation(),
-		lifecycle:        appLifecycle{requiresInitialization: true, state: ApplicationStateConstructed},
-		skipDatabaseInit: skipDatabase,
+		BasePath:        path,
+		AppName:         defaultApplicationDisplayName,
+		ApplicationPath: applicationPath,
+		RuntimePath:     runtimePath,
+		appMetadataState: appMetadataState{
+			nativeRuntimeBasePath: runtimePath,
+			namespace:             "app",
+			configExt:             ".json",
+			consoleMode:           skipDatabase,
+			location:              defaultApplicationLocation(),
+		},
+		appServiceHolders: appServiceHolders{
+			container:             NewContainer(),
+			route:                 router,
+			middleware:            middleware.NewPipeline(),
+			applicationMiddleware: middleware.NewPipeline(),
+			config:                config.NewConfig(),
+			env:                   env.NewEnv(),
+			// 构造阶段只保留无驱动日志占位器，真实日志驱动由 Log Provider 按配置创建。
+			log:        log.NewLog(),
+			metrics:    metrics.NewRegistry(),
+			health:     health.NewRegistry(),
+			event:      event.NewDispatcher(),
+			lang:       lang.NewLang(),
+			debug:      debug.NewDebug(),
+			migrations: migration.NewRegistry(),
+			telemetry:  telemetry.Disabled(),
+		},
+		appStartupState: appStartupState{
+			lifecycle: appLifecycle{requiresInitialization: true, state: ApplicationStateConstructed},
+		},
+		appDatabaseRuntimeState: appDatabaseRuntimeState{
+			skipDatabaseInit: skipDatabase,
+		},
 	}
 	app.routeFacade = newRouteFacade(app, router)
 	app.projectConfiguration = newProjectConfigurationState(app)
@@ -282,18 +206,35 @@ func (app *App) IsDebug() bool {
 	return enabled
 }
 
-// Environment 返回当前运行环境；未显式设置时与 ThinkPHP 一致为空。
+// Environment 返回当前运行环境；配置未显式声明时回退读取 APP_APP_ENV / APP_ENV / env_name。
 func (app *App) Environment() string {
 	if app == nil {
 		return ""
 	}
+	hasConfiguredAppEnv := false
 	environmentName := ""
 	if app.config != nil {
+		hasConfiguredAppEnv = app.config.Has("app.app_env")
 		environmentName = strings.TrimSpace(app.config.GetString("app.app_env"))
 	}
 	if environmentName == "" {
 		_, configuredName := app.environmentNames()
 		environmentName = strings.TrimSpace(configuredName)
+	}
+	if environmentName == "" && !hasConfiguredAppEnv {
+		if app.env != nil {
+			if value, ok := app.env.Lookup("APP_APP_ENV"); ok {
+				environmentName = strings.TrimSpace(value)
+			} else if value, ok := app.env.Lookup("APP_ENV"); ok {
+				environmentName = strings.TrimSpace(value)
+			}
+		} else {
+			if value, ok := os.LookupEnv("APP_APP_ENV"); ok {
+				environmentName = strings.TrimSpace(value)
+			} else if value, ok := os.LookupEnv("APP_ENV"); ok {
+				environmentName = strings.TrimSpace(value)
+			}
+		}
 	}
 	if environmentName == "" && app.env != nil {
 		environmentName = strings.TrimSpace(app.env.Get("env_name", ""))
@@ -420,545 +361,4 @@ func (app *App) validateInitializationFoundation() error {
 		return fmt.Errorf("应用基础服务未完成构造: %s", strings.Join(missing, ", "))
 	}
 	return nil
-}
-
-const maxDatabaseInitializationConcurrency = 4
-
-type databaseConnectionSpec struct {
-	name   string
-	config db.Config
-}
-
-type databaseConnectionResult struct {
-	name     string
-	database *db.DB
-	err      error
-}
-
-// initDatabaseConnections 按配置并行建立数据库连接，并把默认连接绑定到 ServiceDB。
-// 并发数固定有界，结果在安装前按连接名称排序，避免启动顺序和默认连接语义漂移。
-func (app *App) initDatabaseConnections(dbConfigData map[string]interface{}, defaultConn string) {
-	specs := app.databaseConnectionSpecs(dbConfigData, defaultConn)
-
-	results := initializeDatabaseConnections(specs)
-	for _, spec := range specs {
-		result := results[spec.name]
-		if result.err != nil {
-			if spec.name == defaultConn {
-				app.setDatabaseReadinessError(result.err)
-				if app.databaseStartupPolicy == DatabaseStartupRequired {
-					app.recordStartupError(fmt.Errorf("required default database connection %q failed: %w", spec.name, result.err))
-				}
-			}
-			if app.log != nil && app.log.IsLevelEnabled(log.LevelWarning) {
-				connectionError := redactDatabaseConnectionError(result.err)
-				message := fmt.Sprintf("数据库连接 %q 失败（应用仍可启动，但 readiness 将失败，启动策略=%s）: %s", spec.name, app.databaseStartupPolicy, connectionError)
-				if app.databaseStartupPolicy == DatabaseStartupRequired && spec.name == defaultConn {
-					message = fmt.Sprintf("数据库连接 %q 失败（required 策略将阻断启动）: %s", spec.name, connectionError)
-				}
-				app.log.Warning(message)
-			}
-			if app.databaseStartupPolicy != DatabaseStartupRequired || spec.name != defaultConn {
-				if retryErr := app.registerDatabaseConnectionFactory(spec, defaultConn); retryErr != nil {
-					app.recordStartupError(retryErr)
-				}
-			}
-			continue
-		}
-		database := result.database
-		if database == nil {
-			if spec.name == defaultConn {
-				app.setDatabaseReadinessError(db.ErrDatabaseUnavailable)
-				if app.databaseStartupPolicy == DatabaseStartupRequired {
-					app.recordStartupError(fmt.Errorf("required default database connection %q unavailable: %w", spec.name, db.ErrDatabaseUnavailable))
-				}
-			}
-			if app.log != nil {
-				app.log.Warningf("数据库连接 %q 未返回可用连接（启动策略=%s）", spec.name, app.databaseStartupPolicy)
-			}
-			continue
-		}
-
-		database.SetLocation(app.Location())
-		database.SetLogger(app.log)
-		app.loadDatabaseSchemaCache(spec, database)
-		if err := app.dbManager.Add(spec.name, database); err != nil {
-			if spec.name == defaultConn {
-				app.setDatabaseReadinessError(err)
-			}
-			closeErr := database.Close()
-			app.recordStartupError(errors.Join(fmt.Errorf("database connection %q registration failed: %w", spec.name, err), closeErr))
-			continue
-		}
-		if spec.name == defaultConn {
-			app.db = database
-			app.setDatabaseReadinessError(nil)
-		}
-	}
-}
-
-// databaseConnectionSpecs 在任何网络连接前完整校验命名连接配置。
-func (app *App) databaseConnectionSpecs(dbConfigData map[string]interface{}, defaultConn string) []databaseConnectionSpec {
-	rawConnections, exists := dbConfigData["connections"]
-	connections, ok := rawConnections.(map[string]interface{})
-	if !exists || !ok || len(connections) == 0 {
-		app.setDatabaseReadinessError(fmt.Errorf("%w: database.connections 必须是非空对象", db.ErrInvalidDatabaseConfig))
-		app.recordStartupError(fmt.Errorf("%w: database.connections 必须是非空对象", db.ErrInvalidDatabaseConfig))
-		return nil
-	}
-	if _, exists := connections[defaultConn]; !exists {
-		app.setDatabaseReadinessError(fmt.Errorf("%w: 默认连接 %q 未在 database.connections 中声明", db.ErrInvalidDatabaseConfig, defaultConn))
-		app.recordStartupError(fmt.Errorf("%w: 默认连接 %q 未在 database.connections 中声明", db.ErrInvalidDatabaseConfig, defaultConn))
-	}
-
-	names := make([]string, 0, len(connections))
-	for name := range connections {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	specs := make([]databaseConnectionSpec, 0, len(names))
-	production := app.securityWarningEnvironment() == securityEnvironmentProduction
-	for _, name := range names {
-		if err := db.ValidateConnectionName(name); err != nil {
-			if name == defaultConn {
-				app.setDatabaseReadinessError(err)
-			}
-			app.recordStartupError(fmt.Errorf("database connection %q invalid: %w", name, err))
-			continue
-		}
-		connConfig, ok := connections[name].(map[string]interface{})
-		if !ok {
-			if name == defaultConn {
-				app.setDatabaseReadinessError(db.ErrInvalidDatabaseConfig)
-			}
-			app.recordStartupError(fmt.Errorf("%w: 数据库连接 %q 配置必须是对象", db.ErrInvalidDatabaseConfig, name))
-			continue
-		}
-
-		databaseConfig, err := readDatabaseConfig(connConfig)
-		if err == nil {
-			err = applyThinkPHPDatabaseDefaults(dbConfigData, &databaseConfig)
-		}
-		if err == nil && production && strings.EqualFold(strings.TrimSpace(databaseConfig.Type), "mongo") {
-			err = validateMongoProductionTLS(databaseConfig.Params)
-		}
-		if err != nil {
-			if name == defaultConn {
-				app.setDatabaseReadinessError(err)
-			}
-			app.recordStartupError(fmt.Errorf("database connection %q invalid: %w", name, err))
-			continue
-		}
-		applyDatabaseFallbacks(&databaseConfig)
-		specs = append(specs, databaseConnectionSpec{name: name, config: databaseConfig})
-	}
-	return specs
-}
-
-// registerLazyDatabaseConnections 注册通过配置校验的连接工厂，默认连接首次访问后
-// 才会真正拨号，保持 ThinkPHP 数据库管理器的按需连接行为。
-func (app *App) registerLazyDatabaseConnections(dbConfigData map[string]interface{}, defaultConn string) bool {
-	specs := app.databaseConnectionSpecs(dbConfigData, defaultConn)
-	defaultRegistered := false
-	for _, spec := range specs {
-		current := spec
-		err := app.registerDatabaseConnectionFactory(current, defaultConn)
-		if err != nil {
-			if current.name == defaultConn {
-				app.setDatabaseReadinessError(err)
-			}
-			app.recordStartupError(fmt.Errorf("注册惰性数据库连接 %q 失败: %w", current.name, err))
-			continue
-		}
-		if current.name == defaultConn {
-			defaultRegistered = true
-		}
-	}
-	return defaultRegistered
-}
-
-// registerDatabaseConnectionFactory 让首次连接故障保留可重试入口，支持无业务流量时由就绪探针恢复。
-func (app *App) registerDatabaseConnectionFactory(spec databaseConnectionSpec, defaultConn string) error {
-	return app.dbManager.RegisterFactory(spec.name, func() (*db.DB, error) {
-		database, connectErr := connectDatabaseSafely(spec.config)
-		if connectErr != nil {
-			if spec.name == defaultConn {
-				app.setDatabaseReadinessError(connectErr)
-			}
-			if app.log != nil && app.log.IsLevelEnabled(log.LevelWarning) {
-				app.log.Warningf("数据库连接 %q 失败（%s 策略将在下次访问或就绪检查时重试）: %s", spec.name, app.databaseStartupPolicy, redactDatabaseConnectionError(connectErr))
-			}
-			return nil, connectErr
-		}
-		database.SetLocation(app.Location())
-		database.SetLogger(app.log)
-		app.loadDatabaseSchemaCache(spec, database)
-		if spec.name == defaultConn {
-			app.setDatabaseReadinessError(nil)
-		}
-		return database, nil
-	})
-}
-
-// initializeDatabaseConnections 使用固定数量 worker，避免多个远程数据库的 Ping 让启动时间线性增长。
-func initializeDatabaseConnections(specs []databaseConnectionSpec) map[string]databaseConnectionResult {
-	results := make(map[string]databaseConnectionResult, len(specs))
-	if len(specs) == 0 {
-		return results
-	}
-	workerCount := len(specs)
-	if workerCount > maxDatabaseInitializationConcurrency {
-		workerCount = maxDatabaseInitializationConcurrency
-	}
-	jobs := make(chan databaseConnectionSpec)
-	resultChannel := make(chan databaseConnectionResult, len(specs))
-	var workers sync.WaitGroup
-	workers.Add(workerCount)
-	for index := 0; index < workerCount; index++ {
-		go func() {
-			defer workers.Done()
-			for spec := range jobs {
-				database, err := connectDatabaseSafely(spec.config)
-				resultChannel <- databaseConnectionResult{name: spec.name, database: database, err: err}
-			}
-		}()
-	}
-	go func() {
-		for _, spec := range specs {
-			jobs <- spec
-		}
-		close(jobs)
-		workers.Wait()
-		close(resultChannel)
-	}()
-	for result := range resultChannel {
-		results[result.name] = result
-	}
-	return results
-}
-
-// connectDatabaseSafely 将第三方连接器 panic 收敛为连接失败，避免后台 worker 直接崩溃宿主进程。
-func connectDatabaseSafely(config db.Config) (database *db.DB, err error) {
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			database = nil
-			err = fmt.Errorf("数据库连接器 panic: %v", recovered)
-		}
-	}()
-	return db.Connect(config)
-}
-
-func readDefaultDatabaseConnection(config map[string]interface{}) (string, error) {
-	if len(config) == 0 {
-		return "", fmt.Errorf("%w: database 配置不能为空", db.ErrInvalidDatabaseConfig)
-	}
-	keys := make([]string, 0, len(config))
-	for key := range config {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	for _, key := range keys {
-		if key != "default" && key != "connections" && key != "time_query_rule" &&
-			key != "auto_timestamp" && key != "datetime_format" && key != "datetime_field" {
-			return "", fmt.Errorf("%w: database 包含未知字段 %q", db.ErrInvalidDatabaseConfig, key)
-		}
-	}
-	value, exists := config["default"]
-	defaultConnection, ok := value.(string)
-	if !exists || !ok || strings.TrimSpace(defaultConnection) != defaultConnection || defaultConnection == "" {
-		return "", fmt.Errorf("%w: database.default 必须是非空字符串", db.ErrInvalidDatabaseConfig)
-	}
-	if err := db.ValidateConnectionName(defaultConnection); err != nil {
-		return "", err
-	}
-	return defaultConnection, nil
-}
-
-// applyRouteConfig 将 route.json 的全部字段应用到路由器。
-func (app *App) applyRouteConfig() {
-	if app == nil {
-		return
-	}
-	app.applyRouteConfigTo(app.config, app.route)
-}
-
-func (app *App) applyRouteConfigTo(configuration *config.Config, router *route.Router) {
-	if app == nil || configuration == nil || router == nil {
-		return
-	}
-	routeConfig := configuration.GetMap("route")
-	if len(routeConfig) == 0 {
-		return
-	}
-
-	allowed := map[string]struct{}{
-		"pathinfo_depr":         {},
-		"url_lazy_route":        {},
-		"url_route_must":        {},
-		"url_case_sensitive":    {},
-		"route_auto_group":      {},
-		"route_rule_merge":      {},
-		"route_complete_match":  {},
-		"default_route_pattern": {},
-		"default_controller":    {},
-		"default_action":        {},
-		"default_module":        {},
-		"empty_controller":      {},
-		"controller_layer":      {},
-		"url_html_suffix":       {},
-		"remove_slash":          {},
-		"controller_suffix":     {},
-		"action_suffix":         {},
-		"action_bind_param":     {},
-		"url_common_param":      {},
-		"request_cache_key":     {},
-		"request_cache_expire":  {},
-		"request_cache_except":  {},
-		"request_cache_tag":     {},
-		"api_version":           {},
-	}
-	keys := make([]string, 0, len(routeConfig))
-	for key := range routeConfig {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	for _, key := range keys {
-		if _, exists := allowed[key]; !exists {
-			app.recordStartupError(fmt.Errorf("route 配置包含未知字段 %q", key))
-		}
-	}
-
-	caseSensitive, err := readRouteBool(routeConfig, "url_case_sensitive", false)
-	if err != nil {
-		app.recordStartupError(err)
-	} else if err := router.SetCaseSensitive(caseSensitive); err != nil {
-		app.recordStartupError(fmt.Errorf("设置 URL 大小写规则失败: %w", err))
-	}
-	completeMatch, err := readRouteBool(routeConfig, "route_complete_match", false)
-	if err != nil {
-		app.recordStartupError(err)
-	} else if err := router.SetCompleteMatch(completeMatch); err != nil {
-		app.recordStartupError(fmt.Errorf("设置路由完整匹配规则失败: %w", err))
-	}
-	removeSlash, err := readRouteBool(routeConfig, "remove_slash", false)
-	if err != nil {
-		app.recordStartupError(err)
-	} else if err := router.SetRemoveSlash(removeSlash); err != nil {
-		app.recordStartupError(fmt.Errorf("设置路由末尾斜杠规则失败: %w", err))
-	}
-	if _, err := readRouteBool(routeConfig, "controller_suffix", false); err != nil {
-		app.recordStartupError(err)
-	}
-	if raw, exists := routeConfig["action_suffix"]; exists {
-		if _, ok := raw.(string); !ok {
-			app.recordStartupError(fmt.Errorf("route.action_suffix 必须是字符串"))
-		}
-	}
-	if raw, exists := routeConfig["action_bind_param"]; exists {
-		mode, ok := raw.(string)
-		if !ok {
-			app.recordStartupError(fmt.Errorf("route.action_bind_param 必须是字符串"))
-		} else {
-			switch strings.ToLower(strings.TrimSpace(mode)) {
-			case "route", "get", "param":
-			default:
-				app.recordStartupError(fmt.Errorf("route.action_bind_param 必须是 route、get 或 param"))
-			}
-		}
-	}
-
-	if raw, exists := routeConfig["url_html_suffix"]; exists {
-		extension, ok := raw.(string)
-		if !ok {
-			app.recordStartupError(fmt.Errorf("route.url_html_suffix 必须是字符串"))
-		} else if err := router.SetDefaultExtension(extension); err != nil {
-			app.recordStartupError(fmt.Errorf("设置 URL 后缀失败: %w", err))
-		}
-	}
-	if raw, exists := routeConfig["default_route_pattern"]; exists {
-		pattern, ok := raw.(string)
-		if !ok {
-			app.recordStartupError(fmt.Errorf("route.default_route_pattern 必须是字符串"))
-		} else if err := router.SetDefaultPattern(pattern); err != nil {
-			app.recordStartupError(fmt.Errorf("设置默认路由变量规则失败: %w", err))
-		}
-	}
-	if raw, exists := routeConfig["controller_layer"]; exists {
-		layer, ok := raw.(string)
-		if !ok {
-			app.recordStartupError(fmt.Errorf("route.controller_layer 必须是字符串"))
-		} else if err := router.SetControllerLayer(layer); err != nil {
-			app.recordStartupError(fmt.Errorf("设置控制器层失败: %w", err))
-		}
-	}
-	if raw, exists := routeConfig["default_controller"]; exists {
-		controller, ok := raw.(string)
-		if !ok || strings.TrimSpace(controller) == "" {
-			app.recordStartupError(fmt.Errorf("route.default_controller 必须是非空字符串"))
-		} else if err := router.SetDefaultController(controller); err != nil {
-			app.recordStartupError(fmt.Errorf("设置默认路由控制器失败: %w", err))
-		}
-	}
-	if raw, exists := routeConfig["default_action"]; exists {
-		action, ok := raw.(string)
-		if !ok || strings.TrimSpace(action) == "" {
-			app.recordStartupError(fmt.Errorf("route.default_action 必须是非空字符串"))
-		} else if err := router.SetDefaultAction(action); err != nil {
-			app.recordStartupError(fmt.Errorf("设置默认路由动作失败: %w", err))
-		}
-	}
-	// 缺省配置与 NewRouter 保持一致：未声明规则的请求不自动调用控制器。
-	mustRoute, err := readRouteBool(routeConfig, "url_route_must", true)
-	if err != nil {
-		app.recordStartupError(err)
-	} else if err := router.EnableAutoRoute(!mustRoute); err != nil {
-		app.recordStartupError(fmt.Errorf("设置自动路由开关失败: %w", err))
-	}
-}
-
-// applyMiddlewareConfig 将 middleware.json 的 alias 和 priority 接入全局管道。
-// Go 中间件不能从 JSON 反射构造，因此 alias 的值定义为已注册别名，并支持别名链。
-func (app *App) applyMiddlewareConfig() {
-	if app == nil {
-		return
-	}
-	app.applyMiddlewareConfigTo(app.config, app.middleware)
-}
-
-func (app *App) applyMiddlewareConfigTo(configuration *config.Config, pipeline *middleware.Pipeline) {
-	if app == nil || configuration == nil || pipeline == nil {
-		return
-	}
-	values := configuration.GetMap("middleware")
-	if len(values) == 0 {
-		return
-	}
-	for key := range values {
-		if key != "alias" && key != "priority" {
-			app.recordStartupError(fmt.Errorf("middleware 配置包含未知字段 %q", key))
-		}
-	}
-
-	if rawAliases, exists := values["alias"]; exists {
-		aliases, ok := rawAliases.(map[string]interface{})
-		if !ok {
-			app.recordStartupError(fmt.Errorf("middleware.alias 必须是对象"))
-		} else {
-			app.applyMiddlewareAliasesTo(pipeline, aliases)
-		}
-	}
-	if rawPriority, exists := values["priority"]; exists {
-		var priority []interface{}
-		ok := true
-		switch typed := rawPriority.(type) {
-		case []interface{}:
-			priority = typed
-		case []string:
-			priority = make([]interface{}, len(typed))
-			for index, name := range typed {
-				priority[index] = name
-			}
-		default:
-			ok = false
-		}
-		if !ok {
-			app.recordStartupError(fmt.Errorf("middleware.priority 必须是字符串数组"))
-			return
-		}
-		names := make([]string, 0, len(priority))
-		seen := make(map[string]struct{}, len(priority))
-		for index, rawName := range priority {
-			name, ok := rawName.(string)
-			name = strings.TrimSpace(name)
-			if !ok || name == "" {
-				app.recordStartupError(fmt.Errorf("middleware.priority[%d] 必须是非空字符串", index))
-				continue
-			}
-			if _, exists := seen[name]; exists {
-				app.recordStartupError(fmt.Errorf("middleware.priority 包含重复别名 %q", name))
-				continue
-			}
-			if pipeline.ResolveAlias(name) == nil {
-				app.recordStartupError(fmt.Errorf("middleware.priority 引用了未注册别名 %q", name))
-				continue
-			}
-			seen[name] = struct{}{}
-			names = append(names, name)
-		}
-		pipeline.SetPriority(names)
-	}
-}
-
-func (app *App) applyMiddlewareAliasesTo(pipeline *middleware.Pipeline, values map[string]interface{}) {
-	if app == nil || pipeline == nil {
-		return
-	}
-	pending := make(map[string]string, len(values))
-	keys := make([]string, 0, len(values))
-	for alias, rawTarget := range values {
-		alias = strings.TrimSpace(alias)
-		target, ok := rawTarget.(string)
-		if !ok {
-			app.recordStartupError(fmt.Errorf("middleware.alias[%q] 必须是已注册别名字符串", alias))
-			continue
-		}
-		target = strings.TrimSpace(target)
-		if alias == "" || target == "" {
-			app.recordStartupError(fmt.Errorf("middleware.alias 包含空别名或空目标"))
-			continue
-		}
-		if strings.ContainsAny(alias, "\r\n\x00") || strings.ContainsAny(target, "\r\n\x00") {
-			app.recordStartupError(fmt.Errorf("middleware.alias %q 包含控制字符", alias))
-			continue
-		}
-		pending[alias] = target
-		keys = append(keys, alias)
-	}
-	sort.Strings(keys)
-
-	for len(pending) > 0 {
-		progress := false
-		for _, alias := range keys {
-			target, exists := pending[alias]
-			if !exists {
-				continue
-			}
-			handler := pipeline.ResolveAlias(target)
-			if handler == nil {
-				continue
-			}
-			pipeline.Alias(alias, handler)
-			delete(pending, alias)
-			progress = true
-		}
-		if progress {
-			continue
-		}
-		for _, alias := range keys {
-			if target, exists := pending[alias]; exists {
-				app.recordStartupError(fmt.Errorf("middleware.alias %q 的目标 %q 未注册或存在循环引用", alias, target))
-			}
-		}
-		return
-	}
-}
-
-// readRouteBool 读取路由布尔字段，兼容 ThinkPHP 常见的 true、false、1 和 0 写法。
-func readRouteBool(values map[string]interface{}, name string, defaultValue bool) (bool, error) {
-	raw, exists := values[name]
-	if !exists {
-		return defaultValue, nil
-	}
-	switch value := raw.(type) {
-	case bool:
-		return value, nil
-	case string:
-		switch strings.ToLower(strings.TrimSpace(value)) {
-		case "true", "1":
-			return true, nil
-		case "false", "0":
-			return false, nil
-		}
-	}
-	return defaultValue, fmt.Errorf("route.%s 必须是布尔值", name)
 }

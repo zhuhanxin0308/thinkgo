@@ -796,14 +796,27 @@ func normalizeConfigNamespace(name string) (string, error) {
 	return name, nil
 }
 
+type dynamicSliceVisit struct {
+	pointer  uintptr
+	length   int
+	capacity int
+}
+
+type configInputNormalizer struct {
+	spans        snapshot.Spans
+	activeMaps   map[uintptr]struct{}
+	activeSlices map[dynamicSliceVisit]struct{}
+	remaining    int
+}
+
 // normalizeConfigInputValue 规范化 Set 写入的动态 map，并为调用方隔离嵌套集合。
 func normalizeConfigInputValue(value interface{}, depth int, path string) (interface{}, error) {
-	var spans snapshot.Spans
-	normalized, err := normalizeConfigInputWithSpans(value, depth, path, &spans)
+	normalizer := configInputNormalizer{remaining: snapshot.MaxNodes}
+	normalized, err := normalizer.normalize(value, depth, path)
 	if err != nil {
 		return nil, err
 	}
-	err = spans.Validate()
+	err = normalizer.spans.Validate()
 	runtime.KeepAlive(value)
 	if err != nil {
 		return nil, fmt.Errorf("%w at %s: %w", ErrConfigUnsupportedValue, path, err)
@@ -811,22 +824,39 @@ func normalizeConfigInputValue(value interface{}, depth int, path string) (inter
 	return normalized, nil
 }
 
-func normalizeConfigInputWithSpans(value interface{}, depth int, path string, spans *snapshot.Spans) (interface{}, error) {
+func (normalizer *configInputNormalizer) normalize(value interface{}, depth int, path string) (interface{}, error) {
+	normalizer.remaining--
+	if normalizer.remaining < 0 {
+		return nil, fmt.Errorf("%w at %s: 配置快照节点数超过上限", ErrConfigUnsupportedValue, path)
+	}
 	switch typed := value.(type) {
 	case map[string]interface{}:
+		if typed == nil {
+			if depth > maxConfigJSONDepth {
+				return nil, fmt.Errorf("%w at %s", ErrConfigJSONTooDeep, path)
+			}
+			return typed, nil
+		}
+		pointer := reflect.ValueOf(typed).Pointer()
+		if _, active := normalizer.activeMaps[pointer]; active {
+			return nil, fmt.Errorf("%w at %s: map[string]interface {} 含有循环引用", ErrConfigUnsupportedValue, path)
+		}
 		if depth > maxConfigJSONDepth {
 			return nil, fmt.Errorf("%w at %s", ErrConfigJSONTooDeep, path)
 		}
-		if typed == nil {
-			return typed, nil
+		if normalizer.activeMaps == nil {
+			normalizer.activeMaps = make(map[uintptr]struct{})
 		}
+		normalizer.activeMaps[pointer] = struct{}{}
+		defer delete(normalizer.activeMaps, pointer)
+
 		result := make(map[string]interface{}, len(typed))
 		for key, item := range typed {
 			canonicalKey := strings.ToLower(key)
 			if _, exists := result[canonicalKey]; exists {
 				return nil, fmt.Errorf("%w at %s.%s", ErrConfigDuplicateKey, path, key)
 			}
-			normalized, err := normalizeConfigInputWithSpans(item, depth+1, path+"."+key, spans)
+			normalized, err := normalizer.normalize(item, depth+1, path+"."+key)
 			if err != nil {
 				return nil, err
 			}
@@ -834,24 +864,45 @@ func normalizeConfigInputWithSpans(value interface{}, depth int, path string, sp
 		}
 		return result, nil
 	case []interface{}:
+		if typed == nil {
+			if depth > maxConfigJSONDepth {
+				return nil, fmt.Errorf("%w at %s", ErrConfigJSONTooDeep, path)
+			}
+			return typed, nil
+		}
+		reflected := reflect.ValueOf(typed)
+		if len(typed) > 0 {
+			visit := dynamicSliceVisit{pointer: reflected.Pointer(), length: len(typed), capacity: cap(typed)}
+			if _, active := normalizer.activeSlices[visit]; active {
+				return nil, fmt.Errorf("%w at %s: []interface {} 含有循环引用", ErrConfigUnsupportedValue, path)
+			}
+			if depth > maxConfigJSONDepth {
+				return nil, fmt.Errorf("%w at %s", ErrConfigJSONTooDeep, path)
+			}
+			normalizer.spans.Record(reflected)
+			if normalizer.activeSlices == nil {
+				normalizer.activeSlices = make(map[dynamicSliceVisit]struct{})
+			}
+			normalizer.activeSlices[visit] = struct{}{}
+			defer delete(normalizer.activeSlices, visit)
+
+			result := make([]interface{}, len(typed))
+			for index, item := range typed {
+				normalized, err := normalizer.normalize(item, depth+1, fmt.Sprintf("%s[%d]", path, index))
+				if err != nil {
+					return nil, err
+				}
+				result[index] = normalized
+			}
+			return result, nil
+		}
 		if depth > maxConfigJSONDepth {
 			return nil, fmt.Errorf("%w at %s", ErrConfigJSONTooDeep, path)
 		}
-		if typed == nil {
-			return typed, nil
-		}
-		spans.Record(reflect.ValueOf(typed))
-		result := make([]interface{}, len(typed))
-		for index, item := range typed {
-			normalized, err := normalizeConfigInputWithSpans(item, depth+1, fmt.Sprintf("%s[%d]", path, index), spans)
-			if err != nil {
-				return nil, err
-			}
-			result[index] = normalized
-		}
-		return result, nil
+		normalizer.spans.Record(reflected)
+		return make([]interface{}, 0), nil
 	default:
-		copied, err := snapshot.CopyAt(value, depth, spans)
+		copied, err := snapshot.CopyAtWithBudget(value, depth, &normalizer.spans, &normalizer.remaining)
 		if err != nil {
 			return nil, fmt.Errorf("%w at %s: %w", ErrConfigUnsupportedValue, path, err)
 		}

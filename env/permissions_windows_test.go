@@ -63,4 +63,28 @@ func TestEnvLoadValidatesWindowsFileDACL(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("拒绝非受信文件所有者即使 DACL 仅授权该所有者", func(t *testing.T) {
+		untrustedOwner, err := windows.StringToSid("S-1-5-21-111111111-222222222-333333333-1001")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, daclSDDL := range []string{
+			"D:P(A;;FA;;;" + untrustedOwner.String() + ")",
+			"D:P(A;;FA;;;OW)",
+			"D:P(A;;FA;;;" + user.User.Sid.String() + ")",
+		} {
+			descriptor, err := windows.SecurityDescriptorFromString(daclSDDL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			acl, _, err := descriptor.DACL()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := verifyEnvSecurityDescriptor(untrustedOwner, acl, user.User.Sid); !errors.Is(err, ErrEnvPermissionsTooOpen) {
+				t.Fatalf("非受信 owner (%s) 应被拒绝，实际错误: %v", daclSDDL, err)
+			}
+		}
+	})
 }

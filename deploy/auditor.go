@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"sort"
@@ -19,6 +20,8 @@ import (
 	"github.com/zhuhanxin0308/thinkgo/v3/migration"
 	"github.com/zhuhanxin0308/thinkgo/v3/route"
 	"github.com/zhuhanxin0308/thinkgo/v3/telemetry"
+	"golang.org/x/mod/modfile"
+	"golang.org/x/mod/module"
 )
 
 // Level 表示部署检查结果的严重级别。
@@ -230,7 +233,10 @@ func checkProductionConfiguration(_ context.Context, app *framework.App) Result 
 		return fail(err.Error())
 	}
 	environment := strings.ToLower(strings.TrimSpace(configuration.GetString("app.app_env")))
-	if environment != "production" && environment != "prod" {
+	if environment == "" && app != nil {
+		environment = strings.ToLower(strings.TrimSpace(app.Environment()))
+	}
+	if environment != "production" && environment != "prod" && environment != "release" {
 		return fail(fmt.Sprintf("app.app_env=%q，不是 production", environment))
 	}
 	if configuration.GetBool("app.app_debug") || configuration.GetBool("app.app_trace") {
@@ -299,10 +305,40 @@ func checkOperationalAccess(_ context.Context, app *framework.App) Result {
 	if err != nil || len(values) == 0 {
 		return fail("restricted 运维端点必须配置非空 CIDR 白名单")
 	}
-	if _, err := operational.ParsePrefixes(values); err != nil {
+	prefixes, err := operational.ParsePrefixes(values)
+	if err != nil {
 		return fail("运维端点白名单配置无效: " + err.Error())
 	}
+	for _, prefix := range prefixes {
+		if isOverlyBroadPublicPrefix(prefix) {
+			return warn("运维端点白名单包含公网超宽聚合网段；请收敛至内网或具体运维网段")
+		}
+	}
 	return pass(fmt.Sprintf("运维端点由 %d 个 CIDR 白名单限制", len(values)))
+}
+
+var privateOrLocalOperationalNets = []netip.Prefix{
+	netip.MustParsePrefix("10.0.0.0/8"),
+	netip.MustParsePrefix("172.16.0.0/12"),
+	netip.MustParsePrefix("192.168.0.0/16"),
+	netip.MustParsePrefix("127.0.0.0/8"),
+	netip.MustParsePrefix("169.254.0.0/16"),
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("::1/128"),
+	netip.MustParsePrefix("fc00::/7"),
+	netip.MustParsePrefix("fe80::/10"),
+}
+
+func isOverlyBroadPublicPrefix(prefix netip.Prefix) bool {
+	for _, localNet := range privateOrLocalOperationalNets {
+		if localNet.Contains(prefix.Addr()) && prefix.Bits() >= localNet.Bits() {
+			return false
+		}
+	}
+	if prefix.Addr().Is4() {
+		return prefix.Bits() < 8
+	}
+	return prefix.Bits() < 16
 }
 
 func checkSecurityHeaders(_ context.Context, app *framework.App) Result {
@@ -567,13 +603,17 @@ func readModuleName(path string) (string, error) {
 	if err != nil || currentInformation.Mode()&os.ModeSymlink != 0 || !os.SameFile(currentInformation, openedInformation) {
 		return "", errors.New("go.mod 在读取期间发生变化")
 	}
-	for _, line := range strings.Split(string(content), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) == 2 && fields[0] == "module" {
-			return fields[1], nil
-		}
+	parsed, err := modfile.Parse("go.mod", content, nil)
+	if err != nil {
+		return "", fmt.Errorf("解析 go.mod 失败: %w", err)
 	}
-	return "", errors.New("go.mod 缺少 module 声明")
+	if parsed.Module == nil || strings.TrimSpace(parsed.Module.Mod.Path) == "" {
+		return "", errors.New("go.mod 缺少 module 声明")
+	}
+	if err := module.CheckImportPath(parsed.Module.Mod.Path); err != nil {
+		return "", fmt.Errorf("go.mod 的 module 路径无效: %w", err)
+	}
+	return parsed.Module.Mod.Path, nil
 }
 
 func pass(message string) Result { return Result{Level: LevelPass, Message: message} }
