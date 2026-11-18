@@ -41,6 +41,7 @@ func (c *Clear) Execute(input *console.Input, output *console.Output) error {
 	if strings.TrimSpace(c.App.BasePath) == "" {
 		return fmt.Errorf("failed to clear runtime: app base path is empty")
 	}
+	c.App.SkipConfigurationCache()
 	applicationName := strings.TrimSpace(input.GetArgument(0))
 	// 兼容未经 Console 解析、以选项开头的直接调用。
 	if strings.HasPrefix(applicationName, "-") {

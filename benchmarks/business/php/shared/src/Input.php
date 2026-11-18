@@ -53,9 +53,10 @@ final readonly class Input
         if (!preg_match('/\A[a-f0-9]{32}\z/D',$key)) { throw new ApiError(422); }
         $document = $this->object($body,['items']);
         if (!is_array($document->items) || count($document->items)<1 || count($document->items)>$this->contract->integer('maximum_order_items')) { throw new ApiError(422); }
+        $maximumQuantity = min($this->contract->integer('maximum_item_quantity'), Contract::MAX_POSTGRES_INTEGER);
         $items = []; $seen = [];
         foreach ($document->items as $item) {
-            if (!$item instanceof \stdClass || count((array)$item)!==2 || !isset($item->product_id,$item->quantity) || !is_int($item->product_id) || $item->product_id<1 || !is_int($item->quantity) || $item->quantity<1 || $item->quantity>$this->contract->integer('maximum_item_quantity') || isset($seen[$item->product_id])) { throw new ApiError(422); }
+            if (!$item instanceof \stdClass || count((array)$item)!==2 || !isset($item->product_id,$item->quantity) || !is_int($item->product_id) || $item->product_id<1 || !is_int($item->quantity) || $item->quantity<1 || $item->quantity>$maximumQuantity || isset($seen[$item->product_id])) { throw new ApiError(422); }
             $seen[$item->product_id] = true;
             $items[] = ['product_id'=>$item->product_id,'quantity'=>$item->quantity];
         }

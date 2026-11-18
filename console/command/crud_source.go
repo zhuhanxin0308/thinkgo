@@ -46,14 +46,18 @@ func renderCRUDTemplate(source string, plan *crudPlan) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	renderPlan := *plan
+	if renderPlan.PackageName == "" {
+		renderPlan.PackageName = "api"
+	}
 	var output bytes.Buffer
-	if err := compiled.Execute(&output, plan); err != nil {
+	if err := compiled.Execute(&output, &renderPlan); err != nil {
 		return nil, err
 	}
 	return format.Source(output.Bytes())
 }
 
-const crudSourceTemplate = `package api
+const crudSourceTemplate = `package {{.PackageName}}
 
 import (
 	"net/http"
@@ -232,7 +236,7 @@ func transaction{{.Name}}(app *framework.App, request *framework.Request, work f
 }
 `
 
-const crudTestTemplate = `package api
+const crudTestTemplate = `package {{.PackageName}}
 
 import (
 	"context"

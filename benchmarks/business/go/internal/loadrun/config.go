@@ -120,8 +120,9 @@ func (configuration Config) Validate() error {
 		return errors.New("商品、工单与分类数量必须为正，下架模数至少为2")
 	}
 	if configuration.CatalogPageSize < 1 || configuration.MaximumPriceCents < 1 ||
-		configuration.MaximumOrderItems < 1 || configuration.MaximumItemQuantity < 1 {
-		return errors.New("目录页大小、价格和订单数量上限必须为正")
+		configuration.MaximumOrderItems < 1 || configuration.MaximumItemQuantity < 1 ||
+		int64(configuration.MaximumItemQuantity) > math.MaxInt32 {
+		return errors.New("目录页大小、价格和订单数量上限必须为正且在PostgreSQL整数范围内")
 	}
 	activeProducts := configuration.ProductsPerTenant - configuration.ProductsPerTenant/configuration.InactiveProductModulus
 	if configuration.HotProductsPerTenant < 1 || activeProducts <= configuration.HotProductsPerTenant {

@@ -15,6 +15,8 @@ import (
 	"github.com/zhuhanxin0308/thinkgo/v3/middleware"
 )
 
+const requestContextKey = "benchmark_request_context"
+
 type App struct {
 	application *framework.App
 	kernel      *fwhttp.Http
@@ -50,15 +52,16 @@ func New(service adapters.Service, address string) (*App, error) {
 	return app, nil
 }
 
-// guard 在原生全局中间件阶段校验正文，使语法和绑定失败保持统一422协议。
+// guard 在原生全局中间件阶段按应用重写后目标路径校验认证与正文，避免 /index/api/* 绕过并保持统一422协议。
 func guard(service adapters.Service) middleware.Handler {
 	return func(request *fwcontext.Request, next middleware.Next) *fwcontext.Response {
-		if !strings.HasPrefix(request.Path(), "/api/") {
+		path := routedPath(request)
+		if path != "/api" && !strings.HasPrefix(path, "/api/") {
 			return next(request)
 		}
 		ctx, cancel := context.WithTimeout(request.Context(), adapters.Timeout(service))
 		defer cancel()
-		*request.Raw() = *request.Raw().WithContext(ctx)
+		request.Set(requestContextKey, ctx)
 		principal, err := service.Authenticate(request.Header("Authorization"))
 		if err != nil {
 			return failure(err)
@@ -86,36 +89,52 @@ func registerRoutes(application *framework.App, service adapters.Service) {
 		return respond(http.StatusOK, map[string]string{"status": "ok"})
 	})
 	router.Get("/api/catalog", func(request *fwcontext.Request) *fwcontext.Response {
-		result, err := adapters.Catalog(service, request.Context(), principal(request), request.Raw().URL.RawQuery)
+		identity, ok := principal(request)
+		if !ok {
+			return failure(&business.PublicError{Status: http.StatusUnauthorized, Code: "unauthorized", Message: "缺少认证身份"})
+		}
+		result, err := adapters.Catalog(service, requestContext(request), identity, request.Raw().URL.RawQuery)
 		if err != nil {
 			return failure(err)
 		}
 		return respond(http.StatusOK, result)
 	})
 	router.Get("/api/products/:id", func(request *fwcontext.Request) *fwcontext.Response {
-		result, cache, err := service.Detail(request.Context(), principal(request), request.Route("id"))
+		identity, ok := principal(request)
+		if !ok {
+			return failure(&business.PublicError{Status: http.StatusUnauthorized, Code: "unauthorized", Message: "缺少认证身份"})
+		}
+		result, cache, err := service.Detail(requestContext(request), identity, request.Route("id"))
 		if err != nil {
 			return failure(err)
 		}
 		return respond(http.StatusOK, result).Header("X-Benchmark-Cache", cache)
 	})
 	router.Post("/api/orders", func(request *fwcontext.Request) *fwcontext.Response {
+		identity, ok := principal(request)
+		if !ok {
+			return failure(&business.PublicError{Status: http.StatusUnauthorized, Code: "unauthorized", Message: "缺少认证身份"})
+		}
 		var input business.OrderInput
 		if err := bind(request, &input); err != nil {
 			return failure(err)
 		}
-		result, replayed, err := service.CreateOrder(request.Context(), principal(request), request.Header("Idempotency-Key"), input)
+		result, replayed, err := service.CreateOrder(requestContext(request), identity, request.Header("Idempotency-Key"), input)
 		if err != nil {
 			return failure(err)
 		}
 		return respond(adapters.OrderStatus(replayed), result)
 	})
 	router.Post("/api/tickets/:id/comments", func(request *fwcontext.Request) *fwcontext.Response {
+		identity, ok := principal(request)
+		if !ok {
+			return failure(&business.PublicError{Status: http.StatusUnauthorized, Code: "unauthorized", Message: "缺少认证身份"})
+		}
 		var input business.CommentInput
 		if err := bind(request, &input); err != nil {
 			return failure(err)
 		}
-		result, err := service.AddComment(request.Context(), principal(request), request.Route("id"), input)
+		result, err := service.AddComment(requestContext(request), identity, request.Route("id"), input)
 		if err != nil {
 			return failure(err)
 		}
@@ -123,8 +142,25 @@ func registerRoutes(application *framework.App, service adapters.Service) {
 	})
 }
 
-func principal(request *fwcontext.Request) business.Principal {
-	return request.GetData(adapters.PrincipalKey).(business.Principal)
+func requestContext(request *fwcontext.Request) context.Context {
+	if ctx, ok := request.GetData(requestContextKey).(context.Context); ok && ctx != nil {
+		return ctx
+	}
+	return request.Context()
+}
+
+func routedPath(request *fwcontext.Request) string {
+	if application, exists := request.ApplicationContext(); exists {
+		if rewritten := application.RewrittenPath(); rewritten != "" {
+			return rewritten
+		}
+	}
+	return request.Path()
+}
+
+func principal(request *fwcontext.Request) (business.Principal, bool) {
+	identity, ok := request.GetData(adapters.PrincipalKey).(business.Principal)
+	return identity, ok
 }
 func bind(request *fwcontext.Request, target any) error {
 	if err := request.Json(target); err != nil {

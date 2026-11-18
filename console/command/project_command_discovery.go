@@ -66,7 +66,10 @@ func discoverProjectCommandsWithContext(semantic *applicationSemanticContext) ([
 		if err := semantic.runContext.Err(); err != nil {
 			return nil, err
 		}
-		if !entry.IsDir() || entry.Name() == "internal" || entry.Name() == "testdata" {
+		if entry.Type()&os.ModeSymlink != 0 {
+			return nil, fmt.Errorf("应用目录 %q 不能是符号链接", entry.Name())
+		}
+		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") || entry.Name() == "internal" || entry.Name() == "testdata" {
 			continue
 		}
 		directory := filepath.Join("app", entry.Name(), "command")
@@ -128,11 +131,11 @@ func inspectProjectCommandDirectory(root *os.Root, semantic *applicationSemantic
 			if !ok || !object.Exported() {
 				continue
 			}
-			current := types.Unalias(object.Type())
-			if named, ok := current.(*types.Named); ok && named.TypeParams().Len() > 0 && named.TypeArgs().Len() == 0 {
+			if !applicationTypeCanUseEmptyComposite(object.Type()) {
 				continue
 			}
-			if _, ok := current.Underlying().(*types.Struct); !ok || !types.Implements(types.NewPointer(current), contract) {
+			current := types.Unalias(object.Type())
+			if !types.Implements(types.NewPointer(current), contract) {
 				continue
 			}
 			result = append(result, ProjectCommandType{ImportPath: semantic.packagePath(directory), TypeName: name})

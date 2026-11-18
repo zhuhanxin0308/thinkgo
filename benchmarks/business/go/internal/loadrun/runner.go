@@ -77,13 +77,28 @@ func Run(ctx context.Context, configuration Config) (Report, error) {
 // plannedRequestCount 用有理数计算半开窗口内的到达数，避免 100×0.07 被舍入到 7 以上。
 // 速率采用与配置 JSON 相同的最短十进制表达；请求按 i/r 在 [0,duration) 内调度。
 func plannedRequestCount(configuration Config) uint64 {
-	rate, _ := new(big.Rat).SetString(strconv.FormatFloat(configuration.Rate, 'f', -1, 64))
-	count := rate.Mul(rate, new(big.Rat).SetFrac64(int64(configuration.Duration), int64(time.Second)))
+	rate := parseRateRational(configuration.Rate)
+	count := new(big.Rat).Mul(rate, new(big.Rat).SetFrac64(int64(configuration.Duration), int64(time.Second)))
 	whole, remainder := new(big.Int).QuoRem(count.Num(), count.Denom(), new(big.Int))
 	if remainder.Sign() > 0 {
 		whole.Add(whole, big.NewInt(1))
 	}
 	return whole.Uint64()
+}
+
+func parseRateRational(rate float64) *big.Rat {
+	parsed, _ := new(big.Rat).SetString(strconv.FormatFloat(rate, 'f', -1, 64))
+	return parsed
+}
+
+// scheduledOffset 使用与 plannedRequestCount 相同的十进制有理数计算触发纳秒偏移并向下取整，
+// 确保对所有 sequence < expected 严格满足 offset < Duration，消除 float64 向上舍入触碰右边界丢包。
+func scheduledOffset(sequence uint64, rate *big.Rat) time.Duration {
+	numerator := new(big.Int).SetUint64(sequence)
+	numerator.Mul(numerator, big.NewInt(int64(time.Second)))
+	numerator.Mul(numerator, rate.Denom())
+	offsetNs := new(big.Int).Quo(numerator, rate.Num())
+	return time.Duration(offsetNs.Int64())
 }
 
 func runOpen(ctx context.Context, configuration Config, requests *workload, client *http.Client, statistics *statistics, events chan<- observation, expected uint64) time.Duration {
@@ -119,8 +134,9 @@ func runOpen(ctx context.Context, configuration Config, requests *workload, clie
 	timer := time.NewTimer(time.Hour)
 	timer.Stop()
 	defer timer.Stop()
+	rate := parseRateRational(configuration.Rate)
 	for sequence := uint64(0); sequence < expected; sequence++ {
-		when := start.Add(time.Duration(float64(sequence) / configuration.Rate * float64(time.Second)))
+		when := start.Add(scheduledOffset(sequence, rate))
 		if !waitUntil(ctx, timer, when) {
 			break
 		}

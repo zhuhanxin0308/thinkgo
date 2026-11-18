@@ -84,17 +84,8 @@ func createProject(ctx context.Context, base, name string, prepare projectPrepar
 	if err != nil {
 		return err
 	}
-	for path, content := range sources {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		target := filepath.Join(stageName, path)
-		if err := root.MkdirAll(filepath.Dir(target), 0755); err != nil {
-			return err
-		}
-		if err := root.WriteFile(target, content, 0644); err != nil {
-			return err
-		}
+	if err := writeCreatedProjectSources(ctx, root, stageName, sources); err != nil {
+		return err
 	}
 	for _, directory := range []string{"runtime", "app/index/config", "app/index/lang", "app/index/model", "app/index/validate", "app/index/middleware", "app/index/service"} {
 		if err := root.MkdirAll(filepath.Join(stageName, directory), 0755); err != nil {
@@ -122,6 +113,26 @@ func createProject(ctx context.Context, base, name string, prepare projectPrepar
 			return errors.Join(err, root.Mkdir(name, 0755))
 		}
 		return err
+	}
+	return nil
+}
+
+func writeCreatedProjectSources(ctx context.Context, root *os.Root, stageName string, sources map[string][]byte) error {
+	for path, content := range sources {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		target := filepath.Join(stageName, path)
+		if err := root.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		mode := fs.FileMode(0o644)
+		if isDistributionConfig(path) {
+			mode = 0o600
+		}
+		if err := root.WriteFile(target, content, mode); err != nil {
+			return err
+		}
 	}
 	return nil
 }

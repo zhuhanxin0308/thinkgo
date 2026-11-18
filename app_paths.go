@@ -64,11 +64,53 @@ func (app *App) setRuntimePath(path string, explicit bool) error {
 	if err != nil {
 		return err
 	}
+	app.metadataMu.Lock()
 	app.RuntimePath = normalized
 	if explicit {
 		app.nativeRuntimeBasePath = normalized
 	}
+	app.metadataMu.Unlock()
 	return nil
+}
+
+// ProjectRuntimePath 返回项目级运行时根目录；原生多应用切换到子应用目录后仍保持基础 runtime 路径。
+func (app *App) ProjectRuntimePath() string {
+	if app == nil {
+		return ""
+	}
+	app.metadataMu.RLock()
+	basePath := strings.TrimSpace(app.nativeRuntimeBasePath)
+	app.metadataMu.RUnlock()
+	if basePath != "" {
+		return filepath.Clean(basePath)
+	}
+	if app.hasNativeApplication() {
+		return filepath.Join(app.projectBasePath(), "runtime")
+	}
+	return app.ApplicationRuntimePath()
+}
+
+// NativeApplicationPath 返回指定原生子应用的源码目录。
+func (app *App) NativeApplicationPath(name string) string {
+	if app == nil {
+		return ""
+	}
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return app.GetAppPath()
+	}
+	if trimmed == app.CurrentApplicationName() && app.nativeApplicationPath != "" {
+		return app.nativeApplicationPath
+	}
+	if catalog := app.applicationCatalog; catalog != nil {
+		catalog.lock.Lock()
+		configured := catalog.paths[trimmed]
+		catalog.lock.Unlock()
+		if configured != "" {
+			return configured
+		}
+	}
+	return filepath.Join(app.GetBasePath(), trimmed)
 }
 
 // GetConfigPath 返回项目配置目录，对应 ThinkPHP App::getConfigPath。

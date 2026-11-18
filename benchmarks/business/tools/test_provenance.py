@@ -152,6 +152,53 @@ class ProvenanceTests(unittest.TestCase):
         path.write_bytes(b"abc")
         self.assertEqual(provenance.digest(path), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
 
+    def test_control_variant_accepts_clean_spliced_build_commit_and_rejects_framework_tampering(self):
+        control_build = "1" * 40
+        control_build_tree = "2" * 40
+        self.outputs["thinkgo-before"] = build_info(control_build)
+        diff_paths = [b"benchmarks/business/go/go.mod\0benchmarks/business/go/internal/loadrun/runner.go\0"]
+
+        def spliced_git(arguments, **kwargs):
+            if arguments[0] == "go-tool":
+                return self.outputs[pathlib.Path(arguments[-1]).name]
+            if arguments[1] == "diff-tree":
+                return diff_paths[0]
+            reference = arguments[-1]
+            if reference == BEFORE + ":benchmarks/business/go":
+                return "0" * 40 + "\n"
+            if reference.endswith(":benchmarks/business/go"):
+                return SHARED_TREE + "\n"
+            if reference == control_build + "^{tree}":
+                return control_build_tree + "\n"
+            if reference == control_build + "^{commit}":
+                return control_build + "\n"
+            if reference.endswith("^{tree}"):
+                return (BEFORE_TREE if reference.startswith(BEFORE) else CURRENT_TREE) + "\n"
+            return (BEFORE if reference.startswith(BEFORE) else CURRENT) + "\n"
+
+        with mock.patch.object(provenance.subprocess, "check_output", side_effect=spliced_git), \
+                mock.patch.object(provenance, "digest", side_effect=lambda path: self.binaries[pathlib.Path(path).name]):
+            records = provenance.collect(self.root, self.root, self.protocol, self.binaries, "go-tool")
+        self.assertEqual(records["thinkgo-before"]["source_commit"], BEFORE)
+        self.assertEqual(records["thinkgo-before"]["build_commit"], control_build)
+        self.assertEqual(records["thinkgo-before"]["build_tree"], control_build_tree)
+        self.assertEqual(records["thinkgo-before"]["benchmark_go_tree"], SHARED_TREE)
+        provenance.validate(self.protocol, records, self.binaries, CURRENT)
+
+        # 非显式对照变体（HEAD）决不允许携带 build_commit 偏离当前提交。
+        forged = copy.deepcopy(records)
+        forged["thinkgo"]["build_commit"] = control_build
+        forged["thinkgo"]["build_tree"] = control_build_tree
+        with self.assertRaisesRegex(ValueError, "对照组构建提交"):
+            provenance.validate(self.protocol, forged, self.binaries, CURRENT)
+
+        # 对照组构建提交若触碰了 benchmarks/business/go 以外的框架源码（如 log/），必须被拒绝。
+        diff_paths[0] = b"benchmarks/business/go/go.mod\0log/logger.go\0"
+        with mock.patch.object(provenance.subprocess, "check_output", side_effect=spliced_git), \
+                mock.patch.object(provenance, "digest", side_effect=lambda path: self.binaries[pathlib.Path(path).name]):
+            with self.assertRaisesRegex(ValueError, "修改了框架源码"):
+                provenance.collect(self.root, self.root, self.protocol, self.binaries, "go-tool")
+
 
 if __name__ == "__main__":
     unittest.main()

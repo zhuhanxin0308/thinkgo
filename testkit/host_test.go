@@ -2,17 +2,24 @@ package testkit
 
 import (
 	"context"
+	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/zhuhanxin0308/thinkgo/v3"
 	"github.com/zhuhanxin0308/thinkgo/v3/binding"
+	"github.com/zhuhanxin0308/thinkgo/v3/db"
+	"github.com/zhuhanxin0308/thinkgo/v3/db/builder"
 	"github.com/zhuhanxin0308/thinkgo/v3/openapi"
 )
 
@@ -136,5 +143,181 @@ func TestDecodeJSONValidatesContentAndPreservesNumbers(t *testing.T) {
 	}
 	if _, err := DecodeJSON[testOutput](nil); err == nil {
 		t.Fatal("空响应未拒绝")
+	}
+}
+
+type closeTrackingConnector struct {
+	closed *atomic.Int32
+}
+
+func (c closeTrackingConnector) Open(string) (driver.Conn, error) {
+	return closeTrackingConn(c), nil
+}
+
+func (c closeTrackingConnector) Connect(context.Context) (driver.Conn, error) {
+	return closeTrackingConn(c), nil
+}
+
+func (c closeTrackingConnector) Driver() driver.Driver { return c }
+
+type closeTrackingConn struct {
+	closed *atomic.Int32
+}
+
+func (c closeTrackingConn) Prepare(string) (driver.Stmt, error) {
+	return nil, errors.New("unsupported")
+}
+
+func (c closeTrackingConn) Close() error {
+	c.closed.Add(1)
+	return nil
+}
+
+func (c closeTrackingConn) Begin() (driver.Tx, error) {
+	return nil, errors.New("unsupported")
+}
+
+func newTrackedTestDatabase(t *testing.T) (*db.DB, *atomic.Int32) {
+	t.Helper()
+	closed := &atomic.Int32{}
+	raw := sql.OpenDB(closeTrackingConnector{closed: closed})
+	conn, err := raw.Conn(context.Background())
+	if err != nil {
+		t.Fatalf("打开跟踪连接失败: %v", err)
+	}
+	_ = conn.Close()
+	return db.NewDB(db.NewSQLConnection(raw, &builder.Sqlite{})), closed
+}
+
+// TestHostRunsAsHTTPApplicationAndFreezesContainer 验证 testkit.New 以非控制台 HTTP 模式运行、
+// 持有 RunLease 冻结运行期容器、执行真实数据库策略并在早退时关闭 Options.Database。
+func TestHostRunsAsHTTPApplicationAndFreezesContainer(t *testing.T) {
+	host := New(t, Options{
+		Config: map[string]any{
+			"app":           map[string]any{"app_debug": false},
+			"App.app_debug": true,
+		},
+		Register: func(app *framework.App) error {
+			return app.RegisterRouteLoader(func(app *framework.App) error {
+				app.Route().Get("/ping", func() map[string]any {
+					return map[string]any{
+						"console": app.RunningInConsole(),
+						"debug":   app.IsDebug(),
+					}
+				})
+				return nil
+			})
+		},
+	})
+	if host.App().RunningInConsole() {
+		t.Fatal("HTTP 测试宿主不应处于 RunningInConsole 模式")
+	}
+	if host.App().State() != framework.ApplicationStateRunning {
+		t.Fatalf("测试宿主应持有运行租约处于 running 状态，实际为 %s", host.App().State())
+	}
+	if !host.App().IsDebug() {
+		t.Fatal("规范化路径深度排序应保留子路径 App.app_debug=true 覆盖")
+	}
+	if err := host.App().Instance("late_mutated_service", "forbidden"); !errors.Is(err, framework.ErrApplicationRunning) {
+		t.Fatalf("运行期容器必须拒绝滞后 Instance 注入: %v", err)
+	}
+	response, err := host.JSON(http.MethodGet, "/ping", nil)
+	if err != nil || response.Code != http.StatusOK {
+		t.Fatalf("合并默认 server 配置后的请求应成功: code=%d err=%v body=%s", response.Code, err, response.Body.String())
+	}
+
+	// required 数据库策略缺少配置时必须在启动阶段失败（证明未跳过数据库 Provider）。
+	if gotHost, err := newHost(t.TempDir(), Options{
+		Config: map[string]any{"app.database_startup_policy": "required"},
+	}); err == nil || gotHost != nil {
+		t.Fatalf("required 数据库策略缺少配置应启动失败: host=%#v err=%v", gotHost, err)
+	}
+
+	// 原生多应用子应用注册错误必须在 newHost 预热阶段立即暴露，而非延迟到首个请求。
+	multiDir := t.TempDir()
+	for _, sub := range []string{"index", "admin"} {
+		if err := os.MkdirAll(filepath.Join(multiDir, "app", sub), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if gotHost, err := newHost(multiDir, Options{
+		Register: func(app *framework.App) error {
+			return app.RegisterApplications(func(*framework.App) error { return nil },
+				framework.ApplicationDefinition{Name: "index", Register: func(*framework.App) error { return nil }},
+				framework.ApplicationDefinition{Name: "admin", Register: func(*framework.App) error { return errors.New("admin broken") }},
+			)
+		},
+	}); err == nil || gotHost != nil || !strings.Contains(err.Error(), "admin broken") {
+		t.Fatalf("原生多应用子应用错误应在 newHost 阶段失败: host=%#v err=%v", gotHost, err)
+	}
+
+	// 早退失败（配置错误 / Register 错误 / Configure 错误）必须兜底关闭传入的 Options.Database。
+	for _, step := range []string{"config", "register", "configure"} {
+		database, closed := newTrackedTestDatabase(t)
+		opts := Options{Database: database}
+		switch step {
+		case "config":
+			opts.Config = map[string]any{"app.app_debug": false, "App.app_debug": true}
+		case "register":
+			opts.Register = func(*framework.App) error { return errors.New("register boom") }
+		case "configure":
+			opts.Configure = func(*framework.App) error { return errors.New("configure boom") }
+		}
+		if gotHost, err := newHost(t.TempDir(), opts); err == nil || gotHost != nil {
+			t.Fatalf("早退场景 %s 应失败: host=%#v err=%v", step, gotHost, err)
+		}
+		if closed.Load() == 0 {
+			t.Fatalf("早退场景 %s 未关闭传入的 Options.Database，发生连接泄漏", step)
+		}
+	}
+}
+
+// TestHostJSONSetsSimulatedClientRemoteAddrForRateLimit 验证启用默认客户端 IP 限流时，
+// Host.JSON 与 Host.Do(httptest.NewRequest) 行为一致，同时保留生产空 RemoteAddr 失败关闭策略。
+func TestHostJSONSetsSimulatedClientRemoteAddrForRateLimit(t *testing.T) {
+	host := New(t, Options{
+		Config: map[string]any{
+			"rate_limit.enable": true,
+			"rate_limit.rate":   1,
+			"rate_limit.burst":  2,
+		},
+		Register: func(app *framework.App) error {
+			return app.RegisterRouteLoader(func(app *framework.App) error {
+				app.Route().Get("/ok", func() map[string]string {
+					return map[string]string{"status": "ok"}
+				})
+				return nil
+			})
+		},
+	})
+
+	first, err := host.JSON(http.MethodGet, "/ok", nil)
+	if err != nil || first.Code != http.StatusOK {
+		t.Fatalf("首次未超额 JSON 请求应返回 200，实际 code=%d err=%v body=%s", first.Code, err, first.Body.String())
+	}
+	if first.Header().Get("RateLimit-Limit") == "" {
+		t.Fatalf("限流启用后应返回 RateLimit-* 响应头: %#v", first.Header())
+	}
+
+	inbound := httptest.NewRequest(http.MethodGet, "http://example.com/ok", nil)
+	second, err := host.Do(inbound)
+	if err != nil || second.Code != http.StatusOK {
+		t.Fatalf("同客户端第二次请求仍在额度内应返回 200，实际 code=%d err=%v", second.Code, err)
+	}
+
+	third, err := host.JSON(http.MethodGet, "/ok", nil)
+	if err != nil || third.Code != http.StatusTooManyRequests {
+		t.Fatalf("超出额度后应返回 429，实际 code=%d err=%v", third.Code, err)
+	}
+
+	// 生产 ClientIPRateLimitKey 收到缺失 RemoteAddr 的原始请求时仍保持 400 失败关闭，不信任伪造 XFF。
+	rawMissingAddr, err := http.NewRequest(http.MethodGet, "http://example.com/ok", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawMissingAddr.Header.Set("X-Forwarded-For", "198.51.100.88")
+	rejected, err := host.Do(rawMissingAddr)
+	if err != nil || rejected.Code != http.StatusBadRequest {
+		t.Fatalf("缺失 RemoteAddr 的原始请求仍应 400 失败关闭: code=%d err=%v", rejected.Code, err)
 	}
 }

@@ -56,6 +56,7 @@ func scanOpenAPIComments(ctx context.Context, basePath string) (openapi.SourceCo
 	fileSet := token.NewFileSet()
 	var files []commentSourceFile
 	packages := make(map[string]string)
+	seenDirectories := make(map[string]bool)
 	decoder := json.NewDecoder(bytes.NewReader(output))
 	for {
 		if err := ctx.Err(); err != nil {
@@ -75,10 +76,16 @@ func scanOpenAPIComments(ctx context.Context, basePath string) (openapi.SourceCo
 		if err != nil {
 			return source, fmt.Errorf("API 源码目录 %q 不属于当前模块: %w", pkg.Dir, err)
 		}
-		if filepath.ToSlash(directory) == openAPICommentsDirectory {
+		slashDirectory := filepath.ToSlash(directory)
+		if slashDirectory == openAPICommentsDirectory || seenDirectories[slashDirectory] {
 			continue
 		}
+		seenDirectories[slashDirectory] = true
 		if pkg.Error != nil {
+			if len(pkg.GoFiles) == 0 && len(pkg.CgoFiles) == 0 && len(pkg.IgnoredGoFiles) > 0 &&
+				strings.Contains(pkg.Error.Err, "build constraints exclude all Go files") {
+				continue
+			}
 			return source, fmt.Errorf("API 源码包 %s 无效: %s", pkg.ImportPath, pkg.Error.Err)
 		}
 		packages[pkg.ImportPath] = pkg.Name

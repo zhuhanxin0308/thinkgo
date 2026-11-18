@@ -624,5 +624,22 @@ class PhpSnapshotTest(unittest.TestCase):
                     changed.write_bytes(original)
 
 
+    def test_dataset_maximum_item_quantity_respects_postgres_integer_bound(self):
+        protocol = json.loads((ROOT / "contracts/protocol.json").read_text())
+        dataset = json.loads((ROOT / "contracts/dataset.json").read_text())
+        with tempfile.TemporaryDirectory() as folder:
+            custom_root = pathlib.Path(folder) / "bench"
+            (custom_root / "contracts").mkdir(parents=True)
+            dataset["maximum_item_quantity"] = 2147483647
+            (custom_root / "contracts/dataset.json").write_text(json.dumps(dataset))
+            env = Environment(custom_root, custom_root / "runtime", custom_root / "work", protocol)
+            self.assertEqual(env.dataset["maximum_item_quantity"], 2147483647)
+
+            dataset["maximum_item_quantity"] = 2147483648
+            (custom_root / "contracts/dataset.json").write_text(json.dumps(dataset))
+            with self.assertRaisesRegex(ValueError, "maximum_item_quantity"):
+                Environment(custom_root, custom_root / "runtime", custom_root / "work", protocol)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -12,7 +12,10 @@ import (
 	"strings"
 )
 
-const testOrigin = "http://example.com"
+const (
+	testOrigin     = "http://example.com"
+	testRemoteAddr = "192.0.2.1:1234"
+)
 
 // Do 保留调用方请求的上下文、请求头与 Cookie，在内存中记录真实内核响应。
 func (host *Host) Do(request *http.Request) (*httptest.ResponseRecorder, error) {
@@ -45,6 +48,7 @@ func (host *Host) JSON(method, target string, body any) (*httptest.ResponseRecor
 	if err != nil {
 		return nil, err
 	}
+	request.RemoteAddr = testRemoteAddr
 	request.Header.Set("Accept", "application/json")
 	if body != nil {
 		request.Header.Set("Content-Type", "application/json")

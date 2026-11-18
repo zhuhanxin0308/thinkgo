@@ -9,7 +9,8 @@ func NormalizeInformationalArguments(args []string) []string {
 	command := ""
 	help := false
 	version := false
-	for _, argument := range args {
+	for index := 0; index < len(args); index++ {
+		argument := args[index]
 		if argument == "--" {
 			break
 		}
@@ -24,7 +25,16 @@ func NormalizeInformationalArguments(args []string) []string {
 				version = true
 			}
 		default:
-			if command == "" && !strings.HasPrefix(argument, "-") {
+			if command != "" {
+				continue
+			}
+			if looksLikeOptionToken(argument) && !isNegativeNumber(argument) {
+				if !strings.Contains(argument, "=") && preCommandOptionConsumesNext(args, index) {
+					index++
+				}
+				continue
+			}
+			if validCommandName(argument) {
 				command = argument
 			}
 		}
@@ -39,4 +49,45 @@ func NormalizeInformationalArguments(args []string) []string {
 		return []string{"help", command}
 	}
 	return result
+}
+
+func preCommandOptionConsumesNext(args []string, index int) bool {
+	if index+1 >= len(args) {
+		return false
+	}
+	next := args[index+1]
+	if next == "--" || isInformationalFlag(next) {
+		return false
+	}
+	if looksLikeOptionToken(next) && !isNegativeNumber(next) {
+		return false
+	}
+	if !validCommandName(next) {
+		return true
+	}
+	for rest := index + 2; rest < len(args); rest++ {
+		candidate := args[rest]
+		if candidate == "--" {
+			break
+		}
+		if isInformationalFlag(candidate) {
+			continue
+		}
+		if looksLikeOptionToken(candidate) && !isNegativeNumber(candidate) {
+			continue
+		}
+		if validCommandName(candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+func isInformationalFlag(token string) bool {
+	switch token {
+	case "--help", "-h", "--version", "-V", "-v":
+		return true
+	default:
+		return false
+	}
 }

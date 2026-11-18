@@ -48,7 +48,8 @@ func inheritAPITypeComments(docs binding.Documentation, files []commentSourceFil
 				if typ.Name.Name == "_" {
 					continue
 				}
-				if target := apiCommentTypeReference(typ.Type, source.packagePath, imports); target != "" {
+				typeParams := collectAPICommentTypeParams(typ.TypeParams)
+				if target := apiCommentTypeReference(typ.Type, source.packagePath, imports, typeParams); target != "" {
 					references[source.packagePath+"."+typ.Name.Name] = commentTypeReference{target: target, position: typ.Pos()}
 				}
 			}
@@ -85,20 +86,38 @@ func inheritAPITypeComments(docs binding.Documentation, files []commentSourceFil
 	return nil
 }
 
-func apiCommentTypeReference(expression ast.Expr, packagePath string, imports map[string]string) string {
+func collectAPICommentTypeParams(params *ast.FieldList) map[string]bool {
+	if params == nil || len(params.List) == 0 {
+		return nil
+	}
+	names := make(map[string]bool, len(params.List))
+	for _, field := range params.List {
+		for _, ident := range field.Names {
+			if ident != nil && ident.Name != "" && ident.Name != "_" {
+				names[ident.Name] = true
+			}
+		}
+	}
+	return names
+}
+
+func apiCommentTypeReference(expression ast.Expr, packagePath string, imports map[string]string, typeParams map[string]bool) string {
 	switch typ := expression.(type) {
 	case *ast.Ident:
+		if typeParams[typ.Name] {
+			return ""
+		}
 		return packagePath + "." + typ.Name
 	case *ast.SelectorExpr:
-		if qualifier, ok := typ.X.(*ast.Ident); ok && imports[qualifier.Name] != "" {
+		if qualifier, ok := typ.X.(*ast.Ident); ok && !typeParams[qualifier.Name] && imports[qualifier.Name] != "" {
 			return imports[qualifier.Name] + "." + typ.Sel.Name
 		}
 	case *ast.ParenExpr:
-		return apiCommentTypeReference(typ.X, packagePath, imports)
+		return apiCommentTypeReference(typ.X, packagePath, imports, typeParams)
 	case *ast.IndexExpr:
-		return apiCommentTypeReference(typ.X, packagePath, imports)
+		return apiCommentTypeReference(typ.X, packagePath, imports, typeParams)
 	case *ast.IndexListExpr:
-		return apiCommentTypeReference(typ.X, packagePath, imports)
+		return apiCommentTypeReference(typ.X, packagePath, imports, typeParams)
 	}
 	return ""
 }

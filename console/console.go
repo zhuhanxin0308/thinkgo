@@ -210,6 +210,14 @@ func (c *Console) Register(command ICommand) error {
 	if _, _, _, err := validateInputDefinitions(command.GetArgumentDefinitions(), command.GetOptionDefinitions()); err != nil {
 		return fmt.Errorf("%w: 命令 %q 的参数声明错误: %v", ErrInvalidCommand, signature, err)
 	}
+	for _, option := range command.GetOptionDefinitions() {
+		if option.Name == "help" || option.Name == "version" {
+			return fmt.Errorf("%w: 命令 %q 不能占用保留全局长选项 --%s", ErrInvalidCommand, signature, option.Name)
+		}
+		if option.Short == "h" || option.Short == "V" {
+			return fmt.Errorf("%w: 命令 %q 不能占用保留全局短选项 -%s", ErrInvalidCommand, signature, option.Short)
+		}
+	}
 
 	c.mu.Lock()
 	defer c.mu.Unlock()

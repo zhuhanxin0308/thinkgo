@@ -249,20 +249,33 @@ func resolveRunDocumentRoot(app *framework.App, configured string) (string, erro
 }
 
 func writeRunStartupMessage(output *console.Output, host, port, root string) {
-	output.Info(fmt.Sprintf("ThinkPHP Development server is started On <http://%s:%s/>", host, port))
+	output.Info(fmt.Sprintf("ThinkPHP Development server is started On <http://%s/>", net.JoinHostPort(strings.Trim(host, "[]"), port)))
 	output.Info("You can exit with `CTRL-C`")
 	output.Info("Document root is: " + root)
 }
 
 func isValidRunHost(host string) bool {
-	if host == "" || strings.ContainsAny(host, ":/\\@?#\x00\r\n\t ") {
+	if host == "" || strings.ContainsAny(host, "/\\@?#\x00\r\n\t ") {
 		return false
 	}
-	if net.ParseIP(strings.Trim(host, "[]")) != nil {
+	if strings.ContainsAny(host, "[]") {
+		if !strings.HasPrefix(host, "[") || !strings.HasSuffix(host, "]") {
+			return false
+		}
+		inner := host[1 : len(host)-1]
+		return inner != "" && !strings.ContainsAny(inner, "[]") && strings.Contains(inner, ":") && net.ParseIP(inner) != nil
+	}
+	if strings.Contains(host, ":") {
+		return false
+	}
+	if net.ParseIP(host) != nil {
 		return true
 	}
+	if len(host) > 253 {
+		return false
+	}
 	for _, label := range strings.Split(strings.ToLower(host), ".") {
-		if label == "" || label[0] == '-' || label[len(label)-1] == '-' {
+		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
 			return false
 		}
 		for _, character := range label {

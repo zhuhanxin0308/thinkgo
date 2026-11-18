@@ -113,7 +113,7 @@ func applicationSemanticFiles(files []*ast.File) []*ast.File {
 			case *ast.FuncDecl:
 				semanticFile.Decls = append(semanticFile.Decls, typed)
 			case *ast.GenDecl:
-				if typed.Tok == token.IMPORT || typed.Tok == token.CONST || typed.Tok == token.TYPE {
+				if typed.Tok == token.IMPORT || typed.Tok == token.CONST || typed.Tok == token.TYPE || typed.Tok == token.VAR {
 					semanticFile.Decls = append(semanticFile.Decls, typed)
 				}
 			}
@@ -431,7 +431,18 @@ func discoverApplicationStructTypesWithContext(context *applicationSemanticConte
 }
 
 func applicationTypeCanUseEmptyComposite(candidate types.Type) bool {
-	unalias := types.Unalias(candidate)
+	current := candidate
+	for {
+		alias, ok := current.(*types.Alias)
+		if !ok {
+			break
+		}
+		if alias.TypeParams().Len() > 0 && alias.TypeArgs().Len() == 0 {
+			return false
+		}
+		current = alias.Rhs()
+	}
+	unalias := types.Unalias(current)
 	if named, ok := unalias.(*types.Named); ok {
 		if named.TypeParams().Len() > 0 && named.TypeArgs().Len() == 0 {
 			return false

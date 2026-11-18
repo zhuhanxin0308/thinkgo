@@ -87,7 +87,7 @@ func (service *Service) Detail(ctx context.Context, principal Principal, id stri
 	if err != nil {
 		return detail, "", err
 	}
-	if err := service.cache.SetEx(ctx, key, encoded, time.Duration(service.config.Dataset.CacheTTLSeconds)*time.Second).Err(); err != nil {
+	if err := service.cache.Set(ctx, key, encoded, time.Duration(service.config.Dataset.CacheTTLSeconds)*time.Second).Err(); err != nil {
 		return detail, "", err
 	}
 	return detail, "miss", nil

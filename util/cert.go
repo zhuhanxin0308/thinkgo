@@ -24,6 +24,12 @@ const developmentCertificateClockSkew = 5 * time.Minute
 // GenerateCert 在证书和私钥的共同父目录约束内生成开发证书。
 // 已存在任一目标时返回 fs.ErrExist，禁止静默轮换成不匹配的文件对。
 func GenerateCert(certFile, keyFile string) error {
+	if err := validateCertificateTargetPath(certFile, "证书"); err != nil {
+		return err
+	}
+	if err := validateCertificateTargetPath(keyFile, "私钥"); err != nil {
+		return err
+	}
 	if !filepath.IsAbs(certFile) || !filepath.IsAbs(keyFile) {
 		if err := validateCertificateWorkingDirectory(); err != nil {
 			return fmt.Errorf("验证证书工作目录失败: %w", err)
@@ -36,6 +42,9 @@ func GenerateCert(certFile, keyFile string) error {
 	keyAbsolute, err := filepath.Abs(keyFile)
 	if err != nil {
 		return fmt.Errorf("解析私钥路径失败: %w", err)
+	}
+	if err := validateCertificatePairPaths(certAbsolute, keyAbsolute); err != nil {
+		return err
 	}
 	rootPath, err := commonCertificateRoot(filepath.Dir(certAbsolute), keyAbsolute)
 	if err != nil {
@@ -79,13 +88,19 @@ func GenerateCertInRoot(basePath, certFile, keyFile string) (returnErr error) {
 	if strings.TrimSpace(basePath) == "" {
 		return fmt.Errorf("证书根目录不能为空")
 	}
+	if err := validateCertificateTargetPath(certFile, "证书"); err != nil {
+		return err
+	}
+	if err := validateCertificateTargetPath(keyFile, "私钥"); err != nil {
+		return err
+	}
 	certFile = filepath.Clean(certFile)
 	keyFile = filepath.Clean(keyFile)
-	if certFile == "." || keyFile == "." || filepath.IsAbs(certFile) || filepath.IsAbs(keyFile) {
+	if certFile == "." || keyFile == "." || filepath.IsAbs(certFile) || filepath.IsAbs(keyFile) || !filepath.IsLocal(certFile) || !filepath.IsLocal(keyFile) {
 		return fmt.Errorf("证书和私钥必须是根目录内的相对文件路径")
 	}
-	if certFile == keyFile {
-		return fmt.Errorf("证书和私钥不能使用同一路径")
+	if err := validateCertificatePairPaths(certFile, keyFile); err != nil {
+		return err
 	}
 
 	certificatePEM, privateKeyPEM, err := generateDevelopmentCertificate(time.Now())
@@ -99,8 +114,20 @@ func GenerateCertInRoot(basePath, certFile, keyFile string) (returnErr error) {
 	defer func() {
 		returnErr = errors.Join(returnErr, root.Close())
 	}()
+	createdDirs := make([]string, 0, 2)
+	complete := false
+	defer func() {
+		if complete {
+			return
+		}
+		for index := len(createdDirs) - 1; index >= 0; index-- {
+			_ = removeRootFile(root, createdDirs[index])
+		}
+	}()
 	for _, directory := range []string{filepath.Dir(certFile), filepath.Dir(keyFile)} {
-		if err := root.MkdirAll(directory, 0o700); err != nil {
+		created, err := ensureCertificateRootDirectory(root, directory)
+		createdDirs = append(createdDirs, created...)
+		if err != nil {
 			return fmt.Errorf("创建证书目录失败: %w", err)
 		}
 	}
@@ -115,7 +142,6 @@ func GenerateCertInRoot(basePath, certFile, keyFile string) (returnErr error) {
 		removeErr := removeRootFile(root, certFile)
 		return errors.Join(fmt.Errorf("创建私钥文件失败: %w", err), closeErr, removeErr)
 	}
-	complete := false
 	defer func() {
 		if complete {
 			return
@@ -206,6 +232,93 @@ func removeRootFile(root *os.Root, name string) error {
 		return nil
 	}
 	return err
+}
+
+func validateCertificateTargetPath(rawPath, label string) error {
+	if strings.TrimSpace(rawPath) == "" {
+		return fmt.Errorf("%s文件路径不能为空", label)
+	}
+	for _, character := range rawPath {
+		if character < ' ' || character == 0x7f {
+			return fmt.Errorf("%s文件路径不能包含控制字符", label)
+		}
+	}
+	if strings.HasSuffix(rawPath, "/") || strings.HasSuffix(rawPath, "\\") {
+		return fmt.Errorf("%s文件路径不能以目录分隔符结尾", label)
+	}
+	volume := filepath.VolumeName(rawPath)
+	withoutVolume := rawPath[len(volume):]
+	for _, segment := range strings.FieldsFunc(withoutVolume, func(r rune) bool {
+		return r == '/' || r == '\\'
+	}) {
+		if strings.TrimSpace(segment) == "" {
+			return fmt.Errorf("%s文件路径不能包含全空白名称", label)
+		}
+	}
+	cleaned := filepath.Clean(rawPath)
+	base := filepath.Base(cleaned)
+	if cleaned == "." || cleaned == ".." || base == "." || base == ".." || base == string(filepath.Separator) || strings.TrimSpace(base) == "" {
+		return fmt.Errorf("%s文件路径必须指向具体文件", label)
+	}
+	return nil
+}
+
+func validateCertificatePairPaths(certPath, keyPath string) error {
+	if certPath == keyPath {
+		return fmt.Errorf("证书和私钥不能使用同一路径")
+	}
+	if isCertificatePathAncestor(certPath, keyPath) || isCertificatePathAncestor(keyPath, certPath) {
+		return fmt.Errorf("证书和私钥路径不能互为父子目录")
+	}
+	return nil
+}
+
+func isCertificatePathAncestor(ancestor, descendant string) bool {
+	relative, err := filepath.Rel(ancestor, descendant)
+	if err != nil {
+		return false
+	}
+	return relative != "." && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) && !filepath.IsAbs(relative)
+}
+
+func ensureCertificateRootDirectory(root *os.Root, directory string) ([]string, error) {
+	cleaned := filepath.Clean(directory)
+	if cleaned == "." || cleaned == "" {
+		return nil, nil
+	}
+	segments := strings.Split(cleaned, string(filepath.Separator))
+	created := make([]string, 0, len(segments))
+	current := ""
+	for _, segment := range segments {
+		if segment == "" || segment == "." {
+			continue
+		}
+		if current == "" {
+			current = segment
+		} else {
+			current = filepath.Join(current, segment)
+		}
+		info, err := root.Stat(current)
+		if err == nil {
+			if !info.IsDir() {
+				return created, &os.PathError{Op: "mkdir", Path: current, Err: fs.ErrExist}
+			}
+			continue
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			return created, err
+		}
+		if err := root.Mkdir(current, 0o700); err != nil {
+			if errors.Is(err, fs.ErrExist) {
+				if statInfo, statErr := root.Stat(current); statErr == nil && statInfo.IsDir() {
+					continue
+				}
+			}
+			return created, err
+		}
+		created = append(created, current)
+	}
+	return created, nil
 }
 
 func commonCertificateRoot(certDirectory, keyAbsolute string) (string, error) {

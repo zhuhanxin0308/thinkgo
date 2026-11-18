@@ -233,6 +233,61 @@ func TestGenerateCertInRootRejectsInvalidBoundaries(t *testing.T) {
 	}
 }
 
+// TestGenerateCertRejectsConflictBlankAndDirectoryPathsWithoutResidue 验证空路径、全空白文件名、
+// 末尾分隔符与父子祖先包含冲突均在创建任何目录前拒绝，且磁盘冲突回滚不残留新建空目录。
+func TestGenerateCertRejectsConflictBlankAndDirectoryPathsWithoutResidue(t *testing.T) {
+	for _, pair := range [][2]string{
+		{"tls", filepath.Join("tls", "key.pem")},
+		{filepath.Join("tls", "cert.pem"), "tls"},
+		{"   ", "key.pem"},
+		{"cert.pem", "   "},
+		{filepath.Join("tls", "   "), "key.pem"},
+		{"tls/", "key.pem"},
+		{"cert.pem", "tls\\"},
+		{"..", "key.pem"},
+	} {
+		conflictDir := t.TempDir()
+		if err := GenerateCertInRoot(conflictDir, pair[0], pair[1]); err == nil {
+			t.Fatalf("非法证书路径对 %#v 应被拒绝", pair)
+		}
+		entries, err := os.ReadDir(conflictDir)
+		if err != nil || len(entries) != 0 {
+			t.Fatalf("路径对 %#v 失败后不应残留任何目录或文件: entries=%v err=%v", pair, entries, err)
+		}
+	}
+
+	emptyCertBase := t.TempDir()
+	keyOutPath := filepath.Join(emptyCertBase, "out", "key.pem")
+	err := GenerateCert("", keyOutPath)
+	if err == nil || errors.Is(err, fs.ErrExist) {
+		t.Fatalf("空证书路径应报参数校验错误而非工作目录 fs.ErrExist: %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(emptyCertBase, "out")); !errors.Is(statErr, fs.ErrNotExist) {
+		t.Fatalf("空证书路径失败时不应提前创建私钥父目录: %v", statErr)
+	}
+
+	blankDir := t.TempDir()
+	t.Chdir(blankDir)
+	if err := GenerateCert("   ", "key.pem"); err == nil {
+		t.Fatal("全空白证书路径应被 GenerateCert 拒绝")
+	}
+	if entries, readErr := os.ReadDir(blankDir); readErr != nil || len(entries) != 0 {
+		t.Fatalf("GenerateCert 全空白路径不应产生任何文件: entries=%v err=%v", entries, readErr)
+	}
+
+	// 即使磁盘上预先存在同名目录导致 OpenFile 失败，本次为另一路径新建的空目录也必须回滚。
+	rollbackDir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(rollbackDir, "existing-dir"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := GenerateCertInRoot(rollbackDir, "existing-dir", filepath.Join("fresh", "nested", "key.pem")); err == nil {
+		t.Fatal("目标路径已被目录占用时应失败")
+	}
+	if _, statErr := os.Stat(filepath.Join(rollbackDir, "fresh")); !errors.Is(statErr, fs.ErrNotExist) {
+		t.Fatalf("OpenFile 失败后应回滚新建的空父目录 fresh: %v", statErr)
+	}
+}
+
 func readTestCertificate(t *testing.T, path string) *x509.Certificate {
 	t.Helper()
 	content, err := os.ReadFile(path)

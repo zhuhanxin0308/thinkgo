@@ -363,6 +363,9 @@ func (app *App) closeInternal() error {
 		if err := app.closeServiceResources(); err != nil {
 			closeErrors = append(closeErrors, err)
 		}
+		if err := app.closeUnmountedInjectedDatabase(); err != nil {
+			closeErrors = append(closeErrors, err)
+		}
 		app.lifecycle.closeErr = errors.Join(closeErrors...)
 		app.lifecycle.lock.Lock()
 		app.lifecycle.state = ApplicationStateClosed

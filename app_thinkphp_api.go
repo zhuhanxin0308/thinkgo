@@ -208,8 +208,10 @@ func (app *App) LoadConfig() error {
 	if app == nil || app.config == nil {
 		return ErrNilApplication
 	}
-	if loaded, err := app.loadConfigurationCache(); loaded || err != nil {
-		return err
+	if !app.skipsConfigurationCache() {
+		if loaded, err := app.loadConfigurationCache(); loaded || err != nil {
+			return err
+		}
 	}
 	return app.config.LoadAll(app.GetConfigPath())
 }

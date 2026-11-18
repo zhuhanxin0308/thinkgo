@@ -25,7 +25,10 @@ func validateCRUDSource(plan *crudPlan, source, testSource []byte) error {
 		files = append(files, file)
 	}
 	configuration := types.Config{Importer: semantic}
-	packagePath := strings.TrimSuffix(plan.ModelImport, "/model") + "/api"
+	packagePath := plan.APIPackagePath
+	if packagePath == "" {
+		packagePath = strings.TrimSuffix(plan.ModelImport, "/model") + "/api"
+	}
 	if _, err := configuration.Check(packagePath, semantic.fileSet, files, nil); err != nil {
 		return fmt.Errorf("CRUD 源码与模型不兼容: %w", err)
 	}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/url"
 	"os"
@@ -18,6 +19,7 @@ const (
 	minimumSecretBytes = 32
 	maximumConfigBytes = 64 * 1024
 	defaultAddress     = "127.0.0.1:18080"
+	maxPostgresInteger = math.MaxInt32
 )
 
 var namespacePattern = regexp.MustCompile(`^[A-Za-z0-9:_-]{1,96}$`)
@@ -91,7 +93,8 @@ func (dataset Dataset) Validate() error {
 		dataset.HotProductsPerTenant < 1 || int64(dataset.HotProductsPerTenant) >= dataset.ProductsPerTenant ||
 		dataset.CacheTTLSeconds < 1 || dataset.CacheHitWeight < 0 || dataset.CacheHitWeight > 100 ||
 		dataset.CatalogPageSize < 1 || dataset.MaximumPageSize < dataset.CatalogPageSize ||
-		dataset.MaximumPriceCents < 1 || dataset.MaximumOrderItems < 1 || dataset.MaximumItemQuantity < 1 ||
+		dataset.MaximumPriceCents < 1 || dataset.MaximumOrderItems < 1 ||
+		dataset.MaximumItemQuantity < 1 || dataset.MaximumItemQuantity > maxPostgresInteger ||
 		dataset.MinimumCommentCharacters < 1 || dataset.MaximumCommentCharacters < dataset.MinimumCommentCharacters ||
 		dataset.MaximumBodyBytes < int64(dataset.MaximumCommentCharacters) {
 		return errors.New("业务配置的规模或预算无效")

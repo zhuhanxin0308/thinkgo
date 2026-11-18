@@ -67,6 +67,15 @@ func TestOrderValidationDoesNotMutateCallerAndRejectsAmbiguity(t *testing.T) {
 			}
 		})
 	}
+	wideLimits := limits
+	wideLimits.MaximumItemQuantity = 2147483648
+	if _, err := ValidateOrder(OrderInput{Items: []OrderItemInput{{ProductID: 1, Quantity: 2147483648}}}, wideLimits); err == nil {
+		t.Fatal("超出 PostgreSQL integer 范围的订单数量未被 ValidateOrder 拒绝")
+	}
+	wideLimits.MaximumItemQuantity = 2147483647
+	if items, err := ValidateOrder(OrderInput{Items: []OrderItemInput{{ProductID: 1, Quantity: 2147483647}}}, wideLimits); err != nil || items[0].Quantity != 2147483647 {
+		t.Fatalf("2147483647 临界合法订单数量应通过校验: items=%+v err=%v", items, err)
+	}
 }
 
 func TestCommentValidationUsesCharactersAndRejectsInvalidEncoding(t *testing.T) {

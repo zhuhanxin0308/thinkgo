@@ -239,6 +239,37 @@ func TestNativeFrameworkContracts(t *testing.T) {
 				assertStatus(t, response, status)
 				assertJSON(t, response, body)
 			}
+			if name == "thinkgo" {
+				service.err = nil
+				assertStatus(t, request(http.MethodGet, "/index/healthz", "", ""), http.StatusOK)
+				for _, endpoint := range []struct{ method, path, body string }{
+					{http.MethodGet, "/index/api/catalog", ""},
+					{http.MethodGet, "/index/api/products/17", ""},
+					{http.MethodPost, "/index/api/orders", orderBody},
+					{http.MethodPost, "/index/api/tickets/23/comments", `{"body":"有效评论"}`},
+				} {
+					before := service.calls
+					unauth := request(endpoint.method, endpoint.path, endpoint.body, "")
+					assertStatus(t, unauth, http.StatusUnauthorized)
+					if service.calls != before {
+						t.Fatalf("ThinkGo 多应用前缀路径 %s 未鉴权却进入了业务层", endpoint.path)
+					}
+				}
+				callerCtx := context.WithValue(context.Background(), struct{ key string }{"caller"}, "preserved")
+				rawReq := httptest.NewRequest(http.MethodGet, "http://127.0.0.1/index/api/catalog?category_id=2&limit=10", nil).WithContext(callerCtx)
+				rawReq.Header.Set("Authorization", "Bearer valid")
+				resp, err := send(rawReq)
+				if err != nil {
+					t.Fatal(err)
+				}
+				assertStatus(t, resp, http.StatusOK)
+				if rawReq.Context() != callerCtx {
+					t.Fatal("ThinkGo 适配器不得原地篡改调用方传入的 *http.Request 上下文")
+				}
+				if _, hasDeadline := service.requestContext.Deadline(); !hasDeadline {
+					t.Fatal("/index/api/catalog 未注入业务超时上下文")
+				}
+			}
 		})
 	}
 }
