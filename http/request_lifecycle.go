@@ -113,10 +113,12 @@ func (h *Http) run(request *fwcontext.Request, publicOnly, defaultRequest bool) 
 		}
 	}
 
+	var innerParseResponse *fwcontext.Response
 	response = h.middleware.Then(request, func(current *fwcontext.Request) *fwcontext.Response {
 		// ThinkPHP 在全局中间件内进入路由分发；请求解析和静态资源适配均属于该目标阶段。
 		if parseErr := current.Parse(); parseErr != nil {
-			return responseForRequestParseError(parseErr)
+			innerParseResponse = responseForRequestParseError(parseErr)
+			return innerParseResponse
 		}
 		if staticResponse := h.responseForPublicFile(current); staticResponse != nil {
 			return staticResponse
@@ -145,14 +147,57 @@ func (h *Http) run(request *fwcontext.Request, publicOnly, defaultRequest bool) 
 			} else if routeResponse != nil && routeResponse.Committed() {
 				return routeResponse
 			}
-			return responseForRequestParseError(parseErr)
+			innerParseResponse = responseForRequestParseError(parseErr)
+			return innerParseResponse
 		}
 		return routeResponse
 	})
+	if parseErr := request.ParseError(); parseErr != nil {
+		if writer, exists := request.ResponseWriter(); exists && responseWriterStarted(writer) {
+			if response != nil && response.Committed() {
+				return response
+			}
+			return fwcontext.NewCommittedResponse(responseWriterStatus(writer))
+		}
+		if response != nil && response.Committed() {
+			return response
+		}
+		expected := responseForRequestParseError(parseErr)
+		if innerParseResponse != nil && response == innerParseResponse && response.GetStatus() == expected.GetStatus() {
+			return response
+		}
+		preserveMiddlewareHeadersOnParseError(response, expected)
+		h.transferRequestEndState(response, expected)
+		return expected
+	}
 	if response == nil {
 		return internalServerErrorResponse()
 	}
 	return response
+}
+
+func preserveMiddlewareHeadersOnParseError(source, target *fwcontext.Response) {
+	if source == nil || target == nil {
+		return
+	}
+	for name, values := range source.Headers() {
+		canonical := http.CanonicalHeaderKey(name)
+		if isHostManagedHeader(canonical) {
+			continue
+		}
+		switch canonical {
+		case "Content-Type", "Content-Length", "Content-Encoding", "Content-Disposition",
+			"Etag", "Last-Modified", "Accept-Ranges", "Location":
+			continue
+		}
+		for index, value := range values {
+			if index == 0 {
+				target.Header(canonical, value)
+			} else {
+				target.AddHeader(canonical, value)
+			}
+		}
+	}
 }
 
 func responseWriterStarted(writer http.ResponseWriter) bool {

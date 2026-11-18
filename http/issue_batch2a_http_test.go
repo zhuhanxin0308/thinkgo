@@ -333,3 +333,69 @@ func TestIssue579ScalarFloatBindingRejectsNaNAndInf(t *testing.T) {
 		t.Fatalf("合法有限浮点数应正常返回 200 JSON: status=%d body=%q", okRec.Code, okRec.Body.String())
 	}
 }
+
+// TestIssue578GlobalMiddlewareShortCircuitOrPostParseErrorPreservesHeaders 验证全局中间件短路或后置阶段触发的请求体解析错误仍返回 400 并保留中间件响应头。
+func TestIssue578GlobalMiddlewareShortCircuitOrPostParseErrorPreservesHeaders(t *testing.T) {
+	t.Run("short_circuit_middleware_parse_error", func(t *testing.T) {
+		app := newTestHTTPApp(t, t.TempDir(), map[string]interface{}{"enable": false})
+		app.Middleware().Pipe(func(req *fwcontext.Request, _ func(*fwcontext.Request) *fwcontext.Response) *fwcontext.Response {
+			_ = req.Post("field", "")
+			return fwcontext.NewResponse().
+				Code(stdhttp.StatusAccepted).
+				Header("Access-Control-Allow-Origin", "https://trusted.example").
+				Header("X-Request-Id", "req-short-circuit").
+				Content("short-circuit")
+		})
+		router := mustHTTPRoute(t, app)
+		if _, err := router.Post("/items", func(*fwcontext.Request) *fwcontext.Response {
+			return fwcontext.NewResponse().Content("ok")
+		}); err != nil {
+			t.Fatal(err)
+		}
+		kernel := newTestHTTPHandler(t, app)
+		req := httptest.NewRequest(stdhttp.MethodPost, "http://example.com/items", strings.NewReader("{bad-json"))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		kernel.ServeHTTP(rec, req)
+		if rec.Code != stdhttp.StatusBadRequest {
+			t.Fatalf("全局中间件短路但已触发解析错误时应返回 400，实际返回 %d", rec.Code)
+		}
+		if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "https://trusted.example" {
+			t.Fatalf("400 响应应保留全局中间件写入的 CORS 头: %q", got)
+		}
+		if got := rec.Header().Get("X-Request-Id"); got != "req-short-circuit" {
+			t.Fatalf("400 响应应保留全局中间件写入的追踪头: %q", got)
+		}
+	})
+
+	t.Run("post_middleware_parse_error", func(t *testing.T) {
+		app := newTestHTTPApp(t, t.TempDir(), map[string]interface{}{"enable": false})
+		app.Middleware().Pipe(func(req *fwcontext.Request, next func(*fwcontext.Request) *fwcontext.Response) *fwcontext.Response {
+			res := next(req)
+			_ = req.Post("audit_field", "")
+			return res.
+				Header("Access-Control-Allow-Origin", "https://trusted.example").
+				Header("X-Request-Id", "req-post-parse")
+		})
+		router := mustHTTPRoute(t, app)
+		if _, err := router.Post("/lazy", func(*fwcontext.Request) *fwcontext.Response {
+			return fwcontext.NewResponse().Content("lazy-ok")
+		}); err != nil {
+			t.Fatal(err)
+		}
+		kernel := newTestHTTPHandler(t, app)
+		req := httptest.NewRequest(stdhttp.MethodPost, "http://example.com/lazy", strings.NewReader("{bad-json"))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		kernel.ServeHTTP(rec, req)
+		if rec.Code != stdhttp.StatusBadRequest {
+			t.Fatalf("全局中间件后置处理触发解析错误时应返回 400，实际返回 %d", rec.Code)
+		}
+		if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "https://trusted.example" {
+			t.Fatalf("400 响应应保留全局中间件后置写入的 CORS 头: %q", got)
+		}
+		if got := rec.Header().Get("X-Request-Id"); got != "req-post-parse" {
+			t.Fatalf("400 响应应保留全局中间件后置写入的追踪头: %q", got)
+		}
+	})
+}
