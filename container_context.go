@@ -8,11 +8,13 @@ import (
 // ErrInvalidContainerResolutionContext 表示显式服务解析没有提供有效上下文。
 var ErrInvalidContainerResolutionContext = errors.New("服务解析上下文不能为空")
 
-// Context 返回当前依赖解析链的上下文；未显式指定时使用后台上下文。
+// Context 返回当前依赖解析链的上下文；未显式指定或所属单例/作用域构建已结束时使用后台上下文。
 // 上下文保存在本次解析副本中，不修改根容器或其它并发解析。
 func (container *Container) Context() context.Context {
-	if container != nil && container.resolution != nil && container.resolution.context != nil {
-		return container.resolution.context
+	if container != nil && container.resolution != nil {
+		if ctx := container.resolution.effectiveContext(); ctx != nil {
+			return ctx
+		}
 	}
 	return context.Background()
 }
@@ -28,7 +30,11 @@ func (container *Container) MakeContext(ctx context.Context, name string, params
 	previous := container.currentResolution()
 	// 上下文只随解析链传递；具体服务决定是否因取消停止工作。
 	// 响应发送及终结阶段仍可能需要解析清理服务，不能在容器统一提前中断。
-	next := &resolution{stack: previous.stack, context: ctx}
+	next := &resolution{
+		stack:           previous.stack,
+		context:         ctx,
+		singletonOrigin: previous.singletonOrigin,
+	}
 	return container.makeWithResolution(next, name, params...)
 }
 

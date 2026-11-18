@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"sync/atomic"
 
 	"github.com/zhuhanxin0308/thinkgo/v3/internal/resourceidentity"
 )
@@ -241,15 +242,15 @@ func (c *Container) makeScoped(abstract string, registered binding, resolutionSc
 	}
 	key := scopedBuildKey{name: abstract, generation: registered.generation}
 	if active, ok := state.building[key]; ok {
-		from := resolutionScope.current()
-		if err := addScopeWaitLocked(state, from.node, active.node, from.name, abstract); err != nil {
+		addedNodes, err := addScopeWaitEdgesLocked(state, resolutionScope, active.node, abstract)
+		if err != nil {
 			state.lock.Unlock()
 			return nil, err
 		}
 		state.lock.Unlock()
 		<-active.done
 		state.lock.Lock()
-		removeScopeWaitLocked(state, from.node, active.node)
+		removeScopeWaitEdgesLocked(state, addedNodes, active.node)
 		state.lock.Unlock()
 		return active.instance, active.err
 	}
@@ -266,8 +267,11 @@ func (c *Container) makeScoped(abstract string, registered binding, resolutionSc
 	state.lock.Unlock()
 
 	global := c.sharedState()
+	frameDone := &atomic.Bool{}
+	scopedResolution := resolutionScope.pushWithDone(abstract, active.node, Scoped, frameDone)
 	var returned, constructed bool
 	defer func() {
+		frameDone.Store(true)
 		if !returned {
 			err = fmt.Errorf("build scoped %s failed: %w", abstract, ErrContainerBuildAborted)
 		}
@@ -295,7 +299,7 @@ func (c *Container) makeScoped(abstract string, registered binding, resolutionSc
 		delete(state.building, key)
 		close(active.done)
 	}()
-	instance, err = c.build(registered, resolutionScope.push(abstract, active.node, Scoped), params...)
+	instance, err = c.build(registered, scopedResolution, params...)
 	returned, constructed = true, err == nil
 	if err != nil {
 		err = fmt.Errorf("build scoped %s failed: %w", abstract, err)
@@ -303,48 +307,51 @@ func (c *Container) makeScoped(abstract string, registered binding, resolutionSc
 	return instance, err
 }
 
-func addScopeWaitLocked(state *containerScopeState, fromNode, toNode, fromName, toName string) error {
-	if fromNode == "" {
-		return nil
+// addScopeWaitEdgesLocked 将当前解析链上所有未完成的作用域节点记为等待源，
+// 覆盖同作用域嵌套构建及 Factory 中转链路的环路检测。
+func addScopeWaitEdgesLocked(state *containerScopeState, scope *resolution, toNode string, toName string) ([]string, error) {
+	if scope == nil || toNode == "" {
+		return nil, nil
+	}
+	targets := make(map[string]struct{})
+	var sourceNodes []string
+	for _, frame := range scope.stack {
+		if frame.isActive() && frame.lifecycle == Scoped && frame.node != "" {
+			if _, seen := targets[frame.node]; !seen {
+				targets[frame.node] = struct{}{}
+				sourceNodes = append(sourceNodes, frame.node)
+			}
+		}
+	}
+	if len(sourceNodes) == 0 {
+		return nil, nil
+	}
+	if hitNode, found := findReachableWaitTarget(state.waiting, toNode, targets, make(map[string]bool)); found {
+		return nil, scope.circularWaitError(hitNode, toName, true)
 	}
 	if state.waiting == nil {
 		state.waiting = make(map[string]map[string]struct{})
 	}
-	if state.waiting[fromNode] == nil {
-		state.waiting[fromNode] = make(map[string]struct{})
-	}
-	state.waiting[fromNode][toNode] = struct{}{}
-	if hasScopeWaitPathLocked(state, toNode, fromNode, make(map[string]bool)) {
-		removeScopeWaitLocked(state, fromNode, toNode)
-		return fmt.Errorf("circular scoped dependency detected: %s -> %s", fromName, toName)
-	}
-	return nil
-}
-
-func removeScopeWaitLocked(state *containerScopeState, from, to string) {
-	if from == "" {
-		return
-	}
-	delete(state.waiting[from], to)
-	if len(state.waiting[from]) == 0 {
-		delete(state.waiting, from)
-	}
-}
-
-func hasScopeWaitPathLocked(state *containerScopeState, current, target string, visited map[string]bool) bool {
-	if current == target {
-		return true
-	}
-	if visited[current] {
-		return false
-	}
-	visited[current] = true
-	for next := range state.waiting[current] {
-		if hasScopeWaitPathLocked(state, next, target, visited) {
-			return true
+	added := make([]string, 0, len(sourceNodes))
+	for _, fromNode := range sourceNodes {
+		if state.waiting[fromNode] == nil {
+			state.waiting[fromNode] = make(map[string]struct{})
+		}
+		if _, exists := state.waiting[fromNode][toNode]; !exists {
+			state.waiting[fromNode][toNode] = struct{}{}
+			added = append(added, fromNode)
 		}
 	}
-	return false
+	return added, nil
+}
+
+func removeScopeWaitEdgesLocked(state *containerScopeState, fromNodes []string, toNode string) {
+	for _, from := range fromNodes {
+		delete(state.waiting[from], toNode)
+		if len(state.waiting[from]) == 0 {
+			delete(state.waiting, from)
+		}
+	}
 }
 
 func closeScopedServiceContext(ctx context.Context, closer io.Closer) (err error) {

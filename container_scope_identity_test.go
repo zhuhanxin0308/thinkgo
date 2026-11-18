@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"sync"
 	"testing"
 )
 
@@ -57,6 +58,63 @@ func TestContainerScopeResourceIdentity(t *testing.T) {
 	want := []string{"共享指针", "值资源", "值资源", "函数二", "函数一"}
 	if !reflect.DeepEqual(order, want) {
 		t.Fatalf("独立资源遗漏或别名重复关闭: 实际=%v, 预期=%v", order, want)
+	}
+}
+
+type scopedZeroSizeCloserA struct{}
+type scopedZeroSizeCloserB struct{}
+
+var (
+	scopedZeroSizeCloseOrderMu sync.Mutex
+	scopedZeroSizeCloseOrder   []string
+)
+
+func (*scopedZeroSizeCloserA) Close() error {
+	scopedZeroSizeCloseOrderMu.Lock()
+	scopedZeroSizeCloseOrder = append(scopedZeroSizeCloseOrder, "zeroA")
+	scopedZeroSizeCloseOrderMu.Unlock()
+	return nil
+}
+
+func (*scopedZeroSizeCloserB) Close() error {
+	scopedZeroSizeCloseOrderMu.Lock()
+	scopedZeroSizeCloseOrder = append(scopedZeroSizeCloseOrder, "zeroB")
+	scopedZeroSizeCloseOrderMu.Unlock()
+	return nil
+}
+
+// TestContainerScopeZeroSizeStructPointerClosersAllClose 验证共享 runtime.zerobase 的零尺寸结构体指针不会被误去重跳过关闭。
+func TestContainerScopeZeroSizeStructPointerClosersAllClose(t *testing.T) {
+	scopedZeroSizeCloseOrderMu.Lock()
+	scopedZeroSizeCloseOrder = nil
+	scopedZeroSizeCloseOrderMu.Unlock()
+	t.Cleanup(func() {
+		scopedZeroSizeCloseOrderMu.Lock()
+		scopedZeroSizeCloseOrder = nil
+		scopedZeroSizeCloseOrderMu.Unlock()
+	})
+
+	container := NewContainer()
+	container.BindScoped("zero.a1", func() *scopedZeroSizeCloserA { return &scopedZeroSizeCloserA{} })
+	container.BindScoped("zero.a2", func() *scopedZeroSizeCloserA { return &scopedZeroSizeCloserA{} })
+	container.BindScoped("zero.b1", func() *scopedZeroSizeCloserB { return &scopedZeroSizeCloserB{} })
+
+	scope := container.NewScope()
+	for _, name := range []string{"zero.a1", "zero.a2", "zero.b1"} {
+		if _, err := scope.Make(name); err != nil {
+			t.Fatalf("解析零尺寸作用域服务 %s 失败: %v", name, err)
+		}
+	}
+	if err := scope.Close(); err != nil {
+		t.Fatalf("关闭零尺寸作用域服务失败: %v", err)
+	}
+
+	scopedZeroSizeCloseOrderMu.Lock()
+	got := append([]string(nil), scopedZeroSizeCloseOrder...)
+	scopedZeroSizeCloseOrderMu.Unlock()
+	want := []string{"zeroB", "zeroA", "zeroA"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("零尺寸指针 Closer 被误合并漏关或顺序错误: 实际=%v, 预期=%v", got, want)
 	}
 }
 
