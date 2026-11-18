@@ -89,6 +89,8 @@ func TestProviderExportsOTLPTraceAndShutsDown(t *testing.T) {
 	}
 	header := http.Header{}
 	header.Set("Baggage", baggageKey+"="+baggageValue)
+	t.Setenv("OTEL_EXPORTER_OTLP_TRACES_COMPRESSION", "none")
+	t.Setenv("OTEL_EXPORTER_OTLP_COMPRESSION", "none")
 	ctx, span := tracing.StartServer(context.Background(), header, "GET", "/orders/42", "api.example.com")
 	if span == nil {
 		t.Fatal("OTLP Provider 启用后必须创建 Span")
