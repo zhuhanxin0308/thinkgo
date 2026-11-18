@@ -13,11 +13,19 @@ const (
 	memorySessionLockShards      = 64
 )
 
+type memorySessionEntry struct {
+	data    string
+	updated time.Time
+	seq     uint64
+}
+
 // Memory 是支持原子读改写的进程内 Session 驱动，并提供可选容量和过期回收。
 type Memory struct {
 	mutex      sync.RWMutex
-	data       map[string]string
-	updated    map[string]time.Time
+	entries    map[string]memorySessionEntry
+	inFlight   map[string]int
+	seq        uint64
+	clearSeq   uint64
 	order      *list.List
 	orderIndex map[string]*list.Element
 	maxEntries int
@@ -46,9 +54,9 @@ func (m *Memory) Read(id string) (string, bool, error) {
 		return "", false, err
 	}
 	m.mutex.RLock()
-	value, found := m.data[id]
+	entry, found := m.entries[id]
 	m.mutex.RUnlock()
-	return value, found, nil
+	return entry.data, found, nil
 }
 
 // Write 写入 Session；达到容量上限时淘汰最早写入的记录。
@@ -65,8 +73,8 @@ func (m *Memory) Write(id string, data string) error {
 	if err := m.ensureCapacityLocked(id); err != nil {
 		return err
 	}
-	m.data[id] = data
-	m.updated[id] = time.Now()
+	m.seq++
+	m.entries[id] = memorySessionEntry{data: data, updated: time.Now(), seq: m.seq}
 	m.touchOrderLocked(id)
 	return nil
 }
@@ -91,8 +99,8 @@ func (m *Memory) Clear() error {
 	defer unlock()
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
-	m.data = make(map[string]string)
-	m.updated = make(map[string]time.Time)
+	m.clearSeq++
+	m.entries = make(map[string]memorySessionEntry)
 	if m.maxEntries > 0 {
 		m.order = list.New()
 		m.orderIndex = make(map[string]*list.Element)
@@ -103,7 +111,7 @@ func (m *Memory) Clear() error {
 	return nil
 }
 
-// Update 在单一写锁内完成读取、回调与提交，回调失败时保持原值。
+// Update 在分片锁内完成读取、回调与提交，提交前复核代际与淘汰状态，回调失败时保持原值。
 func (m *Memory) Update(id string, update func(string, bool) (string, bool, error)) error {
 	if err := validateSessionID(id); err != nil {
 		return err
@@ -114,16 +122,42 @@ func (m *Memory) Update(id string, update func(string, bool) (string, bool, erro
 	lock := m.lockForID(id)
 	lock.Lock()
 	defer lock.Unlock()
-	m.mutex.RLock()
-	current, found := m.data[id]
-	m.mutex.RUnlock()
-	next, remove, err := update(current, found)
+	m.mutex.Lock()
+	m.ensureDataLocked()
+	entry, found := m.entries[id]
+	snapSeq := entry.seq
+	snapClearSeq := m.clearSeq
+	m.inFlight[id]++
+	m.mutex.Unlock()
+
+	inFlightHeld := true
+	defer func() {
+		if inFlightHeld {
+			m.mutex.Lock()
+			m.releaseInFlightLocked(id)
+			m.mutex.Unlock()
+		}
+	}()
+
+	next, remove, err := update(entry.data, found)
 	if err != nil {
 		return err
 	}
 	m.mutex.Lock()
+	m.releaseInFlightLocked(id)
+	inFlightHeld = false
 	defer m.mutex.Unlock()
 	m.ensureDataLocked()
+	if m.clearSeq != snapClearSeq {
+		return ErrSessionCleared
+	}
+	curEntry, curFound := m.entries[id]
+	if curFound != found || curEntry.seq != snapSeq {
+		next, remove, err = update(curEntry.data, curFound)
+		if err != nil {
+			return err
+		}
+	}
 	if remove {
 		m.removeLocked(id)
 		return nil
@@ -131,8 +165,8 @@ func (m *Memory) Update(id string, update func(string, bool) (string, bool, erro
 	if err = m.ensureCapacityLocked(id); err != nil {
 		return err
 	}
-	m.data[id] = next
-	m.updated[id] = time.Now()
+	m.seq++
+	m.entries[id] = memorySessionEntry{data: next, updated: time.Now(), seq: m.seq}
 	m.touchOrderLocked(id)
 	return nil
 }
@@ -152,9 +186,8 @@ func (m *Memory) GC(maxLifetime time.Duration) (int, error) {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 	removed := 0
-	for id, value := range m.data {
-		updated := m.updated[id]
-		if updated.Before(deadline) || memoryEnvelopeExpired(value, now) {
+	for id, entry := range m.entries {
+		if entry.updated.Before(deadline) || memoryEnvelopeExpired(entry.data, now) {
 			m.removeLocked(id)
 			removed++
 		}
@@ -163,18 +196,29 @@ func (m *Memory) GC(maxLifetime time.Duration) (int, error) {
 }
 
 func (m *Memory) ensureDataLocked() {
-	if m.data == nil {
-		m.data = make(map[string]string)
+	if m.entries == nil {
+		m.entries = make(map[string]memorySessionEntry)
 	}
-	if m.updated == nil {
-		m.updated = make(map[string]time.Time)
+	if m.inFlight == nil {
+		m.inFlight = make(map[string]int)
 	}
 	if m.maxEntries > 0 && m.order == nil {
 		m.order = list.New()
 		m.orderIndex = make(map[string]*list.Element)
-		for id := range m.data {
+		for id := range m.entries {
 			m.touchOrderLocked(id)
 		}
+	}
+}
+
+func (m *Memory) releaseInFlightLocked(id string) {
+	if m.inFlight == nil {
+		return
+	}
+	if remaining := m.inFlight[id] - 1; remaining > 0 {
+		m.inFlight[id] = remaining
+	} else {
+		delete(m.inFlight, id)
 	}
 }
 
@@ -204,8 +248,8 @@ func (m *Memory) ensureCapacityLocked(id string) error {
 	if m.maxEntries <= 0 || m.orderIndex[id] != nil {
 		return nil
 	}
-	for len(m.data) >= m.maxEntries {
-		oldest := m.order.Front()
+	for len(m.entries) >= m.maxEntries {
+		oldest := m.selectEvictionTargetLocked()
 		if oldest == nil {
 			return ErrMemoryCapacityExhausted
 		}
@@ -217,6 +261,19 @@ func (m *Memory) ensureCapacityLocked(id string) error {
 		m.removeLocked(oldestID)
 	}
 	return nil
+}
+
+func (m *Memory) selectEvictionTargetLocked() *list.Element {
+	if m.order == nil {
+		return nil
+	}
+	for element := m.order.Front(); element != nil; element = element.Next() {
+		candidateID, ok := element.Value.(string)
+		if !ok || m.inFlight[candidateID] == 0 {
+			return element
+		}
+	}
+	return m.order.Front()
 }
 
 func (m *Memory) touchOrderLocked(id string) {
@@ -239,8 +296,7 @@ func (m *Memory) removeLocked(id string) {
 		m.order.Remove(element)
 		delete(m.orderIndex, id)
 	}
-	delete(m.data, id)
-	delete(m.updated, id)
+	delete(m.entries, id)
 }
 
 type memorySessionEnvelope struct {

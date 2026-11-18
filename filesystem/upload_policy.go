@@ -117,11 +117,13 @@ func uploadExtension(name string) string {
 }
 
 // Strict destination names use one extension and a restricted application-chosen
-// basename. Directory containment is still enforced by normalizeFilePath/os.Root.
+// single-segment basename. Directory containment is independently enforced.
 func policyDestination(name string) bool {
-	base := path.Base(name)
-	stem, extension, found := strings.Cut(base, ".")
-	if !found || stem == "" || len(base) > 255 || !validUploadExtension(extension) {
+	if strings.ContainsAny(name, `/\`) || name == "." || name == ".." {
+		return false
+	}
+	stem, extension, found := strings.Cut(name, ".")
+	if !found || stem == "" || len(name) > 255 || !validUploadExtension(extension) {
 		return false
 	}
 	for _, char := range stem {
@@ -179,17 +181,18 @@ func (disk *Local) putFileWithPolicy(directory string, file *multipart.FileHeade
 	// The digest name is not available until staging. Check other paths first.
 	if !generated || algorithm == "" {
 		var err error
-		key, err = normalizeFilePath(strings.Trim(directory+"/"+name, "/"))
-		if errors.Is(err, errWindowsPathAlias) {
-			return "", errors.Join(ErrUploadTypeNotAllowed, err)
-		}
+		key, err = resolveUploadDestination(directory, name, !generated, true)
 		if err != nil {
 			return "", err
 		}
-		if !policyDestination(key) || policy.allowed[uploadExtension(key)] == nil {
+		targetBase := name
+		if generated {
+			targetBase = path.Base(key)
+		}
+		if !policyDestination(targetBase) || policy.allowed[uploadExtension(key)] == nil {
 			return "", ErrUploadTypeNotAllowed
 		}
-	} else if _, err := normalizeFilePath(strings.Trim(directory+"/pending."+originalExtension, "/")); err != nil {
+	} else if _, err := resolveUploadDestination(directory, "pending."+originalExtension, false, true); err != nil {
 		return "", err
 	}
 
@@ -232,7 +235,7 @@ func (disk *Local) putFileWithPolicy(directory string, file *multipart.FileHeade
 		}
 		value := hex.EncodeToString(digest.Sum(nil))
 		name = value[:2] + "/" + value[2:] + "." + originalExtension
-		key, err = normalizeFilePath(strings.Trim(directory+"/"+name, "/"))
+		key, err = resolveUploadDestination(directory, name, false, true)
 		if err != nil {
 			return "", err
 		}

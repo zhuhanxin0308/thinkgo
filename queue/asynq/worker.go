@@ -2,6 +2,7 @@ package asynq
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"sync"
@@ -165,12 +166,38 @@ func validateWorkerConfig(config WorkerConfig) (backend.Config, error) {
 	if config.TaskCheckInterval < minimumTaskCheckInterval || config.TaskCheckInterval > maximumTaskCheckInterval {
 		return backend.Config{}, fmt.Errorf("%w: Worker 拉取间隔非法", queue.ErrBackendUnavailable)
 	}
+	delayedInterval := min(config.TaskCheckInterval, 5*time.Second)
+	inProgressRetryDelay := max(config.TaskCheckInterval, 50*time.Millisecond)
 	return backend.Config{
-		Concurrency:       config.Concurrency,
-		Queues:            queues,
-		StrictPriority:    config.StrictPriority,
-		ShutdownTimeout:   config.ShutdownTimeout,
-		TaskCheckInterval: config.TaskCheckInterval,
+		Concurrency:              config.Concurrency,
+		Queues:                   queues,
+		StrictPriority:           config.StrictPriority,
+		ShutdownTimeout:          config.ShutdownTimeout,
+		TaskCheckInterval:        config.TaskCheckInterval,
+		DelayedTaskCheckInterval: delayedInterval,
+		IsFailure: func(err error) bool {
+			if err == nil {
+				return false
+			}
+			var notYetValid taskNotYetValidError
+			if errors.Is(err, ErrTaskInProgress) || errors.As(err, &notYetValid) {
+				return false
+			}
+			return true
+		},
+		RetryDelayFunc: func(n int, err error, task *backend.Task) time.Duration {
+			var notYetValid taskNotYetValidError
+			if errors.As(err, &notYetValid) {
+				if wait := time.Until(notYetValid.readyAt); wait > 10*time.Millisecond {
+					return wait
+				}
+				return 10 * time.Millisecond
+			}
+			if errors.Is(err, ErrTaskInProgress) {
+				return inProgressRetryDelay
+			}
+			return backend.DefaultRetryDelayFunc(n, err, task)
+		},
 	}, nil
 }
 

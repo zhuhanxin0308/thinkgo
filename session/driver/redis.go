@@ -207,6 +207,7 @@ func (r *Redis) Read(id string) (string, bool, error) {
 }
 
 // ReadContext 读取 Redis Session，并继承调用方的取消信号。
+// 活动清理租约有效期内原子返回 ErrSessionCleared；租约到期遗留的清理标记在同一脚本中原子恢复。
 func (r *Redis) ReadContext(parent context.Context, id string) (string, bool, error) {
 	if parent == nil {
 		return "", false, ErrInvalidRedisSessionContext
@@ -216,12 +217,25 @@ func (r *Redis) ReadContext(parent context.Context, id string) (string, bool, er
 	}
 	ctx, cancel := r.contextWithParent(parent)
 	defer cancel()
-	data, err := r.client.Get(ctx, r.dataKey(id)).Result()
+	result, err := r.client.Eval(
+		ctx,
+		redisSessionReadLuaScript,
+		[]string{r.generationKey(), r.clearLeaseKey(), r.dataKey(id)},
+		redisSessionClearingPrefix,
+		redisSessionReadyPrefix,
+	).Result()
 	if errors.Is(err, redis.Nil) {
 		return "", false, nil
 	}
 	if err != nil {
 		return "", false, err
+	}
+	if result == int64(redisSessionGenerationChanged) {
+		return "", false, ErrSessionCleared
+	}
+	data, ok := result.(string)
+	if !ok {
+		return "", false, fmt.Errorf("Redis Session 读取返回类型错误: %T", result)
 	}
 	return data, true, nil
 }

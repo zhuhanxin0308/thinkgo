@@ -24,6 +24,17 @@ if string.sub(generation, 1, string.len(ARGV[1])) == ARGV[1] then
 end
 return generation
 `
+	redisSessionReadLuaScript = `
+local generation = redis.call("GET", KEYS[1]) or ""
+if redis.call("GET", KEYS[2]) == generation then
+	return -2
+end
+if string.sub(generation, 1, string.len(ARGV[1])) == ARGV[1] then
+	generation = ARGV[2] .. string.sub(generation, string.len(ARGV[1]) + 1)
+	redis.call("SET", KEYS[1], generation)
+end
+return redis.call("GET", KEYS[3])
+`
 	redisSessionClearStartScript = `
 redis.call("SET", KEYS[1], ARGV[1])
 redis.call("SET", KEYS[2], ARGV[1], "PX", ARGV[2])
@@ -73,7 +84,8 @@ func (r *Redis) readGeneration(parent context.Context) (string, error) {
 }
 
 // Clear 用命名空间代际阻止清理前的提交，并只删除本命名空间合法数据键。
-// 清理期间新操作明确失败；失败清理可能已删除部分键，但不会重新允许旧代际提交。
+// 清理租约有效期内新的读取与写入操作均返回 ErrSessionCleared；若清理中途失败并解除租约（或租约到期恢复），
+// 跨越清理边界的旧代际提交仍被拒绝，而尚未被扫描删除的剩余键在下次成功清理、显式删除或自然过期前保持可读。
 func (r *Redis) Clear() (returnErr error) {
 	if err := r.validateClient(); err != nil {
 		return err

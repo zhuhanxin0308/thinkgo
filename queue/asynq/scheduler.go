@@ -13,20 +13,35 @@ import (
 
 const maximumScheduleEntries = 10_000
 
-// Scheduler 使用 Asynq 的 Redis 持久化队列执行 Cron 计划。
-type Scheduler struct {
-	mu           sync.Mutex
-	scheduler    *backend.Scheduler
-	ownedClient  redis.UniversalClient
-	state        lifecycleState
-	entries      int
-	shutdownOnce sync.Once
-	shutdownErr  error
+type scheduledSignedEntry struct {
+	task        queue.Task
+	options     queue.EnqueueOptions
+	taskIDIndex int
 }
 
-// NewScheduler 创建拥有独立 Redis 连接池的调度器。
+// Scheduler 使用 Asynq 的 Redis 持久化队列执行 Cron 计划。
+// 若消费端启用了 NewVerifiedWorker，请使用 NewSignedScheduler 或 NewSignedSchedulerFromRedisClient。
+type Scheduler struct {
+	mu            sync.Mutex
+	enqueueMu     sync.Mutex
+	scheduler     *backend.Scheduler
+	ownedClient   redis.UniversalClient
+	state         lifecycleState
+	entries       int
+	signing       *SigningPolicy
+	signedEntries map[*backend.Task]scheduledSignedEntry
+	shutdownOnce  sync.Once
+	shutdownErr   error
+}
+
+// NewScheduler 创建拥有独立 Redis 连接池的无签名调度器。
 // 时区只接受标准 time.UTC，名称相同的自定义时区也会被拒绝。
+// 若消费端启用了验签工作进程，请改用 NewSignedScheduler。
 func NewScheduler(config RedisConfig, location *time.Location) (*Scheduler, error) {
+	return newSchedulerWithPolicy(config, location, nil)
+}
+
+func newSchedulerWithPolicy(config RedisConfig, location *time.Location, signing *SigningPolicy) (*Scheduler, error) {
 	options, err := redisOptions(config)
 	if err != nil {
 		return nil, err
@@ -35,22 +50,70 @@ func NewScheduler(config RedisConfig, location *time.Location) (*Scheduler, erro
 		return nil, err
 	}
 	client := redis.NewClient(options)
-	return &Scheduler{
-		scheduler:   backend.NewSchedulerFromRedisClient(client, &backend.SchedulerOpts{Location: location}),
+	instance := &Scheduler{
 		ownedClient: client,
-	}, nil
+		signing:     signing,
+	}
+	instance.scheduler = backend.NewSchedulerFromRedisClient(client, instance.schedulerOptions(location))
+	return instance, nil
 }
 
-// NewSchedulerFromRedisClient 复用调用方管理生命周期的 Redis 客户端。
+// NewSchedulerFromRedisClient 复用调用方管理生命周期的 Redis 客户端创建无签名调度器。
 // 时区只接受标准 time.UTC，time.LoadLocation("UTC") 返回的实例同样有效。
+// 若消费端启用了验签工作进程，请改用 NewSignedSchedulerFromRedisClient。
 func NewSchedulerFromRedisClient(client redis.UniversalClient, location *time.Location) (*Scheduler, error) {
+	return newSchedulerFromRedisClientWithPolicy(client, location, nil)
+}
+
+func newSchedulerFromRedisClientWithPolicy(client redis.UniversalClient, location *time.Location, signing *SigningPolicy) (*Scheduler, error) {
 	if err := validateRedisClient(client); err != nil {
 		return nil, err
 	}
 	if err := validateSchedulerLocation(location); err != nil {
 		return nil, err
 	}
-	return &Scheduler{scheduler: backend.NewSchedulerFromRedisClient(client, &backend.SchedulerOpts{Location: location})}, nil
+	instance := &Scheduler{signing: signing}
+	instance.scheduler = backend.NewSchedulerFromRedisClient(client, instance.schedulerOptions(location))
+	return instance, nil
+}
+
+func (scheduler *Scheduler) schedulerOptions(location *time.Location) *backend.SchedulerOpts {
+	opts := &backend.SchedulerOpts{Location: location}
+	if scheduler.signing != nil {
+		scheduler.signedEntries = make(map[*backend.Task]scheduledSignedEntry)
+		opts.PreEnqueueFunc = scheduler.preEnqueueSignedTask
+		opts.PostEnqueueFunc = scheduler.postEnqueueSignedTask
+	}
+	return opts
+}
+
+func (scheduler *Scheduler) preEnqueueSignedTask(rawTask *backend.Task, opts []backend.Option) {
+	scheduler.enqueueMu.Lock()
+	scheduler.mu.Lock()
+	entry, ok := scheduler.signedEntries[rawTask]
+	signing := scheduler.signing
+	scheduler.mu.Unlock()
+	if !ok || signing == nil {
+		return
+	}
+	freshSigned, freshID, err := signing.task(entry.task, entry.options, time.Now())
+	if err != nil {
+		if headers := rawTask.Headers(); headers != nil {
+			delete(headers, integrityHeader)
+		}
+		if entry.taskIDIndex >= 0 && entry.taskIDIndex < len(opts) {
+			opts[entry.taskIDIndex] = backend.TaskID("")
+		}
+		return
+	}
+	rawTask.Headers()[integrityHeader] = freshSigned.Headers()[integrityHeader]
+	if entry.taskIDIndex >= 0 && entry.taskIDIndex < len(opts) {
+		opts[entry.taskIDIndex] = backend.TaskID(freshID)
+	}
+}
+
+func (scheduler *Scheduler) postEnqueueSignedTask(_ *backend.TaskInfo, _ error) {
+	scheduler.enqueueMu.Unlock()
 }
 
 func validateSchedulerLocation(location *time.Location) error {
@@ -80,6 +143,16 @@ func (scheduler *Scheduler) Register(spec string, task queue.Task, options queue
 	if err != nil {
 		return "", err
 	}
+	taskIDIndex := -1
+	if scheduler.signing != nil {
+		var initialID string
+		converted, initialID, err = scheduler.signing.task(task, options, time.Now())
+		if err != nil {
+			return "", err
+		}
+		taskIDIndex = len(resolvedOptions)
+		resolvedOptions = append(resolvedOptions, backend.TaskID(initialID))
+	}
 	scheduler.mu.Lock()
 	defer scheduler.mu.Unlock()
 	switch scheduler.state {
@@ -94,6 +167,16 @@ func (scheduler *Scheduler) Register(spec string, task queue.Task, options queue
 	entryID, err := scheduler.scheduler.Register(spec, converted, resolvedOptions...)
 	if err != nil {
 		return "", fmt.Errorf("%w: Cron 计划非法: %v", queue.ErrInvalidOptions, err)
+	}
+	if scheduler.signing != nil {
+		if scheduler.signedEntries == nil {
+			scheduler.signedEntries = make(map[*backend.Task]scheduledSignedEntry)
+		}
+		scheduler.signedEntries[converted] = scheduledSignedEntry{
+			task:        task,
+			options:     options,
+			taskIDIndex: taskIDIndex,
+		}
 	}
 	scheduler.entries++
 	return entryID, nil

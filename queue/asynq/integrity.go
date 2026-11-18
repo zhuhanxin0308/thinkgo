@@ -22,14 +22,35 @@ import (
 	"github.com/zhuhanxin0308/thinkgo/v3/queue"
 )
 
-const integrityHeader = "thinkgo-integrity-v1"
+const (
+	integrityHeader         = "thinkgo-integrity-v1"
+	inProgressClaimWaitMax  = 250 * time.Millisecond
+	inProgressClaimWaitStep = 10 * time.Millisecond
+	notBeforeInlineWaitMax  = time.Second
+)
 
 var (
 	// ErrTaskUnauthenticated means the task failed authentication or its signed execution bounds.
 	ErrTaskUnauthenticated = errors.New("queue task authentication failed")
 	// ErrTaskReplay means a trusted replay store rejected a duplicate or exhausted execution.
 	ErrTaskReplay = errors.New("queue task replay rejected")
+	// ErrTaskInProgress means another worker currently holds an unfinished lease for this task.
+	// It wraps ErrTaskReplay for ReplayStore caller compatibility while remaining retryable in VerifiedWorker.
+	ErrTaskInProgress = fmt.Errorf("%w: execution already in progress", ErrTaskReplay)
 )
+
+type taskNotYetValidError struct {
+	readyAt  time.Time
+	metadata signedMetadata
+}
+
+func (e taskNotYetValidError) Error() string {
+	return ErrTaskUnauthenticated.Error() + ": task not yet valid"
+}
+
+func (e taskNotYetValidError) Unwrap() error {
+	return ErrTaskUnauthenticated
+}
 
 // SigningConfig contains trusted producer configuration. Use a distinct Audience
 // for each application/environment and a cryptographically random key of at least 32 bytes.
@@ -55,7 +76,8 @@ func NewSigningPolicy(config SigningConfig) (*SigningPolicy, error) {
 }
 
 // TaskIdentity describes an authenticated logical task, independent of Redis's
-// mutable retry counter. ExpiresAt includes the verifier's clock-skew allowance.
+// mutable retry counter. ExpiresAt is the envelope's signed expiration time;
+// ReplayStore implementations should retain records past ExpiresAt plus any clock-skew margin.
 type TaskIdentity struct {
 	ID          string
 	Audience    string
@@ -64,9 +86,10 @@ type TaskIdentity struct {
 }
 
 // ReplayStore must use storage independently trusted from the task Redis.
-// Claim atomically excludes concurrent executions, counts attempts itself and
-// rejects completed/exhausted tasks with ErrTaskReplay. Persist the identity and
-// terminal record until ExpiresAt. Never authorize an attempt from Redis's counter.
+// Claim atomically excludes concurrent executions, counts attempts itself,
+// returns ErrTaskInProgress when another worker holds an active unfinished lease,
+// and rejects completed/exhausted/expired tasks with ErrTaskReplay. Persist the identity and
+// terminal record until ExpiresAt (plus any deployment clock-skew margin). Never authorize an attempt from Redis's counter.
 // On a crash or an uncertain Finish, recovery must preserve business idempotency;
 // blindly expiring a lease can duplicate effects. All workers share this store.
 type ReplayStore interface {
@@ -139,6 +162,7 @@ func NewSignedProducerFromRedisClient(client redis.UniversalClient, policy *Sign
 }
 
 // NewVerifiedWorker creates a worker that requires authentication and replay admission before dispatch.
+// Periodic Cron tasks consumed by a verified worker must be scheduled via NewSignedScheduler or NewSignedSchedulerFromRedisClient.
 func NewVerifiedWorker(config RedisConfig, workerConfig WorkerConfig, policy *VerificationPolicy) (*Worker, error) {
 	if policy == nil || len(policy.config.Keys) == 0 {
 		return nil, queue.ErrInvalidOptions
@@ -151,6 +175,7 @@ func NewVerifiedWorker(config RedisConfig, workerConfig WorkerConfig, policy *Ve
 }
 
 // NewVerifiedWorkerFromRedisClient creates a verified worker using a borrowed client.
+// Periodic Cron tasks consumed by a verified worker must be scheduled via NewSignedScheduler or NewSignedSchedulerFromRedisClient.
 func NewVerifiedWorkerFromRedisClient(client redis.UniversalClient, config WorkerConfig, policy *VerificationPolicy) (*Worker, error) {
 	if policy == nil || len(policy.config.Keys) == 0 {
 		return nil, queue.ErrInvalidOptions
@@ -160,6 +185,22 @@ func NewVerifiedWorkerFromRedisClient(client redis.UniversalClient, config Worke
 		worker.verification = policy
 	}
 	return worker, err
+}
+
+// NewSignedScheduler creates a scheduler that freshly signs and assigns a unique task ID on every Cron trigger.
+func NewSignedScheduler(config RedisConfig, location *time.Location, policy *SigningPolicy) (*Scheduler, error) {
+	if policy == nil || len(policy.config.Key) == 0 {
+		return nil, queue.ErrInvalidOptions
+	}
+	return newSchedulerWithPolicy(config, location, policy)
+}
+
+// NewSignedSchedulerFromRedisClient creates a signed scheduler using a borrowed Redis client.
+func NewSignedSchedulerFromRedisClient(client redis.UniversalClient, location *time.Location, policy *SigningPolicy) (*Scheduler, error) {
+	if policy == nil || len(policy.config.Key) == 0 {
+		return nil, queue.ErrInvalidOptions
+	}
+	return newSchedulerFromRedisClientWithPolicy(client, location, policy)
 }
 
 type signedMetadata struct {
@@ -291,8 +332,7 @@ func (policy *VerificationPolicy) verify(task *backend.Task, now time.Time) (que
 	}
 	issued, notBefore, expires := time.Unix(0, metadata.Issued), time.Unix(0, metadata.NotBefore), time.Unix(0, metadata.Expires)
 	if metadata.Issued <= 0 || !expires.After(issued) || expires.After(issued.Add(policy.config.MaxValidFor)) ||
-		issued.After(now.Add(policy.config.ClockSkew)) || notBefore.Before(issued) || notBefore.After(now.Add(policy.config.ClockSkew)) ||
-		!notBefore.Before(expires) || !now.Before(expires.Add(policy.config.ClockSkew)) ||
+		notBefore.Before(issued) || !notBefore.Before(expires) || !now.Before(expires.Add(policy.config.ClockSkew)) ||
 		metadata.MaxRetry < 0 || metadata.MaxRetry > queue.MaximumRetries || metadata.Timeout <= 0 || metadata.Timeout > int64(queue.MaximumTaskTimeout) ||
 		len(metadata.ID) != 64 {
 		return invalid()
@@ -300,31 +340,87 @@ func (policy *VerificationPolicy) verify(task *backend.Task, now time.Time) (que
 	if _, err := hex.DecodeString(metadata.ID); err != nil {
 		return invalid()
 	}
+	skewedNow := now.Add(policy.config.ClockSkew)
+	if issued.After(skewedNow) || notBefore.After(skewedNow) {
+		effectiveStart := issued
+		if notBefore.After(effectiveStart) {
+			effectiveStart = notBefore
+		}
+		return queue.Task{}, signedMetadata{}, taskNotYetValidError{
+			readyAt:  effectiveStart.Add(-policy.config.ClockSkew),
+			metadata: metadata,
+		}
+	}
 	return converted, metadata, nil
 }
 
-func (policy *VerificationPolicy) handle(ctx context.Context, task *backend.Task, handler queue.Handler) error {
-	converted, metadata, err := policy.verify(task, time.Now())
-	if err != nil {
-		return errors.Join(err, backend.SkipRetry)
-	}
+func validBackendDispatchMetadata(ctx context.Context, metadata signedMetadata) (string, bool) {
 	id, hasID := backend.GetTaskID(ctx)
 	name, hasQueue := backend.GetQueueName(ctx)
 	maxRetry, hasMaxRetry := backend.GetMaxRetry(ctx)
 	retries, hasRetries := backend.GetRetryCount(ctx)
 	if !hasID || !hasQueue || !hasMaxRetry || !hasRetries || id != metadata.ID || name != metadata.Queue ||
 		maxRetry != metadata.MaxRetry || retries < 0 || retries > metadata.MaxRetry {
+		return "", false
+	}
+	return id, true
+}
+
+func (policy *VerificationPolicy) handle(ctx context.Context, task *backend.Task, handler queue.Handler) error {
+	converted, metadata, err := policy.verify(task, time.Now())
+	if err != nil {
+		var notYetValid taskNotYetValidError
+		if !errors.As(err, &notYetValid) {
+			return errors.Join(err, backend.SkipRetry)
+		}
+		if _, ok := validBackendDispatchMetadata(ctx, notYetValid.metadata); !ok {
+			return errors.Join(ErrTaskUnauthenticated, backend.SkipRetry)
+		}
+		wait := time.Until(notYetValid.readyAt)
+		if wait > notBeforeInlineWaitMax {
+			return err
+		}
+		if wait > 0 {
+			timer := time.NewTimer(wait)
+			select {
+			case <-timer.C:
+			case <-ctx.Done():
+				if !timer.Stop() {
+					<-timer.C
+				}
+				return ctx.Err()
+			}
+		}
+		converted, metadata, err = policy.verify(task, time.Now())
+		if err != nil {
+			var stillEarly taskNotYetValidError
+			if errors.As(err, &stillEarly) {
+				return err
+			}
+			return errors.Join(err, backend.SkipRetry)
+		}
+	}
+	id, ok := validBackendDispatchMetadata(ctx, metadata)
+	if !ok {
 		return errors.Join(ErrTaskUnauthenticated, backend.SkipRetry)
 	}
-	identity := TaskIdentity{ID: id, Audience: metadata.Audience,
-		ExpiresAt: time.Unix(0, metadata.Expires).Add(policy.config.ClockSkew), MaxAttempts: metadata.MaxRetry + 1}
-	claimContext, cancelClaim := context.WithDeadline(ctx, identity.ExpiresAt)
+	expiresAt := time.Unix(0, metadata.Expires)
+	identity := TaskIdentity{
+		ID:          id,
+		Audience:    metadata.Audience,
+		ExpiresAt:   expiresAt,
+		MaxAttempts: metadata.MaxRetry + 1,
+	}
+	claimContext, cancelClaim := context.WithDeadline(ctx, expiresAt.Add(policy.config.ClockSkew))
 	defer cancelClaim()
 	if err := claimContext.Err(); err != nil {
 		return err
 	}
-	lease, err := policy.config.Replay.Claim(claimContext, identity)
+	lease, err := policy.claimWithInProgressGrace(claimContext, identity)
 	if err != nil {
+		if errors.Is(err, ErrTaskInProgress) {
+			return err
+		}
 		if errors.Is(err, ErrTaskReplay) {
 			return errors.Join(err, backend.SkipRetry)
 		}
@@ -347,6 +443,30 @@ func (policy *VerificationPolicy) handle(ctx context.Context, task *backend.Task
 	completion, complete := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer complete()
 	return errors.Join(result, lease.Finish(completion, result == nil))
+}
+
+func (policy *VerificationPolicy) claimWithInProgressGrace(ctx context.Context, identity TaskIdentity) (TaskLease, error) {
+	lease, err := policy.config.Replay.Claim(ctx, identity)
+	if err == nil || !errors.Is(err, ErrTaskInProgress) {
+		return lease, err
+	}
+	waitDeadline := time.Now().Add(inProgressClaimWaitMax)
+	for time.Now().Before(waitDeadline) {
+		timer := time.NewTimer(inProgressClaimWaitStep)
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return nil, ctx.Err()
+		}
+		lease, err = policy.config.Replay.Claim(ctx, identity)
+		if err == nil || !errors.Is(err, ErrTaskInProgress) {
+			return lease, err
+		}
+	}
+	return nil, err
 }
 
 func validIntegrityName(value string) bool {

@@ -104,13 +104,26 @@ func TestRedisClearFailureAndOverlappingClear(t *testing.T) {
 		t.Run(scenario, func(t *testing.T) {
 			backend, _ := newMiniredisSession(t)
 			other := newRedisClearPeer(t, backend)
+			nested := &Redis{client: other.client, prefix: backend.prefix + "data:tenant:", timeout: backend.timeout}
 			value := marshalRedisTestEnvelope(1, time.Now().Add(time.Minute))
+			if err := backend.Write("existing", value); err != nil {
+				t.Fatal(err)
+			}
+			if err := nested.Write("existing", value); err != nil {
+				t.Fatal(err)
+			}
 			injected := errors.New("测试扫描失败")
 			backend.client.AddHook(&redisClearCommandHook{
 				match: func(command redis.Cmder) bool { return command.Name() == "scan" },
 				before: func() error {
 					switch scenario {
 					case "active":
+						if _, found, readErr := other.ReadContext(t.Context(), "existing"); !errors.Is(readErr, ErrSessionCleared) || found {
+							t.Errorf("清理活动期间 ReadContext 应拒绝旧会话: found=%v err=%v", found, readErr)
+						}
+						if got, found, readErr := nested.ReadContext(t.Context(), "existing"); readErr != nil || !found || got != value {
+							t.Errorf("父命名空间清理活动期间不应阻断嵌套前缀读取: found=%v err=%v", found, readErr)
+						}
 						called := false
 						err := other.Update("during-clear", func(string, bool) (string, bool, error) {
 							called = true
@@ -136,9 +149,15 @@ func TestRedisClearFailureAndOverlappingClear(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
+				if _, found, readErr := other.Read("existing"); readErr != nil || found {
+					t.Fatalf("清理完成后旧 ID 仍可读取: found=%v err=%v", found, readErr)
+				}
 			case "failed":
 				if !errors.Is(err, injected) {
 					t.Fatalf("扫描错误丢失: %v", err)
+				}
+				if got, found, readErr := other.Read("existing"); readErr != nil || !found || got != value {
+					t.Fatalf("清理失败解除租约后未扫描删除的剩余键应保持可读: found=%v err=%v", found, readErr)
 				}
 			case "overlap":
 				if !errors.Is(err, ErrSessionCleared) {
@@ -150,6 +169,9 @@ func TestRedisClearFailureAndOverlappingClear(t *testing.T) {
 			}
 			if err := other.Write("after-clear", value); err != nil {
 				t.Fatalf("清理结束后新会话仍被阻塞: %v", err)
+			}
+			if got, found, err := other.Read("after-clear"); err != nil || !found || got != value {
+				t.Fatalf("清理结束后新会话读取失败: found=%v err=%v", found, err)
 			}
 		})
 	}

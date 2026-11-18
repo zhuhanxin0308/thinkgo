@@ -176,3 +176,159 @@ func TestMemorySessionCapacityUsesFIFOOrder(t *testing.T) {
 		t.Fatalf("更新不应改变 second 的保留状态，found=%t err=%v", found, readErr)
 	}
 }
+
+func distinctShardSessionIDs(t *testing.T, driver *Memory, count int) []string {
+	t.Helper()
+	used := make(map[*sync.Mutex]bool, count)
+	ids := make([]string, 0, count)
+	for candidate := 1; len(ids) < count && candidate < 10000; candidate++ {
+		id := "000000000000000000000000" + strconv.FormatInt(int64(10000000+candidate), 10)
+		shard := driver.lockForID(id)
+		if used[shard] {
+			continue
+		}
+		used[shard] = true
+		ids = append(ids, id)
+	}
+	if len(ids) != count {
+		t.Fatalf("未能找到 %d 个不同分片的 Session ID", count)
+	}
+	return ids
+}
+
+// TestMemoryUpdateCrossShardEvictionDoesNotResurrectStaleSession 验证 Update 锁外回调窗口内
+// 发生跨分片容量淘汰或清理时，不会用旧快照复活已淘汰会话并驱逐新会话，且优先保留正在更新的槽位。
+func TestMemoryUpdateCrossShardEvictionDoesNotResurrectStaleSession(t *testing.T) {
+	t.Run("maxEntries=1_eviction_reverified", func(t *testing.T) {
+		mem, err := NewMemoryWithMaxEntries(1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids := distinctShardSessionIDs(t, mem, 2)
+		id1, id2 := ids[0], ids[1]
+		alice := `{"version":1,"data":{"user":"alice"}}`
+		bob := `{"version":1,"data":{"user":"bob"}}`
+		if err := mem.Write(id1, alice); err != nil {
+			t.Fatal(err)
+		}
+
+		entered := make(chan struct{})
+		release := make(chan struct{})
+		var enterOnce sync.Once
+		var calls int
+		updateDone := make(chan error, 1)
+		go func() {
+			updateDone <- mem.Update(id1, func(current string, found bool) (string, bool, error) {
+				calls++
+				enterOnce.Do(func() {
+					close(entered)
+					<-release
+				})
+				if !found {
+					return "", true, nil
+				}
+				return `{"version":1,"data":{"user":"alice-updated"}}`, false, nil
+			})
+		}()
+
+		<-entered
+		if err := mem.Write(id2, bob); err != nil {
+			close(release)
+			t.Fatalf("写入新会话失败: %v", err)
+		}
+		if _, found1, _ := mem.Read(id1); found1 {
+			close(release)
+			t.Fatal("容量上限为 1 时写入新会话后旧会话应已被淘汰")
+		}
+		if got2, found2, _ := mem.Read(id2); !found2 || got2 != bob {
+			close(release)
+			t.Fatalf("新会话未成功保存: found=%t got=%q", found2, got2)
+		}
+
+		close(release)
+		if err := <-updateDone; err != nil {
+			t.Fatalf("Update 返回错误: %v", err)
+		}
+		if calls != 2 {
+			t.Fatalf("被淘汰条目应在提交锁内按最新缺失状态重跑一次回调: calls=%d", calls)
+		}
+		if _, found1, _ := mem.Read(id1); found1 {
+			t.Fatal("已淘汰旧会话被 Update 错误复活")
+		}
+		if got2, found2, _ := mem.Read(id2); !found2 || got2 != bob {
+			t.Fatalf("活跃新会话被在途旧 Update 误淘汰: found=%t got=%q", found2, got2)
+		}
+	})
+
+	t.Run("maxEntries=2_skips_active_update_slot", func(t *testing.T) {
+		mem, err := NewMemoryWithMaxEntries(2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids := distinctShardSessionIDs(t, mem, 3)
+		id1, id2, id3 := ids[0], ids[1], ids[2]
+		if err := mem.Write(id1, `{"version":1,"data":{"n":1}}`); err != nil {
+			t.Fatal(err)
+		}
+		if err := mem.Write(id2, `{"version":1,"data":{"n":2}}`); err != nil {
+			t.Fatal(err)
+		}
+
+		entered := make(chan struct{})
+		release := make(chan struct{})
+		updateDone := make(chan error, 1)
+		go func() {
+			updateDone <- mem.Update(id1, func(current string, found bool) (string, bool, error) {
+				if !found {
+					return "", false, errors.New("活跃更新槽位不应被跨分片优先淘汰")
+				}
+				close(entered)
+				<-release
+				return `{"version":1,"data":{"n":11}}`, false, nil
+			})
+		}()
+
+		<-entered
+		if err := mem.Write(id3, `{"version":1,"data":{"n":3}}`); err != nil {
+			close(release)
+			t.Fatal(err)
+		}
+		close(release)
+		if err := <-updateDone; err != nil {
+			t.Fatal(err)
+		}
+		if got1, found1, _ := mem.Read(id1); !found1 || got1 != `{"version":1,"data":{"n":11}}` {
+			t.Fatalf("正在 Update 的会话结果错误: found=%t got=%q", found1, got1)
+		}
+		if _, found2, _ := mem.Read(id2); found2 {
+			t.Fatal("空闲旧槽位 id2 应先于在途更新槽位被淘汰")
+		}
+		if got3, found3, _ := mem.Read(id3); !found3 || got3 != `{"version":1,"data":{"n":3}}` {
+			t.Fatalf("新写入槽位 id3 丢失: found=%t got=%q", found3, got3)
+		}
+	})
+
+	t.Run("clear_generation_fences_in_flight_callback", func(t *testing.T) {
+		mem, err := NewMemoryWithMaxEntries(2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		const id = "00000000000000000000000000000001"
+		if err := mem.Write(id, `{"version":1,"data":{"user":"alice"}}`); err != nil {
+			t.Fatal(err)
+		}
+		err = mem.Update(id, func(string, bool) (string, bool, error) {
+			mem.mutex.Lock()
+			mem.clearSeq++
+			mem.entries = make(map[string]memorySessionEntry)
+			mem.mutex.Unlock()
+			return `{"version":1,"data":{"user":"stale"}}`, false, nil
+		})
+		if !errors.Is(err, ErrSessionCleared) {
+			t.Fatalf("跨越清理代际的提交应返回 ErrSessionCleared，实际为 %v", err)
+		}
+		if _, found, _ := mem.Read(id); found {
+			t.Fatal("跨越清理代际的提交不应复活旧会话")
+		}
+	})
+}

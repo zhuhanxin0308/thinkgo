@@ -36,45 +36,128 @@ type RedisStore struct {
 
 var redisGCRAScript = redis.NewScript(`
 local current_time = redis.call("TIME")
-local now = tonumber(current_time[1]) * 1000000 + tonumber(current_time[2])
-local interval = tonumber(ARGV[1])
-local tolerance = tonumber(ARGV[2])
-local burst = tonumber(ARGV[3])
+local now_sec = tonumber(current_time[1])
+local now_usec = tonumber(current_time[2])
+local int_sec = tonumber(ARGV[1])
+local int_usec = tonumber(ARGV[2])
+local tol_sec = tonumber(ARGV[3])
+local tol_usec = tonumber(ARGV[4])
+local burst = tonumber(ARGV[5])
+
+local function lt(s1, u1, s2, u2)
+    return s1 < s2 or (s1 == s2 and u1 < u2)
+end
+
+local function add(s1, u1, s2, u2)
+    local s = s1 + s2
+    local u = u1 + u2
+    if u >= 1000000 then
+        s = s + 1
+        u = u - 1000000
+    end
+    return s, u
+end
+
+local function sub(s1, u1, s2, u2)
+    local s = s1 - s2
+    local u = u1 - u2
+    if u < 0 then
+        s = s - 1
+        u = u + 1000000
+    end
+    return s, u
+end
+
+local function mul(k, s, u)
+    local pu = k * u
+    local ps = k * s + math.floor(pu / 1000000)
+    pu = pu % 1000000
+    return ps, pu
+end
 
 local stored = redis.call("GET", KEYS[1])
-local tat = now
+local tat_sec = now_sec
+local tat_usec = now_usec
 if stored then
-    tat = tonumber(stored)
-    if not tat then
-        return redis.error_reply("invalid stored TAT")
+    if string.match(stored, "^%d+$") then
+        if #stored > 6 then
+            tat_sec = tonumber(string.sub(stored, 1, -7))
+            tat_usec = tonumber(string.sub(stored, -6))
+        else
+            tat_sec = 0
+            tat_usec = tonumber(stored)
+        end
+        if not tat_sec or not tat_usec or tat_sec == math.huge or tat_usec >= 1000000 then
+            return redis.error_reply("invalid stored TAT")
+        end
+    else
+        local legacy = tonumber(stored)
+        if not legacy or legacy < 0 or legacy == math.huge or legacy ~= math.floor(legacy) then
+            return redis.error_reply("invalid stored TAT")
+        end
+        tat_sec = math.floor(legacy / 1000000)
+        tat_usec = legacy % 1000000
     end
-    if tat < now then
-        tat = now
+    if lt(tat_sec, tat_usec, now_sec, now_usec) then
+        tat_sec = now_sec
+        tat_usec = now_usec
     end
 end
 
-local allow_at = tat - tolerance
-if now < allow_at then
-    return {0, 0, allow_at - now, tat - now}
+if not lt(tat_sec, tat_usec, tol_sec, tol_usec) then
+    local allow_sec, allow_usec = sub(tat_sec, tat_usec, tol_sec, tol_usec)
+    if lt(now_sec, now_usec, allow_sec, allow_usec) then
+        local retry_sec, retry_usec = sub(allow_sec, allow_usec, now_sec, now_usec)
+        local reset_sec, reset_usec = sub(tat_sec, tat_usec, now_sec, now_usec)
+        return {0, 0, retry_sec, retry_usec, reset_sec, reset_usec}
+    end
 end
 
-local new_tat = tat + interval
-local debt = new_tat - now
+local new_tat_sec, new_tat_usec = add(tat_sec, tat_usec, int_sec, int_usec)
+local debt_sec, debt_usec = sub(new_tat_sec, new_tat_usec, now_sec, now_usec)
 local remaining = 0
-local headroom = tolerance - debt
-if headroom >= 0 then
-    remaining = math.floor(headroom / interval) + 1
-end
-if remaining > burst - 1 then
-    remaining = burst - 1
+if not lt(tol_sec, tol_usec, debt_sec, debt_usec) then
+    local head_sec, head_usec = sub(tol_sec, tol_usec, debt_sec, debt_usec)
+    local q = math.floor((head_sec * 1000000 + head_usec) / (int_sec * 1000000 + int_usec))
+    if q < 0 then
+        q = 0
+    end
+    if q > burst - 1 then
+        q = burst - 1
+    end
+    local ps, pu = mul(q, int_sec, int_usec)
+    while q > 0 and lt(head_sec, head_usec, ps, pu) do
+        q = q - 1
+        ps, pu = mul(q, int_sec, int_usec)
+    end
+    while q + 1 <= burst - 1 do
+        local ns, nu = add(ps, pu, int_sec, int_usec)
+        if lt(head_sec, head_usec, ns, nu) then
+            break
+        end
+        q = q + 1
+        ps, pu = ns, nu
+    end
+    remaining = q + 1
+    if remaining > burst - 1 then
+        remaining = burst - 1
+    end
 end
 
-local ttl_ms = math.floor((debt + 999) / 1000)
+local ttl_ms = debt_sec * 1000 + math.floor((debt_usec + 999) / 1000)
 if ttl_ms < 1 then
     ttl_ms = 1
+elseif ttl_ms > 9223372036854 then
+    ttl_ms = 9223372036854
 end
-redis.call("SET", KEYS[1], string.format("%.0f", new_tat), "PX", ttl_ms)
-return {1, remaining, 0, debt}
+local encoded_tat
+if new_tat_sec > 0 then
+    encoded_tat = string.format("%.0f%06d", new_tat_sec, new_tat_usec)
+else
+    encoded_tat = string.format("%d", new_tat_usec)
+end
+redis.call("SET", KEYS[1], encoded_tat, "PX", ttl_ms)
+return {1, remaining, 0, 0, debt_sec, debt_usec}
 `)
 
 // NewRedisStore 从调用方管理的 Redis 客户端创建共享限流存储。
@@ -131,8 +214,10 @@ func (store *RedisStore) Take(ctx context.Context, key string, limit Limit, _ ti
 		operationContext,
 		store.client,
 		[]string{store.prefix + key},
-		intervalMicros,
-		toleranceMicros,
+		intervalMicros/1_000_000,
+		intervalMicros%1_000_000,
+		toleranceMicros/1_000_000,
+		toleranceMicros%1_000_000,
 		limit.Burst,
 	).Result()
 	if err != nil {
@@ -142,7 +227,7 @@ func (store *RedisStore) Take(ctx context.Context, key string, limit Limit, _ ti
 		return Result{}, fmt.Errorf("redis 限流原子判定失败: %w", err)
 	}
 	values, ok := raw.([]interface{})
-	if !ok || len(values) != 4 {
+	if !ok || len(values) != 6 {
 		return Result{}, fmt.Errorf("%w: 返回值数量或类型错误", ErrInvalidStoreResponse)
 	}
 	parsed := make([]int64, len(values))
@@ -155,12 +240,20 @@ func (store *RedisStore) Take(ctx context.Context, key string, limit Limit, _ ti
 	if parsed[0] > 1 || parsed[1] > int64(limit.Burst-1) {
 		return Result{}, fmt.Errorf("%w: 判定标志或剩余额度越界", ErrInvalidStoreResponse)
 	}
+	retryAfter, err := saturatingDurationFromSecMicros(parsed[2], parsed[3])
+	if err != nil {
+		return Result{}, err
+	}
+	resetAfter, err := saturatingDurationFromSecMicros(parsed[4], parsed[5])
+	if err != nil {
+		return Result{}, err
+	}
 	return Result{
 		Allowed:    parsed[0] == 1,
 		Limit:      limit.Burst,
 		Remaining:  int(parsed[1]),
-		RetryAfter: time.Duration(parsed[2]) * time.Microsecond,
-		ResetAfter: time.Duration(parsed[3]) * time.Microsecond,
+		RetryAfter: retryAfter,
+		ResetAfter: resetAfter,
 	}, nil
 }
 
@@ -202,10 +295,23 @@ func redisRateLimitDurations(interval time.Duration, burst int) (int64, int64, e
 	if interval%time.Microsecond != 0 {
 		intervalMicros++
 	}
-	if burst <= 0 || int64(burst-1) > math.MaxInt64/intervalMicros {
+	if burst <= 0 || int64(burst) > math.MaxInt64/intervalMicros {
 		return 0, 0, ErrInvalidConfiguration
 	}
 	return intervalMicros, int64(burst-1) * intervalMicros, nil
+}
+
+func saturatingDurationFromSecMicros(seconds, microseconds int64) (time.Duration, error) {
+	if seconds < 0 || microseconds < 0 || microseconds >= 1_000_000 {
+		return 0, fmt.Errorf("%w: 时间分量越界", ErrInvalidStoreResponse)
+	}
+	const maxSeconds = math.MaxInt64 / int64(time.Second)
+	const maxRemainderNanos = math.MaxInt64 % int64(time.Second)
+	remainderNanos := microseconds * int64(time.Microsecond)
+	if seconds > maxSeconds || (seconds == maxSeconds && remainderNanos > maxRemainderNanos) {
+		return time.Duration(math.MaxInt64), nil
+	}
+	return time.Duration(seconds)*time.Second + time.Duration(remainderNanos), nil
 }
 
 func redisRateLimitInteger(value interface{}) (int64, error) {
