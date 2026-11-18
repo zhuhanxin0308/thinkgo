@@ -3,6 +3,7 @@ package otlp
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -11,6 +12,9 @@ import (
 	"github.com/zhuhanxin0308/thinkgo/v3"
 	"github.com/zhuhanxin0308/thinkgo/v3/config"
 	"github.com/zhuhanxin0308/thinkgo/v3/telemetry"
+	"go.opentelemetry.io/otel/baggage"
+	collectortrace "go.opentelemetry.io/proto/otlp/collector/trace/v1"
+	"google.golang.org/protobuf/proto"
 )
 
 func telemetryProviderTestApp(t *testing.T) (*framework.App, *config.Config) {
@@ -24,14 +28,41 @@ func telemetryProviderTestApp(t *testing.T) (*framework.App, *config.Config) {
 	return app, configuration
 }
 
-// TestProviderExportsOTLPTraceAndShutsDown 验证配置驱动的 SDK 会导出 HTTP Span，并在关闭时刷新批处理队列。
+// TestProviderExportsOTLPTraceAndShutsDown 验证关闭会刷新 Span，外部 Baggage 只进入上下文。
 func TestProviderExportsOTLPTraceAndShutsDown(t *testing.T) {
-	var requests atomic.Int32
+	t.Setenv("OTEL_EXPORTER_OTLP_TRACES_COMPRESSION", "none")
+	t.Setenv("OTEL_EXPORTER_OTLP_COMPRESSION", "none")
+	const baggageKey = "client_supplied_baggage"
+	const baggageValue = "external-marker"
+	var exported atomic.Int32
 	collector := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		requests.Add(1)
 		if request.URL.Path != "/v1/traces" || request.Header.Get("X-Tenant") != "tenant-a" {
 			http.Error(writer, "invalid export request", http.StatusBadRequest)
 			return
+		}
+		body, err := io.ReadAll(request.Body)
+		if err != nil {
+			t.Error(err)
+			http.Error(writer, "invalid export body", http.StatusBadRequest)
+			return
+		}
+		var payload collectortrace.ExportTraceServiceRequest
+		if err := proto.Unmarshal(body, &payload); err != nil {
+			t.Error(err)
+			http.Error(writer, "invalid export payload", http.StatusBadRequest)
+			return
+		}
+		for _, resource := range payload.GetResourceSpans() {
+			for _, scope := range resource.GetScopeSpans() {
+				for _, span := range scope.GetSpans() {
+					exported.Add(1)
+					for _, attribute := range span.GetAttributes() {
+						if attribute.GetKey() == baggageKey || attribute.GetValue().GetStringValue() == baggageValue {
+							t.Error("外部 Baggage 被自动写入了 Span 属性")
+						}
+					}
+				}
+			}
 		}
 		writer.WriteHeader(http.StatusOK)
 	}))
@@ -58,16 +89,21 @@ func TestProviderExportsOTLPTraceAndShutsDown(t *testing.T) {
 	if err != nil || !tracing.Enabled() {
 		t.Fatalf("OTLP Provider 未绑定启用的追踪服务: tracing=%v err=%v", tracing, err)
 	}
-	ctx, span := tracing.StartServer(context.Background(), http.Header{}, "GET", "/orders/42", "api.example.com")
+	header := http.Header{}
+	header.Set("Baggage", baggageKey+"="+baggageValue)
+	ctx, span := tracing.StartServer(context.Background(), header, "GET", "/orders/42", "api.example.com")
 	if span == nil {
 		t.Fatal("OTLP Provider 启用后必须创建 Span")
+	}
+	if value := baggage.FromContext(ctx).Member(baggageKey).Value(); value != baggageValue {
+		t.Fatalf("回归需先确认 Baggage 已从外部请求提取: %q", value)
 	}
 	telemetry.SetHTTPRoute(ctx, "/orders/:id")
 	telemetry.EndHTTPServer(ctx, http.StatusOK, nil)
 	if err := provider.Shutdown(app); err != nil {
 		t.Fatalf("关闭 OTLP Provider 失败: %v", err)
 	}
-	if requests.Load() == 0 {
+	if exported.Load() == 0 {
 		t.Fatal("关闭 OTLP Provider 时必须刷新并导出 Span")
 	}
 }
