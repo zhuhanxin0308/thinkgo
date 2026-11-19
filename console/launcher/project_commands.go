@@ -15,6 +15,7 @@ import (
 	"github.com/zhuhanxin0308/thinkgo/v3"
 	"github.com/zhuhanxin0308/thinkgo/v3/console"
 	"github.com/zhuhanxin0308/thinkgo/v3/console/command"
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/gotool"
 )
 
 // ErrProjectCommandRequiresBusiness 表示命令与参数已校验，需要由拥有进程生命周期的宿主接续业务装配。
@@ -93,10 +94,9 @@ func runProjectCommandHost(ctx context.Context, basePath string, args []string, 
 	}
 	modulePath := ""
 	if business {
-		// #nosec G204 -- 模块查询参数固定，仅由工作目录选择当前项目，不经过 shell。
-		process := exec.CommandContext(ctx, "go", "list", "-mod=readonly", "-m", "-f", "{{.Path}}")
+		// 模块查询参数固定，仅由工作目录选择当前项目，不经过 shell。
+		process := gotool.CommandContext(ctx, "list", "-mod=readonly", "-m", "-f", "{{.Path}}")
 		process.Dir = base
-		process.Env = append(os.Environ(), "GOWORK=off")
 		output, err := process.Output()
 		if err != nil {
 			return errors.Join(fmt.Errorf("读取项目模块失败: %w", err), ctx.Err())
@@ -133,14 +133,13 @@ func runProjectCommandHost(ctx context.Context, basePath string, args []string, 
 		filename += ".exe"
 	}
 	executable := filepath.Join(directory, filename)
-	// #nosec G204 -- 编译参数固定，源文件和输出文件均在本次独占临时目录中，不经过 shell。
-	build := exec.CommandContext(ctx, "go", "build", "-mod=readonly", "-o", executable)
+	// 编译参数固定，源文件和输出文件均在本次独占临时目录中，不经过 shell。
+	build := gotool.CommandContext(ctx, "build", "-mod=readonly", "-o", executable)
 	if business {
 		build.Args = append(build.Args, "-tags="+runtimeBuildTag)
 	}
 	build.Args = append(build.Args, sourcePaths...)
 	build.Dir, build.Stdout, build.Stderr = base, stdout, stderr
-	build.Env = append(os.Environ(), "GOWORK=off")
 	if err := build.Run(); err != nil {
 		return errors.Join(fmt.Errorf("编译项目命令宿主失败: %w", err), ctx.Err())
 	}

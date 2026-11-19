@@ -182,25 +182,30 @@ func (auditor *Auditor) runCheckWithDeadline(ctx context.Context, app *framework
 	if auditor == nil || check == nil {
 		return Result{Name: "auditor", Level: LevelFail, Message: "部署检查器不可用"}
 	}
+	checkName := check.Name()
 	if err := ctx.Err(); err != nil {
-		return Result{Name: check.Name(), Level: LevelFail, Message: "部署检查超时或上下文已取消"}
+		return Result{Name: checkName, Level: LevelFail, Message: "部署检查超时或上下文已取消"}
 	}
 	select {
 	case auditor.executionSlots <- struct{}{}:
 		// 获取执行槽后才启动 goroutine，避免上下文已取消时创建无效后台任务。
 	default:
-		return Result{Name: check.Name(), Level: LevelFail, Message: "部署检查执行槽已耗尽；存在未遵守 context 的检查"}
+		return Result{Name: checkName, Level: LevelFail, Message: "部署检查执行槽已耗尽；存在未遵守 context 的检查"}
 	}
 	resultChannel := make(chan Result, 1)
 	go func() {
-		defer func() { <-auditor.executionSlots }()
-		resultChannel <- runCheckSafely(ctx, app, check)
+		// 在向通道发布结果之前归还执行槽，避免调用方立刻启动下一项检查时误判执行槽耗尽；
+		// 内层 defer 同时保证检查调用 runtime.Goexit 时不会泄漏执行槽。
+		resultChannel <- func() Result {
+			defer func() { <-auditor.executionSlots }()
+			return runCheckSafely(ctx, app, check)
+		}()
 	}()
 	select {
 	case result := <-resultChannel:
 		return result
 	case <-ctx.Done():
-		return Result{Name: check.Name(), Level: LevelFail, Message: "部署检查超时或上下文已取消"}
+		return Result{Name: checkName, Level: LevelFail, Message: "部署检查超时或上下文已取消"}
 	}
 }
 

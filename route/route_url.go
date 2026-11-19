@@ -16,6 +16,7 @@ func (r *Router) URL(name string, params map[string]interface{}) (string, error)
 	r.mu.RLock()
 	registered := r.cachedNames[name]
 	caseSensitive := r.caseSensitive
+	removeSlash := r.removeSlash
 	r.mu.RUnlock()
 	if registered == nil {
 		if err := r.Freeze(); err != nil {
@@ -24,6 +25,7 @@ func (r *Router) URL(name string, params map[string]interface{}) (string, error)
 		r.mu.RLock()
 		registered = r.namedRoutes[name]
 		caseSensitive = r.caseSensitive
+		removeSlash = r.removeSlash
 		r.mu.RUnlock()
 	}
 	if registered == nil {
@@ -75,6 +77,9 @@ func (r *Router) URL(name string, params map[string]interface{}) (string, error)
 	builtPath := "/" + joinEscapedPathParts(pathParts)
 	if len(pathParts) == 0 {
 		builtPath = "/"
+	} else if registered.trailingSlash && !removeSlash {
+		// 严格斜杠模式下还原路由显式声明的尾斜杠，确保生成的 URL 可以回环命中 Router.Match。
+		builtPath += "/"
 	}
 
 	queryKeys := make([]string, 0, len(params))

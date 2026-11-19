@@ -10,11 +10,12 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/gotool"
 )
 
 const (
@@ -200,9 +201,8 @@ func listModulesAt(directory string) ([]moduleInfo, error) {
 }
 
 func executeGoList(commandContext context.Context, directory string) ([]byte, error) {
-	command := exec.CommandContext(commandContext, "go", "list", "-m", "-json", "all")
+	command := gotool.CommandContext(commandContext, "list", "-m", "-json", "all")
 	command.Dir = directory
-	command.Env = append(os.Environ(), "GOWORK=off")
 	return command.CombinedOutput()
 }
 
@@ -244,9 +244,8 @@ func listModuleGraphAt(directory string) ([]moduleGraphEdge, error) {
 }
 
 func executeGoModGraph(commandContext context.Context, directory string) ([]byte, error) {
-	command := exec.CommandContext(commandContext, "go", "mod", "graph")
+	command := gotool.CommandContext(commandContext, "mod", "graph")
 	command.Dir = directory
-	command.Env = append(os.Environ(), "GOWORK=off")
 	return command.CombinedOutput()
 }
 

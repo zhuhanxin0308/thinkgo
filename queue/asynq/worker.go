@@ -154,6 +154,10 @@ func validateWorkerConfig(config WorkerConfig) (backend.Config, error) {
 	}
 	queues := make(map[string]int, len(config.Queues))
 	for name, priority := range config.Queues {
+		// EnqueueOptions.Validate 会将空队列名默认回退为 default，Worker 监听映射必须显式拒绝空键。
+		if name == "" {
+			return backend.Config{}, fmt.Errorf("%w: Worker 队列名不能为空", queue.ErrBackendUnavailable)
+		}
 		options := queue.EnqueueOptions{Queue: name}
 		if err := options.Validate(time.Now()); err != nil || priority <= 0 || priority > maximumQueuePriority {
 			return backend.Config{}, fmt.Errorf("%w: Worker 队列 %q 或权重非法", queue.ErrBackendUnavailable, name)

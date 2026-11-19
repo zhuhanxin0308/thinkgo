@@ -174,6 +174,10 @@ func scalarText(value interface{}) (string, bool) {
 	if !valid {
 		return "", false
 	}
+	// 解引用指针或接口后再次识别 time.Time，使 *time.Time 等可选时间字段与值类型保持一致语义。
+	if reflected.Type() == reflect.TypeFor[time.Time]() && reflected.CanInterface() {
+		return reflected.Interface().(time.Time).Format(time.RFC3339Nano), true
+	}
 	switch reflected.Kind() {
 	case reflect.String:
 		return reflected.String(), true

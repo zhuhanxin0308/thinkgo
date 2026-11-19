@@ -120,14 +120,14 @@ func (r *Router) registerDefinitionsWithCommit(definitions []routeDefinition, co
 	}
 	for _, candidate := range prepared {
 		if duplicate := r.findDuplicateLocked(candidate, nil, prepared); duplicate != nil {
-			return nil, fmt.Errorf("%w: %s %s domain=%q", ErrDuplicateRoute, candidate.method, candidate.path, candidate.domain)
+			return nil, fmt.Errorf("%w: %s %s domain=%q", ErrDuplicateRoute, candidate.method, candidate.displayPath(), candidate.domain)
 		}
 	}
 	if commit != nil {
 		candidate := prepared[0]
 		if err := commit(RouteInfo{
 			Method:            candidate.method,
-			Path:              candidate.path,
+			Path:              candidate.displayPath(),
 			Handler:           candidate.handler,
 			Domain:            candidate.domain,
 			Extension:         candidate.ext,

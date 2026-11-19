@@ -17,6 +17,7 @@ import (
 	"github.com/zhuhanxin0308/thinkgo/v3/console"
 	"github.com/zhuhanxin0308/thinkgo/v3/console/command"
 	"github.com/zhuhanxin0308/thinkgo/v3/db/connector"
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/gotool"
 	_ "time/tzdata" // 内置时区数据，保证 Windows CLI 制品可加载配置中的时区。
 )
 
@@ -192,8 +193,8 @@ func RunRuntime(ctx context.Context, basePath string, args []string, stdout, std
 		filename += ".exe"
 	}
 	executable := filepath.Join(directory, filename)
-	// #nosec G204 -- 构建工具、包路径和构建参数固定，输出路径来自独占临时目录，不经过 shell。
-	build := exec.CommandContext(ctx, "go", "build", "-mod=readonly", "-tags="+runtimeBuildTag, "-o", executable, "./cmd/think")
+	// 使用当前激活 Go 工具链并强制关闭 GOWORK，避免宿主工作区或工具链降级干扰项目宿主编译。
+	build := gotool.CommandContext(ctx, "build", "-mod=readonly", "-tags="+runtimeBuildTag, "-o", executable, "./cmd/think")
 	build.Dir, build.Stdout, build.Stderr = base, stdout, stderr
 	if err := build.Run(); err != nil {
 		return errors.Join(fmt.Errorf("编译业务命令宿主失败: %w", err), ctx.Err())

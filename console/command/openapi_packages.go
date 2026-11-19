@@ -6,10 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/gotool"
 )
 
 const openAPIPrivateFileMode = 0o600
@@ -130,11 +131,10 @@ func listBuildSourcePackages(ctx context.Context, basePath string, patterns ...s
 			return nil, err
 		}
 	}
-	// #nosec G204 -- 命令与参数固定，模块路径仅来自本函数创建的临时目录，未拼接 shell。
-	process := exec.CommandContext(ctx, "go", "list", "-mod=mod", "-modfile="+moduleFile, "-e", "-find", "-json", "--")
+	// 命令与参数固定，模块路径仅来自本函数创建的临时目录，未拼接 shell。
+	process := gotool.CommandContext(ctx, "list", "-mod=mod", "-modfile="+moduleFile, "-e", "-find", "-json", "--")
 	process.Args = append(process.Args, patterns...)
 	process.Dir = basePath
-	process.Env = append(os.Environ(), "GOWORK=off")
 	var stderr bytes.Buffer
 	process.Stderr = &stderr
 	output, err := process.Output()

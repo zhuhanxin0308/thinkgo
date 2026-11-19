@@ -18,6 +18,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/gotool"
 )
 
 const (
@@ -289,8 +291,8 @@ type applicationExportPackage struct {
 
 // loadExportFiles 使用固定参数一次性枚举框架公共类型及其完整依赖图。
 func (context *applicationSemanticContext) loadExportFiles() (map[string]string, error) {
-	command := exec.CommandContext(context.runContext,
-		"go", "list", "-mod=readonly", "-deps", "-export", "-json", "--",
+	command := gotool.CommandContext(context.runContext,
+		"list", "-mod=readonly", "-deps", "-export", "-json", "--",
 		frameworkImportPath, frameworkMiddlewareImportPath,
 	)
 	return context.executeExportList(command)
@@ -302,14 +304,13 @@ func (context *applicationSemanticContext) loadNamedExportFiles(importPath strin
 	if err := validateApplicationImportPath(importPath); err != nil {
 		return nil, err
 	}
-	command := exec.CommandContext(context.runContext, "go", "list", "-mod=readonly", "-deps", "-export", "-json")
+	command := gotool.CommandContext(context.runContext, "list", "-mod=readonly", "-deps", "-export", "-json")
 	command.Args = append(command.Args, "--", importPath)
 	return context.executeExportList(command)
 }
 
 func (context *applicationSemanticContext) executeExportList(command *exec.Cmd) (map[string]string, error) {
 	command.Dir = context.basePath
-	command.Env = append(os.Environ(), "GOWORK=off")
 	output, err := command.Output()
 	if err != nil {
 		if canceled := context.runContext.Err(); canceled != nil {

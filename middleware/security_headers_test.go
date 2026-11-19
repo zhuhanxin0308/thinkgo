@@ -63,6 +63,13 @@ func TestSecurityHeadersHSTSOnlyForVerifiedHTTPS(t *testing.T) {
 func TestSecurityHeadersRejectInvalidConfiguration(t *testing.T) {
 	for _, config := range []SecurityHeadersConfig{
 		{ContentSecurityPolicy: "default-src 'self'\r\nX-Evil: true"},
+		{ContentSecurityPolicy: "default-src 'self'\x00"},
+		{ContentSecurityPolicy: "default-src 'self'\x07"},
+		{ContentSecurityPolicy: "default-src 'self'\x0b"},
+		{ContentSecurityPolicy: "default-src 'self'\x1b"},
+		{ContentSecurityPolicy: "default-src 'self'\x7f"},
+		{PermissionsPolicy: "camera=()\x0c"},
+		{PermissionsPolicy: "camera=()\x7f"},
 		{ReferrerPolicy: "unsafe-custom-policy"},
 		{CrossOriginOpenerPolicy: "invalid"},
 		{HSTSMaxAgeSeconds: 100, HSTSPreload: true},
@@ -70,5 +77,19 @@ func TestSecurityHeadersRejectInvalidConfiguration(t *testing.T) {
 		if _, err := NewSecurityHeaders(config); err == nil {
 			t.Fatalf("非法安全响应头配置必须被拒绝: %#v", config)
 		}
+	}
+
+	// 合法水平制表符（RFC 9110 OWS）应与 context.Response.Header 保持一致，构造和请求均不报错。
+	handler, err := NewSecurityHeaders(SecurityHeadersConfig{
+		ContentSecurityPolicy: "default-src\t'self'",
+		PermissionsPolicy:     "camera=(),\tmicrophone=()",
+	})
+	if err != nil {
+		t.Fatalf("包含合法水平制表符的安全响应头配置应允许通过: %v", err)
+	}
+	request := fwcontext.MustNewRequest(httptest.NewRequest(http.MethodGet, "https://example.com/", nil))
+	response := handler(request, func(*fwcontext.Request) *fwcontext.Response { return fwcontext.NewResponse().Content("ok") })
+	if response.Error() != nil {
+		t.Fatalf("合法安全响应头配置不应触发响应错误: %v", response.Error())
 	}
 }
