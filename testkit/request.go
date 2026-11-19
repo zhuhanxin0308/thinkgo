@@ -63,9 +63,13 @@ func DecodeJSON[T any](response *httptest.ResponseRecorder) (T, error) {
 	if response == nil {
 		return value, errors.New("测试响应为空")
 	}
-	media, _, err := mime.ParseMediaType(response.Header().Get("Content-Type"))
+	// Result 返回响应首次提交时的头部快照；关闭其独立 Body，解码仍使用 Recorder 原始缓冲区。
+	result := response.Result()
+	defer result.Body.Close()
+	contentType := result.Header.Get("Content-Type")
+	media, _, err := mime.ParseMediaType(contentType)
 	if err != nil || media != "application/json" && !strings.HasSuffix(media, "+json") {
-		return value, fmt.Errorf("测试响应不是 JSON: %q", response.Header().Get("Content-Type"))
+		return value, fmt.Errorf("测试响应不是 JSON: %q", contentType)
 	}
 	decoder := json.NewDecoder(bytes.NewReader(response.Body.Bytes()))
 	decoder.UseNumber()
