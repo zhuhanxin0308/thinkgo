@@ -2,10 +2,10 @@ package gotool
 
 import (
 	"context"
+	"debug/buildinfo"
 	"go/version"
 	"os"
 	"os/exec"
-	"runtime"
 	"strings"
 )
 
@@ -15,26 +15,42 @@ import (
 func CommandContext(ctx context.Context, args ...string) *exec.Cmd {
 	// #nosec G204 G702 -- 命令固定为 "go"，参数数组由框架调用方构造且不经过 shell。
 	command := exec.CommandContext(ctx, "go", args...)
-	command.Env = PrepareEnv(os.Environ())
+	command.Env = PrepareEnv(command, nil)
 	return command
 }
 
 // PrepareEnv 返回适合执行 go 子进程的环境变量副本：
 //  1. 强制设置 GOWORK=off，防止宿主工作区文件干扰项目或临时模块命令；
-//  2. 在当前运行工具链版本不低于 GOTOOLCHAIN="<ver>+auto/+path" 声明的最低版本时，
+//  2. 在命令实际选中的 Go 版本不低于 GOTOOLCHAIN="<ver>+auto/+path" 声明的最低版本时，
 //     将其规范化为 "auto"/"path"，避免子进程触发不必要的降级下载或在 GOPROXY=off 下失败。
-func PrepareEnv(baseEnv []string) []string {
+func PrepareEnv(command *exec.Cmd, baseEnv []string) []string {
 	if baseEnv == nil {
 		baseEnv = os.Environ()
 	}
-	return prepareEnvWithRuntime(baseEnv, runtime.Version())
+	return prepareEnv(baseEnv, func() string { return goCommandVersion(command) })
 }
 
-func prepareEnvWithRuntime(baseEnv []string, runtimeVersion string) []string {
+// goCommandVersion 只信任实际选中标准 go 程序的构建信息，保留 PATH 包装器原有的工具链约束。
+func goCommandVersion(command *exec.Cmd) string {
+	if command == nil || command.Err != nil {
+		return ""
+	}
+	file, err := os.Stat(command.Path)
+	if err != nil || !file.Mode().IsRegular() {
+		return ""
+	}
+	info, err := buildinfo.ReadFile(command.Path)
+	if err != nil || info.Path != "cmd/go" {
+		return ""
+	}
+	return info.GoVersion
+}
+
+func prepareEnv(baseEnv []string, goVersion func() string) []string {
 	goroot, hasGOROOT := lookupEnv(baseEnv, "GOROOT")
 	hasEnvGOROOT := hasGOROOT && strings.TrimSpace(goroot) != ""
 	currentToolchain, hasToolchain := lookupEnv(baseEnv, "GOTOOLCHAIN")
-	normalizedToolchain := normalizeGoToolchain(currentToolchain, runtimeVersion, hasEnvGOROOT)
+	normalizedToolchain := normalizeGoToolchain(currentToolchain, goVersion, hasEnvGOROOT)
 	replaceToolchain := normalizedToolchain != "" && (!hasToolchain || normalizedToolchain != currentToolchain)
 
 	result := make([]string, 0, len(baseEnv)+2)
@@ -74,12 +90,12 @@ func lookupEnv(env []string, name string) (string, bool) {
 }
 
 // normalizeGoToolchain 在当前运行工具链不低于 "<ver>+auto"/"<ver>+path" 下限时收敛为 "auto"/"path"。
-func normalizeGoToolchain(current, runtimeVersion string, hasEnvGOROOT bool) string {
+func normalizeGoToolchain(current string, goVersion func() string, hasEnvGOROOT bool) string {
 	trimmed := strings.TrimSpace(current)
 	if trimmed == "" {
 		// 父进程切换工具链后显式设置了 GOROOT 且未携带 GOTOOLCHAIN 时，
 		// 显式以当前 GOROOT 为基准启用 auto，防止子进程读取 go/env 中较低的 "<ver>+auto" 触发降级。
-		if hasEnvGOROOT {
+		if hasEnvGOROOT && version.IsValid(goVersion()) {
 			return "auto"
 		}
 		return ""
@@ -94,8 +110,10 @@ func normalizeGoToolchain(current, runtimeVersion string, hasEnvGOROOT bool) str
 	if minimum == "local" {
 		return suffix
 	}
-	if version.IsValid(minimum) && version.IsValid(runtimeVersion) && version.Compare(runtimeVersion, minimum) >= 0 {
-		return suffix
+	if version.IsValid(minimum) {
+		if selected := goVersion(); version.IsValid(selected) && version.Compare(selected, minimum) >= 0 {
+			return suffix
+		}
 	}
 	return trimmed
 }

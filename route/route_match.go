@@ -535,8 +535,8 @@ func canonicalRoutePath(rawPath string) (string, int, error) {
 	if !strings.HasPrefix(path, "/") {
 		path = "/" + path
 	}
-	// 在移除单个尾斜杠前拒绝连续斜杠，防止 "/docs//" 等非法空段绕过 parseRoutePath。
-	if strings.Contains(path, "//") {
+	// 在裁剪尾斜杠前校验完整模板，与请求端的路径长度和空段约束一致。
+	if len(path) > maxRoutePathLength || strings.Contains(path, "//") {
 		return "", 0, fmt.Errorf("%w: 路径 %q 非法", ErrInvalidRoute, rawPath)
 	}
 	if len(path) > 1 {

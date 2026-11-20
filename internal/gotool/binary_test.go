@@ -4,8 +4,46 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
+
+// TestCommandContextKeepsUnverifiedToolchainFloor 验证 PATH 包装器未提供工具链版本时不会丢失调用方的下限。
+func TestCommandContextKeepsUnverifiedToolchainFloor(t *testing.T) {
+	const minimum = "go1.21.0+path"
+	t.Setenv("GOTOOLCHAIN", minimum)
+	dir := t.TempDir()
+	filename := "go"
+	if runtime.GOOS == "windows" {
+		filename = "go.exe"
+	}
+	// 构造命令只做 PATH 解析，无需执行夹具，也不依赖特定系统的 shell。
+	wrapper := filepath.Join(dir, filename)
+	if err := os.WriteFile(wrapper, []byte("工具链版本未知"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	cmd := CommandContext(t.Context(), "version")
+	if cmd.Err != nil || cmd.Path != wrapper {
+		t.Fatalf("未解析到 PATH 包装器: path=%q err=%v", cmd.Path, cmd.Err)
+	}
+	if got, _ := lookupEnv(cmd.Env, "GOTOOLCHAIN"); got != minimum {
+		t.Errorf("包装器的版本未知，应保留 %q，实际为 %q", minimum, got)
+	}
+}
+
+// TestCommandContextUsesVerifiedGoToolchain 验证标准 go 命令的本地版本确定后才允许收敛最低版本。
+func TestCommandContextUsesVerifiedGoToolchain(t *testing.T) {
+	t.Setenv("PATH", filepath.Join(runtime.GOROOT(), "bin"))
+	t.Setenv("GOTOOLCHAIN", "go1.21.0+path")
+	command := CommandContext(t.Context(), "version")
+	if command.Err != nil {
+		t.Fatal(command.Err)
+	}
+	if got, _ := lookupEnv(command.Env, "GOTOOLCHAIN"); got != "path" {
+		t.Fatalf("已验证的标准工具链应保留 path 搜索模式，实际为 %q", got)
+	}
+}
 
 // TestPrepareEnvNormalizesGoWorkAndToolchain 验证 GOWORK=off 强制生效与 GOTOOLCHAIN 防降级规则。
 func TestPrepareEnvNormalizesGoWorkAndToolchain(t *testing.T) {
@@ -83,7 +121,7 @@ func TestPrepareEnvNormalizesGoWorkAndToolchain(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := prepareEnvWithRuntime(tc.env, tc.runtimeVersion)
+			got := prepareEnv(tc.env, func() string { return tc.runtimeVersion })
 			if gowork, ok := lookupEnv(got, "GOWORK"); !ok || gowork != "off" {
 				t.Fatalf("GOWORK 必须为 off: ok=%t got=%q", ok, gowork)
 			}
@@ -112,7 +150,7 @@ func TestCommandContextRunsOfflineWithActiveToolchain(t *testing.T) {
 	if got := string(output); got != "example.test/offline\n" {
 		t.Fatalf("go list -m 输出不符: %q", got)
 	}
-	if len(PrepareEnv(nil)) == 0 {
-		t.Fatal("PrepareEnv(nil) 不应为空")
+	if len(PrepareEnv(cmd, nil)) == 0 {
+		t.Fatal("未指定环境时应继承进程环境")
 	}
 }

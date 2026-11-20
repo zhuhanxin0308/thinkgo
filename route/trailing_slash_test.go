@@ -4,10 +4,101 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	fwcontext "github.com/zhuhanxin0308/thinkgo/v3/context"
 )
+
+// TestTrailingSlashOptionalRootURL 验证省略全部可选段时不会生成属于另一条路由的根路径。
+func TestTrailingSlashOptionalRootURL(t *testing.T) {
+	for _, relaxed := range []bool{false, true} {
+		router := NewRouter()
+		if err := router.SetRemoveSlash(relaxed); err != nil {
+			t.Fatal(err)
+		}
+		if err := router.SetDefaultExtension(""); err != nil {
+			t.Fatal(err)
+		}
+		registered, err := router.Get("/:id?/", "Page@Show")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := registered.WithName("page"); err != nil {
+			t.Fatal(err)
+		}
+		cache, err := router.ExportNameCache()
+		if err != nil {
+			t.Fatal(err)
+		}
+		restored := NewRouter()
+		if err := restored.SetRemoveSlash(relaxed); err != nil {
+			t.Fatal(err)
+		}
+		if err := restored.LoadNameCache(cache); err != nil {
+			t.Fatal(err)
+		}
+		for _, source := range []*Router{router, restored} {
+			path, err := source.URL("page", nil)
+			if !relaxed {
+				if !errors.Is(err, ErrInvalidRouteParameter) || path != "" {
+					t.Errorf("严格模式不能用根路径表示尾斜杠: path=%q err=%v", path, err)
+				}
+			} else if err != nil || path != "/" {
+				t.Errorf("忽略尾斜杠时允许省略可选段: path=%q err=%v", path, err)
+			}
+			path, err = source.URL("page", map[string]interface{}{"id": "docs"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			hit, params := matchForTest(t, router, fwcontext.MustNewRequest(httptest.NewRequest(http.MethodGet, path, nil)))
+			if hit != registered || params["id"] != "docs" {
+				t.Fatalf("提供可选段后 URL 未回环: path=%q params=%v", path, params)
+			}
+		}
+	}
+}
+
+// TestTrailingSlashPathByteLimit 验证模板、命名缓存与实际生成路径共享请求端的字节上限。
+func TestTrailingSlashPathByteLimit(t *testing.T) {
+	router := NewRouter()
+	if err := router.SetDefaultExtension(""); err != nil {
+		t.Fatal(err)
+	}
+	atLimit := "/" + strings.Repeat("a", maxRoutePathLength-len("//")) + "/"
+	overLimit := "/a" + atLimit[1:]
+	if _, err := router.Get(overLimit, "Docs@Large"); !errors.Is(err, ErrInvalidRoute) {
+		t.Errorf("超限模板应在注册时拒绝: %v", err)
+	}
+	if _, err := router.Get(atLimit, "Docs@Limit"); err != nil {
+		t.Fatal(err)
+	}
+	named, err := router.Get("/:id/", "Docs@Dynamic")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := named.WithName("docs"); err != nil {
+		t.Fatal(err)
+	}
+	if err := named.WithPattern("id", ".+"); err != nil {
+		t.Fatal(err)
+	}
+	// 转义后的路径字节数才是请求端实际检查的长度；普通查询参数不计入路径上限。
+	encodedSegment := strings.Repeat(" ", (maxRoutePathLength-len("//"))/len("%20"))
+	if path, err := router.URL("docs", map[string]interface{}{"id": encodedSegment, "q": "test"}); err != nil || len(path) != maxRoutePathLength+len("?q=test") {
+		t.Fatalf("到达上限且附带查询的 URL 应有效: pathBytes=%d err=%v", len(path), err)
+	}
+	if path, err := router.URL("docs", map[string]interface{}{"id": encodedSegment + "a"}); !errors.Is(err, ErrInvalidRouteParameter) || path != "" {
+		t.Errorf("动态参数转义后越界应返回参数错误: pathBytes=%d err=%v", len(path), err)
+	}
+	if matched, _ := matchForTest(t, router, fwcontext.MustNewRequest(httptest.NewRequest(http.MethodGet, atLimit, nil))); matched == nil || matched.Handler() != "Docs@Limit" {
+		t.Fatal("恰好达到上限的静态路径未命中")
+	}
+	restored := NewRouter()
+	if err := restored.LoadNameCache([]byte(`{"version":1,"default_pattern":"[a-z]+","entries":[{"name":"docs","path":"` + overLimit + `"}]}`)); !errors.Is(err, ErrInvalidRoute) {
+		t.Errorf("超限缓存条目应被拒绝: %v", err)
+	}
+}
 
 // TestExplicitTrailingSlashRoutesMatchAndCoexist 验证默认严格斜杠模式下显式尾斜杠路由能正确命中，
 // 且与同名无尾斜杠路由互不冲突，并保持 Route.Path、Routes 与 AddWithCommit 元数据一致。
