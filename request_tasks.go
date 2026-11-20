@@ -32,7 +32,6 @@ type RequestTasksSnapshot struct {
 type requestTaskRegistry struct {
 	mu       sync.Mutex
 	snapshot RequestTasksSnapshot
-	closed   bool
 	idle     chan struct{}
 	budgets  map[time.Duration]int
 }
@@ -66,9 +65,9 @@ func (app *App) acquireRequestTask(capacity int, timeout time.Duration, operatio
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
 	app.lifecycle.lock.Lock()
-	closed := app.lifecycle.closed
+	closed := app.lifecycle.admissionClosed
 	app.lifecycle.lock.Unlock()
-	if registry.closed || closed {
+	if closed {
 		registry.snapshot.Rejected++
 		return nil, ErrApplicationClosed
 	}
@@ -177,7 +176,9 @@ func (app *App) drainRequestTasksForClose() error {
 	for _, candidate := range applications {
 		registry := &candidate.lifecycle.tasks
 		registry.mu.Lock()
-		registry.closed = true
+		candidate.lifecycle.lock.Lock()
+		candidate.lifecycle.admissionClosed = true
+		candidate.lifecycle.lock.Unlock()
 		// 只采集仍在途的租约预算，避免最后接纳或历史任务支配关闭窗口。
 		for budget := range registry.budgets {
 			if budget > timeout {
@@ -200,6 +201,24 @@ func (app *App) drainRequestTasksForClose() error {
 			registry.mu.Unlock()
 			waitErr = errors.Join(waitErr, err)
 		}
+		if candidate != app && candidate.lifecycle.ownedLifecycleInUse() {
+			waitErr = errors.Join(waitErr, ErrApplicationRunning)
+		}
 	}
 	return waitErr
+}
+
+// ownedLifecycleInUse 在子应用封闭后检查先前获准的运行、转换或关闭，避免根释放子回调仍依赖的资源。
+func (lifecycle *appLifecycle) ownedLifecycleInUse() bool {
+	if !lifecycle.closeLock.TryLock() {
+		return true
+	}
+	defer lifecycle.closeLock.Unlock()
+	if !lifecycle.transitionLock.TryLock() {
+		return true
+	}
+	defer lifecycle.transitionLock.Unlock()
+	lifecycle.lock.Lock()
+	defer lifecycle.lock.Unlock()
+	return lifecycle.running
 }

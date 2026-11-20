@@ -88,7 +88,7 @@ func (app *App) RegisterProvider(provider ServiceProvider) error {
 	lifecycle := &app.providers
 	lifecycle.lock.Lock()
 	lifecycle.initializeLocked()
-	if lifecycle.registrationClosed || lifecycle.closing || lifecycle.closed {
+	if app.providerRegistrationClosedLocked() {
 		lifecycle.lock.Unlock()
 		return ErrProviderRegistrationClosed
 	}
@@ -130,6 +130,12 @@ func (app *App) RegisterProvider(provider ServiceProvider) error {
 		}
 	}
 	return nil
+}
+
+// providerRegistrationClosedLocked 同时核对 Provider 和应用装配窗口，调用者持有 Provider 注册锁。
+func (app *App) providerRegistrationClosedLocked() bool {
+	lifecycle := &app.providers
+	return lifecycle.registrationClosed || lifecycle.closing || lifecycle.closed || app.assemblyState().stopsAdmission()
 }
 
 // initializeProviders 执行可选的 Provider 初始化阶段，并缓存结果避免重复装配。
@@ -256,18 +262,16 @@ func (app *App) initializeLateProvider(registration *providerRegistration) error
 // BootProviders 确保框架构造器创建的应用先完成 Initialize，再关闭注册阶段并按确定顺序启动全部 Provider。
 // 手工构造的零值 App 仍保留仅启动已注册 Provider 的底层契约；已经失败的初始化不允许绕过。
 func (app *App) BootProviders() error {
-	if app == nil {
-		return ErrNilApplication
+	if err := app.lockStartupTransition(); err != nil {
+		return err
 	}
-	app.lifecycle.transitionLock.Lock()
 	defer app.lifecycle.transitionLock.Unlock()
 	app.lifecycle.lock.Lock()
-	state := app.lifecycle.state
+	state := app.lifecycle.currentStateLocked()
 	requiresInitialization := app.lifecycle.requiresInitialization
 	initialized := app.lifecycle.initialized
-	closed := app.lifecycle.closed
 	app.lifecycle.lock.Unlock()
-	if closed || state == ApplicationStateClosing || state == ApplicationStateClosed {
+	if state.stopsAdmission() {
 		return ErrApplicationClosed
 	}
 	if state == ApplicationStateFailed {

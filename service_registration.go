@@ -11,7 +11,7 @@ func (app *App) registerApplicationServiceProvider(candidate, previous *applicat
 	lifecycle := &app.providers
 	lifecycle.lock.Lock()
 	lifecycle.initializeLocked()
-	if lifecycle.registrationClosed || lifecycle.closing || lifecycle.closed {
+	if app.providerRegistrationClosedLocked() {
 		lifecycle.lock.Unlock()
 		return ErrProviderRegistrationClosed
 	}

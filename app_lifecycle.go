@@ -32,6 +32,8 @@ const (
 	ApplicationStateClosed
 	// ApplicationStateFailed 表示应用初始化或启动失败。
 	ApplicationStateFailed
+	// ApplicationStateDraining 表示已停止接纳新任务，在途任务仍可使用依赖，排空超时后可重试 Close。
+	ApplicationStateDraining
 )
 
 // String 返回生命周期状态的稳定文本，便于日志和诊断输出。
@@ -55,15 +57,21 @@ func (state ApplicationState) String() string {
 		return "closed"
 	case ApplicationStateFailed:
 		return "failed"
+	case ApplicationStateDraining:
+		return "draining"
 	default:
 		return "unknown"
 	}
 }
 
+func (state ApplicationState) stopsAdmission() bool {
+	return state == ApplicationStateDraining || state == ApplicationStateClosing || state == ApplicationStateClosed
+}
+
 var (
 	// ErrNilApplication 表示方法接收到了 nil 应用实例。
 	ErrNilApplication = errors.New("应用实例不能为空")
-	// ErrApplicationClosed 表示应用资源已经关闭。
+	// ErrApplicationClosed 表示操作要求的应用入口或资源已经关闭。
 	ErrApplicationClosed = errors.New("应用已经关闭")
 	// ErrApplicationRunning 表示同一应用正在运行，禁止重复启动。
 	ErrApplicationRunning = errors.New("应用正在运行")
@@ -82,7 +90,7 @@ var (
 type appLifecycle struct {
 	tasks                  requestTaskRegistry
 	transitionLock         sync.Mutex
-	initializationLock     sync.Mutex
+	closeLock              sync.Mutex
 	initializeOnce         sync.Once
 	lock                   sync.Mutex
 	requiresInitialization bool
@@ -90,7 +98,7 @@ type appLifecycle struct {
 	state                  ApplicationState
 	running                bool
 	runLeases              uint32
-	closed                 bool
+	admissionClosed        bool
 	closeOnce              sync.Once
 	closeErr               error
 }
@@ -104,20 +112,30 @@ type RunLease struct {
 
 // Initialize 只执行一次初始化，并在重复调用时返回首次初始化结果。
 func (app *App) Initialize() error {
-	if app == nil {
-		return ErrNilApplication
+	if err := app.lockStartupTransition(); err != nil {
+		return err
 	}
-	app.lifecycle.transitionLock.Lock()
 	defer app.lifecycle.transitionLock.Unlock()
 	return app.initializeLocked()
 }
 
+// lockStartupTransition 让已进入排空的请求能立即放弃启动，避免持有任务租约等待 Close。
+// 获得转换锁后，具体操作仍需检查准入，以处理等待锁期间发生的关闭。
+func (app *App) lockStartupTransition() error {
+	if app == nil {
+		return ErrNilApplication
+	}
+	if app.State().stopsAdmission() {
+		return ErrApplicationClosed
+	}
+	app.lifecycle.transitionLock.Lock()
+	return nil
+}
+
 // initializeLocked 执行初始化主体；调用方必须持有应用转换锁。
 func (app *App) initializeLocked() error {
-	app.lifecycle.initializationLock.Lock()
-	defer app.lifecycle.initializationLock.Unlock()
 	app.lifecycle.lock.Lock()
-	if app.lifecycle.closed {
+	if app.lifecycle.admissionClosed {
 		app.lifecycle.lock.Unlock()
 		return ErrApplicationClosed
 	}
@@ -169,30 +187,47 @@ func (app *App) State() ApplicationState {
 	}
 	app.lifecycle.lock.Lock()
 	defer app.lifecycle.lock.Unlock()
-	if app.lifecycle.state == ApplicationStateInvalid {
+	return app.lifecycle.currentStateLocked()
+}
+
+// currentStateLocked 在子应用已有启动或租约操作收尾时，仍对外保持已封闭的准入状态。
+func (lifecycle *appLifecycle) currentStateLocked() ApplicationState {
+	if lifecycle.admissionClosed && lifecycle.state != ApplicationStateClosing && lifecycle.state != ApplicationStateClosed {
+		return ApplicationStateDraining
+	}
+	if lifecycle.state == ApplicationStateInvalid {
 		return ApplicationStateConstructed
 	}
-	return app.lifecycle.state
+	return lifecycle.state
+}
+
+// assemblyState 仅在已进入初始化或启动的回调期间保留装配窗口，其余阶段服从公开的准入状态。
+func (app *App) assemblyState() ApplicationState {
+	app.lifecycle.lock.Lock()
+	defer app.lifecycle.lock.Unlock()
+	state := app.lifecycle.state
+	if state == ApplicationStateInitializing || state == ApplicationStateBooting {
+		return state
+	}
+	return app.lifecycle.currentStateLocked()
 }
 
 // EnsureReady 等待完整初始化并启动 Provider。
 // 初始化或启动一旦失败，后续调用只返回同一启动错误，不允许绕过 Failed 状态。
 func (app *App) EnsureReady() error {
-	if app == nil {
-		return ErrNilApplication
+	if err := app.lockStartupTransition(); err != nil {
+		return err
 	}
-	app.lifecycle.transitionLock.Lock()
 	defer app.lifecycle.transitionLock.Unlock()
 	return app.ensureReadyLocked()
 }
 
 func (app *App) ensureReadyLocked() error {
 	app.lifecycle.lock.Lock()
-	state := app.lifecycle.state
+	state := app.lifecycle.currentStateLocked()
 	requiresInitialization := app.lifecycle.requiresInitialization
-	closed := app.lifecycle.closed
 	app.lifecycle.lock.Unlock()
-	if closed || state == ApplicationStateClosing || state == ApplicationStateClosed {
+	if state.stopsAdmission() {
 		return ErrApplicationClosed
 	}
 	if state == ApplicationStateFailed {
@@ -232,13 +267,12 @@ func (app *App) AcquireRunLease() (*RunLease, error) {
 }
 
 func (app *App) acquireRunLease(exclusive bool) (*RunLease, error) {
-	if app == nil {
-		return nil, ErrNilApplication
+	if err := app.lockStartupTransition(); err != nil {
+		return nil, err
 	}
-	app.lifecycle.transitionLock.Lock()
 	defer app.lifecycle.transitionLock.Unlock()
 	app.lifecycle.lock.Lock()
-	if app.lifecycle.closed {
+	if app.lifecycle.admissionClosed {
 		app.lifecycle.lock.Unlock()
 		return nil, ErrApplicationClosed
 	}
@@ -255,7 +289,7 @@ func (app *App) acquireRunLease(exclusive bool) (*RunLease, error) {
 	defer app.serviceMutationMu.Unlock()
 	app.lifecycle.lock.Lock()
 	defer app.lifecycle.lock.Unlock()
-	if app.lifecycle.closed || app.lifecycle.state == ApplicationStateClosing || app.lifecycle.state == ApplicationStateClosed {
+	if app.lifecycle.admissionClosed {
 		return nil, ErrApplicationClosed
 	}
 	if app.lifecycle.state == ApplicationStateFailed {
@@ -288,7 +322,7 @@ func (lease *RunLease) Release() {
 		}
 		if app.lifecycle.runLeases == 0 {
 			app.lifecycle.running = false
-			if !app.lifecycle.closed && app.lifecycle.state == ApplicationStateRunning {
+			if app.lifecycle.state == ApplicationStateRunning {
 				app.lifecycle.state = ApplicationStateInitialized
 			}
 		}
@@ -333,23 +367,29 @@ func (app *App) closeInternal() error {
 	if app == nil {
 		return ErrNilApplication
 	}
+	app.lifecycle.closeLock.Lock()
+	defer app.lifecycle.closeLock.Unlock()
+	if app.State() == ApplicationStateClosed {
+		return app.lifecycle.closeErr
+	}
+	// 与运行租约提交互斥；封闭后释放转换锁，让已经排队的请求能复查准入、退出并归还任务。
 	app.lifecycle.transitionLock.Lock()
-	defer app.lifecycle.transitionLock.Unlock()
-	app.lifecycle.initializationLock.Lock()
-	defer app.lifecycle.initializationLock.Unlock()
 	app.lifecycle.lock.Lock()
-	if app.lifecycle.running {
-		app.lifecycle.lock.Unlock()
-		return ErrApplicationRunning
+	running := app.lifecycle.running
+	if !running {
+		app.lifecycle.admissionClosed = true
 	}
 	app.lifecycle.lock.Unlock()
+	app.lifecycle.transitionLock.Unlock()
+	if running {
+		return ErrApplicationRunning
+	}
 	if err := app.drainRequestTasksForClose(); err != nil {
 		return err
 	}
 	app.lifecycle.closeOnce.Do(func() {
 		app.serviceMutationMu.Lock()
 		app.lifecycle.lock.Lock()
-		app.lifecycle.closed = true
 		app.lifecycle.state = ApplicationStateClosing
 		app.lifecycle.lock.Unlock()
 		app.serviceMutationMu.Unlock()

@@ -144,6 +144,7 @@ func TestApplicationStateStringIsStable(t *testing.T) {
 		ApplicationStateClosing:      "closing",
 		ApplicationStateClosed:       "closed",
 		ApplicationStateFailed:       "failed",
+		ApplicationStateDraining:     "draining",
 		ApplicationState(255):        "unknown",
 	}
 	for state, text := range expected {

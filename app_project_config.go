@@ -153,11 +153,8 @@ func (app *App) ApplyProjectApplicationOverrides(overrides map[string]interface{
 
 	app.lifecycle.transitionLock.Lock()
 	defer app.lifecycle.transitionLock.Unlock()
-	app.lifecycle.lock.Lock()
-	state := app.lifecycle.state
-	closed := app.lifecycle.closed
-	app.lifecycle.lock.Unlock()
-	if closed || state == ApplicationStateClosing || state == ApplicationStateClosed {
+	state := app.State()
+	if state.stopsAdmission() {
 		return fmt.Errorf("%w: %w", ErrProjectConfigurationOverrideUnavailable, ErrApplicationClosed)
 	}
 	if state == ApplicationStateRunning {

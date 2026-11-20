@@ -118,6 +118,9 @@ func (app *App) registerStartupReadinessCheckTo(registry *health.Registry) {
 		return
 	}
 	if err := registry.Register("startup", func(stdcontext.Context) error {
+		if app.State().stopsAdmission() {
+			return ErrApplicationClosed
+		}
 		return app.StartupError()
 	}); err != nil {
 		app.recordStartupError(fmt.Errorf("注册启动就绪检查失败: %w", err))

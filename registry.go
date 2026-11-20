@@ -284,12 +284,11 @@ func (app *App) ensureRegistrationOpen() error {
 	if app.registrationClosed {
 		return ErrApplicationRegistrationClosed
 	}
-	app.lifecycle.lock.Lock()
-	defer app.lifecycle.lock.Unlock()
-	if app.lifecycle.closed || app.lifecycle.state >= ApplicationStateClosing {
+	state := app.assemblyState()
+	if state >= ApplicationStateClosing {
 		return ErrApplicationClosed
 	}
-	if app.lifecycle.state >= ApplicationStateInitialized {
+	if state >= ApplicationStateInitialized {
 		return ErrApplicationRegistrationClosed
 	}
 	return nil
