@@ -3,8 +3,10 @@ package gotool
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -34,7 +36,13 @@ func TestCommandContextKeepsUnverifiedToolchainFloor(t *testing.T) {
 
 // TestCommandContextUsesVerifiedGoToolchain 验证标准 go 命令的本地版本确定后才允许收敛最低版本。
 func TestCommandContextUsesVerifiedGoToolchain(t *testing.T) {
-	t.Setenv("PATH", filepath.Join(runtime.GOROOT(), "bin"))
+	// 通过当前机器上的 go 查询本地安装目录，避免使用编译测试程序时的目录。
+	t.Setenv("GOTOOLCHAIN", "local")
+	root, err := exec.CommandContext(t.Context(), "go", "env", "GOROOT").Output()
+	if err != nil {
+		t.Fatalf("查询本地 Go 工具链目录失败: %v", err)
+	}
+	t.Setenv("PATH", filepath.Join(strings.TrimSpace(string(root)), "bin"))
 	t.Setenv("GOTOOLCHAIN", "go1.21.0+path")
 	command := CommandContext(t.Context(), "version")
 	if command.Err != nil {
