@@ -51,13 +51,13 @@ func writeRuntimeFileAtomicallyWithMode(app *framework.App, runtimeBase, target 
 	return writeProjectFileAtomicallyWithMode(app, target, content, mode)
 }
 
-// writeProjectFileExclusively 用同目录硬链接原子发布；只有最终目标碰撞才返回 false,nil。
-func writeProjectFileExclusively(app *framework.App, target string, content []byte) (bool, error) {
+// writeProjectFileExclusivelyWithMode 让私有配置复用排他发布协议，不改变普通产物的权限。
+func writeProjectFileExclusivelyWithMode(app *framework.App, target string, content []byte, mode os.FileMode) (bool, error) {
 	if app == nil {
 		return false, framework.ErrNilApplication
 	}
 	created := false
-	err := writeRootedFileWithPublication(app.GetRootPath(), target, content, 0, func(root *os.Root, temporary, relative string) (bool, error) {
+	err := writeRootedFileWithPublication(app.GetRootPath(), target, content, mode, func(root *os.Root, temporary, relative string) (bool, error) {
 		linkErr := root.Link(temporary, relative)
 		if errors.Is(linkErr, os.ErrExist) {
 			return false, nil

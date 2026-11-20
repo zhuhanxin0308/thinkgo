@@ -18,17 +18,21 @@ import (
 	"github.com/zhuhanxin0308/thinkgo/v3/console"
 )
 
-const maxVendorPublishFileBytes int64 = 8 * 1024 * 1024
+const (
+	maxVendorPublishFileBytes int64 = 8 * 1024 * 1024
+	// vendorConfigFileMode 与项目配置创建、配置缓存保持相同的私有读取边界。
+	vendorConfigFileMode os.FileMode = 0o600
+)
 
 var publishVendorFile = publishVendorFileWithPolicy
 
 // publishVendorFileWithPolicy 集中处理供应商文件的发布策略。
 func publishVendorFileWithPolicy(app *framework.App, target string, content []byte, force bool) (bool, error) {
 	if force {
-		err := writeProjectFileAtomically(app, target, content)
+		err := writeProjectFileAtomicallyWithMode(app, target, content, vendorConfigFileMode)
 		return err == nil, err
 	}
-	return writeProjectFileExclusively(app, target, content)
+	return writeProjectFileExclusivelyWithMode(app, target, content, vendorConfigFileMode)
 }
 
 // VendorPublish 按 Composer installed.json 发布供应商包配置，

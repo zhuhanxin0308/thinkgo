@@ -271,8 +271,18 @@ func parseConfigEnvironmentNumber(path, raw string, prototype json.Number) (json
 	if !ok {
 		return "", configEnvironmentTypeError(path, "number")
 	}
-	if _, prototypeErr := prototype.Int64(); prototypeErr == nil {
-		if _, valueErr := number.Int64(); valueErr != nil {
+	exactValue, validValue := configExactNumber(number)
+	if !validValue {
+		return "", configEnvironmentTypeError(path, "bounded JSON number")
+	}
+	exactPrototype, validPrototype := configExactNumber(prototype)
+	if !validPrototype {
+		return "", configEnvironmentTypeError(path, "bounded JSON number prototype")
+	}
+	if exactPrototype.IsInt() {
+		// 覆盖成功后必须仍能由公开整数读取入口无损读取。
+		maximum := int64(^uint(0) >> 1)
+		if _, validInteger := configRationalToInt(exactValue, -maximum-1, maximum); !validInteger {
 			return "", configEnvironmentTypeError(path, "integer")
 		}
 	}
