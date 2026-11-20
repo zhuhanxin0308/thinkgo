@@ -79,11 +79,15 @@ func NewPipeline() *Pipeline {
 // 注册后可通过 PipeByNameStrict() 按名称引用并检查错误。
 func (p *Pipeline) Alias(name string, handler Handler) *Pipeline {
 	name = strings.TrimSpace(name)
-	if name == "" || handler == nil {
+	if p == nil || name == "" || handler == nil {
 		return p
 	}
 	p.lock.Lock()
 	defer p.lock.Unlock()
+	// 零值 Pipeline 在首次注册别名时惰性初始化映射，保持构造器与零值实例行为一致。
+	if p.aliases == nil {
+		p.aliases = make(map[string]Handler)
+	}
 	p.aliases[name] = handler
 	return p
 }
