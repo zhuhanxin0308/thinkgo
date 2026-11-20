@@ -331,7 +331,7 @@ func (r *Request) Server(key string) string {
 }
 
 func (r *Request) serverValue(key string) string {
-	key = strings.ToUpper(strings.TrimSpace(key))
+	key = canonicalServerKey(key)
 	if overridden, configured := r.serverOverride(key); configured {
 		value, valid := stringifyRequestValue(overridden)
 		if valid {
