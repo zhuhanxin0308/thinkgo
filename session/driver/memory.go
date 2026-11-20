@@ -112,6 +112,7 @@ func (m *Memory) Clear() error {
 }
 
 // Update 在分片锁内完成读取、回调与提交，提交前复核代际与淘汰状态，回调失败时保持原值。
+// 回调可能在并发淘汰后基于最新状态重算一次，因此不得执行无法安全重放的外部副作用。
 func (m *Memory) Update(id string, update func(string, bool) (string, bool, error)) error {
 	if err := validateSessionID(id); err != nil {
 		return err
@@ -139,36 +140,41 @@ func (m *Memory) Update(id string, update func(string, bool) (string, bool, erro
 		}
 	}()
 
-	next, remove, err := update(entry.data, found)
-	if err != nil {
-		return err
-	}
-	m.mutex.Lock()
-	m.releaseInFlightLocked(id)
-	inFlightHeld = false
-	defer m.mutex.Unlock()
-	m.ensureDataLocked()
-	if m.clearSeq != snapClearSeq {
-		return ErrSessionCleared
-	}
-	curEntry, curFound := m.entries[id]
-	if curFound != found || curEntry.seq != snapSeq {
-		next, remove, err = update(curEntry.data, curFound)
+	for {
+		// 全局锁只保护快照与提交，首次及淘汰后的回调都允许读取其他会话。
+		next, remove, err := update(entry.data, found)
 		if err != nil {
 			return err
 		}
-	}
-	if remove {
-		m.removeLocked(id)
+		m.mutex.Lock()
+		m.ensureDataLocked()
+		if m.clearSeq != snapClearSeq {
+			m.mutex.Unlock()
+			return ErrSessionCleared
+		}
+		current, currentFound := m.entries[id]
+		if currentFound != found || current.seq != snapSeq {
+			entry, found, snapSeq = current, currentFound, current.seq
+			m.mutex.Unlock()
+			// 分片锁排除了同 ID 的重建与改写，跨分片只能把存在项淘汰为缺失；
+			// 因而合法驱动操作最多重算一次，不会在持续写入下无界重放回调。
+			continue
+		}
+		m.releaseInFlightLocked(id)
+		inFlightHeld = false
+		defer m.mutex.Unlock()
+		if remove {
+			m.removeLocked(id)
+			return nil
+		}
+		if err = m.ensureCapacityLocked(id); err != nil {
+			return err
+		}
+		m.seq++
+		m.entries[id] = memorySessionEntry{data: next, updated: time.Now(), seq: m.seq}
+		m.touchOrderLocked(id)
 		return nil
 	}
-	if err = m.ensureCapacityLocked(id); err != nil {
-		return err
-	}
-	m.seq++
-	m.entries[id] = memorySessionEntry{data: next, updated: time.Now(), seq: m.seq}
-	m.touchOrderLocked(id)
-	return nil
 }
 
 // GC 删除已过期、已撤销、损坏或超过最大存活时间的记录。
