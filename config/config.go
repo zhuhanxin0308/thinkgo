@@ -8,7 +8,6 @@ import (
 	"io"
 	"maps"
 	"math"
-	"math/big"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -513,19 +512,6 @@ func configValueToInt(value interface{}) (int, bool) {
 	default:
 		return 0, false
 	}
-}
-
-// configNumberToInt 使用精确有理数解析 JSON 数字，避免大整数经过 float64 舍入。
-func configNumberToInt(number json.Number, minimum, maximum int64) (int, bool) {
-	rational, ok := new(big.Rat).SetString(number.String())
-	if !ok || !rational.IsInt() || !rational.Num().IsInt64() {
-		return 0, false
-	}
-	integer := rational.Num().Int64()
-	if integer < minimum || integer > maximum {
-		return 0, false
-	}
-	return int(integer), true
 }
 
 // GetMap 安全读取 map 配置并返回独立快照；类型不符时返回非 nil 空 map。

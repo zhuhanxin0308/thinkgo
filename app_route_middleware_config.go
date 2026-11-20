@@ -231,8 +231,21 @@ func (app *App) applyMiddlewareAliasesTo(pipeline *middleware.Pipeline, values m
 	}
 	pending := make(map[string]string, len(values))
 	keys := make([]string, 0, len(values))
-	for alias, rawTarget := range values {
-		alias = strings.TrimSpace(alias)
+	rawKeys := make([]string, 0, len(values))
+	for key := range values {
+		rawKeys = append(rawKeys, key)
+	}
+	sort.Strings(rawKeys)
+	originalNames := make(map[string]string, len(values))
+	for _, original := range rawKeys {
+		alias := strings.TrimSpace(original)
+		if previous, exists := originalNames[alias]; exists {
+			// 发布前拒绝歧义；相同目标也不允许多个原始键争用一个别名。
+			app.recordStartupError(fmt.Errorf("middleware.alias 包含规范化后重复别名 %q（原始键 %q 与 %q）", alias, previous, original))
+			return
+		}
+		originalNames[alias] = original
+		rawTarget := values[original]
 		target, ok := rawTarget.(string)
 		if !ok {
 			app.recordStartupError(fmt.Errorf("middleware.alias[%q] 必须是已注册别名字符串", alias))
