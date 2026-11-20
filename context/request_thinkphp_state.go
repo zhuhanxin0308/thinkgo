@@ -44,8 +44,10 @@ type requestThinkPHPState struct {
 	cookieSet    bool
 	serverValues map[string]interface{}
 	serverSet    bool
+	serverErr    error
 	headerValues http.Header
 	headerSet    bool
+	headerErr    error
 	fileValues   map[string]*multipart.FileHeader
 	fileSet      bool
 	inputValue   string
@@ -162,42 +164,6 @@ func (r *Request) SetCookie(name string, value interface{}) {
 	}
 	state.cookieValues[name] = deepCloneRequestValue(value)
 	state.mu.Unlock()
-}
-
-// WithServer 替换 SERVER 数据，键名按 ThinkPHP 规则统一为大写。
-func (r *Request) WithServer(values map[string]interface{}) *Request {
-	state := r.thinkPHPState()
-	if state == nil {
-		return r
-	}
-	normalized := make(map[string]interface{}, len(values))
-	for key, value := range values {
-		normalized[strings.ToUpper(strings.TrimSpace(key))] = deepCloneRequestValue(value)
-	}
-	state.mu.Lock()
-	state.serverValues = normalized
-	state.serverSet = true
-	state.baseFile = ""
-	state.baseFileSet = false
-	state.mu.Unlock()
-	return r
-}
-
-// WithHeader 替换请求头数据，读取时保持 HTTP 头名大小写不敏感。
-func (r *Request) WithHeader(values map[string]string) *Request {
-	state := r.thinkPHPState()
-	if state == nil {
-		return r
-	}
-	headers := make(http.Header, len(values))
-	for key, value := range values {
-		headers.Set(key, value)
-	}
-	state.mu.Lock()
-	state.headerValues = headers
-	state.headerSet = true
-	state.mu.Unlock()
-	return r
 }
 
 // WithFiles 替换上传文件集合，并在读取时继续返回防御性副本。
@@ -622,7 +588,7 @@ func (r *Request) serverOverride(key string) (interface{}, bool) {
 	if !state.serverSet {
 		return nil, false
 	}
-	value := state.serverValues[strings.ToUpper(strings.TrimSpace(key))]
+	value := state.serverValues[canonicalServerKey(key)]
 	return deepCloneRequestValue(value), true
 }
 
