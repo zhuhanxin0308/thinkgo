@@ -123,11 +123,8 @@ func (app *App) applyContainerMutation(container *Container, mutation containerM
 
 // containerMutationTargetError 统一单次和批量变更的生命周期门禁；调用方持有服务变更锁。
 func (app *App) containerMutationTargetError(container *Container) error {
-	app.lifecycle.lock.Lock()
-	state := app.lifecycle.state
-	closed := app.lifecycle.closed
-	app.lifecycle.lock.Unlock()
-	if closed || state == ApplicationStateClosing || state == ApplicationStateClosed {
+	state := app.assemblyState()
+	if state.stopsAdmission() {
 		return fmt.Errorf("%w: 当前状态为 %s", ErrApplicationClosed, state)
 	}
 	if state == ApplicationStateRunning {
@@ -265,11 +262,8 @@ func (app *App) serviceAccessError() error {
 	if app == nil {
 		return ErrNilApplication
 	}
-	app.lifecycle.lock.Lock()
-	state := app.lifecycle.state
-	closed := app.lifecycle.closed
-	app.lifecycle.lock.Unlock()
-	if closed || state == ApplicationStateClosing || state == ApplicationStateClosed {
+	state := app.State()
+	if state == ApplicationStateClosing || state == ApplicationStateClosed {
 		return fmt.Errorf("%w: 当前状态为 %s", ErrApplicationClosed, state)
 	}
 	if app.container == nil {
