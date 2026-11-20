@@ -16,6 +16,7 @@ func (c *Cache) getCacheValueAndRepairContext(ctx context.Context, driver Driver
 	if found {
 		return value, true, nil
 	}
+	ctx = withTagPrefixContext(ctx, c.resolveTagPrefixContext(ctx))
 	tags, err := c.reverseTagsLockedContext(ctx, driver, key)
 	if err != nil || len(tags) == 0 {
 		return nil, false, err
@@ -56,6 +57,7 @@ func (c *Cache) hasCacheValueAndRepairContext(ctx context.Context, driver Driver
 
 // repairBatchMissesContext 将批量未命中的幽灵关系合并到一次代际锁内清理。
 func (c *Cache) repairBatchMissesContext(ctx context.Context, driver Driver, keys []string, values map[string]interface{}) error {
+	ctx = withTagPrefixContext(ctx, c.resolveTagPrefixContext(ctx))
 	candidates := make([]string, 0)
 	seen := make(map[string]bool, len(keys))
 	for _, key := range keys {
@@ -111,6 +113,7 @@ func (c *Cache) repairMissingKeyMetadataLockedContext(ctx context.Context, drive
 // mutateWithTagRepairContext 只让已有标签关系的键进入标签锁；
 // 普通无标签键依靠原子代际提交，避免所有 Session 和业务缓存被一个全局锁串行化。
 func (c *Cache) mutateWithTagRepairContext(ctx context.Context, driver Driver, key string, mutation func() error) error {
+	ctx = withTagPrefixContext(ctx, c.resolveTagPrefixContext(ctx))
 	tags, err := c.reverseTagsLockedContext(ctx, driver, key)
 	if err != nil {
 		return err
@@ -139,6 +142,28 @@ func (c *Cache) setCacheValueWithFenceContext(ctx context.Context, driver Driver
 func (c *Cache) changeCounterWithFence(driver Driver, key string, step int64, subtract bool) (value int64, resultErr error) {
 	resultErr = c.mutateWithTagRepairContext(context.Background(), driver, key, func() error {
 		if !cacheDriverSupportsAtomicFencing(driver) {
+			if updater, ok := driver.(ConditionalTTLAtomicUpdater); ok {
+				return updater.UpdatePreserveTTLConditionally(key, func(raw interface{}, found bool) (interface{}, bool, bool, error) {
+					current := int64(0)
+					if found {
+						var decodeErr error
+						current, decodeErr = strictCacheCounterValue(raw)
+						if decodeErr != nil {
+							return nil, false, false, decodeErr
+						}
+					}
+					var calculateErr error
+					if subtract {
+						value, calculateErr = subtractCacheCounter(current, step)
+					} else {
+						value, calculateErr = addCacheCounter(current, step)
+					}
+					if calculateErr != nil {
+						return nil, false, false, calculateErr
+					}
+					return value, false, found, nil
+				})
+			}
 			if subtract {
 				value, resultErr = driver.Dec(key, step)
 			} else {

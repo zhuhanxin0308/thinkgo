@@ -16,10 +16,12 @@ import (
 
 	"github.com/zhuhanxin0308/thinkgo/v3/debug"
 	"github.com/zhuhanxin0308/thinkgo/v3/internal/cachekey"
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/cachesnapshot"
 )
 
 const (
 	defaultStoreName   = "default"
+	defaultTagPrefix   = "tag:"
 	tagMetaPrefix      = cachekey.TagMetadataPrefix
 	tagReversePrefix   = cachekey.TagReverseMetadataPrefix
 	cacheFencePrefix   = "__thinkgo_cache_fence__:"
@@ -101,9 +103,13 @@ type cacheResourceIdentified interface {
 }
 
 type rememberCall struct {
-	done  chan struct{}
-	value interface{}
-	err   error
+	done      chan struct{}
+	value     interface{}
+	err       error
+	sharedCtx context.Context
+	cancel    context.CancelCauseFunc
+	waiters   int
+	finished  bool
 }
 
 type cacheState struct {
@@ -158,7 +164,7 @@ func NewCache(trace *debug.Debug, driver Driver) *Cache {
 	}
 	if !isNilCacheDriver(driver) {
 		state.stores[defaultStoreName] = driver
-		state.storeOptions[defaultStoreName] = StoreOptions{TagPrefix: "tag:"}
+		state.storeOptions[defaultStoreName] = StoreOptions{TagPrefix: driverTagPrefix(driver)}
 		state.rememberNamespaces[defaultStoreName] = defaultStoreName
 	}
 	return &Cache{state: state, storeName: defaultStoreName, debug: trace}
@@ -218,7 +224,7 @@ func (c *Cache) RegisterStore(name string, driver Driver) error {
 		c.state.storeOptions = make(map[string]StoreOptions)
 	}
 	if _, exists := c.state.storeOptions[name]; !exists {
-		c.state.storeOptions[name] = StoreOptions{TagPrefix: "tag:"}
+		c.state.storeOptions[name] = StoreOptions{TagPrefix: driverTagPrefix(driver)}
 	}
 	return nil
 }
@@ -239,6 +245,8 @@ func (c *Cache) ConfigureStore(name string, options StoreOptions) error {
 	if options.Prefix != "" {
 		return fmt.Errorf("%w: ConfigureStore 不支持 Prefix；请在注册前使用 NewNamespaceDriver 显式隔离键空间", ErrInvalidCacheStore)
 	}
+	c.state.tagMu.Lock()
+	defer c.state.tagMu.Unlock()
 	c.state.storesMu.Lock()
 	defer c.state.storesMu.Unlock()
 	if c.state.closed {
@@ -263,7 +271,7 @@ func validateStoreOptions(options StoreOptions) (StoreOptions, error) {
 		return StoreOptions{}, fmt.Errorf("%w: store 前缀非法", ErrInvalidCacheKey)
 	}
 	if options.TagPrefix == "" {
-		options.TagPrefix = "tag:"
+		options.TagPrefix = defaultTagPrefix
 	}
 	if len(options.TagPrefix) > maxCacheTagBytes || !utf8.ValidString(options.TagPrefix) || hasControlCharacter(options.TagPrefix) {
 		return StoreOptions{}, fmt.Errorf("%w: store 标签前缀非法", ErrInvalidCacheTag)
@@ -483,15 +491,20 @@ func (c *Cache) RememberContext(ctx context.Context, key string, ttl time.Durati
 	rememberNamespace := c.state.rememberNamespaces[c.storeName]
 	c.state.storesMu.RUnlock()
 	callKey := rememberNamespace + "\x00" + key
-	return c.state.doRememberContext(ctx, callKey, func() (interface{}, error) {
-		if value, found, err := c.GetContext(ctx, key); err != nil || found {
+	return c.state.doRememberContext(ctx, callKey, func(sharedCtx context.Context) (interface{}, error) {
+		if value, found, err := c.GetContext(sharedCtx, key); err != nil || found {
 			return value, err
 		}
 		value, err := callback()
 		if err != nil {
 			return nil, err
 		}
-		if err = c.SetContext(ctx, key, value, ttl); err != nil {
+		// 先取得独立快照，再发布缓存和共享结果，避免拒绝不安全类型后仍残留已提交数据。
+		value, err = cachesnapshot.Clone(value)
+		if err != nil {
+			return nil, err
+		}
+		if err = c.SetContext(sharedCtx, key, value, ttl); err != nil {
 			return nil, err
 		}
 		return value, nil
@@ -866,60 +879,6 @@ func (c *Cache) trace(action, key string) {
 	if c != nil && c.debug != nil {
 		c.debug.AddCache(action, key)
 	}
-}
-
-func (s *cacheState) doRememberContext(ctx context.Context, key string, callback func() (interface{}, error)) (value interface{}, err error) {
-	if ctx == nil {
-		return nil, ErrInvalidCacheContext
-	}
-	s.rememberMu.Lock()
-	if existing := s.remembering[key]; existing != nil {
-		s.rememberMu.Unlock()
-		select {
-		case <-existing.done:
-			return existing.value, existing.err
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
-	}
-	if err := ctx.Err(); err != nil {
-		s.rememberMu.Unlock()
-		return nil, err
-	}
-	call := &rememberCall{done: make(chan struct{})}
-	s.remembering[key] = call
-	s.rememberMu.Unlock()
-	if err := ctx.Err(); err != nil {
-		s.finishRemember(key, call, nil, err)
-		return nil, err
-	}
-
-	callbackReturned := false
-	defer func() {
-		recovered := recover()
-		if recovered != nil {
-			value, err = nil, errors.New("Remember 回调发生 panic")
-		} else if !callbackReturned {
-			// Goexit 没有返回值，必须通知等待者失败，不能永久保留共享加载状态。
-			value, err = nil, errors.New("Remember 回调异常退出")
-		}
-		s.finishRemember(key, call, value, err)
-		if recovered != nil {
-			panic(recovered)
-		}
-	}()
-	value, err = callback()
-	callbackReturned = true
-	return value, err
-}
-
-func (s *cacheState) finishRemember(key string, call *rememberCall, value interface{}, err error) {
-	s.rememberMu.Lock()
-	call.value = value
-	call.err = err
-	delete(s.remembering, key)
-	close(call.done)
-	s.rememberMu.Unlock()
 }
 
 func validatePublicCacheKey(key string) error {

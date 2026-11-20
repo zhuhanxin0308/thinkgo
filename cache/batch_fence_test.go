@@ -58,7 +58,7 @@ func TestBatchReadsDistinctFenceKeysOnceAndRejectsStaleValues(t *testing.T) {
 	if _, err := manager.beginKeyInvalidation(ctx, driver, []string{"exact"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := manager.beginPrefixInvalidation(ctx, driver, "prefix:"); err != nil {
+	if _, err := manager.beginPrefixInvalidation(ctx, driver, "prefix:", 0); err != nil {
 		t.Fatal(err)
 	}
 	if err := manager.Set("prefix:new", "updated", time.Minute); err != nil {

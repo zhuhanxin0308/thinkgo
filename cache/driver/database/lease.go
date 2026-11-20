@@ -2,12 +2,9 @@ package database
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"time"
 
-	"github.com/zhuhanxin0308/thinkgo/v3/cache/contract"
 	"github.com/zhuhanxin0308/thinkgo/v3/db"
 )
 
@@ -23,7 +20,7 @@ func (c *DB) UpdateIfLockOwnerContext(ctx context.Context, key string, ttl time.
 		return false, ErrInvalidCacheLock
 	}
 	if update == nil {
-		return false, contract.ErrNilAtomicUpdate
+		return false, ErrNilAtomicUpdate
 	}
 	if err := validateDriverTTL(ttl); err != nil {
 		return false, err
@@ -84,8 +81,9 @@ func (c *DB) updateLeasedRecord(transaction *db.Tx, key string, ttl time.Duratio
 			if err != nil {
 				return err
 			}
-			if err := json.Unmarshal(encoded, &current); err != nil {
-				return fmt.Errorf("%w: %v", ErrCorruptCacheEntry, err)
+			current, err = unmarshalDBCacheValue(encoded)
+			if err != nil {
+				return err
 			}
 		}
 	}
@@ -97,15 +95,12 @@ func (c *DB) updateLeasedRecord(transaction *db.Tx, key string, ttl time.Duratio
 		_, err := query.Delete()
 		return err
 	}
-	encoded, err := json.Marshal(next)
+	encoded, err := marshalDBCacheValue(next)
 	if err != nil {
 		return err
 	}
-	expiry := int64(0)
-	if ttl > 0 {
-		expiry = time.Now().Add(ttl).UnixMilli()
-	}
-	data := map[string]interface{}{"key": key, "value": string(encoded), "expiry": expiry}
+	expiry := dbExpiryMillis(time.Now(), ttl)
+	data := map[string]interface{}{"key": key, "value": encoded, "expiry": expiry}
 	if row != nil {
 		_, err = query.Update(data)
 	} else {

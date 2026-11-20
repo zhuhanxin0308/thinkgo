@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -104,6 +105,61 @@ func TestDriverInputBoundaries(t *testing.T) {
 	for input, invalid := range map[string]bool{"": false, "业务:counter": false, "line\nnext": true, "key\x00": true, "key\u0085": true} {
 		if ContainsControlCharacter(input) != invalid {
 			t.Fatalf("控制字符边界错误: %q", input)
+		}
+	}
+}
+
+func TestPreciseCacheIntegerRoundTripAndValidation(t *testing.T) {
+	cases := []interface{}{
+		int64(math.MaxInt64),
+		int64(math.MinInt64),
+		uint64(math.MaxUint64),
+		json.Number("9223372036854775807"),
+		json.Number("123456789012345678901234567890"),
+	}
+	if strconv.IntSize == 64 {
+		wide := int64(1)<<53 + 1
+		bigPositive := int(wide)
+		bigUint := uint(wide)
+		cases = append(cases, bigPositive, -bigPositive, bigUint)
+	}
+	for _, expected := range cases {
+		if err := ValidateCacheNumber(expected); err != nil {
+			t.Fatalf("合法数字 %#v 被拒绝: %v", expected, err)
+		}
+		encoded, encoding := EncodePreciseCacheInteger(expected)
+		if encoding == "" {
+			t.Fatalf("大整数 %#v 未生成精确编码", expected)
+		}
+		decoded, err := DecodePreciseCacheInteger(encoded, encoding)
+		if err != nil || decoded != expected {
+			t.Fatalf("精确整数往返错误: input=%#v got=%#v err=%v", expected, decoded, err)
+		}
+	}
+	if encoded, encoding := EncodePreciseCacheInteger(42); encoding != "" || encoded != 42 {
+		t.Fatalf("普通安全范围 int 不应改写编码: %#v %q", encoded, encoding)
+	}
+	if decoded, err := DecodePreciseCacheInteger("plain", ""); err != nil || decoded != "plain" {
+		t.Fatalf("空编码直通失败: %#v %v", decoded, err)
+	}
+	for _, badNumber := range []json.Number{"", "bad", "01", "+1", "1e"} {
+		if err := ValidateCacheNumber(badNumber); !errors.Is(err, ErrInvalidCacheValue) {
+			t.Fatalf("非法 json.Number %q 未拒绝: %v", badNumber, err)
+		}
+	}
+	for _, corrupt := range []struct {
+		value    interface{}
+		encoding string
+	}{
+		{123, PreciseIntegerEncodingPrefix + "int64"},
+		{"123", "other:int64"},
+		{"123", PreciseIntegerEncodingPrefix + "unknown"},
+		{"bad", PreciseIntegerEncodingPrefix + "int64"},
+		{"bad", PreciseIntegerEncodingPrefix + "uint64"},
+		{"1.5", PreciseIntegerEncodingPrefix + "json-number-wide"},
+	} {
+		if _, err := DecodePreciseCacheInteger(corrupt.value, corrupt.encoding); !errors.Is(err, ErrCorruptCacheEnvelope) {
+			t.Fatalf("损坏整数载荷 (%#v, %q) 未拒绝: %v", corrupt.value, corrupt.encoding, err)
 		}
 	}
 }

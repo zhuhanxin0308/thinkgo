@@ -94,10 +94,18 @@ func (c *DB) compareValue(key string, encoded string) *db.Query {
 	return c.whereEncodedValue(query, encoded)
 }
 
-// whereEncodedValue 在原查询上追加值匹配条件，保留事务、上下文和其他谓词。
+// whereEncodedValue 在原查询上追加字节级精确值匹配条件，消除不区分大小写排序规则下的 CAS 误判，并保留事务、上下文和其他谓词。
 func (c *DB) whereEncodedValue(query *db.Query, encoded string) *db.Query {
-	if connection, ok := c.conn.(*db.SQLConnection); ok && connection.Builder != nil && connection.Builder.DialectName() == "oracle" {
-		return query.WhereRaw(fmt.Sprintf("DBMS_LOB.COMPARE(%s, TO_CLOB(?)) = 0", c.quoteIdentifier("value")), encoded)
+	if connection, ok := c.conn.(*db.SQLConnection); ok && connection.Builder != nil {
+		valueColumn := c.quoteIdentifier("value")
+		switch connection.Builder.DialectName() {
+		case "oracle":
+			return query.WhereRaw(fmt.Sprintf("DBMS_LOB.COMPARE(%s, TO_CLOB(?)) = 0", valueColumn), encoded)
+		case "mysql":
+			return query.WhereRaw(fmt.Sprintf("CAST(%s AS BINARY) = CAST(? AS BINARY)", valueColumn), encoded)
+		case "sqlserver":
+			return query.WhereRaw(fmt.Sprintf("CAST(%s AS VARBINARY(MAX)) = CAST(CAST(? AS NVARCHAR(MAX)) AS VARBINARY(MAX))", valueColumn), encoded)
+		}
 	}
 	return query.Where("value", encoded)
 }

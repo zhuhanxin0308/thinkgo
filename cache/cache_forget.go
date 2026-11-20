@@ -30,6 +30,7 @@ func (c *Cache) ForgetContext(ctx context.Context, key string) error {
 	return c.withTagMutationLockContext(ctx, driver, func(ctx context.Context) error {
 		c.state.tagMu.Lock()
 		defer c.state.tagMu.Unlock()
+		ctx = withTagPrefixContext(ctx, c.resolveTagPrefixContext(ctx))
 		if cacheDriverSupportsAtomicFencing(driver) {
 			fence, fenceErr := c.beginKeyInvalidation(ctx, driver, []string{key})
 			if fenceErr != nil {
