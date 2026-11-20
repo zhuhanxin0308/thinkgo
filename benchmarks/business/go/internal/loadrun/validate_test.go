@@ -8,6 +8,7 @@ import (
 
 func TestResponseSemanticContracts(t *testing.T) {
 	configuration := testConfig()
+	configuration.ProductsPerTenant = 34
 	cases := []struct {
 		name    string
 		request requestSpec
@@ -15,10 +16,10 @@ func TestResponseSemanticContracts(t *testing.T) {
 		cache   string
 		body    string
 	}{
-		{"catalog", requestSpec{Scenario: "catalog", Tenant: 1, CategoryID: 1}, 200, "", `{"items":[{"id":1,"name":"商品","price_cents":100,"category":"分类-1","stock":30},{"id":33,"name":"商品2","price_cents":100,"category":"分类-1","stock":30}],"next_cursor":{"price_cents":100,"id":33}}`},
-		{"detail", requestSpec{Scenario: "detail", Tenant: 1, ResourceID: 1}, 200, "hit", `{"id":1,"name":"商品","price_cents":100,"stock":30,"category":"分类","description":"商品说明","specs":[{"name":"颜色","value":"黑色"}]}`},
-		{"order", requestSpec{Scenario: "order", Tenant: 1, OrderItems: []orderItem{{1, 2}, {2, 1}}}, 201, "", `{"order_id":1,"total_cents":400,"status":"created","items":[{"product_id":1,"quantity":2,"unit_price_cents":100},{"product_id":2,"quantity":1,"unit_price_cents":200}]}`},
-		{"ticket", requestSpec{Scenario: "ticket", Tenant: 1, ResourceID: 7}, 201, "", `{"comment_id":1,"ticket_id":7,"version":2,"status":"open"}`},
+		{"catalog", requestSpec{Scenario: "catalog", Tenant: 1, CategoryID: 1}, 200, "", `{"items":[{"id":1,"name":"通用商品-1-1","price_cents":79226,"category":"分类-1","stock":30},{"id":33,"name":"通用商品-1-33","price_cents":132734,"category":"分类-1","stock":30}],"next_cursor":null}`},
+		{"detail", requestSpec{Scenario: "detail", Tenant: 1, ResourceID: 1}, 200, "hit", `{"id":1,"name":"通用商品-1-1","price_cents":79226,"stock":30,"category":"分类-1","description":"商品说明","specs":[{"name":"颜色","value":"黑色"}]}`},
+		{"order", requestSpec{Scenario: "order", Tenant: 1, OrderItems: []orderItem{{1, 2}, {2, 1}}}, 201, "", `{"order_id":1,"total_cents":245597,"status":"created","items":[{"product_id":1,"quantity":2,"unit_price_cents":79226},{"product_id":2,"quantity":1,"unit_price_cents":87145}]}`},
+		{"ticket", requestSpec{Scenario: "ticket", Tenant: 1, ResourceID: 7}, 201, "", `{"comment_id":60001,"ticket_id":7,"version":4,"status":"open"}`},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {

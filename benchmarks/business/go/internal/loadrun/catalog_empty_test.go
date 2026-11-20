@@ -2,7 +2,6 @@ package loadrun
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -16,18 +15,12 @@ func TestCatalogResponseRespectsConfiguredPriceAndPageSize(t *testing.T) {
 	configuration.Categories = 1
 	configuration.CatalogPageSize = 30
 	request := requestSpec{Scenario: "catalog", Tenant: 1, CategoryID: 1}
-	var cards []string
-	for id := 1; len(cards) < 30; id++ {
-		if id%configuration.InactiveProductModulus != 0 {
-			cards = append(cards, fmt.Sprintf(`{"id":%d,"name":"商品","price_cents":100,"category":"分类-1","stock":1}`, id))
-		}
-	}
-	body := fmt.Sprintf(`{"items":[%s],"next_cursor":null}`, strings.Join(cards, ","))
+	body := fixtureCatalogPage(configuration, request.CategoryID)
 	if err := validateCatalog(configuration, request, []byte(body)); err != nil {
 		t.Errorf("按配置返回 30 件商品应通过校验: %v", err)
 	}
 	configuration.MaximumPriceCents = 99
-	if err := validateCatalog(configuration, request, []byte(fmt.Sprintf(`{"items":[%s],"next_cursor":null}`, cards[0]))); err == nil {
+	if err := validateCatalog(configuration, request, []byte(body)); err == nil {
 		t.Error("响应包含超过请求价格上限的商品")
 	}
 	const empty = `{"items":[],"next_cursor":null}`

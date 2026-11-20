@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/zhuhanxin0308/thinkgo/benchmarks/business/internal/seed"
 )
 
 const (
@@ -18,6 +20,7 @@ const (
 	defaultUsersPerTenant    = 1000
 	defaultProductsPerTenant = 25000
 	defaultTicketsPerTenant  = 5000
+	defaultInitialComments   = 3
 	defaultCategories        = 32
 	defaultDatasetSeed       = 20261107
 	defaultConcurrency       = 32
@@ -78,6 +81,8 @@ type Config struct {
 	HotProductsPerTenant   int             `json:"hot_products_per_tenant"`
 	CacheHitWeight         int             `json:"cache_hit_weight"`
 	MixedWeights           ScenarioWeights `json:"mixed_weights"`
+
+	InitialCommentsPerTicket int `json:"initial_comments_per_ticket"`
 }
 
 // DefaultConfig 集中定义可通过命令行覆盖的实验默认值。
@@ -93,6 +98,8 @@ func DefaultConfig() Config {
 		InactiveProductModulus: inactiveProductEvery, HotProductsPerTenant: hotProductCount,
 		CacheHitWeight: detailHotCount * percentageTotal / detailCycleSize,
 		MixedWeights:   ScenarioWeights{Catalog: 40, Detail: 30, Order: 20, Ticket: 10},
+
+		InitialCommentsPerTicket: defaultInitialComments,
 	}
 }
 
@@ -118,6 +125,9 @@ func (configuration Config) Validate() error {
 	}
 	if configuration.ProductsPerTenant < 1 || configuration.TicketsPerTenant < 1 || configuration.Categories < 1 || configuration.InactiveProductModulus < 2 {
 		return errors.New("商品、工单与分类数量必须为正，下架模数至少为2")
+	}
+	if err := seed.ValidateProducts(int64(configuration.ProductsPerTenant), configuration.DatasetSeed); err != nil {
+		return err
 	}
 	if configuration.CatalogPageSize < 1 || configuration.MaximumPriceCents < 1 ||
 		configuration.MaximumOrderItems < 1 || configuration.MaximumItemQuantity < 1 ||
@@ -146,6 +156,10 @@ func (configuration Config) Validate() error {
 			return errors.New("全局数据主键溢出")
 		}
 	}
+	tickets := int64(configuration.TicketsPerTenant) * int64(configuration.TenantCount)
+	if configuration.InitialCommentsPerTicket < 1 || int64(configuration.InitialCommentsPerTicket) > (math.MaxInt64-1)/tickets {
+		return errors.New("initial-comments-per-ticket 必须为正，且初始评论须为下一次新增保留 bigint 标识")
+	}
 	if configuration.Scenario == "catalog" || configuration.Scenario == "mixed" {
 		if err := configuration.validateCatalogResponseBudget(); err != nil {
 			return err
@@ -164,7 +178,7 @@ func (configuration Config) validateCatalogResponseBudget() error {
 	// 分类按租户内商品编号轮转。用种子字段的最大 JSON 编码长度估算，无需访问数据库。
 	rows := min(configuration.CatalogPageSize, 1+(configuration.ProductsPerTenant-1)/configuration.Categories)
 	idDigits := len(strconv.FormatInt(int64(configuration.TenantCount)*int64(configuration.ProductsPerTenant), 10))
-	priceDigits := len(strconv.FormatInt(min(configuration.MaximumPriceCents, seededPriceUpperBound), 10))
+	priceDigits := len(strconv.FormatInt(min(configuration.MaximumPriceCents, seed.MaxPrice), 10))
 	stockDigits := len(strconv.FormatInt(math.MaxInt64, 10))
 	// 为可能转义 Unicode 的 JSON 编码器计入六字节转义，并为每项计入逗号。
 	nameBytes := len(`\u901a\u7528\u5546\u54c1--`) + len(strconv.Itoa(configuration.TenantCount)) + len(strconv.Itoa(configuration.ProductsPerTenant))

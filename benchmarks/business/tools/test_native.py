@@ -640,6 +640,27 @@ class PhpSnapshotTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "maximum_item_quantity"):
                 Environment(custom_root, custom_root / "runtime", custom_root / "work", protocol)
 
+    def test_dataset_seed_and_specification_column_boundaries(self):
+        protocol = json.loads((ROOT / "contracts/protocol.json").read_text())
+        dataset = json.loads((ROOT / "contracts/dataset.json").read_text())
+        dataset.update(products_per_tenant=2, hot_products_per_tenant=1)
+        with tempfile.TemporaryDirectory() as folder:
+            root = pathlib.Path(folder)
+            (root / "contracts").mkdir()
+            for seed, specs, error in [
+                (-8018, 32767, None), (-8020, 1, "seed"), (-207819, 1, "seed"),
+                ((1 << 63) - 1 - 15838, 1, None), ((1 << 63) - 15838, 1, "seed"),
+                (0, 32768, "specifications_per_product"), (False, 1, "seed"),
+            ]:
+                with self.subTest(seed=seed, specs=specs):
+                    dataset.update(seed=seed, specifications_per_product=specs)
+                    (root / "contracts/dataset.json").write_text(json.dumps(dataset))
+                    if error:
+                        with self.assertRaisesRegex(ValueError, error):
+                            Environment(root, root / "runtime", root / "work", protocol)
+                    else:
+                        self.assertEqual(Environment(root, root / "runtime", root / "work", protocol).dataset, dataset)
+
 
 if __name__ == "__main__":
     unittest.main()

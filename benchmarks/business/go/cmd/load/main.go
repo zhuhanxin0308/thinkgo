@@ -48,6 +48,7 @@ func run(ctx context.Context, arguments []string, stdout, stderr io.Writer, look
 	flags.IntVar(&configuration.UsersPerTenant, "users-per-tenant", configuration.UsersPerTenant, "每租户用户数量")
 	flags.IntVar(&configuration.ProductsPerTenant, "products-per-tenant", configuration.ProductsPerTenant, "每租户商品数量")
 	flags.IntVar(&configuration.TicketsPerTenant, "tickets-per-tenant", configuration.TicketsPerTenant, "每租户工单数量")
+	flags.IntVar(&configuration.InitialCommentsPerTicket, "initial-comments-per-ticket", configuration.InitialCommentsPerTicket, "每个工单的种子评论数量和初始版本")
 	flags.IntVar(&configuration.Categories, "categories", configuration.Categories, "每租户分类数量")
 	flags.IntVar(&configuration.CatalogPageSize, "catalog-page-size", configuration.CatalogPageSize, "数据集的目录分页大小")
 	flags.Int64Var(&configuration.MaximumPriceCents, "maximum-price-cents", configuration.MaximumPriceCents, "数据集的目录最高价格")

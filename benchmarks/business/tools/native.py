@@ -27,6 +27,10 @@ PROCESS_POLL_SECONDS = 0.01
 PHP_CONTRACT_SCHEMA_VERSION = 1
 PHP_CONTRACT_SOURCE_FILES = ("dataset.json", "queries.json")
 PHP_CONTRACT_DIGEST_PREFIX = b"thinkgo-contract-v1\0"
+POSTGRES_MAX_BIGINT = (1 << 63) - 1
+POSTGRES_MAX_SMALLINT = (1 << 15) - 1
+SEED_PRICE_BASE = 100
+SEED_PRICE_STRIDE = 7919
 
 
 def read_php_contract_snapshot(metadata, contracts, *, snapshot=None):
@@ -338,6 +342,16 @@ class Environment:
         self.work = pathlib.Path(work).resolve()
         self.protocol = protocol
         self.dataset = json.loads((self.root / "contracts/dataset.json").read_text())
+        specs = self.dataset.get("specifications_per_product")
+        if type(specs) is not int or not 1 <= specs <= POSTGRES_MAX_SMALLINT:
+            raise ValueError("dataset.specifications_per_product 超出 PostgreSQL smallint 位置列范围")
+        products = self.dataset.get("products_per_tenant")
+        seed = self.dataset.get("seed")
+        # 保留全部可生成正价的旧负种子，并在建库前校验 bigint 的乘法和加法。
+        if (type(products) is not int or not 2 <= products <= POSTGRES_MAX_BIGINT // SEED_PRICE_STRIDE
+                or type(seed) is not int or not 1 - SEED_PRICE_BASE - SEED_PRICE_STRIDE <= seed
+                <= POSTGRES_MAX_BIGINT - products * SEED_PRICE_STRIDE):
+            raise ValueError("dataset.seed 与 products_per_tenant 无法生成正价的 PostgreSQL bigint 商品数据")
         maximum_item_quantity = self.dataset.get("maximum_item_quantity")
         if type(maximum_item_quantity) is not int or not (1 <= maximum_item_quantity <= 2147483647):
             raise ValueError("dataset.maximum_item_quantity 超出 PostgreSQL integer 范围")

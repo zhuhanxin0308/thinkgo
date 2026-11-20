@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/zhuhanxin0308/thinkgo/benchmarks/business/internal/seed"
 )
 
 const (
@@ -85,10 +87,13 @@ func LoadDataset(path string) (Dataset, error) {
 }
 
 func (dataset Dataset) Validate() error {
+	if dataset.SpecificationsPerProduct < 1 || dataset.SpecificationsPerProduct > math.MaxInt16 {
+		return errors.New("specifications_per_product 超出 PostgreSQL smallint 位置列的正数范围")
+	}
 	if dataset.SchemaVersion != 1 || dataset.TenantCount < 1 || dataset.UsersPerTenant < 1 ||
 		dataset.ProductsPerTenant < 1 || dataset.CategoriesPerTenant < 1 || dataset.TicketsPerTenant < 1 ||
 		dataset.DatabaseConnectionBudget < 1 || dataset.RedisConnectionBudget < 1 ||
-		dataset.RequestTimeoutSeconds < 1 || dataset.SpecificationsPerProduct < 1 ||
+		dataset.RequestTimeoutSeconds < 1 ||
 		dataset.InitialCommentsPerTicket < 1 || dataset.InitialStock < 1 || dataset.InactiveProductModulus < 2 ||
 		dataset.HotProductsPerTenant < 1 || int64(dataset.HotProductsPerTenant) >= dataset.ProductsPerTenant ||
 		dataset.CacheTTLSeconds < 1 || dataset.CacheHitWeight < 0 || dataset.CacheHitWeight > 100 ||
@@ -98,6 +103,9 @@ func (dataset Dataset) Validate() error {
 		dataset.MinimumCommentCharacters < 1 || dataset.MaximumCommentCharacters < dataset.MinimumCommentCharacters ||
 		dataset.MaximumBodyBytes < int64(dataset.MaximumCommentCharacters) {
 		return errors.New("业务配置的规模或预算无效")
+	}
+	if err := seed.ValidateProducts(dataset.ProductsPerTenant, dataset.Seed); err != nil {
+		return err
 	}
 	weight := 0
 	for _, scenario := range []string{"catalog", "detail", "order", "ticket"} {

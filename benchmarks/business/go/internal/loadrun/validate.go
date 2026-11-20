@@ -9,10 +9,12 @@ import (
 	"mime"
 	"net/http"
 	"strconv"
+
+	"github.com/zhuhanxin0308/thinkgo/benchmarks/business/internal/seed"
 )
 
 // responseValidatorVersion 标识未来结果采用的响应语义门禁，历史结果保持原样。
-const responseValidatorVersion = 3
+const responseValidatorVersion = 4
 
 const catalogCategoryPrefix = "分类-"
 
@@ -100,9 +102,9 @@ func validateResponse(configuration Config, request requestSpec, status int, hea
 		}
 		return validateDetail(configuration, request, body)
 	case "order":
-		return validateOrder(request, body)
+		return validateOrder(configuration, request, body)
 	case "ticket":
-		return validateTicket(request, body)
+		return validateTicket(configuration, request, body)
 	default:
 		return errResponseData
 	}
@@ -125,9 +127,22 @@ func validateCard(configuration Config, tenant int, card productCard) bool {
 	if card.ID == nil || card.PriceCents == nil || card.Stock == nil || card.Name == nil || card.Category == nil {
 		return false
 	}
-	local := *card.ID - int64(tenant-1)*int64(configuration.ProductsPerTenant)
-	return local > 0 && local <= int64(configuration.ProductsPerTenant) && local%int64(configuration.InactiveProductModulus) != 0 &&
-		*card.PriceCents > 0 && *card.Stock >= 0 && *card.Name != "" && *card.Category != ""
+	local, valid := activeLocalProduct(configuration, tenant, *card.ID)
+	if !valid {
+		return false
+	}
+	category := (local-1)%int64(configuration.Categories) + 1
+	name := "通用商品-" + strconv.Itoa(tenant) + "-" + strconv.FormatInt(local, 10)
+	return *card.PriceCents == seed.Price(local, configuration.DatasetSeed) && *card.Stock >= 0 &&
+		*card.Name == name && *card.Category == catalogCategoryPrefix+strconv.FormatInt(category, 10)
+}
+
+func activeLocalProduct(c Config, tenant int, id int64) (int64, bool) {
+	if tenant < 1 || tenant > c.TenantCount || id <= 0 {
+		return 0, false
+	}
+	local := id - int64(tenant-1)*int64(c.ProductsPerTenant)
+	return local, local > 0 && local <= int64(c.ProductsPerTenant) && local%int64(c.InactiveProductModulus) != 0
 }
 
 func validateCatalog(configuration Config, request requestSpec, body []byte) error {
@@ -141,15 +156,14 @@ func validateCatalog(configuration Config, request requestSpec, body []byte) err
 	if response.Items == nil || len(response.Items) > configuration.CatalogPageSize || response.NextCursor == nil {
 		return errResponseData
 	}
-	if len(response.Items) == 0 {
-		hasGoods := request.catalogHasGoods
-		if hasGoods == nil {
-			hasGoods = func() bool { return catalogHasActiveProducts(configuration, request.CategoryID) }
-		}
-		if !bytes.Equal(bytes.TrimSpace(response.NextCursor), []byte("null")) || hasGoods() {
-			return errResponseData
-		}
-		return nil
+	page := request.catalogPage
+	if page == nil {
+		calculated := firstCatalogPage(configuration, request.CategoryID)
+		page = &calculated
+	}
+	hasCursor := !bytes.Equal(bytes.TrimSpace(response.NextCursor), []byte("null"))
+	if len(response.Items) != page.count || hasCursor != page.more {
+		return errResponseData
 	}
 	expectedCategory := catalogCategoryPrefix + strconv.Itoa(request.CategoryID)
 	productOffset := int64(request.Tenant-1) * int64(configuration.ProductsPerTenant)
@@ -157,9 +171,7 @@ func validateCatalog(configuration Config, request requestSpec, body []byte) err
 		if !validateCard(configuration, request.Tenant, card) || *card.PriceCents > configuration.MaximumPriceCents {
 			return errResponseData
 		}
-		// 与冻结种子合同一致：分类由租户内商品编号计算，不能只相信响应文案。
-		category := (*card.ID-productOffset-1)%int64(configuration.Categories) + 1
-		if category != int64(request.CategoryID) || *card.Category != expectedCategory {
+		if *card.Category != expectedCategory {
 			return errResponseData
 		}
 		if index > 0 {
@@ -169,64 +181,18 @@ func validateCatalog(configuration Config, request requestSpec, body []byte) err
 			}
 		}
 	}
-	if !bytes.Equal(bytes.TrimSpace(response.NextCursor), []byte("null")) {
+	if hasCursor {
 		var cursor catalogCursor
 		if err := decodeStrict(response.NextCursor, &cursor); err != nil {
 			return err
 		}
 		last := response.Items[len(response.Items)-1]
-		if cursor.ID == nil || cursor.PriceCents == nil || *cursor.ID != *last.ID || *cursor.PriceCents != *last.PriceCents {
+		// 数量、唯一性和严格顺序已验证。页尾等于种子的第 limit 项即证明中间无缺项。
+		if *last.ID-productOffset != page.lastLocalID || cursor.ID == nil || cursor.PriceCents == nil || *cursor.ID != *last.ID || *cursor.PriceCents != *last.PriceCents {
 			return errResponseData
 		}
 	}
 	return nil
-}
-
-// 与 contracts/seed.sql 中的商品价格公式保持一致。
-const (
-	seededPriceBase       = 100
-	seededPriceStride     = 7919
-	seededPriceModulus    = 199900
-	seededPriceUpperBound = seededPriceBase + seededPriceModulus - 1
-)
-
-// catalogHasActiveProducts 判断分类是否存在活动且价格不超过本次上限的商品。
-func catalogHasActiveProducts(configuration Config, category int) bool {
-	if category > configuration.ProductsPerTenant {
-		return false
-	}
-	if configuration.MaximumPriceCents >= seededPriceUpperBound {
-		// 首项下架且步长是下架模数的倍数时整类下架，否则下一项存在即为活动商品。
-		return category%configuration.InactiveProductModulus != 0 ||
-			configuration.Categories%configuration.InactiveProductModulus != 0 && configuration.Categories <= configuration.ProductsPerTenant-category
-	}
-	if configuration.MaximumPriceCents < seededPriceBase && configuration.DatasetSeed >= -seededPriceStride {
-		return false
-	}
-	for id := category; ; id += configuration.Categories {
-		if id%configuration.InactiveProductModulus != 0 {
-			price := seededProductPrice(int64(id), configuration.DatasetSeed)
-			if price > 0 && price <= configuration.MaximumPriceCents {
-				return true
-			}
-		}
-		if configuration.Categories > configuration.ProductsPerTenant-id {
-			return false
-		}
-	}
-}
-
-func seededProductPrice(id, seed int64) int64 {
-	// 先取余以避免乘法溢出，再按 PostgreSQL 中被除数的符号恢复余数。
-	remainder := (id%seededPriceModulus*seededPriceStride + seed%seededPriceModulus) % seededPriceModulus
-	if seed < 0 && id <= -(seed/seededPriceStride) {
-		if remainder > 0 {
-			remainder -= seededPriceModulus
-		}
-	} else if remainder < 0 {
-		remainder += seededPriceModulus
-	}
-	return seededPriceBase + remainder
 }
 
 func validateDetail(configuration Config, request requestSpec, body []byte) error {
@@ -245,7 +211,7 @@ func validateDetail(configuration Config, request requestSpec, body []byte) erro
 	return nil
 }
 
-func validateOrder(request requestSpec, body []byte) error {
+func validateOrder(configuration Config, request requestSpec, body []byte) error {
 	var response orderResponse
 	if err := decodeStrict(body, &response); err != nil {
 		return err
@@ -262,7 +228,8 @@ func validateOrder(request requestSpec, body []byte) error {
 		if item.ProductID == nil || item.Quantity == nil || item.UnitPriceCents == nil || *item.Quantity < 1 || *item.UnitPriceCents <= 0 || expected[*item.ProductID] != *item.Quantity {
 			return errResponseData
 		}
-		if *item.UnitPriceCents > math.MaxInt64/(*item.Quantity) {
+		local, valid := activeLocalProduct(configuration, request.Tenant, *item.ProductID)
+		if !valid || *item.UnitPriceCents != seed.Price(local, configuration.DatasetSeed) || *item.UnitPriceCents > math.MaxInt64/(*item.Quantity) {
 			return errResponseData
 		}
 		line := *item.Quantity * *item.UnitPriceCents
@@ -278,12 +245,15 @@ func validateOrder(request requestSpec, body []byte) error {
 	return nil
 }
 
-func validateTicket(request requestSpec, body []byte) error {
+func validateTicket(configuration Config, request requestSpec, body []byte) error {
 	var response ticketResponse
 	if err := decodeStrict(body, &response); err != nil {
 		return err
 	}
-	if response.CommentID == nil || *response.CommentID <= 0 || response.TicketID == nil || *response.TicketID != request.ResourceID || response.Version == nil || *response.Version <= 0 || response.Status == nil || *response.Status != "open" {
+	// 并发事务可能乱序完成，identity 也可能跳号，只比较运行开始前可证明的下界。
+	initialVersion := int64(configuration.InitialCommentsPerTicket)
+	initialComments := int64(configuration.TenantCount) * int64(configuration.TicketsPerTenant) * initialVersion
+	if response.CommentID == nil || *response.CommentID <= initialComments || response.TicketID == nil || *response.TicketID != request.ResourceID || response.Version == nil || *response.Version <= initialVersion || response.Status == nil || *response.Status != "open" {
 		return errResponseData
 	}
 	return nil

@@ -90,6 +90,7 @@ def load_command(root, protocol, dataset, url, run_id, scenario, duration, outpu
                  "-seed", protocol["seed"], "-run-id", run_id, "-secret-env", "BENCH_SECRET",
                  "-tenant-count", dataset["tenant_count"], "-users-per-tenant", dataset["users_per_tenant"],
                  "-products-per-tenant", dataset["products_per_tenant"], "-tickets-per-tenant", dataset["tickets_per_tenant"],
+                 "-initial-comments-per-ticket", dataset["initial_comments_per_ticket"],
                  "-categories", dataset["categories_per_tenant"],
                  "-dataset-seed", dataset["seed"],
                  "-catalog-page-size", dataset["catalog_page_size"],

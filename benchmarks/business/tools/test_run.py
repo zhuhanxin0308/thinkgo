@@ -56,7 +56,8 @@ class RunTest(unittest.TestCase):
         self.assertEqual(closed[closed.index("-concurrency") + 1], "64")
         self.assertEqual(opened[opened.index("-rate") + 1], "100")
         for option, expected in [("-tenant-count", "4"), ("-products-per-tenant", "25000"),
-                                 ("-tickets-per-tenant", "5000"), ("-timeout", "5s")]:
+                                 ("-tickets-per-tenant", "5000"), ("-initial-comments-per-ticket", "3"),
+                                 ("-timeout", "5s")]:
             self.assertEqual(closed[closed.index(option) + 1], expected)
             self.assertEqual(opened[opened.index(option) + 1], expected)
         self.assertNotIn("BENCH_SECRET=", " ".join(closed))
