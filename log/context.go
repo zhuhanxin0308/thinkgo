@@ -90,14 +90,22 @@ func newLogReference(value reflect.Value) logReference {
 
 // sanitizeLogContext 将所有可序列化结构转换为安全副本，并按字段名递归脱敏。
 func sanitizeLogContext(ctx map[string]interface{}) map[string]interface{} {
-	sanitized, ok := sanitizeLogReflectValue(reflect.ValueOf(ctx), "", make(map[logReference]int)).(map[string]interface{})
+	budget := logContextBudget{nodes: maxLogContextNodes, bytes: maxLogContextBytes}
+	sanitized, ok := sanitizeLogReflectValue(reflect.ValueOf(ctx), "", make(map[logReference]int), &budget, 0).(map[string]interface{})
+	if budget.exhausted {
+		// 整体替换保证 map 迭代顺序不会决定哪些业务字段偶然保留下来。
+		return map[string]interface{}{"log_context": logTruncatedPlaceholder}
+	}
 	if !ok {
 		return nil
 	}
 	return sanitized
 }
 
-func sanitizeLogReflectValue(value reflect.Value, key string, visiting map[logReference]int) interface{} {
+func sanitizeLogReflectValue(value reflect.Value, key string, visiting map[logReference]int, budget *logContextBudget, depth int) interface{} {
+	if !budget.visit(depth) {
+		return logTruncatedPlaceholder
+	}
 	if isSensitiveLogKey(key) {
 		return logRedactedPlaceholder
 	}
@@ -108,7 +116,7 @@ func sanitizeLogReflectValue(value reflect.Value, key string, visiting map[logRe
 		if value.IsNil() {
 			return nil
 		}
-		return sanitizeLogReflectValue(value.Elem(), key, visiting)
+		return sanitizeLogReflectValue(value.Elem(), key, visiting, budget, depth+1)
 	}
 
 	if isLogReferenceKind(value.Kind()) {
@@ -130,8 +138,11 @@ func sanitizeLogReflectValue(value reflect.Value, key string, visiting map[logRe
 
 	switch value.Kind() {
 	case reflect.Pointer:
-		return sanitizeLogReflectValue(value.Elem(), key, visiting)
+		return sanitizeLogReflectValue(value.Elem(), key, visiting, budget, depth+1)
 	case reflect.Map:
+		if !budget.collection(value.Len()) {
+			return logTruncatedPlaceholder
+		}
 		sanitized := make(map[string]interface{}, value.Len())
 		iterator := value.MapRange()
 		unsupportedKeyIndex := 0
@@ -141,24 +152,40 @@ func sanitizeLogReflectValue(value reflect.Value, key string, visiting map[logRe
 				innerKey = fmt.Sprintf("%s_%d", logUnsupportedValue, unsupportedKeyIndex)
 				unsupportedKeyIndex++
 			}
-			sanitized[innerKey] = sanitizeLogReflectValue(iterator.Value(), innerKey, visiting)
+			if !budget.text(innerKey) {
+				return logTruncatedPlaceholder
+			}
+			sanitized[innerKey] = sanitizeLogReflectValue(iterator.Value(), innerKey, visiting, budget, depth+1)
+			if budget.exhausted {
+				return logTruncatedPlaceholder
+			}
 		}
 		return sanitized
 	case reflect.Slice, reflect.Array:
+		if !budget.collection(value.Len()) {
+			return logTruncatedPlaceholder
+		}
 		sanitized := make([]interface{}, value.Len())
 		for index := 0; index < value.Len(); index++ {
-			sanitized[index] = sanitizeLogReflectValue(value.Index(index), key, visiting)
+			sanitized[index] = sanitizeLogReflectValue(value.Index(index), key, visiting, budget, depth+1)
+			if budget.exhausted {
+				return logTruncatedPlaceholder
+			}
 		}
 		return sanitized
 	case reflect.Struct:
 		if value.Type() == timeType && value.CanInterface() {
 			return value.Interface()
 		}
-		return sanitizeLogStruct(value, visiting)
+		return sanitizeLogStruct(value, visiting, budget, depth)
 	case reflect.Bool:
 		return value.Bool()
 	case reflect.String:
-		return value.String()
+		text := value.String()
+		if !budget.text(text) {
+			return logTruncatedPlaceholder
+		}
+		return text
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		if value.Type().PkgPath() == "" {
 			return value.Interface()
@@ -185,7 +212,7 @@ func sanitizeLogReflectValue(value reflect.Value, key string, visiting map[logRe
 	}
 }
 
-func sanitizeLogStruct(value reflect.Value, visiting map[logReference]int) map[string]interface{} {
+func sanitizeLogStruct(value reflect.Value, visiting map[logReference]int, budget *logContextBudget, depth int) map[string]interface{} {
 	typeOf := value.Type()
 	sanitized := make(map[string]interface{})
 	for index := 0; index < value.NumField(); index++ {
@@ -197,7 +224,13 @@ func sanitizeLogStruct(value reflect.Value, visiting map[logReference]int) map[s
 		if !included {
 			continue
 		}
-		sanitized[fieldName] = sanitizeLogReflectValue(value.Field(index), fieldName, visiting)
+		if !budget.text(fieldName) {
+			return nil
+		}
+		sanitized[fieldName] = sanitizeLogReflectValue(value.Field(index), fieldName, visiting, budget, depth+1)
+		if budget.exhausted {
+			return nil
+		}
 	}
 	return sanitized
 }
