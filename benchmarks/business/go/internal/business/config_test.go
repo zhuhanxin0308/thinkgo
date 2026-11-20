@@ -2,6 +2,7 @@ package business
 
 import (
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -67,5 +68,29 @@ func TestLoadConfigRequiresExplicitLocalDependencies(t *testing.T) {
 	t.Setenv("BENCH_DATABASE_URL", "postgres://benchmark@db.example.com/benchmark_run")
 	if _, err := LoadConfig(); err == nil {
 		t.Fatal("本地基准不能误连接外部数据库")
+	}
+}
+
+// TestDatabaseSeedBoundaries 覆盖合法的旧负种子和建库时会溢出的实际边界。
+func TestDatabaseSeedBoundaries(t *testing.T) {
+	dataset, err := LoadDataset("../../../contracts/dataset.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dataset.ProductsPerTenant, dataset.HotProductsPerTenant = 2, 1
+	for _, tc := range []struct {
+		seed  int64
+		specs int
+		valid bool
+	}{
+		{-8018, 32767, true}, {-8019, 1, false}, {-8020, 1, false},
+		{-7919 - 199900, 1, false}, {math.MinInt64, 1, false},
+		{math.MaxInt64 - 2*7919, 1, true}, {math.MaxInt64 - 2*7919 + 1, 1, false},
+		{20261107, 32768, false},
+	} {
+		dataset.Seed, dataset.SpecificationsPerProduct = tc.seed, tc.specs
+		if err := dataset.Validate(); (err == nil) != tc.valid {
+			t.Errorf("seed=%d specs=%d：期望合法=%v，实际 %v", tc.seed, tc.specs, tc.valid, err)
+		}
 	}
 }

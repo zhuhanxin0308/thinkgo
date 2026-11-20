@@ -6,6 +6,9 @@ final readonly class Contract
 {
     public const SNAPSHOT_VERSION = 1;
     public const MAX_POSTGRES_INTEGER = 2147483647;
+    private const MAX_POSTGRES_SMALLINT = 32767;
+    private const SEED_PRICE_BASE = 100;
+    private const SEED_PRICE_STRIDE = 7919;
     private function __construct(private array $dataset, private array $queries) {}
     public static function load(string $directory): self
     {
@@ -36,6 +39,22 @@ final readonly class Contract
     }
     private static function validateDataset(array $dataset): void
     {
+        if (array_key_exists('specifications_per_product', $dataset)) {
+            $specs = $dataset['specifications_per_product'];
+            if (!is_int($specs) || $specs < 1 || $specs > self::MAX_POSTGRES_SMALLINT) {
+                throw new \RuntimeException('合同 specifications_per_product 超出 PostgreSQL smallint 位置列范围');
+            }
+        }
+        if (array_key_exists('seed', $dataset) || array_key_exists('products_per_tenant', $dataset)) {
+            $seed = $dataset['seed'] ?? null;
+            $products = $dataset['products_per_tenant'] ?? null;
+            // 算乘积之前先验界，避免 PHP 溢出转成浮点后丢失精度。
+            if (!is_int($products) || $products < 2 || $products > intdiv(PHP_INT_MAX, self::SEED_PRICE_STRIDE)
+                || !is_int($seed) || $seed < 1 - self::SEED_PRICE_BASE - self::SEED_PRICE_STRIDE
+                || $seed > PHP_INT_MAX - $products * self::SEED_PRICE_STRIDE) {
+                throw new \RuntimeException('合同 seed 与 products_per_tenant 无法生成正价的 PostgreSQL bigint 商品数据');
+            }
+        }
         if (array_key_exists('maximum_item_quantity', $dataset)) {
             $maximumQuantity = $dataset['maximum_item_quantity'];
             if (!is_int($maximumQuantity) || $maximumQuantity < 1 || $maximumQuantity > self::MAX_POSTGRES_INTEGER) {
@@ -46,7 +65,7 @@ final readonly class Contract
     public function integer(string $name): int
     {
         $value = $this->dataset[$name] ?? null;
-        if (!is_int($value) || $value <= 0) { throw new \RuntimeException('合同整数配置无效'); }
+        if (!is_int($value) || ($name !== 'seed' && $value <= 0)) { throw new \RuntimeException('合同整数配置无效'); }
         return $value;
     }
     public function query(string $name): string

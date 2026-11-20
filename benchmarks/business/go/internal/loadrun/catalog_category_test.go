@@ -16,7 +16,8 @@ import (
 // TestCatalogCategoryContract 使用独立期望分类检查同租户错类、名称伪装和既有排序边界。
 func TestCatalogCategoryContract(t *testing.T) {
 	configuration := testConfig()
-	const correct = `{"items":[{"id":2,"name":"商品","price_cents":100,"category":"分类-2","stock":30}],"next_cursor":null}`
+	configuration.ProductsPerTenant = 31
+	const correct = `{"items":[{"id":2,"name":"通用商品-1-2","price_cents":87145,"category":"分类-2","stock":30}],"next_cursor":null}`
 	request := requestSpec{Scenario: "catalog", Tenant: 1, CategoryID: 2}
 	headers := http.Header{"Content-Type": {"application/json"}}
 	if err := validateResponse(configuration, request, http.StatusOK, headers, []byte(correct)); err != nil {
@@ -24,7 +25,8 @@ func TestCatalogCategoryContract(t *testing.T) {
 	}
 	otherTenant := request
 	otherTenant.Tenant = 2
-	if err := validateResponse(configuration, otherTenant, http.StatusOK, headers, []byte(strings.Replace(correct, `"id":2`, `"id":25002`, 1))); err != nil {
+	other := strings.NewReplacer(`"id":2`, `"id":33`, "通用商品-1-2", "通用商品-2-2").Replace(correct)
+	if err := validateResponse(configuration, otherTenant, http.StatusOK, headers, []byte(other)); err != nil {
 		t.Fatalf("分类应使用租户内编号而非全局编号: %v", err)
 	}
 	for _, body := range []string{

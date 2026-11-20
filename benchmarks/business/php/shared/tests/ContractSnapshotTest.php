@@ -77,6 +77,33 @@ final class ContractSnapshotTest extends TestCase
         self::assertCount(3,glob($this->cache.'/contract-*.php'));
     }
 
+    public function testSeedAndSpecificationBoundariesApplyToSourceAndSnapshot(): void
+    {
+        $dataset = json_decode(file_get_contents($this->source.'/dataset.json'), true, flags: JSON_THROW_ON_ERROR);
+        $dataset['products_per_tenant'] = 2;
+        $dataset['hot_products_per_tenant'] = 1;
+        foreach ([[-8018, 32767, true], [-8020, 1, false], [-207819, 1, false],
+                  [PHP_INT_MAX - 15838, 1, true], [PHP_INT_MAX - 15837, 1, false],
+                  [0, 32768, false]] as [$seed, $specs, $valid]) {
+            $dataset['seed'] = $seed;
+            $dataset['specifications_per_product'] = $specs;
+            file_put_contents($this->source.'/dataset.json', json_encode($dataset, JSON_THROW_ON_ERROR));
+            $snapshot = ['schema_version' => Contract::SNAPSHOT_VERSION, 'dataset' => $dataset, 'queries' => []];
+            $path = $this->temporary.'/check.php';
+            file_put_contents($path, '<?php return '.var_export($snapshot, true).';');
+            foreach ([fn() => Contract::load($this->source), fn() => Contract::loadSnapshot($path)] as $load) {
+                try {
+                    $contract = $load();
+                } catch (\RuntimeException $error) {
+                    self::assertFalse($valid, $error->getMessage());
+                    continue;
+                }
+                self::assertTrue($valid, "错误的 seed=$seed 或规格数 $specs 被接受");
+                self::assertSame($seed, $contract->integer('seed'));
+            }
+        }
+    }
+
     public function testConflictingExistingSnapshotIsPreservedAndRejected(): void
     {
         $metadata = ContractSnapshot::compile($this->source,$this->cache);

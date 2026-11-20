@@ -6,12 +6,45 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+// fixtureCatalogPage 独立枚举 SQL 合同并全量排序，校验生产门禁的有界分页算法。
+func fixtureCatalogPage(c Config, category int) string {
+	type row struct{ id, price int64 }
+	rows := []row{}
+	for local := category; local <= c.ProductsPerTenant; local += c.Categories {
+		price := 100 + (int64(local)*7919+c.DatasetSeed)%199900
+		if local%c.InactiveProductModulus != 0 && price <= c.MaximumPriceCents {
+			rows = append(rows, row{int64(local), price})
+		}
+	}
+	slices.SortStableFunc(rows, func(a, b row) int { return int(a.price - b.price) })
+	cursor := "null"
+	if len(rows) > c.CatalogPageSize {
+		rows = rows[:c.CatalogPageSize]
+		last := rows[len(rows)-1]
+		cursor = fmt.Sprintf(`{"id":%d,"price_cents":%d}`, last.id, last.price)
+	}
+	cards := make([]string, len(rows))
+	for index, row := range rows {
+		cards[index] = fmt.Sprintf(`{"id":%d,"name":"通用商品-1-%d","price_cents":%d,"stock":10,"category":"分类-%d"}`, row.id, row.id, row.price, category)
+	}
+	return fmt.Sprintf(`{"items":[%s],"next_cursor":%s}`, strings.Join(cards, ","), cursor)
+}
+
+var fixtureCatalog = func() map[int]string {
+	pages := make(map[int]string)
+	for category := 1; category <= defaultCategories; category++ {
+		pages[category] = fixtureCatalogPage(DefaultConfig(), category)
+	}
+	return pages
+}()
 
 // respondCatalog 仅作为本地测试端点，不替代正式业务应用。
 func respondCatalog(writer http.ResponseWriter, request *http.Request) {
@@ -21,11 +54,7 @@ func respondCatalog(writer http.ResponseWriter, request *http.Request) {
 		writer.WriteHeader(http.StatusBadRequest)
 		return
 	}
-	product := category
-	for product%inactiveProductEvery == 0 {
-		product += defaultCategories
-	}
-	fmt.Fprintf(writer, `{"items":[{"id":%d,"name":"商品","price_cents":100,"stock":10,"category":"分类-%d"}],"next_cursor":null}`, product, category)
+	fmt.Fprint(writer, fixtureCatalog[category])
 }
 
 func assertConservation(t *testing.T, report Report) {
@@ -208,7 +237,7 @@ func TestRunnerUsesCompleteBusinessRequests(t *testing.T) {
 			} else {
 				writer.Header().Set("X-Benchmark-Cache", "miss")
 			}
-			fmt.Fprintf(writer, `{"id":%d,"name":"商品","price_cents":100,"stock":10,"category":"分类","description":"真实商品说明","specs":[{"name":"尺寸","value":"标准"}]}`, id)
+			fmt.Fprintf(writer, `{"id":%d,"name":"通用商品-1-%d","price_cents":%d,"stock":10,"category":"分类-%d","description":"真实商品说明","specs":[{"name":"尺寸","value":"标准"}]}`, id, id, 100+(id*7919+defaultDatasetSeed)%199900, (id-1)%defaultCategories+1)
 		case request.URL.Path == "/api/orders":
 			var input struct {
 				Items []orderItem `json:"items"`
@@ -219,8 +248,11 @@ func TestRunnerUsesCompleteBusinessRequests(t *testing.T) {
 				return
 			}
 			writer.WriteHeader(http.StatusCreated)
-			fmt.Fprintf(writer, `{"order_id":1,"total_cents":%d,"status":"created","items":[{"product_id":%d,"quantity":%d,"unit_price_cents":100},{"product_id":%d,"quantity":%d,"unit_price_cents":100}]}`,
-				(input.Items[0].Quantity+input.Items[1].Quantity)*100, input.Items[0].ProductID, input.Items[0].Quantity, input.Items[1].ProductID, input.Items[1].Quantity)
+			first, second := input.Items[0], input.Items[1]
+			firstPrice := 100 + (first.ProductID*7919+defaultDatasetSeed)%199900
+			secondPrice := 100 + (second.ProductID*7919+defaultDatasetSeed)%199900
+			fmt.Fprintf(writer, `{"order_id":1,"total_cents":%d,"status":"created","items":[{"product_id":%d,"quantity":%d,"unit_price_cents":%d},{"product_id":%d,"quantity":%d,"unit_price_cents":%d}]}`,
+				first.Quantity*firstPrice+second.Quantity*secondPrice, first.ProductID, first.Quantity, firstPrice, second.ProductID, second.Quantity, secondPrice)
 		case strings.HasPrefix(request.URL.Path, "/api/tickets/"):
 			path := strings.TrimSuffix(strings.TrimPrefix(request.URL.Path, "/api/tickets/"), "/comments")
 			id, _ := strconv.ParseInt(path, 10, 64)
@@ -231,7 +263,7 @@ func TestRunnerUsesCompleteBusinessRequests(t *testing.T) {
 				t.Errorf("工单正文不满足合同: %v", err)
 			}
 			writer.WriteHeader(http.StatusCreated)
-			fmt.Fprintf(writer, `{"comment_id":1,"ticket_id":%d,"version":1,"status":"open"}`, id)
+			fmt.Fprintf(writer, `{"comment_id":15001,"ticket_id":%d,"version":4,"status":"open"}`, id)
 		default:
 			writer.WriteHeader(404)
 		}
