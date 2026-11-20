@@ -8,11 +8,11 @@ import (
 // TestDecodeJSONUsesCommittedResponseHeaders 验证解码依据首次提交的响应头，而非后续可变 HeaderMap。
 func TestDecodeJSONUsesCommittedResponseHeaders(t *testing.T) {
 	tests := []struct {
-		name           string
-		committedType  string
-		mutatedType    string
-		writeBody      bool
-		wantDecodeErr  bool
+		name          string
+		committedType string
+		mutatedType   string
+		writeBody     bool
+		wantDecodeErr bool
 	}{
 		{
 			name:          "提交后从文本改为 JSON 仍拒绝",

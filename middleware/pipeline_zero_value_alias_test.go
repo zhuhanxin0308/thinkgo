@@ -10,6 +10,7 @@ import (
 
 	fwcontext "github.com/zhuhanxin0308/thinkgo/v3/context"
 )
+
 // TestZeroValuePipelineCanRegisterAndExecuteAliases 验证零值管道可完整配置、解析并执行别名中间件。
 func TestZeroValuePipelineCanRegisterAndExecuteAliases(t *testing.T) {
 	var pipeline Pipeline
