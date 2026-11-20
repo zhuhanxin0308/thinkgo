@@ -535,6 +535,10 @@ func canonicalRoutePath(rawPath string) (string, int, error) {
 	if !strings.HasPrefix(path, "/") {
 		path = "/" + path
 	}
+	// 在裁剪尾斜杠前校验完整模板，与请求端的路径长度和空段约束一致。
+	if len(path) > maxRoutePathLength || strings.Contains(path, "//") {
+		return "", 0, fmt.Errorf("%w: 路径 %q 非法", ErrInvalidRoute, rawPath)
+	}
 	if len(path) > 1 {
 		path = strings.TrimSuffix(path, "/")
 	}
@@ -590,8 +594,16 @@ func parseRoutePath(path string) ([]routePart, int, error) {
 }
 
 func joinRoutePath(prefix, child string) string {
-	prefix = strings.Trim(strings.TrimSpace(prefix), "/")
-	child = strings.Trim(strings.TrimSpace(child), "/")
+	trimmedPrefix := strings.TrimSpace(prefix)
+	trimmedChild := strings.TrimSpace(child)
+	if strings.Contains(trimmedPrefix, "//") || strings.Contains(trimmedChild, "//") {
+		if trimmedPrefix == "" {
+			return trimmedChild
+		}
+		return trimmedPrefix + "/" + trimmedChild
+	}
+	prefix = strings.Trim(trimmedPrefix, "/")
+	child = strings.Trim(trimmedChild, "/")
 	switch {
 	case prefix == "" && child == "":
 		return "/"
@@ -602,6 +614,24 @@ func joinRoutePath(prefix, child string) string {
 	default:
 		return "/" + prefix + "/" + child
 	}
+}
+
+// joinRouteDefinitionPath 合并分组前缀与路由路径，并保留子路径显式声明的末尾斜杠。
+func joinRouteDefinitionPath(prefix, child string) string {
+	trimmedPrefix := strings.TrimSpace(prefix)
+	trimmedChild := strings.TrimSpace(child)
+	if strings.Contains(trimmedPrefix, "//") || strings.Contains(trimmedChild, "//") {
+		// 保留非法连续斜杠供 canonicalRoutePath 统一返回 ErrInvalidRoute。
+		if trimmedPrefix == "" {
+			return trimmedChild
+		}
+		return trimmedPrefix + "/" + trimmedChild
+	}
+	joined := joinRoutePath(trimmedPrefix, trimmedChild)
+	if joined != "/" && strings.HasSuffix(trimmedChild, "/") {
+		return joined + "/"
+	}
+	return joined
 }
 
 func isStaticRouteParts(parts []routePart) bool {

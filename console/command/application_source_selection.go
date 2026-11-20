@@ -8,11 +8,11 @@ import (
 	"fmt"
 	"go/types"
 	"io"
-	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/gotool"
 )
 
 const applicationSourceSelectionTimeout = 2 * time.Minute
@@ -68,9 +68,8 @@ func loadApplicationSourcePackages(parent context.Context, basePath string) (map
 		return nil, nil, err
 	}
 	// go/types 的整数宽度必须与源码和外部包导出数据使用同一目标，避免 32 位目标沿用宿主大小。
-	process := exec.CommandContext(ctx, "go", "env", "GOARCH")
+	process := gotool.CommandContext(ctx, "env", "GOARCH")
 	process.Dir = basePath
-	process.Env = append(os.Environ(), "GOWORK=off")
 	architecture, err := process.Output()
 	if err != nil {
 		if canceled := ctx.Err(); canceled != nil {

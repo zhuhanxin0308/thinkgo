@@ -114,3 +114,32 @@ func TestRuntimeLauncherCompilesAndCleans(t *testing.T) {
 		t.Fatal("缺失源码未失败")
 	}
 }
+
+// TestRunRuntimeIgnoresAmbientGoWork 验证 RunRuntime 强制关闭 GOWORK，不被损坏的宿主 go.work 干扰。
+func TestRunRuntimeIgnoresAmbientGoWork(t *testing.T) {
+	brokenWork := filepath.Join(t.TempDir(), "broken.work")
+	if err := os.WriteFile(brokenWork, []byte("go 1.27\nuse ./does-not-exist\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GOWORK", brokenWork)
+	base := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(base, "cmd", "think"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{
+		"go.mod":            "module example.com/isolated\n\ngo 1.20\n",
+		"cmd/think/main.go": "//go:build thinkgo_runtime\n\npackage main\nimport \"fmt\"\nfunc main() { fmt.Println(\"isolated-ok\") }\n",
+	}
+	for path, content := range files {
+		if err := os.WriteFile(filepath.Join(base, path), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var stdout, stderr bytes.Buffer
+	if err := RunRuntime(context.Background(), base, nil, &stdout, &stderr); err != nil {
+		t.Fatalf("RunRuntime 应忽略宿主 GOWORK，实际失败: %v stderr=%s", err, stderr.String())
+	}
+	if strings.TrimSpace(stdout.String()) != "isolated-ok" || stderr.Len() != 0 {
+		t.Fatalf("RunRuntime 输出异常: stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+}

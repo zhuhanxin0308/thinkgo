@@ -249,6 +249,8 @@ func TestWorkerValidationAndRepeatedStart(t *testing.T) {
 	defer client.Close()
 	invalid := []WorkerConfig{
 		{Concurrency: 1, Queues: map[string]int{"default": 1}, ShutdownTimeout: time.Second, TaskCheckInterval: time.Millisecond},
+		{Concurrency: 1, Queues: map[string]int{"": 1}, ShutdownTimeout: time.Second, TaskCheckInterval: time.Second},
+		{Concurrency: 1, Queues: map[string]int{"": 1, "default": 2}, ShutdownTimeout: time.Second, TaskCheckInterval: time.Second},
 		{Concurrency: 1, Queues: map[string]int{"bad queue": 1}, ShutdownTimeout: time.Second, TaskCheckInterval: time.Second},
 		{Concurrency: 1, Queues: map[string]int{"default": 0}, ShutdownTimeout: time.Second, TaskCheckInterval: time.Second},
 		{Concurrency: 1, Queues: map[string]int{"default": 1}, ShutdownTimeout: time.Millisecond, TaskCheckInterval: time.Second},

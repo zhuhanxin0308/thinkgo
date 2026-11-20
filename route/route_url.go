@@ -16,6 +16,7 @@ func (r *Router) URL(name string, params map[string]interface{}) (string, error)
 	r.mu.RLock()
 	registered := r.cachedNames[name]
 	caseSensitive := r.caseSensitive
+	removeSlash := r.removeSlash
 	r.mu.RUnlock()
 	if registered == nil {
 		if err := r.Freeze(); err != nil {
@@ -24,6 +25,7 @@ func (r *Router) URL(name string, params map[string]interface{}) (string, error)
 		r.mu.RLock()
 		registered = r.namedRoutes[name]
 		caseSensitive = r.caseSensitive
+		removeSlash = r.removeSlash
 		r.mu.RUnlock()
 	}
 	if registered == nil {
@@ -73,8 +75,15 @@ func (r *Router) URL(name string, params map[string]interface{}) (string, error)
 		pathParts[index] = url.PathEscape(part)
 	}
 	builtPath := "/" + joinEscapedPathParts(pathParts)
-	if len(pathParts) == 0 {
-		builtPath = "/"
+	if registered.trailingSlash && !removeSlash {
+		if len(pathParts) == 0 {
+			return "", fmt.Errorf("%w: 路由 %q 省略全部路径段后无法保留末尾斜杠", ErrInvalidRouteParameter, name)
+		}
+		builtPath += "/"
+	}
+	// 匹配器校验转义后的完整路径；查询串独立于这个长度限制。
+	if len(builtPath) > maxRoutePathLength {
+		return "", fmt.Errorf("%w: 路由 %q 的路径超过 %d 字节", ErrInvalidRouteParameter, name, maxRoutePathLength)
 	}
 
 	queryKeys := make([]string, 0, len(params))

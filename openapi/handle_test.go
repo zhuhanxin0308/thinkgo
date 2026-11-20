@@ -22,6 +22,60 @@ type handleInput struct {
 
 type handleService struct{}
 
+// TestHandlePreservesDistinctTrailingSlashContracts 验证同一方法的两个严格路径分别进入文档和覆盖检查。
+func TestHandlePreservesDistinctTrailingSlashContracts(t *testing.T) {
+	registry, err := NewRegistry(openapi3.Info{Title: "接口", Version: "1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := route.NewRouter()
+	paths := []Operation{
+		{Method: http.MethodPost, Path: "/api/users/:id", OperationID: "user"},
+		{Method: http.MethodPost, Path: "/api/users/:id/", OperationID: "userDirectory"},
+	}
+	for _, operation := range paths {
+		if err := Handle(router, registry, operation, func(handleInput) {}); err != nil {
+			t.Fatalf("注册 %s: %v", operation.Path, err)
+		}
+	}
+	if err := registry.ValidateRouter(router, "/api"); err != nil {
+		t.Fatal(err)
+	}
+	document, err := registry.JSON(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := openapi3.NewLoader().LoadFromData(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, operation := range paths {
+		path := strings.Replace(operation.Path, ":id", "{id}", 1)
+		item := parsed.Paths.Value(path)
+		if item == nil || item.Post == nil || item.Post.OperationID != operation.OperationID {
+			t.Errorf("文档路径 %q 应对应 %s", path, operation.OperationID)
+		}
+	}
+}
+
+// TestValidateRouterDistinguishesTrailingSlash 验证普通路径的文档无法替代带尾斜杠的实际路由。
+func TestValidateRouterDistinguishesTrailingSlash(t *testing.T) {
+	registry, err := NewRegistry(openapi3.Info{Title: "接口", Version: "1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Register(http.MethodGet, "/api/docs", validOperation("docs")); err != nil {
+		t.Fatal(err)
+	}
+	router := route.NewRouter()
+	if _, err := router.Get("/api/docs/", "Docs@Show"); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.ValidateRouter(router, "/api"); !errors.Is(err, ErrRouteCoverage) {
+		t.Fatalf("文档与实际路由末尾斜杠不一致时应报告覆盖错误: %v", err)
+	}
+}
+
 // TestHandleDerivesContractFromActualCallback 验证真实签名、分组路径和元信息共同生成契约。
 func TestHandleDerivesContractFromActualCallback(t *testing.T) {
 	registry, _ := NewRegistry(openapi3.Info{Title: "接口", Version: "1"})

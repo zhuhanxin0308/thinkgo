@@ -419,13 +419,11 @@ func normalizePath(path string) (string, error) {
 	}) {
 		return "", fmt.Errorf("%w: 路径 %q 非法", ErrUnsupportedRoute, path)
 	}
-	if path != "/" {
-		path = strings.TrimSuffix(path, "/")
-	}
-	segments := strings.Split(strings.Trim(path, "/"), "/")
 	if path == "/" {
 		return path, nil
 	}
+	// 保留最后一个空段，使严格路由 /docs 与 /docs/ 拥有独立的文档键。
+	segments := strings.Split(strings.TrimPrefix(path, "/"), "/")
 	for index, segment := range segments {
 		if strings.HasPrefix(segment, ":") {
 			name := strings.TrimPrefix(segment, ":")

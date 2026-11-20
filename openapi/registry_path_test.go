@@ -37,7 +37,9 @@ func TestRegistryPreservesEscapedPathsAndParameters(t *testing.T) {
 		path, want, routerPath, parameter string
 	}{
 		{path: "/", want: "/", routerPath: "/"},
-		{path: " /foo/ ", want: "/foo", routerPath: "/foo"},
+		// 两端空白不属于路径；严格路由中的末尾斜杠属于路径。
+		{path: " /foo ", want: "/foo", routerPath: "/foo"},
+		{path: " /foo/ ", want: "/foo/", routerPath: "/foo/"},
 		{path: "/foo%3Fbar=1", want: "/foo%3Fbar=1", routerPath: "/foo%3Fbar=1"},
 		{path: "/foo%3fbar=1", want: "/foo%3fbar=1", routerPath: "/foo%3fbar=1"},
 		{path: "/foo%253Fbar=1", want: "/foo%253Fbar=1", routerPath: "/foo%253Fbar=1"},

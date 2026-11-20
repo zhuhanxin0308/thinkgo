@@ -48,7 +48,7 @@ func (router *Router) ExportNameCache() ([]byte, error) {
 		for name, pattern := range registered.patterns {
 			patterns[name] = pattern
 		}
-		cache.Entries = append(cache.Entries, namedRouteEntry{Name: name, Path: registered.path, Extension: registered.ext, ExtensionRequired: registered.extensionRequired, Patterns: patterns})
+		cache.Entries = append(cache.Entries, namedRouteEntry{Name: name, Path: registered.displayPath(), Extension: registered.ext, ExtensionRequired: registered.extensionRequired, Patterns: patterns})
 	}
 	sort.Slice(cache.Entries, func(left, right int) bool { return cache.Entries[left].Name < cache.Entries[right].Name })
 	content, err := json.MarshalIndent(cache, "", "    ")
@@ -105,7 +105,7 @@ func (router *Router) LoadNameCache(content []byte) error {
 		if entry.ExtensionRequired && extension == "" {
 			return fmt.Errorf("命名路由缓存的强制后缀不能为空: %q", entry.Name)
 		}
-		registered := &Route{router: metadataRouter, path: path, pathParts: parts, ext: extension, extensionRequired: entry.ExtensionRequired, patterns: make(map[string]string), compiled: make(map[string]*regexp.Regexp)}
+		registered := &Route{router: metadataRouter, path: path, pathParts: parts, ext: extension, extensionRequired: entry.ExtensionRequired, trailingSlash: routeHasTrailingSlash(entry.Path), patterns: make(map[string]string), compiled: make(map[string]*regexp.Regexp)}
 		for name, pattern := range entry.Patterns {
 			if err := registered.WithPattern(name, pattern); err != nil {
 				return err

@@ -13,6 +13,7 @@ import (
 
 	"github.com/zhuhanxin0308/thinkgo/v3"
 	"github.com/zhuhanxin0308/thinkgo/v3/console"
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/gotool"
 )
 
 // SupportedBuildTargets 是经过框架验证的无 CGO 发布目标。
@@ -154,6 +155,9 @@ func compileDistributionWithRunner(ctx context.Context, base, executable string,
 func runBuildProcess(ctx context.Context, base string, environment []string, output io.Writer, executable string, args ...string) error {
 	// #nosec G204 G702 -- 内部调用只执行 Go 工具或本次独占生成器，使用参数数组且不经过 shell。
 	process := exec.CommandContext(ctx, executable, args...)
+	if executable == "go" {
+		environment = gotool.PrepareEnv(process, environment)
+	}
 	process.Dir, process.Env, process.Stdout, process.Stderr = base, environment, output, output
 	return errors.Join(process.Run(), ctx.Err())
 }

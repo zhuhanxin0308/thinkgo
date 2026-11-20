@@ -110,7 +110,7 @@ func validateSecurityHeaders(config SecurityHeadersConfig) error {
 		"X-Frame-Options":              config.FrameOptions,
 	}
 	for name, value := range values {
-		if strings.TrimSpace(value) == "" || len(value) > maximumSecurityPolicyBytes || strings.ContainsAny(value, "\r\n\x00") {
+		if strings.TrimSpace(value) == "" || len(value) > maximumSecurityPolicyBytes || containsInvalidHeaderControl(value) {
 			return fmt.Errorf("%w: %s", ErrInvalidSecurityHeaders, name)
 		}
 	}
@@ -138,6 +138,16 @@ func validateSecurityHeaders(config SecurityHeadersConfig) error {
 func allowedSecurityValue(value string, allowed ...string) bool {
 	for _, candidate := range allowed {
 		if value == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+// containsInvalidHeaderControl 拒绝除水平制表符外的 ASCII 控制字符，与 context.Response.Header 口径一致。
+func containsInvalidHeaderControl(value string) bool {
+	for _, char := range value {
+		if char != '\t' && (char < 0x20 || char == 0x7f) {
 			return true
 		}
 	}
