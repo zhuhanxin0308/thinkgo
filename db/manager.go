@@ -16,6 +16,7 @@ type Manager struct {
 	lock            sync.RWMutex
 	closed          bool
 	initErr         error
+	factoryClosing  chan struct{}
 	factoryWG       sync.WaitGroup
 	factoryCloseErr error
 	closeOnce       sync.Once
@@ -36,6 +37,20 @@ type lazyConnectionAttempt struct {
 	err        error
 }
 
+// wait 等待工厂发布结果。若管理器开始关闭，已发布的结果优先，其余等待者立即退出。
+func (attempt *lazyConnectionAttempt) wait(closing <-chan struct{}) (*DB, error) {
+	select {
+	case <-attempt.done:
+	case <-closing:
+		select {
+		case <-attempt.done:
+		default:
+			return nil, ErrDatabaseManagerClosed
+		}
+	}
+	return attempt.connection, attempt.err
+}
+
 // ValidateConnectionName 校验应用配置使用的命名连接标识。
 func ValidateConnectionName(name string) error {
 	if !connectorNamePattern.MatchString(name) {
@@ -47,10 +62,11 @@ func ValidateConnectionName(name string) error {
 // NewManager 创建数据库连接管理器；非法默认名称会在首次操作时显式返回。
 func NewManager(defaultName string) *Manager {
 	manager := &Manager{
-		defaultName: defaultName,
-		connections: make(map[string]*DB),
-		factories:   make(map[string]*lazyConnectionFactory),
-		handles:     make(map[ConnectionID]*managedConnection),
+		defaultName:    defaultName,
+		connections:    make(map[string]*DB),
+		factories:      make(map[string]*lazyConnectionFactory),
+		handles:        make(map[ConnectionID]*managedConnection),
+		factoryClosing: make(chan struct{}),
 	}
 	if err := ValidateConnectionName(defaultName); err != nil {
 		manager.initErr = err
@@ -63,8 +79,8 @@ func (m *Manager) Add(name string, connection *DB) error {
 	return m.addConnection(name, connection, false)
 }
 
-// RegisterFactory 注册惰性命名连接。工厂只会在首次 Connection 调用时执行；
-// 同一次并发访问共享构建结果，失败后允许下一次访问重试。
+// RegisterFactory 注册惰性命名连接。并发首次访问只执行一次工厂并共享结果，失败后可重试。
+// 若管理器开始关闭时工厂尚未发布结果，等待该结果的调用者可返回 ErrDatabaseManagerClosed。
 func (m *Manager) RegisterFactory(name string, factory ConnectionFactory) error {
 	if m == nil {
 		return ErrDatabaseUnavailable
@@ -184,8 +200,7 @@ func (m *Manager) Connection(name string) (*DB, error) {
 	}
 	if active := registered.active; active != nil {
 		m.lock.RUnlock()
-		<-active.done
-		return active.connection, active.err
+		return active.wait(m.factoryClosing)
 	}
 	m.lock.RUnlock()
 
@@ -210,8 +225,7 @@ func (m *Manager) Connection(name string) (*DB, error) {
 	}
 	if active := registered.active; active != nil {
 		m.lock.Unlock()
-		<-active.done
-		return active.connection, active.err
+		return active.wait(m.factoryClosing)
 	}
 	attempt := &lazyConnectionAttempt{done: make(chan struct{})}
 	registered.active = attempt
@@ -278,7 +292,8 @@ func callConnectionFactorySafely(factory ConnectionFactory) (connection *DB, err
 	return factory()
 }
 
-// Close 关闭每个唯一 DB 实例，聚合全部错误，并向并发调用返回稳定结果。
+// Close 唤醒等待惰性连接的调用者，关闭每个唯一 DB，并等待在途工厂实际退出。
+// 关闭错误聚合后向所有并发调用返回相同结果。
 func (m *Manager) Close() error {
 	if m == nil {
 		return nil
@@ -286,6 +301,9 @@ func (m *Manager) Close() error {
 	m.closeOnce.Do(func() {
 		m.lock.Lock()
 		m.closed = true
+		if m.factoryClosing != nil {
+			close(m.factoryClosing)
+		}
 		names := make([]string, 0, len(m.connections))
 		for name := range m.connections {
 			names = append(names, name)
