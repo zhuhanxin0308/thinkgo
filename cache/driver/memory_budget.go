@@ -7,12 +7,14 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/cachesnapshot"
 )
 
 var (
 	ErrInvalidMemoryBudget    = errors.New("内存缓存预算非法")
 	ErrMemoryValueTooLarge    = errors.New("内存缓存值超过预算")
-	ErrUnsupportedMemoryValue = errors.New("内存缓存不支持安全复制该值类型")
+	ErrUnsupportedMemoryValue = cachesnapshot.ErrUnsupportedValue
 )
 
 // MemoryBudget defines explicit per-driver admission limits. Bytes are conservative
@@ -321,6 +323,9 @@ func budgetMapKeys(value reflect.Value) []reflect.Value {
 
 func budgetVisit(v reflect.Value) memoryCloneVisit {
 	visit := memoryCloneVisit{typ: v.Type(), kind: v.Kind(), pointer: v.Pointer()}
+	if v.Kind() == reflect.Pointer {
+		visit.typ = v.Type().Elem()
+	}
 	if v.Kind() == reflect.Slice {
 		visit.length, visit.capacity = v.Len(), v.Cap()
 	}
@@ -347,17 +352,18 @@ func cloneBudgetValue(v reflect.Value, seen map[memoryCloneVisit]reflect.Value) 
 		}
 		visit := budgetVisit(v)
 		if result, ok := seen[visit]; ok {
+			if v.Kind() == reflect.Pointer {
+				return result.Convert(v.Type())
+			}
 			return result
 		}
 		var result reflect.Value
 		switch v.Kind() {
 		case reflect.Pointer:
 			result = reflect.New(v.Type().Elem())
-			if result.Type() != v.Type() {
-				result = result.Convert(v.Type())
-			}
 			seen[visit] = result
 			result.Elem().Set(cloneBudgetValue(v.Elem(), seen))
+			return result.Convert(v.Type())
 		case reflect.Slice:
 			result = reflect.MakeSlice(v.Type(), v.Len(), v.Len())
 			seen[visit] = result

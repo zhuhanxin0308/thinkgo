@@ -118,8 +118,9 @@ func TestPreciseCacheIntegerRoundTripAndValidation(t *testing.T) {
 		json.Number("123456789012345678901234567890"),
 	}
 	if strconv.IntSize == 64 {
-		bigPositive := int(1)<<53 + 1
-		bigUint := uint(1)<<53 + 1
+		wide := int64(1)<<53 + 1
+		bigPositive := int(wide)
+		bigUint := uint(wide)
 		cases = append(cases, bigPositive, -bigPositive, bigUint)
 	}
 	for _, expected := range cases {

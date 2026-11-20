@@ -186,6 +186,9 @@ func (c *Cache) incFenceSequenceContext(ctx context.Context, driver Driver, step
 }
 
 func (c *Cache) currentFenceSequenceContext(ctx context.Context, driver Driver) (uint64, error) {
+	if allocator, sequence, issued := c.fenceAllocator(driver); allocator != nil {
+		return allocator.FenceGenerationFloorContext(ctx, sequence, issued)
+	}
 	raw, found, err := getCacheValueContext(ctx, driver, c.fenceSequenceKey())
 	if err != nil || !found {
 		return 0, err
@@ -224,6 +227,13 @@ func (c *Cache) raiseFenceSequenceFloorContext(ctx context.Context, driver Drive
 
 // allocateFenceGenerationAboveContext 分配严格大于 floor 的单调代际；若序列回退则原子自愈后重试。
 func (c *Cache) allocateFenceGenerationAboveContext(ctx context.Context, driver Driver, floor uint64) (uint64, error) {
+	return c.allocateFenceGenerationWithWitness(ctx, driver, floor, 0)
+}
+
+func (c *Cache) allocateFenceGenerationWithWitness(ctx context.Context, driver Driver, floor, minimumIssued uint64) (uint64, error) {
+	if allocator, sequence, issued := c.fenceAllocator(driver); allocator != nil {
+		return allocator.AllocateFenceGenerationContext(ctx, sequence, issued, floor, minimumIssued)
+	}
 	for attempt := 0; attempt < maxCacheAtomicRebaseAttempts; attempt++ {
 		generation, err := c.nextFenceGenerationContext(ctx, driver)
 		if err != nil {
@@ -276,10 +286,10 @@ func parseFenceGenerationValue(raw interface{}) (uint64, error) {
 }
 
 // beginFenceInvalidationContext 先发布单调失效代际，再允许删除旧值；序列回退时基于已有全局水位自愈。
-func (c *Cache) beginFenceInvalidationContext(ctx context.Context, driver Driver) (uint64, error) {
-	var floor uint64
+func (c *Cache) beginFenceInvalidationContext(ctx context.Context, driver Driver, floor uint64) (uint64, error) {
+	minimumIssued := floor
 	for attempt := 0; attempt < maxCacheAtomicRebaseAttempts; attempt++ {
-		generation, err := c.allocateFenceGenerationAboveContext(ctx, driver, floor)
+		generation, err := c.allocateFenceGenerationWithWitness(ctx, driver, floor, minimumIssued)
 		if err != nil {
 			return 0, err
 		}
@@ -363,7 +373,7 @@ func (c *Cache) writeFencedCacheValueContext(ctx context.Context, driver Driver,
 	if !cacheDriverSupportsAtomicFencing(driver) {
 		return setCacheValueContext(ctx, driver, key, value, ttl)
 	}
-	floor, err := c.commitInvalidationForKey(ctx, driver, key)
+	floor, err := c.invalidationForKey(ctx, driver, key)
 	if err != nil {
 		return err
 	}
@@ -372,7 +382,7 @@ func (c *Cache) writeFencedCacheValueContext(ctx context.Context, driver Driver,
 		if err != nil {
 			return err
 		}
-		preCommit, preErr := c.commitInvalidationForKey(ctx, driver, key)
+		preCommit, preErr := c.invalidationForKey(ctx, driver, key)
 		if preErr != nil {
 			return preErr
 		}
@@ -439,12 +449,12 @@ func (c *Cache) writeFencedCacheValuesContext(ctx context.Context, driver Driver
 	keyInvalidations := make(map[string]uint64, len(keys))
 	var floor uint64
 	for _, key := range keys {
-		invalidation, commitInv, err := c.keyInvalidationBarriers(ctx, driver, key)
+		invalidation, err := c.invalidationForKey(ctx, driver, key)
 		if err != nil {
 			return err
 		}
 		keyInvalidations[key] = invalidation
-		floor = max(floor, commitInv)
+		floor = max(floor, invalidation)
 	}
 	for attempt := 0; attempt < maxCacheAtomicRebaseAttempts; attempt++ {
 		generation, err := c.allocateFenceGenerationAboveContext(ctx, driver, floor)
@@ -454,7 +464,7 @@ func (c *Cache) writeFencedCacheValuesContext(ctx context.Context, driver Driver
 		committed := make([]cacheBatchSnapshot, 0, len(keys))
 		var observed uint64
 		for _, key := range keys {
-			preCommit, preErr := c.commitInvalidationForKey(ctx, driver, key)
+			preCommit, preErr := c.invalidationForKey(ctx, driver, key)
 			if preErr != nil {
 				err = preErr
 				break
@@ -511,7 +521,7 @@ func (c *Cache) writeFencedCacheValuesContext(ctx context.Context, driver Driver
 		if err == nil {
 			detached := context.WithoutCancel(ctx)
 			for _, snapshot := range committed {
-				latestInvalidation, fenceErr := c.commitInvalidationForKey(detached, driver, snapshot.key)
+				latestInvalidation, fenceErr := c.invalidationForKey(detached, driver, snapshot.key)
 				if fenceErr != nil {
 					err = fenceErr
 					break
@@ -554,7 +564,7 @@ func (c *Cache) verifyFenceCommitContext(ctx context.Context, driver Driver, key
 
 func (c *Cache) verifyAtomicFenceCommitContext(ctx context.Context, driver Driver, key string, generation, origin uint64) error {
 	detached := context.WithoutCancel(ctx)
-	current, err := c.commitInvalidationForKey(detached, driver, key)
+	current, err := c.invalidationForKey(detached, driver, key)
 	if err != nil {
 		return err
 	}

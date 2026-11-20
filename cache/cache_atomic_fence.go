@@ -27,16 +27,16 @@ func (staleAtomicFenceError) Unwrap() error {
 
 // withFreshAtomicFence 仅在后端尚未提交且票据过时时重入；真实失效与业务错误直接返回。
 // 领取全局票据必须在单键原子锁之外，避免内存互斥锁或文件分片锁的嵌套死锁。
-func (c *Cache) withFreshAtomicFence(ctx context.Context, driver Driver, key string, run func(uint64, uint64, uint64, uint64) error) (generation, origin uint64, err error) {
+func (c *Cache) withFreshAtomicFence(ctx context.Context, driver Driver, key string, run func(uint64, uint64, uint64) error) (generation, origin uint64, err error) {
 	if !cacheDriverSupportsAtomicFencing(driver) {
-		return 0, 0, run(0, 0, 0, 0)
+		return 0, 0, run(0, 0, 0)
 	}
 	var floor uint64
 	for attempt := 0; attempt < maxCacheAtomicRebaseAttempts; attempt++ {
 		if err = ctx.Err(); err != nil {
 			return generation, origin, err
 		}
-		_, commitFloor, readErr := c.keyInvalidationBarriers(ctx, driver, key)
+		commitFloor, readErr := c.invalidationForKey(ctx, driver, key)
 		if readErr != nil {
 			return generation, origin, readErr
 		}
@@ -50,11 +50,11 @@ func (c *Cache) withFreshAtomicFence(ctx context.Context, driver Driver, key str
 		if origin == 0 {
 			origin = generation
 		}
-		invalidation, commitFence, readErr := c.keyInvalidationBarriers(ctx, driver, key)
+		invalidation, readErr := c.invalidationForKey(ctx, driver, key)
 		if readErr != nil {
 			return generation, origin, readErr
 		}
-		err = run(generation, origin, invalidation, commitFence)
+		err = run(generation, origin, invalidation)
 		if !errors.Is(err, errCacheAtomicFenceStale) {
 			return generation, origin, err
 		}
@@ -77,7 +77,7 @@ func (c *Cache) withFreshAtomicFence(ctx context.Context, driver Driver, key str
 
 // decodeAtomicCacheValue 每次原子尝试都重新读取因果起点，不继承 WATCH 失败尝试的临时代际。
 // 只有实际读取到仍有效的新值，旧操作才可作为其后续合并推进屏障；缺失或失效值不能复活。
-func decodeAtomicCacheValue(raw interface{}, found bool, generation, started, invalidation, commitInvalidation uint64) (interface{}, bool, uint64, error) {
+func decodeAtomicCacheValue(raw interface{}, found bool, generation, started, invalidation uint64) (interface{}, bool, uint64, error) {
 	origin := started
 	var value interface{}
 	if found {
@@ -95,7 +95,7 @@ func decodeAtomicCacheValue(raw interface{}, found bool, generation, started, in
 			found = false
 		}
 	}
-	if max(invalidation, commitInvalidation) > origin {
+	if invalidation > origin {
 		return nil, false, origin, ErrCacheLockLost
 	}
 	return value, found, origin, nil

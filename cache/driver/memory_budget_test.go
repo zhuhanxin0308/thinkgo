@@ -144,6 +144,26 @@ func TestMemoryBudgetGraphsAndOwnership(t *testing.T) {
 	assertMemoryBudget(t, m)
 }
 
+// 命名指针和匿名指针共享目标时，内存预算和实际克隆都只能保留一个副本。
+func TestBudgetCloneKeepsNamedPointerCycles(t *testing.T) {
+	type node struct{ Next *node }
+	type namedPointer *node
+	source := &node{}
+	source.Next = source
+	copy, charge, err := budgetSnapshot(namedPointer(source), 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, plainCharge, err := budgetSnapshot(source, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := copy.(namedPointer)
+	if got == source || got.Next != got || plain.(*node).Next != plain.(*node) || charge != plainCharge {
+		t.Fatalf("指针别名影响了图拓扑或预算：named=%d plain=%d", charge, plainCharge)
+	}
+}
+
 func TestMemoryBudgetRejectsUnaccountableGraphsBeforeCommit(t *testing.T) {
 	type hidden struct{ value string }
 	type hiddenTime struct{ at time.Time }

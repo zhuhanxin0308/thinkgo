@@ -42,8 +42,9 @@ func TestIssue601PreciseIntegersAndWideNumbers(t *testing.T) {
 		{"json_number_wide", json.Number("123456789012345678901234567890")},
 	}
 	if strconv.IntSize == 64 {
-		bigInt := int(1)<<53 + 7
-		bigUint := uint(1)<<53 + 9
+		wide := int64(1) << 53
+		bigInt := int(wide + 7)
+		bigUint := uint(wide + 9)
 		cases = append(cases,
 			struct {
 				name  string
@@ -370,7 +371,11 @@ func TestDBAtomicUpdateAndExpiryOperations(t *testing.T) {
 				if !found {
 					return int64(1), false, nil
 				}
-				return val.(int64) + 1, false, nil
+				count, ok := val.(int64)
+				if !ok {
+					return nil, false, fmt.Errorf("并发 CAS 需要 int64，实际为 %T", val)
+				}
+				return count + 1, false, nil
 			})
 		}()
 	}

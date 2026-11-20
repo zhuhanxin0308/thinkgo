@@ -71,6 +71,8 @@ var (
 	ErrInvalidCacheValue = errors.New("缓存值编码无效")
 	// ErrCorruptCacheEnvelope 表示内部 fencing 或精确整数信封损坏。
 	ErrCorruptCacheEnvelope = errors.New("缓存代际信封损坏")
+	// ErrCacheFenceUnavailable 表示后端无法安全分配后续代际。
+	ErrCacheFenceUnavailable = errors.New("缓存 fencing 代际不可用")
 )
 
 // ValidateDriverTTL 拒绝负有效期。

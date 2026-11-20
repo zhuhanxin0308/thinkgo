@@ -12,21 +12,30 @@ import (
 // 元数据候选键。调用方必须缩小范围或隔离数据库，不能把部分清理当作成功。
 var ErrAmbiguousRedisClearScope = errors.New("Redis 清理范围包含归属不明确的保护元数据")
 
-// redisClearKeyEligible 按精确保留前缀与 canonical namespace 帧边界识别内部锁和
-// fencing 元数据键；普通业务键中间包含保留标记文本不会阻塞清理，只有损坏或未知版本的
-// __thinkgo_namespace__: 帧携带保护标记时才失败关闭。
+// redisClearKeyEligible 只将驱动已配置的前缀及合法帧作为归属证据。调用方的过滤前缀
+// 可以在一个普通业务键的任意位置结束，不能把它当成另一个 Redis 驱动的物理配置。
 func redisClearKeyEligible(key, driverPrefix, scopePrefix string) (bool, error) {
 	if !strings.HasPrefix(key, driverPrefix) || !strings.HasPrefix(key, scopePrefix) {
 		return false, nil
 	}
-	for _, prefix := range []string{driverPrefix, scopePrefix} {
-		logical := strings.TrimPrefix(key, prefix)
-		protected, ambiguous := cachekey.ClassifyProtectedMetadata(logical)
-		if ambiguous {
-			return false, errors.Join(ErrUnsafeRedisFlush, ErrAmbiguousRedisClearScope)
+	if !strings.Contains(key, managerLockKeyPrefix) && !strings.Contains(key, cacheFenceMetadataPrefix) {
+		return true, nil
+	}
+	if protected, _ := cachekey.ClassifyProtectedMetadata(strings.TrimPrefix(key, driverPrefix)); protected {
+		return false, nil
+	}
+	// 旧驱动的原始前缀没有分隔符，长度最多为 maxRedisPrefixBytes。逐一验证可能的
+	// 帧起点也涵盖「旧前缀 + 任意层 namespace + 锁」，且不依据 owner 或 TTL 猜测。
+	for boundary := 0; boundary <= min(maxRedisPrefixBytes, len(key)); boundary++ {
+		suffix := key[boundary:]
+		if !strings.HasPrefix(suffix, managerLockKeyPrefix) &&
+			!strings.HasPrefix(suffix, cacheFenceMetadataPrefix) &&
+			!strings.HasPrefix(suffix, cachekey.NamespacePrefix) {
+			continue
 		}
-		if protected {
-			return false, nil
+		protected, ambiguous := cachekey.ClassifyProtectedMetadata(suffix)
+		if protected || ambiguous {
+			return false, errors.Join(ErrUnsafeRedisFlush, ErrAmbiguousRedisClearScope)
 		}
 	}
 	return true, nil

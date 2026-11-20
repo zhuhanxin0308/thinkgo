@@ -31,12 +31,6 @@ func strictCounterValue(value interface{}) (int64, error) { return contract.Stri
 func decodeCounterJSON(encoded []byte) (interface{}, error) {
 	return contract.DecodeCounterJSON(encoded)
 }
-func encodePreciseCacheInteger(value interface{}) (interface{}, string) {
-	return contract.EncodePreciseCacheInteger(value)
-}
-func decodePreciseCacheInteger(value interface{}, encoding string) (interface{}, error) {
-	return contract.DecodePreciseCacheInteger(value, encoding)
-}
 func checkedCounterAdd(value, step int64) (int64, error) {
 	return contract.CheckedCounterAdd(value, step)
 }

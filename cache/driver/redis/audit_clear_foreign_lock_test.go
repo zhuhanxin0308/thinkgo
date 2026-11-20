@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -53,6 +54,7 @@ func TestAuditClearMustPreserveNamespacedActiveLocks(t *testing.T) {
 					return driver
 				}
 				business, sweep := create(tc.businessPrefix, false), create(tc.sweepPrefix, tc.allowFlush)
+				const embedded = "doc:__thinkgo_lock__:intro"
 				const lock = "__thinkgo_lock__:critical"
 				if owned, err := business.AcquireLock(lock, "owner-A", time.Minute); err != nil || !owned {
 					t.Fatalf("initial lock: %t %v", owned, err)
@@ -63,7 +65,7 @@ func TestAuditClearMustPreserveNamespacedActiveLocks(t *testing.T) {
 				if err := business.Set("ordinary", "value", 0); err != nil {
 					t.Fatal(err)
 				}
-				if err := business.Set("doc:__thinkgo_lock__:intro", "value", 0); err != nil {
+				if err := business.Set(embedded, "value", 0); err != nil {
 					t.Fatal(err)
 				}
 				if conditional {
@@ -83,7 +85,7 @@ func TestAuditClearMustPreserveNamespacedActiveLocks(t *testing.T) {
 				if found, err := business.Has(cacheFenceMetadataPrefix + "test"); err != nil || !found {
 					t.Fatalf("fencing metadata lost: %t %v", found, err)
 				}
-				for _, ordinaryKey := range []string{"ordinary", "doc:__thinkgo_lock__:intro"} {
+				for _, ordinaryKey := range []string{"ordinary", embedded} {
 					if found, err := business.Has(ordinaryKey); err != nil || found {
 						t.Fatalf("ordinary data %q not cleared: %t %v", ordinaryKey, found, err)
 					}
@@ -94,14 +96,17 @@ func TestAuditClearMustPreserveNamespacedActiveLocks(t *testing.T) {
 }
 
 func TestRedisClearScopeDistinguishesBusinessSubstringsFromMalformedFrames(t *testing.T) {
+	// 这些是合法业务键。旧驱动还允许产生相同物理键的前缀配置，因此分别记录尚未满足的清理契约。
 	for _, key := range []string{
 		"app:report__thinkgo_lock__:balance",
 		"app:doc:__thinkgo_cache_fence__:intro",
 		"app:" + cachekey.Namespace("tenant:") + "doc:__thinkgo_lock__:intro",
 	} {
-		if eligible, err := redisClearKeyEligible(key, "app:", "app:"); !eligible || err != nil {
-			t.Fatalf("valid business key containing marker must be eligible: key=%q eligible=%t err=%v", key, eligible, err)
-		}
+		t.Run(key, func(t *testing.T) {
+			if eligible, err := redisClearKeyEligible(key, "app:", "app:"); !eligible || err != nil {
+				t.Fatalf("合法业务键应允许清理：key=%q eligible=%t err=%v", key, eligible, err)
+			}
+		})
 	}
 	for _, malformed := range []string{
 		"app:" + cachekey.NamespacePrefix + "v2:999:short:__thinkgo_lock__:critical",
@@ -113,5 +118,62 @@ func TestRedisClearScopeDistinguishesBusinessSubstringsFromMalformedFrames(t *te
 	}
 	if eligible, err := redisClearKeyEligible("other:data", "app:", "app:"); eligible || err != nil {
 		t.Fatalf("out-of-scope key: %t %v", eligible, err)
+	}
+}
+
+func TestRedisClearRemovesUnambiguousEmbeddedMarkers(t *testing.T) {
+	// 原始驱动前缀的字节上限是确定边界。超过它的标记不可能位于原始前缀结尾。
+	long := strings.Repeat("x", maxRedisPrefixBytes+1)
+	for _, conditional := range []bool{false, true} {
+		t.Run("conditional="+strconv.FormatBool(conditional), func(t *testing.T) {
+			driver := newConditionalRedis(t)
+			for _, key := range []string{
+				"doc:" + long + "__thinkgo_lock__:intro",
+				"doc:" + long + "__thinkgo_cache_fence__:guide",
+				cachekey.Namespace("tenant:") + "doc:" + long + "__thinkgo_lock__:intro",
+			} {
+				if err := driver.Set(key, "value", time.Minute); err != nil {
+					t.Fatal(err)
+				}
+				if conditional {
+					if err := driver.ClearPrefixIfContext(t.Context(), "", nil, func(any) (bool, error) { return true, nil }); err != nil {
+						t.Fatal(err)
+					}
+				} else if err := driver.Clear(); err != nil {
+					t.Fatal(err)
+				}
+				if found, err := driver.Has(key); found || err != nil {
+					t.Fatalf("无歧义业务键未物理删除：key=%q found=%t err=%v", key, found, err)
+				}
+			}
+		})
+	}
+}
+
+// 通过公开接口写入业务值，分别检查 ClearPrefix 和 Clear 是否真的删除对应物理键。
+func TestRedisClearShortBusinessKeysContainingReservedMarkers(t *testing.T) {
+	for _, tc := range []struct{ key, prefix string }{
+		{"doc:__thinkgo_lock__:intro", "doc:"},
+		{"doc:__thinkgo_cache_fence__:guide", "doc:"},
+		{"article:__thinkgo_lock__:v2", ""},
+	} {
+		t.Run(tc.key, func(t *testing.T) {
+			driver := newConditionalRedis(t)
+			if err := driver.Set(tc.key, "value", time.Minute); err != nil {
+				t.Fatal(err)
+			}
+			var err error
+			if tc.prefix == "" {
+				err = driver.Clear()
+			} else {
+				err = driver.ClearPrefix(tc.prefix)
+			}
+			if err != nil {
+				t.Errorf("业务键清理失败：%v", err)
+			}
+			if found, err := driver.Has(tc.key); err != nil || found {
+				t.Errorf("业务键仍存在或无法核验：key=%q found=%t err=%v", tc.key, found, err)
+			}
+		})
 	}
 }

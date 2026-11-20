@@ -21,14 +21,7 @@ const (
 	millisecondEpochBoundary = int64(1_000_000_000_000)
 	dbLockAcquireAttempts    = 3
 	dbLockStoragePrefix      = "__thinkgo_db_lock__:"
-	dbValueEnvelopeMarker    = "thinkgo-db-value-v1"
 )
-
-type dbValueEnvelope struct {
-	Marker   string      `json:"__thinkgo_db_value"`
-	Value    interface{} `json:"value"`
-	Encoding string      `json:"encoding"`
-}
 
 var cacheTablePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
@@ -430,15 +423,8 @@ func marshalDBCacheValue(value interface{}) (string, error) {
 	if err := validateCacheNumber(value); err != nil {
 		return "", err
 	}
-	payload := value
-	if encodedValue, encoding := encodePreciseCacheInteger(value); encoding != "" {
-		payload = dbValueEnvelope{
-			Marker:   dbValueEnvelopeMarker,
-			Value:    encodedValue,
-			Encoding: encoding,
-		}
-	}
-	encoded, err := json.Marshal(payload)
+	// 现有表没有独立编码列，继续写标准 JSON，使滚动升级中的旧进程仍可读取。
+	encoded, err := json.Marshal(value)
 	if err != nil {
 		return "", err
 	}
@@ -446,31 +432,29 @@ func marshalDBCacheValue(value interface{}) (string, error) {
 }
 
 func unmarshalDBCacheValue(encoded []byte) (interface{}, error) {
+	// 旧驱动直接保存十进制 JSON。精准读取旧计数，同时保留安全范围内普通 JSON 数字的类型。
+	trimmed := bytes.TrimSpace(encoded)
+	if len(trimmed) > 0 && (trimmed[0] == '-' || trimmed[0] >= '0' && trimmed[0] <= '9') && !bytes.ContainsAny(trimmed, ".eE") {
+		number := json.Number(trimmed)
+		if validateCacheNumber(number) == nil {
+			integer, err := number.Int64()
+			if err != nil {
+				return number, nil
+			}
+			const exactFloatIntegerLimit = 1 << 53
+			if integer > exactFloatIntegerLimit || integer < -exactFloatIntegerLimit {
+				return integer, nil
+			}
+		}
+	}
 	var raw interface{}
 	if err := json.Unmarshal(encoded, &raw); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrCorruptCacheEntry, err)
-	}
-	if typed, ok := raw.(map[string]interface{}); ok {
-		if marker, marked := typed["__thinkgo_db_value"].(string); marked && marker == dbValueEnvelopeMarker {
-			encoding, validEncoding := typed["encoding"].(string)
-			inner, hasValue := typed["value"]
-			if !validEncoding || encoding == "" || !hasValue || len(typed) != 3 {
-				return nil, fmt.Errorf("%w: 精确整数信封字段非法", ErrCorruptCacheEntry)
-			}
-			decoded, err := decodePreciseCacheInteger(inner, encoding)
-			if err != nil {
-				return nil, fmt.Errorf("%w: %v", ErrCorruptCacheEntry, err)
-			}
-			return decoded, nil
-		}
 	}
 	return raw, nil
 }
 
 func decodeDBCounterValue(encoded []byte) (interface{}, error) {
-	if bytes.HasPrefix(bytes.TrimSpace(encoded), []byte("{")) {
-		return unmarshalDBCacheValue(encoded)
-	}
 	value, err := decodeCounterJSON(encoded)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrCorruptCacheEntry, err)

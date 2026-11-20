@@ -136,7 +136,7 @@ func TestCompactionPreservesNewerScopes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	prefix, err := manager.beginPrefixInvalidation(context.Background(), backend, "prefix:")
+	prefix, err := manager.beginPrefixInvalidation(context.Background(), backend, "prefix:", 0)
 	if err != nil {
 		t.Fatal(err)
 	}

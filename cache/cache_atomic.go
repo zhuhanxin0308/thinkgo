@@ -20,7 +20,7 @@ var (
 	// ErrCorruptCacheEnvelope 表示内部 fencing 信封损坏。
 	ErrCorruptCacheEnvelope = contract.ErrCorruptCacheEnvelope
 	// ErrCacheFenceUnavailable 表示驱动无法提供有效的单调 fencing 代际。
-	ErrCacheFenceUnavailable = errors.New("缓存 fencing 代际不可用")
+	ErrCacheFenceUnavailable = contract.ErrCacheFenceUnavailable
 )
 
 // Update 原子读取并改写单个缓存键。
@@ -60,9 +60,9 @@ func (c *Cache) UpdateContext(ctx context.Context, key string, ttl time.Duration
 	runUpdate := func(ctx context.Context, cleanMetadata bool) (bool, error) {
 		removed := false
 		committedOrigin := uint64(0)
-		generation, _, err := c.withFreshAtomicFence(ctx, driver, key, func(generation, started, invalidation, commitInvalidation uint64) error {
+		generation, _, err := c.withFreshAtomicFence(ctx, driver, key, func(generation, started, invalidation uint64) error {
 			wrapped := func(raw interface{}, found bool) (interface{}, bool, error) {
-				value, found, origin, decodeErr := decodeAtomicCacheValue(raw, found, generation, started, invalidation, commitInvalidation)
+				value, found, origin, decodeErr := decodeAtomicCacheValue(raw, found, generation, started, invalidation)
 				if decodeErr != nil {
 					return nil, false, decodeErr
 				}
@@ -88,7 +88,7 @@ func (c *Cache) UpdateContext(ctx context.Context, key string, ttl time.Duration
 		}
 		if generation > 0 {
 			detached := context.WithoutCancel(ctx)
-			current, fenceErr := c.commitInvalidationForKey(detached, driver, key)
+			current, fenceErr := c.invalidationForKey(detached, driver, key)
 			if fenceErr != nil {
 				return false, fenceErr
 			}

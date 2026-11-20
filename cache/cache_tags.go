@@ -169,19 +169,19 @@ func (c *TaggedCache) FlushContext(ctx context.Context) error {
 			if reverseErr != nil {
 				return reverseErr
 			}
-			consistent := true
+			var unproven []string
 			for _, tag := range requiredTags {
 				if !containsString(reverse, tag) {
-					consistent = false
-					break
+					unproven = append(unproven, tag)
 				}
 			}
-			if consistent {
+			if len(unproven) < len(requiredTags) {
 				validKeys = append(validKeys, key)
-			} else if visible {
-				forwardGhosts[key] = requiredTags
-			} else {
+			}
+			if len(unproven) == len(requiredTags) && !visible {
 				deadGhosts[key] = requiredTags
+			} else if len(unproven) > 0 {
+				forwardGhosts[key] = unproven
 			}
 		}
 		sort.Strings(validKeys)
@@ -201,7 +201,6 @@ func (c *TaggedCache) FlushContext(ctx context.Context) error {
 			_, cleanupErr := c.cache.removeForwardMembersLockedContext(ctx, driver, key, tags)
 			resultErr = errors.Join(resultErr, cleanupErr)
 		}
-		completedKeys := make([]string, 0, len(validKeys))
 		for _, key := range validKeys {
 			raw, found, valueErr := getCacheValueContext(ctx, driver, key)
 			if valueErr != nil {
@@ -211,9 +210,6 @@ func (c *TaggedCache) FlushContext(ctx context.Context) error {
 			if !found {
 				_, cleanupErr := c.cache.removeKeyFromTagsLockedContext(ctx, driver, key, keys[key])
 				resultErr = errors.Join(resultErr, cleanupErr)
-				if cleanupErr == nil {
-					completedKeys = append(completedKeys, key)
-				}
 				continue
 			}
 			if fence > 0 {
@@ -223,7 +219,6 @@ func (c *TaggedCache) FlushContext(ctx context.Context) error {
 					continue
 				}
 				if generation > fence {
-					completedKeys = append(completedKeys, key)
 					continue
 				}
 			}
@@ -233,17 +228,10 @@ func (c *TaggedCache) FlushContext(ctx context.Context) error {
 				continue
 			}
 			if !deleted {
-				completedKeys = append(completedKeys, key)
 				continue
 			}
 			_, unbindErr := c.cache.unbindKeyFromAllTagsLockedContext(ctx, driver, key)
 			resultErr = errors.Join(resultErr, unbindErr)
-			if unbindErr == nil {
-				completedKeys = append(completedKeys, key)
-			}
-		}
-		if fence > 0 && len(completedKeys) > 0 {
-			resultErr = errors.Join(resultErr, c.cache.completeKeyInvalidation(context.WithoutCancel(ctx), driver, completedKeys, fence))
 		}
 		return resultErr
 	})
@@ -464,10 +452,10 @@ func cloneStrings(values []string) []string {
 type tagPrefixContextKey struct{}
 
 func withTagPrefixContext(ctx context.Context, prefix string) context.Context {
-	if ctx == nil || prefix == "" {
+	if ctx == nil {
 		return ctx
 	}
-	if existing, ok := ctx.Value(tagPrefixContextKey{}).(string); ok && existing != "" {
+	if _, ok := ctx.Value(tagPrefixContextKey{}).(string); ok {
 		return ctx
 	}
 	return context.WithValue(ctx, tagPrefixContextKey{}, prefix)
@@ -475,7 +463,7 @@ func withTagPrefixContext(ctx context.Context, prefix string) context.Context {
 
 func (c *Cache) resolveTagPrefixContext(ctx context.Context) string {
 	if ctx != nil {
-		if prefix, ok := ctx.Value(tagPrefixContextKey{}).(string); ok && prefix != "" {
+		if prefix, ok := ctx.Value(tagPrefixContextKey{}).(string); ok {
 			return prefix
 		}
 	}
@@ -484,19 +472,28 @@ func (c *Cache) resolveTagPrefixContext(ctx context.Context) string {
 
 func (c *Cache) resolveTagPrefix() string {
 	if c == nil || c.state == nil {
-		return defaultTagPrefix
+		return ""
 	}
 	c.state.storesMu.RLock()
 	tagPrefix := c.state.storeOptions[c.storeName].TagPrefix
+	base := driverTagPrefix(c.state.stores[c.storeName])
 	c.state.storesMu.RUnlock()
-	if tagPrefix == "" {
-		return defaultTagPrefix
+	if tagPrefix == base {
+		return ""
 	}
 	return tagPrefix
 }
 
+// 命名空间驱动已把构造时的标签前缀编码在物理键中，使用原配置时沿用原索引。
+func driverTagPrefix(driver Driver) string {
+	if ns, ok := driver.(*NamespaceDriver); ok {
+		return ns.tagPrefix
+	}
+	return defaultTagPrefix
+}
+
 func tagMetaKeyWithPrefix(tagPrefix, tag string) string {
-	if tagPrefix == "" || tagPrefix == defaultTagPrefix {
+	if tagPrefix == "" {
 		return tagMetaPrefix + cacheMetadataScope + ":" + tag
 	}
 	return tagMetaPrefix + "custom:" + cachekey.TagNamespace(tagPrefix) + cacheMetadataScope + ":" + tag
@@ -505,7 +502,7 @@ func tagMetaKeyWithPrefix(tagPrefix, tag string) string {
 func tagReverseKeyWithPrefix(tagPrefix, key string) string {
 	digest := sha256.Sum256([]byte(key))
 	hexDigest := hex.EncodeToString(digest[:])
-	if tagPrefix == "" || tagPrefix == defaultTagPrefix {
+	if tagPrefix == "" {
 		return tagReversePrefix + cacheMetadataScope + ":" + hexDigest
 	}
 	return tagReversePrefix + "custom:" + cachekey.TagNamespace(tagPrefix) + cacheMetadataScope + ":" + hexDigest
