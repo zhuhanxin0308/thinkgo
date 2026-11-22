@@ -8,7 +8,6 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/zhuhanxin0308/thinkgo/v3/context"
@@ -151,7 +150,6 @@ func canonicalBrowserOrigin(parsed *url.URL) string {
 	if defaultPort == "" || host == "" || !utf8.ValidString(host) {
 		return ""
 	}
-	// 仅对 ASCII 字母做小写折叠，防止 Unicode 转小写后指向另一个域名。
 	rawAuthority := host
 	canonicalAuthority := ""
 	if strings.HasPrefix(parsed.Host, "[") {
@@ -162,22 +160,10 @@ func canonicalBrowserOrigin(parsed *url.URL) string {
 		rawAuthority = "[" + host + "]"
 		canonicalAuthority = "[" + strings.ToLower(address.String()) + "]"
 	} else {
-		var builder strings.Builder
-		builder.Grow(len(host))
-		for _, char := range host {
-			if char < 0x80 {
-				if !isCorsASCIIHostCharacter(char) {
-					return ""
-				}
-				if char >= 'A' && char <= 'Z' {
-					char += 'a' - 'A'
-				}
-			} else if unicode.IsControl(char) || unicode.IsSpace(char) {
-				return ""
-			}
-			builder.WriteRune(char)
+		canonicalAuthority = canonicalCorsDomain(host)
+		if canonicalAuthority == "" {
+			return ""
 		}
-		canonicalAuthority = builder.String()
 	}
 	rawPort := parsed.Port()
 	if rawPort == "" {

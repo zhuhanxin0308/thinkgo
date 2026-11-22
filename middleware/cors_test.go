@@ -26,6 +26,9 @@ func TestCorsMatchesBrowserOriginsUsingCanonicalAuthority(t *testing.T) {
 			"https://LOCALHOST:8443",
 			"https://[2001:DB8::1]:443",
 			"https://İ.example:443",
+			"https://你好.com:443",
+			"https://xn--bcher-kva.example:8443",
+			"http://0177.1:80",
 		},
 		AllowMethods:     []string{http.MethodPost},
 		AllowCredentials: true,
@@ -47,6 +50,13 @@ func TestCorsMatchesBrowserOriginsUsingCanonicalAuthority(t *testing.T) {
 		{"https://client.example.attacker.test", false},
 		{"https://localhost", false},
 		{"https://i.example", false},
+		{"https://xn--6qq79v.com", true},
+		{"https://bücher.example:8443", true},
+		{"https://xn--bcher-kva.example", false},
+		{"https://xn--6qq79v.net", false},
+		{"http://127.0.0.1", true},
+		{"http://0x7f000001", true},
+		{"http://127.0.0.2", false},
 	} {
 		t.Run(test.origin, func(t *testing.T) {
 			preflight := newCorsRequest(t, http.MethodOptions, test.origin)
@@ -72,6 +82,45 @@ func TestCorsMatchesBrowserOriginsUsingCanonicalAuthority(t *testing.T) {
 				t.Fatal("未授权来源不应收到凭证许可")
 			}
 		})
+	}
+}
+
+func TestCorsRejectsInvalidIDNAConfiguration(t *testing.T) {
+	for _, origin := range []string{"https://ab\u200dcd.example", "https://\u0301.example", "https://xn--.example", "https://你好.xn--"} {
+		config := CorsConfig{AllowOrigins: []string{origin}, AllowMethods: []string{http.MethodGet}}
+		if _, err := NewCors(config); err == nil {
+			t.Errorf("不符合 IDNA 的主机 %q 通过了配置校验", origin)
+		}
+	}
+}
+
+func TestCorsCanonicalizesBrowserIPv4(t *testing.T) {
+	for _, test := range []struct{ host, want string }{
+		{"127.1", "127.0.0.1"},
+		{"0X7f.0.01.", "127.0.0.1"},
+		{"0xffffffff", "255.255.255.255"},
+		{"0x", "0.0.0.0"},
+		{"1.16777215", "1.255.255.255"},
+		{"１.１", "1.0.0.1"},
+		{"node.0xg", "node.0xg"},
+		{"1.16777216", ""},
+		{"256.1", ""},
+		{"0x100000000", ""},
+		{"1.2.3.4.5", ""},
+		{"1..2", ""},
+		{"09", ""},
+		{"name.1", ""},
+	} {
+		got, err := validateAllowedOrigin("http://" + test.host)
+		if test.want == "" {
+			if err == nil {
+				t.Errorf("无效 IPv4 主机 %q 被接受为 %q", test.host, got)
+			}
+			continue
+		}
+		if err != nil || got != "http://"+test.want {
+			t.Errorf("主机 %q 的规范化结果为 %q，错误为 %v，期望 %q", test.host, got, err, test.want)
+		}
 	}
 }
 

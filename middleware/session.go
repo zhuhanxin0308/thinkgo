@@ -122,11 +122,6 @@ func (c *sessionCommitCoordinator) beforeCommit(header http.Header) error {
 	if err := c.requestSession.CommitResponse(); err != nil {
 		return newSessionCommitError(err)
 	}
-	name, err := c.requestSession.CookieName()
-	if err != nil {
-		return newSessionCommitError(err)
-	}
-	keepLatestSessionCookie(header, name)
 	return nil
 }
 
@@ -187,36 +182,6 @@ func (w *sessionHeaderWriter) Header() http.Header {
 
 func (w *sessionHeaderWriter) Write(body []byte) (int, error) { return len(body), nil }
 func (w *sessionHeaderWriter) WriteHeader(int)                {}
-
-// keepLatestSessionCookie 合并提交前多次 Save 产生的同名 Cookie，只保留最终状态。
-func keepLatestSessionCookie(header http.Header, name string) {
-	values := header.Values("Set-Cookie")
-	if len(values) < 2 || name == "" {
-		return
-	}
-	latest := -1
-	for index, value := range values {
-		parsed, err := http.ParseSetCookie(value)
-		if err == nil && parsed.Name == name {
-			latest = index
-		}
-	}
-	if latest < 0 {
-		return
-	}
-	filtered := make([]string, 0, len(values))
-	for index, value := range values {
-		parsed, err := http.ParseSetCookie(value)
-		if err == nil && parsed.Name == name && index != latest {
-			continue
-		}
-		filtered = append(filtered, value)
-	}
-	header.Del("Set-Cookie")
-	for _, value := range filtered {
-		header.Add("Set-Cookie", value)
-	}
-}
 
 // ResponseAdapter 将内存响应安全适配为仅用于写响应头的 http.ResponseWriter。
 type ResponseAdapter struct {
