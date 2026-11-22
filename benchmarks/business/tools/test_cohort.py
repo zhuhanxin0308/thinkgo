@@ -164,26 +164,37 @@ class CohortTests(unittest.TestCase):
             self.assertEqual((output / "manifest.json").read_bytes(), archived)
 
     def test_identity_collects_default_and_comparison_provenance(self):
+        # 先加载真实模块，避免在合成来源的替身生效期间缓存被替换的函数。
+        import build_inputs
+
         with tempfile.TemporaryDirectory() as directory:
             environment = SimpleNamespace(root=ROOT, runtime=pathlib.Path(directory),
                                           binary=lambda component, name: pathlib.Path(directory) / component / name)
+            default_protocol = experiment.load_protocol(ROOT / "contracts/protocol.json")
+            comparison = experiment.load_protocol(COMPARISON)
+            records = {"actual": "provenance"}
+            sources = {"root.go": "e" * 64}
             def git(arguments, **kwargs):
                 if arguments[1] == "status":
                     return ""
                 return CURRENT if arguments[1] == "rev-parse" else b"benchmarks/business/tools/run.py\0"
             with mock.patch.object(run.subprocess, "check_output", side_effect=git), \
                     mock.patch.object(run, "file_digest", return_value="f" * 64), \
-                    mock.patch("provenance.committed_sources", return_value={"root.go": "e" * 64}), \
-                    mock.patch("provenance.collect", return_value={"actual": "provenance"}) as collect, \
-                    mock.patch("provenance.validate") as validate:
-                default = run.identity(environment, experiment.load_protocol(ROOT / "contracts/protocol.json"), "measure")
-                self.assertEqual(default["go_build_provenance"], {"actual": "provenance"})
+                    mock.patch("provenance.committed_sources", return_value=sources), \
+                    mock.patch("provenance.collect", return_value=records) as collect, \
+                    mock.patch("provenance.validate") as validate, \
+                    mock.patch.object(build_inputs, "verify_inputs") as verify_inputs:
+                default = run.identity(environment, default_protocol, "measure")
+                self.assertEqual(default["go_build_provenance"], records)
                 self.assertEqual(collect.call_count, 1)
-                comparison = experiment.load_protocol(COMPARISON)
                 result = run.identity(environment, comparison, "measure", go_tool="specified-go")
-            self.assertEqual(result["go_build_provenance"], {"actual": "provenance"})
+            self.assertEqual(result["go_build_provenance"], records)
             self.assertEqual(collect.call_args.args[-1], "specified-go")
             self.assertEqual(validate.call_count, 2)
+            self.assertEqual(verify_inputs.call_args_list, [
+                mock.call(ROOT.parents[1], default_protocol, records, CURRENT, sources, "go"),
+                mock.call(ROOT.parents[1], comparison, records, CURRENT, sources, "specified-go"),
+            ])
             self.assertIn("thinkgo-before", result["binaries_sha256"])
             self.assertEqual(result["git_commit"], CURRENT)
 

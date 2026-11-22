@@ -169,10 +169,17 @@ def identity(environment, protocol, mode, *, go_tool="go"):
         # 采集器自行读取提交；再次绑定清单起始提交，防止采集期间切换 HEAD。
         validate(protocol, result["go_build_provenance"], binaries, git, current_tree=tree)
     if mode == "measure":
-        require_measurement_sources(repository, protocol)
-        current = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repository, text=True).strip()
-        if current != git:
-            raise ValueError("来源采集期间源码提交已变化，拒绝归档混合身份")
+        from build_inputs import verify_inputs
+
+        def confirm_snapshot():
+            require_measurement_sources(repository, protocol)
+            current = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repository, text=True).strip()
+            if current != git:
+                raise ValueError("来源采集期间源码提交已变化，拒绝归档混合身份")
+
+        confirm_snapshot()
+        verify_inputs(repository, protocol, result["go_build_provenance"], git, source, go_tool)
+        confirm_snapshot()
     return result
 
 
