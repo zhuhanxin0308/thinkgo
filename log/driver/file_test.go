@@ -416,9 +416,18 @@ func TestFileDriverRotationSkipsEveryFullSegment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("选择轮转日志失败: %v", err)
 	}
-	expected := filepath.Join(directory, now.Format("2006-01-02")+"_2.log")
-	if filename != expected {
-		t.Fatalf("应选择第二个轮转文件 %s，实际为 %s", expected, filename)
+	// 选段时目标文件尚未创建，先核对父目录身份，再核对轮转文件全名。
+	expectedDir, err := os.Stat(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selectedDir, err := os.Stat(filepath.Dir(filename))
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedName := now.Format("2006-01-02") + "_2.log"
+	if !os.SameFile(expectedDir, selectedDir) || filepath.Base(filename) != expectedName {
+		t.Fatalf("应选择第二个轮转文件 %s，实际为 %s", filepath.Join(directory, expectedName), filename)
 	}
 }
 

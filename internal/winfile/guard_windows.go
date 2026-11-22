@@ -112,6 +112,15 @@ func lockGuard(ctx context.Context, handle *os.File) (result error) {
 }
 
 func tryGuardLock(handle *os.File) (locked bool, result error) {
+	return tryWindowsGuardLock(handle, windows.LOCKFILE_EXCLUSIVE_LOCK)
+}
+
+func trySharedGuardLock(handle *os.File) (bool, error) {
+	// LockFileEx 的共享锁不设置 LOCKFILE_EXCLUSIVE_LOCK。
+	return tryWindowsGuardLock(handle, 0)
+}
+
+func tryWindowsGuardLock(handle *os.File, flags uint32) (locked bool, result error) {
 	request, err := newGuardRequest()
 	if err != nil {
 		return false, err
@@ -120,7 +129,7 @@ func tryGuardLock(handle *os.File) (locked bool, result error) {
 	defer func() { result = errors.Join(result, request.close()) }()
 	native := windows.Handle(handle.Fd())
 	err = windows.LockFileEx(native,
-		windows.LOCKFILE_EXCLUSIVE_LOCK|windows.LOCKFILE_FAIL_IMMEDIATELY,
+		flags|windows.LOCKFILE_FAIL_IMMEDIATELY,
 		0, 1, 0, request.overlapped)
 	// FAIL_IMMEDIATELY does not queue for an unavailable range. If a driver
 	// nevertheless reports pending I/O, cancel it before joining completion;

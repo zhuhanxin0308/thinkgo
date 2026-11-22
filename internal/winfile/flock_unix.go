@@ -1,4 +1,4 @@
-//go:build (linux && !android) || (darwin && !ios)
+//go:build linux || darwin || freebsd || openbsd || netbsd || dragonfly || solaris
 
 package winfile
 
