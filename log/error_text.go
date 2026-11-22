@@ -1,9 +1,7 @@
 package log
 
 import (
-	"encoding/json"
 	"regexp"
-	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -26,17 +24,21 @@ func findSensitiveErrorFieldMatches(message string) [][]int {
 	matches := make([][]int, 0, len(candidates))
 	for _, sub := range candidates {
 		rawKey := message[sub[2]:sub[3]]
-		if loc := sensitiveErrorFieldSuffixRegexp.FindStringIndex(rawKey); loc != nil {
-			keyStart := sub[2] + loc[0]
-			keyEnd := sub[2] + loc[1]
-			matches = append(matches, []int{keyStart, sub[1], keyStart, keyEnd})
-			continue
-		}
-		if redact.CredentialAlias(rawKey) {
-			matches = append(matches, []int{sub[2], sub[1], sub[2], sub[3]})
+		if field := sensitiveErrorField(rawKey); field != "" {
+			matches = append(matches, []int{sub[3] - len(field), sub[1], sub[3] - len(field), sub[3]})
 		}
 	}
 	return matches
+}
+
+func sensitiveErrorField(key string) string {
+	if field := sensitiveErrorFieldSuffixRegexp.FindString(key); field != "" {
+		return field
+	}
+	if redact.CredentialAlias(key) {
+		return key
+	}
+	return ""
 }
 
 // redactErrorCredentials 按字段类型识别凭据边界，避免把认证方案或首项 Cookie 当成完整凭据。
@@ -49,26 +51,50 @@ func redactErrorCredentialsWithMask(message string, mask func(string) string) st
 	if !strings.ContainsAny(message, ":=") {
 		return message
 	}
-	matches := findSensitiveErrorFieldMatches(message)
-	if len(matches) == 0 {
-		return message
-	}
 	var result strings.Builder
+	for len(message) > 0 {
+		start := nextErrorJSONStart(message)
+		plainEnd := redactPlainErrorText(&result, message, start, mask)
+		if plainEnd == len(message) {
+			break
+		}
+		if plainEnd > start {
+			// 明文凭据与一个或多个对象重叠时，不能从中途恢复并暴露剩余成员。
+			for start < plainEnd {
+				_, length := redactErrorJSON(message[start:], mask)
+				end := start + length
+				if end >= plainEnd {
+					plainEnd = end
+					break
+				}
+				start = end + nextErrorJSONStart(message[end:])
+			}
+			message = message[plainEnd:]
+			continue
+		}
+		fragment, end := redactErrorJSON(message[start:], mask)
+		result.WriteString(fragment)
+		message = message[start+end:]
+	}
+	return result.String()
+}
+
+// redactPlainErrorText 只在前段寻找字段，但允许已开始的凭据延伸到完整文本的边界。
+func redactPlainErrorText(result *strings.Builder, message string, end int, mask func(string) string) int {
 	position := 0
-	jsonEnd := 0
-	for _, match := range matches {
+	for _, match := range findSensitiveErrorFieldMatches(message[:end]) {
 		if match[0] < position {
 			continue
 		}
 		result.WriteString(message[position:match[1]])
 		field := strings.ToLower(message[match[2]:match[3]])
 		value := message[match[1]:]
-		if length := jsonScalarCredentialLength(message, match, value, &jsonEnd); length > 0 {
-			result.WriteString(strconv.Quote(maskErrorField(field, value[:length], mask)))
-			position = match[1] + length
-			continue
-		}
 		length, quoted := errorCredentialLength(value, field)
+		if match[1]+length > end {
+			// 边界落入结构化片段，按一个完整的敏感值遮蔽，避免回写任何可疑字段。
+			result.WriteString(logRedactedPlaceholder)
+			return match[1] + length
+		}
 		content := value[:length]
 		if quoted {
 			result.WriteByte(content[0])
@@ -91,48 +117,10 @@ func redactErrorCredentialsWithMask(message string, mask func(string) string) st
 		}
 		position = match[1] + length
 	}
-	result.WriteString(message[position:])
-	return result.String()
-}
-
-// jsonScalarCredentialLength 只信任已验证对象中的非引号标量边界。
-func jsonScalarCredentialLength(message string, match []int, value string, jsonEnd *int) int {
-	keyEnd := match[3]
-	if message[keyEnd] != '"' || strings.TrimSpace(message[keyEnd+1:match[1]]) != ":" {
-		return 0
+	if position < end {
+		result.WriteString(message[position:end])
 	}
-	valueEnd := strings.IndexAny(value, ",}")
-	if valueEnd <= 0 {
-		return 0
-	}
-	token := strings.TrimRightFunc(value[:valueEnd], unicode.IsSpace)
-	if token == "" || strings.ContainsRune(`"{[`, rune(token[0])) || !json.Valid([]byte(token)) {
-		return 0
-	}
-	keyStart := strings.LastIndexByte(message[:match[2]], '"')
-	if keyStart < 0 || !json.Valid([]byte(message[keyStart:keyEnd+1])) {
-		return 0
-	}
-	beforeKey := strings.TrimRightFunc(message[:keyStart], unicode.IsSpace)
-	if beforeKey == "" || !strings.ContainsRune("{,", rune(beforeKey[len(beforeKey)-1])) {
-		return 0
-	}
-	if match[1]+len(token) > *jsonEnd {
-		objectStart := strings.LastIndexByte(beforeKey, '{')
-		if objectStart < 0 {
-			return 0
-		}
-		decoder := json.NewDecoder(strings.NewReader(message[objectStart:]))
-		var object json.RawMessage
-		if err := decoder.Decode(&object); err != nil {
-			return 0
-		}
-		*jsonEnd = objectStart + int(decoder.InputOffset())
-		if match[1]+len(token) > *jsonEnd {
-			return 0
-		}
-	}
-	return len(token)
+	return max(position, end)
 }
 
 // errorCredentialLength 保留有闭合引号的字段边界；不明确的 HTTP 敏感头延伸到行末。
