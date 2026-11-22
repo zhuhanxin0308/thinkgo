@@ -297,7 +297,7 @@ func TestMongoBuildFilterParsesNotLikeAsNegatedRegex(t *testing.T) {
 	if !ok {
 		t.Fatalf("NOT LIKE 应生成 $not 正则条件，实际 %#v", condition)
 	}
-	if negated["$regex"] != "^.*admin.*$" || negated["$options"] != "i" {
+	if negated["$regex"] != `\A.*admin.*\z` || negated["$options"] != "is" {
 		t.Fatalf("NOT LIKE 正则条件不正确，实际 %#v", negated)
 	}
 	if _, exists := filter["name NOT"]; exists {

@@ -155,15 +155,20 @@ func convertModelScanValue(destination reflect.Value, source any) error {
 		return nil
 	case reflect.Slice:
 		if destination.Type().Elem().Kind() == reflect.Uint8 {
+			if value.Kind() == reflect.Slice && value.Type().Elem().Kind() == reflect.Uint8 {
+				// 有类型的空字节源表示零长二进制值，SQL NULL 已在上方单独处理。
+				binary := make([]byte, value.Len())
+				copy(binary, value.Bytes())
+				destination.SetBytes(binary)
+				return nil
+			}
 			text, err := modelScanScalarText(source)
 			if err != nil {
 				return err
 			}
-			binary := reflect.MakeSlice(destination.Type(), len(text), len(text))
-			for index := 0; index < len(text); index++ {
-				binary.Index(index).SetUint(uint64(text[index]))
-			}
-			destination.Set(binary)
+			binary := make([]byte, len(text))
+			copy(binary, text)
+			destination.SetBytes(binary)
 			return nil
 		}
 	}

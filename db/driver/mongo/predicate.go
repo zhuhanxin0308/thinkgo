@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
+	"slices"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
@@ -25,6 +26,7 @@ func (c *MongoConnection) compilePredicate(predicate Predicate, primaryKey, mode
 	if err := coerceMongoFilterPrimaryKeyAlias(filter, primaryKey, modelKey); err != nil {
 		return nil, err
 	}
+	guardMongoNegativeFields(filter)
 	return filter, nil
 }
 
@@ -89,8 +91,13 @@ func compileMongoNode(node PredicateNode) (bson.M, error) {
 		case "IS NOT NULL":
 			return bson.M{field: bson.M{"$ne": nil}}, nil
 		case "IN":
-			return bson.M{field: bson.M{"$in": node.Values}}, nil
+			// PortableNodes 已复制参数。WHERE 中只有与非 NULL 候选相等才能为真。
+			return bson.M{field: bson.M{"$in": slices.DeleteFunc(node.Values, isMongoNullCandidate)}}, nil
 		case "NOT IN":
+			if slices.ContainsFunc(node.Values, isMongoNullCandidate) {
+				// 空 $in 恒假，同时保留原候选，后续仍会校验和转换主键。
+				return bson.M{field: bson.M{"$in": []any{}, "$nin": node.Values}}, nil
+			}
 			return bson.M{field: bson.M{"$nin": node.Values}}, nil
 		case "BETWEEN":
 			if len(node.Values) != 2 || isNilMongoScalar(node.Values[0]) || isNilMongoScalar(node.Values[1]) {
@@ -122,16 +129,51 @@ func compileMongoNode(node PredicateNode) (bson.M, error) {
 
 var mongoComparisonOperators = map[string]string{">=": "$gte", "<=": "$lte", "!=": "$ne", "<>": "$ne", ">": "$gt", "<": "$lt"}
 
-func isNilMongoScalar(value interface{}) bool {
-	if value == nil {
-		return true
+// BSON 用有符号的单字节类型编号，MinKey 是 -1。集合只初始化一次，包含数组本身。
+var mongoNonNullTypes = func() []int32 {
+	const minKeyTypeCode int32 = -1
+	types := []int32{minKeyTypeCode}
+	for typ := bson.TypeDouble; typ <= bson.TypeMaxKey; typ++ {
+		if typ.IsValid() && typ != bson.TypeNull {
+			types = append(types, int32(typ))
+		}
 	}
+	return types
+}()
+
+// 合取合并和主键别名校验完成后，才为每个否定条件添加叶字段的非空类型限制。
+// $type 会穿过文档数组检查实际叶值；叶字段是数组时保留 MongoDB 的原生元素匹配。
+func guardMongoNegativeFields(filter bson.M) {
+	for field, value := range filter {
+		switch condition := value.(type) {
+		case []bson.M:
+			for _, child := range condition {
+				guardMongoNegativeFields(child)
+			}
+		case bson.M:
+			if field == "$expr" || condition["$in"] != nil {
+				continue
+			}
+			if condition["$ne"] != nil || condition["$not"] != nil || condition["$nin"] != nil {
+				condition["$type"] = mongoNonNullTypes
+			}
+		}
+	}
+}
+
+func isMongoNullCandidate(value any) bool {
+	current := mongoScalarValue(value)
+	return !current.IsValid() || current.Kind() == reflect.Slice && current.IsNil()
+}
+
+func isNilMongoScalar(value interface{}) bool {
+	return !mongoScalarValue(value).IsValid()
+}
+
+func mongoScalarValue(value any) reflect.Value {
 	current := reflect.ValueOf(value)
 	for current.Kind() == reflect.Pointer || current.Kind() == reflect.Interface {
-		if current.IsNil() {
-			return true
-		}
 		current = current.Elem()
 	}
-	return false
+	return current
 }

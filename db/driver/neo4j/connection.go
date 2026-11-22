@@ -523,7 +523,7 @@ func cypherLikeRegex(value interface{}) (string, error) {
 		return "", fmt.Errorf("%w: Neo4j LIKE 模式过长", ErrInvalidQuery)
 	}
 	var builder strings.Builder
-	builder.WriteString("(?i)^")
+	builder.WriteString(`(?is)\A`)
 	for _, character := range pattern {
 		switch character {
 		case '%':
@@ -534,6 +534,6 @@ func cypherLikeRegex(value interface{}) (string, error) {
 			builder.WriteString(regexp.QuoteMeta(string(character)))
 		}
 	}
-	builder.WriteByte('$')
+	builder.WriteString(`\z`)
 	return builder.String(), nil
 }

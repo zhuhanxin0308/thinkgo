@@ -768,5 +768,5 @@ func mongoLikeRegex(raw interface{}) (bson.M, error) {
 	escaped := regexp.QuoteMeta(pattern)
 	escaped = strings.ReplaceAll(escaped, "%", ".*")
 	escaped = strings.ReplaceAll(escaped, "_", ".")
-	return bson.M{"$regex": "^" + escaped + "$", "$options": "i"}, nil
+	return bson.M{"$regex": `\A` + escaped + `\z`, "$options": "is"}, nil
 }
