@@ -313,6 +313,9 @@ func parseConfigEnvironmentJSONArray(path, raw string) ([]interface{}, error) {
 }
 
 func parseTypedConfigEnvironmentCollection(path, raw string, targetType reflect.Type) (interface{}, error) {
+	if err := validateSingleEnvironmentJSON(raw); err != nil {
+		return nil, configEnvironmentTypeError(path, targetType.String())
+	}
 	target := reflect.New(targetType)
 	decoder := json.NewDecoder(strings.NewReader(raw))
 	decoder.DisallowUnknownFields()
@@ -326,6 +329,9 @@ func parseTypedConfigEnvironmentCollection(path, raw string, targetType reflect.
 }
 
 func decodeSingleEnvironmentJSON(raw string) (interface{}, error) {
+	if err := validateSingleEnvironmentJSON(raw); err != nil {
+		return nil, err
+	}
 	decoder := json.NewDecoder(bytes.NewBufferString(raw))
 	decoder.UseNumber()
 	var decoded interface{}
@@ -336,6 +342,17 @@ func decodeSingleEnvironmentJSON(raw string) (interface{}, error) {
 		return nil, err
 	}
 	return decoded, nil
+}
+
+// validateSingleEnvironmentJSON 复用文件配置的成员与深度规则，避免解码先覆盖重复键而丢失歧义。
+// 使用 Number 保持大整数和超出浮点范围的合法数字；调用方负责将校验错误转换为脱敏上下文。
+func validateSingleEnvironmentJSON(raw string) error {
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	decoder.UseNumber()
+	if err := validateJSONValue(decoder, 0, "$"); err != nil {
+		return err
+	}
+	return ensureJSONDecoderEOF(decoder)
 }
 
 func ensureJSONDecoderEOF(decoder *json.Decoder) error {
