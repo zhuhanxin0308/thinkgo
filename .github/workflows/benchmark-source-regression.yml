@@ -21,7 +21,6 @@ jobs:
       GOTOOLCHAIN: local
       GOWORK: "off"
       PYTHONDONTWRITEBYTECODE: "1"
-      COVERAGE_FILE: ${{ runner.temp }}/benchmark-source.coverage
     steps:
       # 临时工作流只验证本修复分支，正式 PR 前删除。
       - name: Checkout
@@ -49,8 +48,8 @@ jobs:
           go version
       - name: Run benchmark regression tests
         working-directory: benchmarks/business/tools
-        run: python -m coverage run --branch --source=. --omit="*/test_*.py" -m unittest discover -v
+        run: python -m coverage run --data-file="$RUNNER_TEMP/benchmark-source.coverage" --branch --source=. --omit="*/test_*.py" -m unittest discover -v
       - name: Report benchmark coverage
         if: always()
         working-directory: benchmarks/business/tools
-        run: python -m coverage report --show-missing
+        run: python -m coverage report --data-file="$RUNNER_TEMP/benchmark-source.coverage" --show-missing
