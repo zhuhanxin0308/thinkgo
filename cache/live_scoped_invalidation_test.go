@@ -52,7 +52,7 @@ func liveScopedRedis(tb testing.TB) (*Cache, *Cache) {
 		manager := NewCache(nil, namespace)
 		managers = append(managers, manager)
 		tb.Cleanup(func() {
-			keys := []string{manager.fenceSequenceKey(), manager.fenceInvalidationKey(), manager.scopedInvalidationKey()}
+			keys := []string{manager.fenceSequenceKey(), manager.fenceIssuedKey(), manager.fenceInvalidationKey(), manager.scopedInvalidationKey()}
 			for bucket := 0; bucket < cacheInvalidationBuckets; bucket++ {
 				keys = append(keys, manager.keyInvalidationBucketKey(bucket))
 			}

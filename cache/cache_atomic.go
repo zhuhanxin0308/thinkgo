@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"github.com/zhuhanxin0308/thinkgo/v3/cache/contract"
 )
 
 var (
@@ -16,9 +18,9 @@ var (
 	// ErrCacheNamespaceClearUnsupported 表示带前缀的命名空间无法安全局部清理。
 	ErrCacheNamespaceClearUnsupported = errors.New("缓存驱动不支持命名空间清理")
 	// ErrCorruptCacheEnvelope 表示内部 fencing 信封损坏。
-	ErrCorruptCacheEnvelope = errors.New("缓存代际信封损坏")
+	ErrCorruptCacheEnvelope = contract.ErrCorruptCacheEnvelope
 	// ErrCacheFenceUnavailable 表示驱动无法提供有效的单调 fencing 代际。
-	ErrCacheFenceUnavailable = errors.New("缓存 fencing 代际不可用")
+	ErrCacheFenceUnavailable = contract.ErrCacheFenceUnavailable
 )
 
 // Update 原子读取并改写单个缓存键。
@@ -85,13 +87,14 @@ func (c *Cache) UpdateContext(ctx context.Context, key string, ttl time.Duration
 			return false, err
 		}
 		if generation > 0 {
-			current, fenceErr := c.invalidationForKey(ctx, driver, key)
+			detached := context.WithoutCancel(ctx)
+			current, fenceErr := c.invalidationForKey(detached, driver, key)
 			if fenceErr != nil {
 				return false, fenceErr
 			}
 			if current > committedOrigin {
 				if !removed {
-					fenceErr = c.deleteExactGenerationContext(context.WithoutCancel(ctx), driver, key, generation)
+					fenceErr = c.deleteExactGenerationContext(detached, driver, key, generation)
 				}
 				return false, errors.Join(ErrCacheLockLost, fenceErr)
 			}
@@ -102,6 +105,7 @@ func (c *Cache) UpdateContext(ctx context.Context, key string, ttl time.Duration
 		_, cleanupErr := c.unbindKeyFromAllTagsLockedContext(ctx, driver, key)
 		return removed, cleanupErr
 	}
+	ctx = withTagPrefixContext(ctx, c.resolveTagPrefixContext(ctx))
 	tags, err := c.reverseTagsLockedContext(ctx, driver, key)
 	if err != nil {
 		return err

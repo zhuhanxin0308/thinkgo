@@ -7,12 +7,14 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/cachesnapshot"
 )
 
 var (
 	ErrInvalidMemoryBudget    = errors.New("内存缓存预算非法")
 	ErrMemoryValueTooLarge    = errors.New("内存缓存值超过预算")
-	ErrUnsupportedMemoryValue = errors.New("内存缓存不支持安全复制该值类型")
+	ErrUnsupportedMemoryValue = cachesnapshot.ErrUnsupportedValue
 )
 
 // MemoryBudget defines explicit per-driver admission limits. Bytes are conservative
@@ -38,11 +40,13 @@ func NewMemoryWithBudget(budget MemoryBudget) (*Memory, error) {
 }
 
 const (
-	memoryEntryCharge      = uint64(256)
-	memoryLockCharge       = uint64(128)
-	memoryGraphVisitCharge = uint64(128)
-	memoryGraphMaxDepth    = 64
-	memoryGraphMaxNodes    = 65536
+	memoryEntryCharge        = uint64(256)
+	memoryLockCharge         = uint64(128)
+	memoryGraphVisitCharge   = uint64(128)
+	memoryTimeCharge         = uint64(64)
+	memoryTimeLocationCharge = uint64(192)
+	memoryGraphMaxDepth      = 64
+	memoryGraphMaxNodes      = 65536
 )
 
 // budgetSnapshot first traverses the graph without allocating its payload, then
@@ -160,6 +164,9 @@ func (g *memoryGraphInspection) inspect(value reflect.Value, depth int) error {
 			}
 		}
 	case reflect.Struct:
+		if value.Type() == reflect.TypeFor[time.Time]() {
+			return g.inspectTime(value)
+		}
 		for i := 0; i < value.NumField(); i++ {
 			if value.Type().Field(i).PkgPath != "" {
 				if !budgetInlineType(value.Field(i).Type(), depth+1) {
@@ -176,6 +183,78 @@ func (g *memoryGraphInspection) inspect(value reflect.Value, depth int) error {
 		reflect.Float32, reflect.Float64, reflect.Complex64, reflect.Complex128:
 	default:
 		return fmt.Errorf("%w: %s", ErrUnsupportedMemoryValue, value.Type())
+	}
+	return nil
+}
+
+func (g *memoryGraphInspection) inspectTime(value reflect.Value) error {
+	if !value.CanInterface() {
+		return ErrUnsupportedMemoryValue
+	}
+	if err := g.add(memoryTimeCharge); err != nil {
+		return err
+	}
+	tm := value.Interface().(time.Time)
+	loc := tm.Location()
+	if loc == nil || loc == time.UTC || loc == time.Local {
+		return nil
+	}
+	locVal := reflect.ValueOf(loc)
+	visit := budgetVisit(locVal)
+	if g.seen[visit] {
+		return nil
+	}
+	if err := g.add(memoryGraphVisitCharge); err != nil {
+		return err
+	}
+	g.seen[visit] = true
+	locName := loc.String()
+	if err := g.addProduct(len(locName), 1); err != nil {
+		return err
+	}
+	zoneName, offset := tm.Zone()
+	if locName == zoneName && reflect.DeepEqual(loc, time.FixedZone(zoneName, offset)) {
+		return g.add(memoryTimeLocationCharge)
+	}
+	if locName == "" {
+		return fmt.Errorf("%w: %s", ErrUnsupportedMemoryValue, value.Type())
+	}
+	stdLoc, err := time.LoadLocation(locName)
+	if err != nil || !reflect.DeepEqual(loc, stdLoc) {
+		return fmt.Errorf("%w: %s", ErrUnsupportedMemoryValue, value.Type())
+	}
+	elem := reflect.ValueOf(stdLoc).Elem()
+	if err := g.add(uint64(elem.Type().Size())); err != nil {
+		return err
+	}
+	return g.chargeLocationStruct(elem, true)
+}
+
+func (g *memoryGraphInspection) chargeLocationStruct(v reflect.Value, skipRootName bool) error {
+	switch v.Kind() {
+	case reflect.String:
+		return g.addProduct(v.Len(), 1)
+	case reflect.Slice:
+		if v.Cap() == 0 {
+			return nil
+		}
+		if err := g.addProduct(v.Cap(), uint64(v.Type().Elem().Size())); err != nil {
+			return err
+		}
+		for i := 0; i < v.Len(); i++ {
+			if err := g.chargeLocationStruct(v.Index(i), false); err != nil {
+				return err
+			}
+		}
+	case reflect.Struct:
+		for i := 0; i < v.NumField(); i++ {
+			if skipRootName && v.Type().Field(i).Name == "name" {
+				continue
+			}
+			if err := g.chargeLocationStruct(v.Field(i), false); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
@@ -244,6 +323,9 @@ func budgetMapKeys(value reflect.Value) []reflect.Value {
 
 func budgetVisit(v reflect.Value) memoryCloneVisit {
 	visit := memoryCloneVisit{typ: v.Type(), kind: v.Kind(), pointer: v.Pointer()}
+	if v.Kind() == reflect.Pointer {
+		visit.typ = v.Type().Elem()
+	}
 	if v.Kind() == reflect.Slice {
 		visit.length, visit.capacity = v.Len(), v.Cap()
 	}
@@ -270,17 +352,18 @@ func cloneBudgetValue(v reflect.Value, seen map[memoryCloneVisit]reflect.Value) 
 		}
 		visit := budgetVisit(v)
 		if result, ok := seen[visit]; ok {
+			if v.Kind() == reflect.Pointer {
+				return result.Convert(v.Type())
+			}
 			return result
 		}
 		var result reflect.Value
 		switch v.Kind() {
 		case reflect.Pointer:
 			result = reflect.New(v.Type().Elem())
-			if result.Type() != v.Type() {
-				result = result.Convert(v.Type())
-			}
 			seen[visit] = result
 			result.Elem().Set(cloneBudgetValue(v.Elem(), seen))
+			return result.Convert(v.Type())
 		case reflect.Slice:
 			result = reflect.MakeSlice(v.Type(), v.Len(), v.Len())
 			seen[visit] = result
@@ -296,6 +379,9 @@ func cloneBudgetValue(v reflect.Value, seen map[memoryCloneVisit]reflect.Value) 
 		}
 		return result
 	case reflect.Array, reflect.Struct:
+		if v.Type() == reflect.TypeFor[time.Time]() {
+			return cloneBudgetTime(v, seen)
+		}
 		result := reflect.New(v.Type()).Elem()
 		result.Set(v)
 		if v.Kind() == reflect.Array {
@@ -313,6 +399,33 @@ func cloneBudgetValue(v reflect.Value, seen map[memoryCloneVisit]reflect.Value) 
 	default:
 		return v
 	}
+}
+
+func cloneBudgetTime(v reflect.Value, seen map[memoryCloneVisit]reflect.Value) reflect.Value {
+	tm := v.Interface().(time.Time)
+	loc := tm.Location()
+	if loc == nil || loc == time.UTC || loc == time.Local {
+		result := reflect.New(v.Type()).Elem()
+		result.Set(v)
+		return result
+	}
+	locVal := reflect.ValueOf(loc)
+	visit := budgetVisit(locVal)
+	if cachedLoc, ok := seen[visit]; ok {
+		return reflect.ValueOf(tm.In(cachedLoc.Interface().(*time.Location)))
+	}
+	locName := strings.Clone(loc.String())
+	zoneName, offset := tm.Zone()
+	var clonedLoc *time.Location
+	if locName == zoneName && reflect.DeepEqual(loc, time.FixedZone(zoneName, offset)) {
+		clonedLoc = time.FixedZone(strings.Clone(zoneName), offset)
+	} else if loaded, err := time.LoadLocation(locName); err == nil {
+		clonedLoc = loaded
+	} else {
+		clonedLoc = time.FixedZone(strings.Clone(zoneName), offset)
+	}
+	seen[visit] = reflect.ValueOf(clonedLoc)
+	return reflect.ValueOf(tm.In(clonedLoc))
 }
 
 // storeBudgetItemLocked admits all records, including monotonic fencing metadata.

@@ -67,6 +67,12 @@ var (
 	ErrInvalidCachePrefix = errors.New("缓存清理前缀非法")
 	// ErrUnscopedCacheEntry 表示旧文件项没有记录逻辑键，无法安全归属到某个前缀。
 	ErrUnscopedCacheEntry = errors.New("文件缓存项缺少命名空间信息")
+	// ErrInvalidCacheValue 表示缓存值无法按公开的编码合同无损保存。
+	ErrInvalidCacheValue = errors.New("缓存值编码无效")
+	// ErrCorruptCacheEnvelope 表示内部 fencing 或精确整数信封损坏。
+	ErrCorruptCacheEnvelope = errors.New("缓存代际信封损坏")
+	// ErrCacheFenceUnavailable 表示后端无法安全分配后续代际。
+	ErrCacheFenceUnavailable = errors.New("缓存 fencing 代际不可用")
 )
 
 // ValidateDriverTTL 拒绝负有效期。

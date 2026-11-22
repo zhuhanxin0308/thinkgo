@@ -8,15 +8,18 @@ import (
 	"errors"
 	"strconv"
 	"strings"
+	"sync/atomic"
 )
 
 const (
-	// 每个精确桶与前缀桶各自有数量和字节预算；精确桶最多 64 个，不按分桶扩大失效范围。
+	// 旧进程校验相同的桶数量、成员数和字节数，混合部署必须保持这些持久化约束。
 	cacheInvalidationBuckets      = 64
 	maxCacheInvalidationScopes    = 256
 	maxCacheInvalidationBytes     = 256 << 10
 	keyInvalidationScopePrefix    = "key:"
 	prefixInvalidationScopePrefix = "prefix:"
+	completedScopeWatermarkPrefix = "done:"
+	retiredScopeWatermarkKey      = "retired"
 )
 
 // ErrCacheInvalidationCapacity 表示失效范围元数据达到安全边界，调用方可先执行全 store Flush 回收。
@@ -40,6 +43,17 @@ func (c *Cache) keyInvalidationBucketKey(bucket int) string {
 	return cacheFencePrefix + cacheMetadataScope + ":keys:" + strconv.Itoa(bucket)
 }
 
+func parseScopeWatermark(raw interface{}) (generation uint64, completed bool, err error) {
+	if text, ok := raw.(string); ok {
+		if rest, isDone := strings.CutPrefix(text, completedScopeWatermarkPrefix); isDone {
+			gen, parseErr := parseFenceGenerationValue(rest)
+			return gen, parseErr == nil, parseErr
+		}
+	}
+	gen, err := parseFenceGenerationValue(raw)
+	return gen, false, err
+}
+
 // boundedScopeWatermarks 同时限制数量与 JSON 转义后的字节数，给文件后端的外层信封保留空间。
 func boundedScopeWatermarks(watermarks map[string]interface{}) (interface{}, bool, error) {
 	if len(watermarks) > maxCacheInvalidationScopes {
@@ -49,7 +63,7 @@ func boundedScopeWatermarks(watermarks map[string]interface{}) (interface{}, boo
 	if err != nil {
 		return nil, false, err
 	}
-	// 预留 uint64 最长十进制代际长度，已有 scope 换代不会因为多一位数字失去容量。
+	// 预留 uint64 最长十进制代际，已有范围换代不会失去容量。
 	reservedBytes := len(encoded)
 	for _, value := range watermarks {
 		generation, err := parseFenceGenerationValue(value)
@@ -66,34 +80,82 @@ func boundedScopeWatermarks(watermarks map[string]interface{}) (interface{}, boo
 
 // beginKeyInvalidation 只发布实际被删除键的水位，商品失效不会误伤会话等其他业务键。
 func (c *Cache) beginKeyInvalidation(ctx context.Context, driver Driver, keys []string) (uint64, error) {
-	generation, err := c.nextFenceGenerationContext(ctx, driver)
-	if err != nil {
-		return 0, err
-	}
 	groups := [cacheInvalidationBuckets][]string{}
 	for _, key := range keys {
 		bucket := keyInvalidationBucket(key)
 		groups[bucket] = append(groups[bucket], key)
 	}
-	// 调用方持有标签变更锁；先预检所有桶，避免可预见容量不足造成半途发布。
-	for bucket, keys := range groups {
-		if len(keys) == 0 {
+	floor, err := c.currentInvalidationGeneration(ctx, driver)
+	if err != nil {
+		return 0, err
+	}
+	if rawPrefixes, found, prefixErr := getCacheValueContext(ctx, driver, c.scopedInvalidationKey()); prefixErr != nil {
+		return 0, prefixErr
+	} else if found {
+		prefixWatermarks, parseErr := scopeWatermarks(rawPrefixes, true)
+		if parseErr != nil {
+			return 0, parseErr
+		}
+		for _, value := range prefixWatermarks {
+			gen, _, _ := parseScopeWatermark(value)
+			floor = max(floor, gen)
+		}
+	}
+	for _, key := range keys {
+		if rawVal, found, readErr := getCacheValueContext(ctx, driver, key); readErr != nil {
+			return 0, readErr
+		} else if found {
+			if _, currentGen, enveloped, decErr := decodeCacheValueEnvelope(rawVal); decErr != nil {
+				return 0, decErr
+			} else if enveloped {
+				floor = max(floor, currentGen)
+			}
+		}
+	}
+	var bucketSnapshots [cacheInvalidationBuckets]struct {
+		raw   interface{}
+		found bool
+	}
+	for bucket, bucketKeys := range groups {
+		if len(bucketKeys) == 0 {
 			continue
 		}
-		raw, found, err := getCacheValueContext(ctx, driver, c.keyInvalidationBucketKey(bucket))
-		if err != nil {
-			return 0, err
+		raw, found, readErr := getCacheValueContext(ctx, driver, c.keyInvalidationBucketKey(bucket))
+		if readErr != nil {
+			return 0, readErr
 		}
-		if _, _, err := keyScopeWatermarks(raw, found, keys, generation); err != nil {
+		bucketSnapshots[bucket].raw = raw
+		bucketSnapshots[bucket].found = found
+		if found {
+			existing, parseErr := scopeWatermarks(raw, true)
+			if parseErr != nil {
+				return 0, parseErr
+			}
+			for _, value := range existing {
+				gen, _, _ := parseScopeWatermark(value)
+				floor = max(floor, gen)
+			}
+		}
+	}
+	generation, err := c.allocateFenceGenerationAboveContext(ctx, driver, floor)
+	if err != nil {
+		return 0, err
+	}
+	// 调用方持有标签变更锁；先预检所有桶，避免可预见容量不足造成半途发布。
+	for bucket, bucketKeys := range groups {
+		if len(bucketKeys) == 0 {
+			continue
+		}
+		if _, _, err := keyScopeWatermarks(bucketSnapshots[bucket].raw, bucketSnapshots[bucket].found, bucketKeys, generation); err != nil {
 			return 0, err
 		}
 	}
-	for bucket, keys := range groups {
-		if len(keys) == 0 {
+	for bucket, bucketKeys := range groups {
+		if len(bucketKeys) == 0 {
 			continue
 		}
 		err = atomicUpdateCacheValueContext(ctx, driver, c.keyInvalidationBucketKey(bucket), 0, func(raw interface{}, found bool) (interface{}, bool, error) {
-			return keyScopeWatermarks(raw, found, keys, generation)
+			return keyScopeWatermarks(raw, found, bucketKeys, generation)
 		})
 		if err != nil {
 			return 0, err
@@ -107,13 +169,15 @@ func keyScopeWatermarks(raw interface{}, found bool, keys []string, generation u
 	if err != nil {
 		return nil, false, err
 	}
+	generationText := strconv.FormatUint(generation, 10)
 	for _, key := range keys {
 		scope := keyInvalidationScope(key)
 		current, _ := parseFenceGenerationValue(watermarks[scope])
-		if current < generation {
-			watermarks[scope] = strconv.FormatUint(generation, 10)
+		if current <= generation {
+			watermarks[scope] = generationText
 		}
 	}
+	// 删除成功不能证明提交前暂停的旧进程已经退出。只有覆盖该范围的全局水位才能替代它。
 	return boundedScopeWatermarks(watermarks)
 }
 
@@ -133,23 +197,45 @@ func scopeWatermarks(raw interface{}, found bool) (map[string]interface{}, error
 		if !keyScope && !prefixScope {
 			return nil, ErrCacheFenceUnavailable
 		}
-		if _, err := parseFenceGenerationValue(value); err != nil {
-			return nil, err
+		generation, completed, err := parseScopeWatermark(value)
+		if err != nil || prefixScope && completed {
+			return nil, ErrCacheFenceUnavailable
+		}
+		if completed {
+			// 候选版本留下的完成态仍含精确水位，可以无损恢复成旧格式。
+			value = strconv.FormatUint(generation, 10)
 		}
 		result[scope] = value
 	}
 	return result, nil
 }
 
-func (c *Cache) beginPrefixInvalidation(ctx context.Context, driver Driver, prefix string) (uint64, error) {
+func (c *Cache) beginPrefixInvalidation(ctx context.Context, driver Driver, prefix string, observed uint64) (uint64, error) {
 	if prefix == "" {
-		generation, err := c.beginFenceInvalidationContext(ctx, driver)
+		generation, err := c.beginFenceInvalidationContext(ctx, driver, observed)
 		if err != nil {
 			return 0, err
 		}
 		return generation, c.compactScopesAtFence(ctx, driver, generation)
 	}
-	generation, err := c.nextFenceGenerationContext(ctx, driver)
+	floor, err := c.currentInvalidationGeneration(ctx, driver)
+	if err != nil {
+		return 0, err
+	}
+	floor = max(floor, observed)
+	if rawScoped, found, readErr := getCacheValueContext(ctx, driver, c.scopedInvalidationKey()); readErr != nil {
+		return 0, readErr
+	} else if found {
+		existing, parseErr := scopeWatermarks(rawScoped, true)
+		if parseErr != nil {
+			return 0, parseErr
+		}
+		for _, value := range existing {
+			gen, _, _ := parseScopeWatermark(value)
+			floor = max(floor, gen)
+		}
+	}
+	generation, err := c.allocateFenceGenerationWithWitness(ctx, driver, floor, observed)
 	if err != nil {
 		return 0, err
 	}
@@ -201,7 +287,7 @@ func (c *Cache) compactScopeBucketAtFence(ctx context.Context, driver Driver, ke
 			return nil, false, err
 		}
 		for scope, raw := range watermarks {
-			generation, _ := parseFenceGenerationValue(raw)
+			generation, _, _ := parseScopeWatermark(raw)
 			if generation <= fence {
 				delete(watermarks, scope)
 			}
@@ -214,7 +300,7 @@ func (c *Cache) compactScopeBucketAtFence(ctx context.Context, driver Driver, ke
 	return err
 }
 
-// invalidationForKey 合并整 store、当前键与匹配前缀的水位，其他键的失效不参与判定。
+// invalidationForKey 合并整 store、当前键与匹配前缀的水位，其他键的失效不参与读取判定。
 func (c *Cache) invalidationForKey(ctx context.Context, driver Driver, key string) (uint64, error) {
 	raw, found, err := getCacheValueContext(ctx, driver, c.keyInvalidationBucketKey(keyInvalidationBucket(key)))
 	if err != nil {
@@ -234,7 +320,8 @@ func (c *Cache) invalidationForKey(ctx context.Context, driver Driver, key strin
 	}
 	// 先读取范围，再读取全局水位；Flush 先发布全局水位再压缩范围，读取不能落入两者之间的空窗。
 	global, err := c.currentInvalidationGeneration(ctx, driver)
-	return max(exact, matchingPrefixInvalidation(watermarks, key), global), err
+	prefix := matchingPrefixInvalidation(watermarks, key)
+	return max(exact, prefix, global), err
 }
 
 func exactKeyInvalidation(raw interface{}, found bool, key string) (uint64, error) {
@@ -242,11 +329,16 @@ func exactKeyInvalidation(raw interface{}, found bool, key string) (uint64, erro
 		return 0, nil
 	}
 	watermarks, valid := raw.(map[string]interface{})
-	if !valid {
+	if !valid || len(watermarks) > maxCacheInvalidationScopes {
+		return 0, ErrCacheFenceUnavailable
+	}
+	if _, exists := watermarks[retiredScopeWatermarkKey]; exists {
+		// 已裁剪的精确键集合无法从单个桶水位还原。不要放行可能迟到的旧提交。
 		return 0, ErrCacheFenceUnavailable
 	}
 	if value, exists := watermarks[keyInvalidationScope(key)]; exists {
-		return parseFenceGenerationValue(value)
+		exact, _, err := parseScopeWatermark(value)
+		return exact, err
 	}
 	return 0, nil
 }
@@ -318,15 +410,28 @@ func (c *Cache) clearAtFence(ctx context.Context, driver Driver, prefix string) 
 			return err
 		}
 	}
-	fence, err := c.beginPrefixInvalidation(ctx, driver, prefix)
+	floor, err := c.clearGenerationFloor(ctx, driver, clearer, prefix)
 	if err != nil {
 		return err
 	}
-	return clearer.ClearPrefixIfContext(ctx, prefix, nil, func(raw interface{}) (bool, error) {
+	fence, err := c.beginPrefixInvalidation(ctx, driver, prefix, floor)
+	if err != nil {
+		return err
+	}
+	var descendant atomic.Bool
+	var match func(string) bool
+	if allocator, _, _ := c.fenceAllocator(driver); allocator != nil {
+		match = redisClearNamespaceFilter(&descendant)
+	}
+	err = clearer.ClearPrefixIfContext(ctx, prefix, match, func(raw interface{}) (bool, error) {
 		_, generation, _, err := decodeCacheValueAtOrigin(raw)
 		if err != nil {
 			return false, errors.Join(ErrCorruptCacheEnvelope, err)
 		}
 		return generation <= fence, nil
 	})
+	if descendant.Load() {
+		return errors.Join(err, ErrCacheFenceUnavailable)
+	}
+	return err
 }

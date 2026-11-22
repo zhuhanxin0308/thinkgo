@@ -69,17 +69,40 @@ func TestMemoryBudgetGraphsAndOwnership(t *testing.T) {
 		number int
 	}
 	integer := 7
+	fixedTime := time.Date(2026, 11, 18, 12, 30, 0, 123, time.FixedZone("CST", 8*3600))
+	utcTime := time.Date(2026, 11, 18, 4, 30, 0, 123, time.UTC)
+	localTime := time.Now()
+	type exportedTimestamp struct {
+		Label string
+		At    time.Time
+	}
 	inputs := []interface{}{
 		nil, true, int8(-1), uint64(9), float64(2), complex128(3), "text",
+		fixedTime, utcTime, localTime, &fixedTime, []time.Time{fixedTime, fixedTime}, [1]time.Time{fixedTime},
+		exportedTimestamp{Label: "ok", At: fixedTime},
 		namedPointer(&integer), (*int)(nil), []int(nil), map[string]int(nil),
 		namedBytes{1, 2}, [2]string{"a", "b"}, exported{Values: []string{"value"}, number: 4},
-		map[string]interface{}{"a": []int{1, 2}, "b": nil},
+		map[string]interface{}{"a": []int{1, 2}, "b": nil, "now": fixedTime},
 	}
 	for _, input := range inputs {
 		clone, _, err := budgetSnapshot(input, 1<<20)
 		if err != nil || !reflect.DeepEqual(clone, input) || reflect.TypeOf(clone) != reflect.TypeOf(input) {
 			t.Fatalf("snapshot %T: %v %#v", input, err, clone)
 		}
+	}
+	if ianaLoc, locErr := time.LoadLocation("Asia/Shanghai"); locErr == nil {
+		ianaTime := time.Date(2026, 11, 18, 12, 30, 0, 0, ianaLoc)
+		clone, charge, snapErr := budgetSnapshot(ianaTime, 1<<20)
+		if snapErr != nil || !reflect.DeepEqual(clone, ianaTime) || charge <= memoryTimeCharge {
+			t.Fatalf("IANA time snapshot failed or undercharged: charge=%d err=%v", charge, snapErr)
+		}
+	}
+	zoneBacking := strings.Repeat("Z", 10000)
+	zoneSubstr := zoneBacking[100:103]
+	subTime := time.Date(2026, 11, 18, 12, 30, 0, 0, time.FixedZone(zoneSubstr, 3600))
+	clonedSub, _, err := budgetSnapshot(subTime, 1024)
+	if err != nil || unsafe.StringData(clonedSub.(time.Time).Location().String()) == unsafe.StringData(zoneSubstr) {
+		t.Fatalf("time location substring backing retained: err=%v", err)
 	}
 
 	backing := strings.Repeat("x", 10000)
@@ -121,8 +144,29 @@ func TestMemoryBudgetGraphsAndOwnership(t *testing.T) {
 	assertMemoryBudget(t, m)
 }
 
+// 命名指针和匿名指针共享目标时，内存预算和实际克隆都只能保留一个副本。
+func TestBudgetCloneKeepsNamedPointerCycles(t *testing.T) {
+	type node struct{ Next *node }
+	type namedPointer *node
+	source := &node{}
+	source.Next = source
+	copy, charge, err := budgetSnapshot(namedPointer(source), 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, plainCharge, err := budgetSnapshot(source, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := copy.(namedPointer)
+	if got == source || got.Next != got || plain.(*node).Next != plain.(*node) || charge != plainCharge {
+		t.Fatalf("指针别名影响了图拓扑或预算：named=%d plain=%d", charge, plainCharge)
+	}
+}
+
 func TestMemoryBudgetRejectsUnaccountableGraphsBeforeCommit(t *testing.T) {
 	type hidden struct{ value string }
+	type hiddenTime struct{ at time.Time }
 	type pointerNode struct{ Next *pointerNode }
 	integer := 0
 	deep := &pointerNode{}
@@ -131,7 +175,8 @@ func TestMemoryBudgetRejectsUnaccountableGraphsBeforeCommit(t *testing.T) {
 	}
 	unsupported := []interface{}{
 		make(chan int), (func())(nil), unsafe.Pointer(&integer), uintptr(1),
-		hidden{value: "hidden"}, time.Now(), map[*int]int{&integer: 1}, map[interface{}]int{1: 1}, map[float64]int{1: 1}, map[complex128]int{1: 1},
+		hidden{value: "hidden"}, hiddenTime{at: time.Now()},
+		map[time.Time]int{time.Now(): 1}, map[*int]int{&integer: 1}, map[interface{}]int{1: 1}, map[float64]int{1: 1}, map[complex128]int{1: 1},
 	}
 	m := testBudgetMemory(t, 2, 2048, 4096, 2)
 	if err := m.Set("existing", "keep", 0); err != nil {
@@ -144,7 +189,8 @@ func TestMemoryBudgetRejectsUnaccountableGraphsBeforeCommit(t *testing.T) {
 		requireMemoryValue(t, m, "existing", "keep")
 		assertMemoryBudget(t, m)
 	}
-	for _, value := range []interface{}{strings.Repeat("x", 2048), make([]byte, 2048), map[string][4096]byte{"large": {}}, deep, make([]struct{}, 70000), [4096]byte{}} {
+	hugeZoneTime := time.Date(2026, 11, 18, 0, 0, 0, 0, time.FixedZone(strings.Repeat("Z", 1<<20), 0))
+	for _, value := range []interface{}{strings.Repeat("x", 2048), make([]byte, 2048), map[string][4096]byte{"large": {}}, deep, make([]struct{}, 70000), [4096]byte{}, hugeZoneTime} {
 		if err := m.Set("existing", value, 0); !errors.Is(err, ErrMemoryValueTooLarge) {
 			t.Fatalf("accepted large graph %T: %v", value, err)
 		}

@@ -93,3 +93,33 @@ func TestTagMetadataRejectsMalformedFrames(t *testing.T) {
 		})
 	}
 }
+
+func TestClassifyProtectedMetadataRespectsFramedBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		key       string
+		protected bool
+		ambiguous bool
+	}{
+		{"direct-lock", LockMetadataPrefix + "job", true, false},
+		{"direct-fence", FenceMetadataPrefix + "default:sequence", true, false},
+		{"namespaced-lock", Namespace("tenant:") + LockMetadataPrefix + "job", true, false},
+		{"nested-namespaced-lock", Namespace("outer:") + Namespace("inner:") + LockMetadataPrefix + "job", true, false},
+		{"namespaced-fence", FenceMetadataPrefix + "namespace:" + Namespace("tenant:") + "default:sequence", true, false},
+		{"framed-fence", Namespace("outer:") + FenceMetadataPrefix + "default:sequence", true, false},
+		{"business-embedded-lock", "doc:" + LockMetadataPrefix + "intro", false, false},
+		{"business-embedded-fence", "doc:" + FenceMetadataPrefix + "intro", false, false},
+		{"namespaced-business-embedded-lock", Namespace("app:") + "doc:" + LockMetadataPrefix + "intro", false, false},
+		{"tag-metadata", Namespace("app:") + TagMetadataPrefix + TagNamespace("tag:") + "default:news", false, false},
+		{"malformed-namespace-with-lock", NamespacePrefix + "v2:999:short:" + LockMetadataPrefix + "job", false, true},
+		{"future-namespace-with-fence", NamespacePrefix + "v3:0::" + FenceMetadataPrefix + "seq", false, true},
+		{"malformed-namespace-without-marker", NamespacePrefix + "v2:999:short:ordinary", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			protected, ambiguous := ClassifyProtectedMetadata(tc.key)
+			if protected != tc.protected || ambiguous != tc.ambiguous {
+				t.Fatalf("ClassifyProtectedMetadata(%q) = (%t, %t), want (%t, %t)", tc.key, protected, ambiguous, tc.protected, tc.ambiguous)
+			}
+		})
+	}
+}

@@ -23,9 +23,7 @@ func (driver *NamespaceDriver) supportsTagMutationLock() bool {
 }
 
 func (driver *NamespaceDriver) supportsAtomicFencing() bool {
-	_, atomic := driver.driver.(AtomicUpdater)
-	_, preservesTTL := driver.driver.(TTLAtomicUpdater)
-	return atomic && preservesTTL
+	return cacheDriverSupportsAtomicFencing(driver.driver)
 }
 
 func (driver *NamespaceDriver) supportsGuardedUpdates() bool {
@@ -119,8 +117,8 @@ func (driver *NamespaceDriver) ClearPrefixIfContext(ctx context.Context, prefix 
 	}
 	return clearer.ClearPrefixIfContext(ctx, driver.namespace+prefix, func(physical string) bool {
 		logical := strings.TrimPrefix(physical, driver.namespace)
-		// Redis 的租约值不是业务 JSON，必须在读取和解码前排除本 namespace 的锁。
-		if strings.HasPrefix(logical, lockKeyPrefix) || strings.HasPrefix(logical, cacheFencePrefix) {
+		// Redis 的租约值不是业务 JSON，必须在读取和解码前排除本 namespace 及嵌套子 namespace 的锁与 fencing 元数据。
+		if protected, _ := cachekey.ClassifyProtectedMetadata(logical); protected {
 			return false
 		}
 		return match == nil || match(logical)

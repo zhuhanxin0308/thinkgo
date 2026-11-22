@@ -4,28 +4,39 @@ import (
 	"context"
 	"errors"
 	"strings"
+
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/cachekey"
 )
 
 // ErrAmbiguousRedisClearScope 表示扫描范围包含无法确认归属的锁或 fencing
 // 元数据候选键。调用方必须缩小范围或隔离数据库，不能把部分清理当作成功。
 var ErrAmbiguousRedisClearScope = errors.New("Redis 清理范围包含归属不明确的保护元数据")
 
-// redisClearKeyEligible 不根据值猜测锁类型：已知命名空间的保留键直接保护；
-// 其余包含保留标记的键存在业务键/外部命名空间歧义，失败关闭而非静默跳过。
-// scopePrefix 可以是比 driverPrefix 更窄的显式业务命名空间。
+// redisClearKeyEligible 只将驱动已配置的前缀及合法帧作为归属证据。调用方的过滤前缀
+// 可以在一个普通业务键的任意位置结束，不能把它当成另一个 Redis 驱动的物理配置。
 func redisClearKeyEligible(key, driverPrefix, scopePrefix string) (bool, error) {
 	if !strings.HasPrefix(key, driverPrefix) || !strings.HasPrefix(key, scopePrefix) {
 		return false, nil
 	}
-	for _, prefix := range []string{driverPrefix, scopePrefix} {
-		if strings.HasPrefix(key, prefix+managerLockKeyPrefix) ||
-			strings.HasPrefix(key, prefix+cacheFenceMetadataPrefix) {
-			return false, nil
-		}
+	if !strings.Contains(key, managerLockKeyPrefix) && !strings.Contains(key, cacheFenceMetadataPrefix) {
+		return true, nil
 	}
-	logical := strings.TrimPrefix(key, driverPrefix)
-	if strings.Contains(logical, managerLockKeyPrefix) || strings.Contains(logical, cacheFenceMetadataPrefix) {
-		return false, errors.Join(ErrUnsafeRedisFlush, ErrAmbiguousRedisClearScope)
+	if protected, _ := cachekey.ClassifyProtectedMetadata(strings.TrimPrefix(key, driverPrefix)); protected {
+		return false, nil
+	}
+	// 旧驱动的原始前缀没有分隔符，长度最多为 maxRedisPrefixBytes。逐一验证可能的
+	// 帧起点也涵盖「旧前缀 + 任意层 namespace + 锁」，且不依据 owner 或 TTL 猜测。
+	for boundary := 0; boundary <= min(maxRedisPrefixBytes, len(key)); boundary++ {
+		suffix := key[boundary:]
+		if !strings.HasPrefix(suffix, managerLockKeyPrefix) &&
+			!strings.HasPrefix(suffix, cacheFenceMetadataPrefix) &&
+			!strings.HasPrefix(suffix, cachekey.NamespacePrefix) {
+			continue
+		}
+		protected, ambiguous := cachekey.ClassifyProtectedMetadata(suffix)
+		if protected || ambiguous {
+			return false, errors.Join(ErrUnsafeRedisFlush, ErrAmbiguousRedisClearScope)
+		}
 	}
 	return true, nil
 }
