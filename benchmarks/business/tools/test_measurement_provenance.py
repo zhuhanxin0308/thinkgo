@@ -156,11 +156,11 @@ class MeasurementBinaryIdentityTests(MeasurementRepositoryFixture, unittest.Test
             path.write_bytes(b"runtime fixture, never executed")
         self.build()
 
-    def build(self):
+    def build(self, *flags):
         environment = {**os.environ, "GOFLAGS": "", "GOWORK": "off", "CGO_ENABLED": "1",
                        "GOOS": "linux", "GOARCH": "amd64", "GOAMD64": "v1"}
         for command in ("thinkgo", "load"):
-            subprocess.run([self.go_tool, "build", "-trimpath", "-buildvcs=true", "-o",
+            subprocess.run([self.go_tool, "build", "-trimpath", "-buildvcs=true", *flags, "-o",
                             str(self.root / "bin" / command), "./cmd/" + command],
                            cwd=self.root / "go", env=environment, check=True, capture_output=True)
 
@@ -255,6 +255,86 @@ class MeasurementBinaryIdentityTests(MeasurementRepositoryFixture, unittest.Test
         with mock.patch.object(provenance, "collect", side_effect=collect_then_commit), \
                 self.assertRaisesRegex(ValueError, "源码提交已变化"):
             self.identity()
+
+    def assert_measurement_gate(self, rejected=None):
+        class ReachedPreflight(Exception):
+            pass
+
+        output = self.directory / "output"
+        arguments = SimpleNamespace(mode="measure", variants="", protocol=self.protocol_path,
+                                    runtime=self.environment.runtime, work=self.directory / "work", output=output,
+                                    resume=False, go_tool=self.go_tool)
+        self.environment.dataset = json.loads((ROOT / "contracts/dataset.json").read_text(encoding="utf-8"))
+        self.environment.url = "http://127.0.0.1:1"
+        # 只替换外部副作用边界，来源采集和负载参数构建仍执行真实路径。
+        self.environment.command = mock.Mock(side_effect=ReachedPreflight)
+        self.environment.start = mock.Mock(side_effect=AssertionError("不得启动服务"))
+        with mock.patch.object(run, "ROOT", self.root), mock.patch.object(run, "Environment", return_value=self.environment):
+            if rejected is None:
+                with self.assertRaises(ReachedPreflight):
+                    run.execute(arguments)
+                self.environment.command.assert_called_once()
+                command = self.environment.command.call_args.args[0]
+                self.assertEqual(command[0], str(self.root / "bin/load"))
+                self.assertIn("-check-config", command)
+            else:
+                with self.assertRaisesRegex(ValueError, rejected):
+                    run.execute(arguments)
+                self.environment.command.assert_not_called()
+        self.environment.start.assert_not_called()
+        self.assertFalse(output.exists())
+
+    def ignored_input(self, relative, content):
+        path = self.repository / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with self.repository.joinpath(".git/info/exclude").open("a", encoding="utf-8") as excluded:
+            excluded.write("\n/" + relative + "\n")
+        path.write_text(content, encoding="utf-8")
+        self.assertEqual(self.git("check-ignore", "--", relative), relative)
+
+    def test_ignored_compiled_framework_source_is_rejected_before_load_or_evidence(self):
+        binary = self.root / "bin/load"
+        before = run.file_digest(binary)
+        self.ignored_input("ignored_behavior.go", 'package framework\n\nfunc init() { println("ignored fixture input") }\n')
+        self.build()
+        self.assertNotEqual(run.file_digest(binary), before)
+        self.assertEqual(self.git("status", "--porcelain", "--untracked-files=all"), "")
+        settings = provenance.parse_build_info(subprocess.check_output(
+            [self.go_tool, "version", "-m", str(binary)], text=True))["settings"]
+        self.assertEqual(settings["vcs.revision"], self.git("rev-parse", "HEAD"))
+        self.assertEqual(settings["vcs.modified"], "false")
+        self.assert_measurement_gate(r"ignored_behavior\.go")
+
+    def test_ignored_input_selected_by_binary_build_tag_is_rejected(self):
+        self.ignored_input("active_tag.go", '//go:build thinkgo_fixture_active\n\npackage framework\n\n'
+                           'func init() { println("tagged fixture input") }\n')
+        self.build("-tags=thinkgo_fixture_active")
+        self.assert_measurement_gate(r"active_tag\.go")
+
+    def test_ignored_file_selected_by_go_embed_is_rejected(self):
+        assets = self.repository / "assets"
+        assets.mkdir()
+        (assets / "base.txt").write_text("committed payload\n", encoding="utf-8")
+        (self.repository / "embedded.go").write_text(
+            'package framework\n\nimport "embed"\n\n//go:embed assets/*.txt\nvar assets embed.FS\n\n'
+            'func init() { if _, err := assets.ReadDir("assets"); err != nil { panic(err) } }\n',
+            encoding="utf-8")
+        self.git("add", "assets/base.txt", "embedded.go")
+        self.git("commit", "-qm", "test: add committed embed fixture")
+        self.ignored_input("assets/local.txt", "local payload\n")
+        self.build()
+        self.assert_measurement_gate(r"assets/local\.txt")
+
+    def test_ignored_files_outside_the_build_are_allowed(self):
+        paths = {
+            "local/runtime.log": "local runtime output\n",
+            "inactive_tag.go": "//go:build thinkgo_fixture_inactive\n\npackage framework\n",
+            "inactive_windows.go": "package framework\n",
+        }
+        for path, content in paths.items():
+            self.ignored_input(path, content)
+        self.assertEqual(self.git("status", "--porcelain", "--untracked-files=all"), "")
+        self.assert_measurement_gate()
 
 
 if __name__ == "__main__":
