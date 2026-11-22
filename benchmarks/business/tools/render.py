@@ -303,7 +303,7 @@ def load_results(source, *, allow_synthetic=False):
         from provenance import validate
 
         validate(protocol, manifest.get("go_build_provenance"), manifest.get("binaries_sha256"),
-                 manifest.get("git_commit"))
+                 manifest.get("git_commit"), current_tree=manifest.get("git_tree"))
         require(read_json(source / "contracts/protocol.json") == protocol, "归档协议与实验清单不一致")
     require(set(protocol["scenarios"]) == set(SCENARIOS) and len(protocol["scenarios"]) == len(SCENARIOS),
             "协议必须包含全部五个业务场景")

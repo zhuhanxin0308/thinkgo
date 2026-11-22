@@ -10,6 +10,7 @@ import subprocess
 GIT_OBJECT = re.compile(r"[0-9a-f]{40}\Z")
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 BUSINESS_GO_PATH = "benchmarks/business/go"
+BLOB_READ_CHUNK_BYTES = 1024 * 1024
 
 
 def require(condition, message):
@@ -50,11 +51,59 @@ def definitions(protocol):
     return {**variants, "load": {"id": "load", "command": "load"}}
 
 
-def validate(protocol, records, binaries, current_commit):
+def require_measurement_sources(repository, protocol):
+    """正式测量不能省略来源合同，也不能把框架根模块的工作树改动归入 HEAD。"""
+    require("build_provenance" in protocol, "正式测量必须声明 build_provenance 构建来源合同")
+    changed = subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=all"],
+                                      cwd=repository, text=True)
+    require(not changed.strip(), "正式测量要求框架及基准源码全部已提交，当前仍有未提交变更:\n" + changed)
+
+
+def committed_sources(repository, commit):
+    """从固定提交的不可变对象流归档摘要，编辑器临时改动和还原不会混入测量身份。"""
+    require(isinstance(commit, str) and GIT_OBJECT.fullmatch(commit), "源码快照提交无效")
+    listing = subprocess.check_output(["git", "ls-tree", "-r", "--full-tree", "-z", commit], cwd=repository)
+    entries = []
+    for entry in listing.split(b"\0"):
+        if not entry:
+            continue
+        metadata, name = entry.split(b"\t", 1)
+        _, kind, object_id = metadata.split()
+        require(kind == b"blob", "正式源码快照不支持尚未归档的子模块")
+        entries.append((name.decode("utf-8", errors="surrogateescape"), object_id))
+    result, checksums = {}, {}
+    # 单个持久 cat-file 进程逐对象交替读写，避免逐文件启动进程或一次缓冲整个仓库。
+    with subprocess.Popen(["git", "cat-file", "--batch"], cwd=repository,
+                          stdin=subprocess.PIPE, stdout=subprocess.PIPE) as process:
+        for name, object_id in entries:
+            if object_id not in checksums:
+                process.stdin.write(object_id + b"\n")
+                process.stdin.flush()
+                header = process.stdout.readline().split()
+                require(len(header) == 3 and header[:2] == [object_id, b"blob"] and header[2].isdigit(),
+                        "Git 源码对象缺失或类型不匹配")
+                remaining = int(header[2])
+                checksum = hashlib.sha256()
+                while remaining:
+                    data = process.stdout.read(min(remaining, BLOB_READ_CHUNK_BYTES))
+                    require(bool(data), "Git 源码对象读取被截断")
+                    checksum.update(data)
+                    remaining -= len(data)
+                require(process.stdout.read(1) == b"\n", "Git 源码对象边界无效")
+                checksums[object_id] = checksum.hexdigest()
+            result[name] = checksums[object_id]
+        process.stdin.close()
+        require(process.wait() == 0, "Git 源码快照读取失败")
+    return result
+
+
+def validate(protocol, records, binaries, current_commit, *, current_tree=None):
     """归档重绘只核对已保存证据，不依赖原工作区或重新执行二进制。"""
     expected = definitions(protocol)
     require(isinstance(records, dict) and set(records) == set(expected), "Go 构建来源清单不完整或包含额外配置")
     require(isinstance(current_commit, str) and GIT_OBJECT.fullmatch(current_commit), "当前源码提交无效")
+    if current_tree is not None:
+        require(isinstance(current_tree, str) and GIT_OBJECT.fullmatch(current_tree), "当前源码树无效")
     require(isinstance(binaries, dict), "二进制摘要清单缺失")
     configuration = protocol["build_provenance"]
     shared = None
@@ -71,6 +120,8 @@ def validate(protocol, records, binaries, current_commit):
         explicit_control = revision != "HEAD"
         revision = current_commit if revision == "HEAD" else revision
         require(record["source_commit"] == revision, f"二进制源码提交不符合协议: {identifier}")
+        if current_tree is not None and revision == current_commit:
+            require(record["source_tree"] == current_tree, f"源码树与实验清单不一致: {identifier}")
         build_commit = revision
         if "build_commit" in record or "build_tree" in record:
             require(explicit_control and isinstance(record.get("build_commit"), str) and
