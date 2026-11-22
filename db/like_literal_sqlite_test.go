@@ -44,3 +44,21 @@ func TestLiteralLikeSQLiteRowIsolation(t *testing.T) {
 		})
 	}
 }
+
+func TestNullablePredicatesSQLite(t *testing.T) {
+	handle, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle.SetMaxOpenConns(1)
+	database := db.NewDB(db.NewSQLConnection(handle, &builder.Sqlite{}))
+	t.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	if _, err := database.Execute("CREATE TABLE nullable_rows (name TEXT, state TEXT, batch TEXT, marked BOOLEAN)"); err != nil {
+		t.Fatal(err)
+	}
+	assertNullablePredicateRows(t, database, "nullable_rows")
+}

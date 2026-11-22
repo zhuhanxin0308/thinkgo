@@ -339,7 +339,7 @@ func TestNeo4jBuildCypherWhereSupportsCollectionAndRangeConditions(t *testing.T)
 	if !reflect.DeepEqual(params["w0"], []interface{}{int64(1), int64(2)}) {
 		t.Fatalf("IN 参数应聚合为切片，实际为 %#v", params["w0"])
 	}
-	if params["w1"] != "(?i)^.*Admin.$" {
+	if params["w1"] != `(?is)\A.*Admin.\z` {
 		t.Fatalf("LIKE 参数应转换为大小写不敏感的安全正则，实际为 %#v", params["w1"])
 	}
 	if params["w2_start"] != 18 || params["w2_end"] != 30 {

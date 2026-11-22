@@ -242,6 +242,51 @@ func TestLiveMongoOperationContract(t *testing.T) {
 		})
 		assertLiteralLikeRows(t, database, literalCollection)
 	})
+	t.Run("nullable_predicates", func(t *testing.T) {
+		table := liveResourceName("live_nullable")
+		t.Cleanup(func() {
+			if err := dropLiveMongoCollection(database, table); err != nil {
+				t.Error(err)
+			}
+		})
+		assertNullablePredicateRows(t, database, table)
+		for _, values := range [][]any{{"open", nil}, {"closed", nil}} {
+			if _, err := database.Table(table).Insert(map[string]any{"tags": values}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for _, query := range []*db.Query{
+			database.Table(table).Where("tags", "!=", "closed"),
+			database.Table(table).WhereNotIn("tags", []any{"closed"}),
+			database.Table(table).Where("tags", "NOT LIKE", "cl%"),
+			database.Table(table).WhereIn("tags", []any{"open", nil}),
+		} {
+			if count, err := query.Count(); err != nil || count != 1 {
+				t.Fatalf("数组字段应保留按元素匹配: %d %v", count, err)
+			}
+		}
+		for _, row := range []map[string]any{
+			{"label": "mixed", "items": []any{bson.M{"state": "open"}, bson.M{"state": nil}}},
+			{"label": "vetoed", "items": []any{bson.M{"state": "open"}, bson.M{"state": "closed"}}},
+			{"label": "missing", "items": []any{bson.M{}}},
+			{"label": "null", "items": []any{bson.M{"state": nil}}},
+			{"label": "array", "items": bson.M{"state": []any{nil}}},
+		} {
+			if _, err := database.Table(table).Insert(row); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for _, query := range []*db.Query{
+			database.Table(table).Where("items.state", "!=", "closed"),
+			database.Table(table).WhereNotIn("items.state", []any{"closed"}),
+			database.Table(table).Where("items.state", "NOT LIKE", "cl%"),
+		} {
+			rows, err := query.Field("label").Order("label ASC").Select()
+			if err != nil || len(rows) != 2 || rows[0]["label"] != "array" || rows[1]["label"] != "mixed" {
+				t.Fatalf("点分字段应保留非空叶值与叶数组: %#v %v", rows, err)
+			}
+		}
+	})
 }
 
 // TestLiveMongoStreamingContract 验证真实 MongoDB 游标流式读取和回调提前停止。
@@ -307,6 +352,15 @@ func TestLiveNeoStrictAndDetachDelete(t *testing.T) {
 			}
 		})
 		assertLiteralLikeRows(t, database, literalLabel)
+	})
+	t.Run("nullable_predicates", func(t *testing.T) {
+		label := liveResourceName("live_nullable")
+		t.Cleanup(func() {
+			if err := cleanupLiveNeo(database, label); err != nil {
+				t.Error(err)
+			}
+		})
+		assertNullablePredicateRows(t, database, label)
 	})
 }
 

@@ -10,7 +10,7 @@ import (
 )
 
 func literalLikeSamples() []string {
-	return []string{"%", "_", "!", "[ab]", "a", "a_b", "axb", "100%", "100x", `C:\tmp`, "C:tmp", "客户_%", "客户abc", "emoji😀_", "quote' OR 1=1--", "line\n", "line"}
+	return []string{"%", "_", "!", "[ab]", "a", "a_b", "axb", "100%", "100x", `C:\tmp`, "C:tmp", "客户_%", "客户abc", "emoji😀_", "quote' OR 1=1--", "line\n", "line", "", "lf\nend", "crlf\r\nend", "unicode\u2028end"}
 }
 
 // The same row-set oracle runs against SQLite and the existing MySQL/PostgreSQL
@@ -49,12 +49,22 @@ func assertLiteralLikeRows(t *testing.T, database *db.DB, table string) {
 			t.Fatalf("literal %q matched %q", literal, text)
 		}
 	}
-	// Check intentional wildcards on the '%' and '_' rows. The existing native
-	// regex paths do not normalize SQL LIKE's treatment of embedded newlines.
-	// All samples, including the final-newline pair, remain in the literal oracle.
-	wildcardScope := scoped.WhereIn("id", []interface{}{int64(1), int64(2)})
-	if count, err := wildcardScope.WhereLike("name", "%").Count(); err != nil || count != 2 {
-		t.Fatalf("intentional wildcard contract changed: %d %v", count, err)
+	// 在同一组真实记录上核对通配符、绝对结尾和否定条件的互补行数。
+	for _, tc := range []struct {
+		pattern string
+		want    int64
+	}{
+		{"%", int64(len(samples))}, {"line", 1}, {"line_", 1},
+		{"lf_end", 1}, {"crlf_end", 0}, {"crlf__end", 1}, {"unicode_end", 1},
+	} {
+		count, err := scoped.WhereLike("name", tc.pattern).Count()
+		if err != nil || count != tc.want {
+			t.Fatalf("LIKE %q 匹配 %d 行，预期 %d: %v", tc.pattern, count, tc.want, err)
+		}
+		count, err = scoped.Where("name", "NOT LIKE", tc.pattern).Count()
+		if err != nil || count != int64(len(samples))-tc.want {
+			t.Fatalf("NOT LIKE %q 匹配 %d 行: %v", tc.pattern, count, err)
+		}
 	}
 	if count, err := scoped.Count(); err != nil || count != int64(len(samples)) {
 		t.Fatalf("derived predicate changed scope: %d %v", count, err)

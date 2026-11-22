@@ -2,12 +2,97 @@ package mongo
 
 import (
 	"errors"
+	"reflect"
+	"slices"
 	"sync"
 	"testing"
 
 	"github.com/zhuhanxin0308/thinkgo/v3/db"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
+
+func TestMongoSQLSetMembership(t *testing.T) {
+	connection := &MongoConnection{}
+	base := db.NewDB(connection).Table("items")
+	var absent *string
+	for _, tc := range []struct {
+		name  string
+		query *db.Query
+		want  bson.M
+	}{
+		{"混合 IN", base.WhereIn("state", []any{absent, "open", nil}), bson.M{"$in": []any{"open"}}},
+		{"二进制 IN", base.WhereIn("state", []any{[]byte(nil), []byte{}}), bson.M{"$in": []any{[]byte{}}}},
+		{"全空 IN", base.WhereIn("state", []any{nil, absent}), bson.M{"$in": []any{}}},
+		{"混合 NOT IN", base.WhereNotIn("state", []any{"open", nil}), bson.M{"$in": []any{}, "$nin": []any{"open", nil}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			predicate, err := tc.query.Predicate()
+			if err != nil {
+				t.Fatal(err)
+			}
+			filter, err := connection.compilePredicate(predicate, "_id", "id")
+			if err != nil || !reflect.DeepEqual(filter["state"], tc.want) {
+				t.Fatalf("集合谓词错误: %#v, %v", filter, err)
+			}
+		})
+	}
+	predicate, err := base.WhereNotIn("id", []any{nil, "bad-id"}).Predicate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := connection.compilePredicate(predicate, "_id", "id"); !errors.Is(err, db.ErrInvalidQuery) {
+		t.Fatalf("恒假集合仍应校验主键别名中的非法 ObjectID: %v", err)
+	}
+}
+
+func TestMongoNegativePredicatesKeepNullGuardInEachBranch(t *testing.T) {
+	connection := &MongoConnection{}
+	for _, operator := range []string{"!=", "<>", "NOT LIKE", "NOT IN"} {
+		clause := "state " + operator + " ?"
+		if operator == "NOT IN" {
+			clause = "state NOT IN (?)"
+		}
+		filter, err := connection.buildFilter([]string{"(" + clause + " OR featured = ?)"}, []any{"open", true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		branches := filter["$or"].([]bson.M)
+		if len(branches) != 2 || !reflect.DeepEqual(branches[1], bson.M{"featured": true}) {
+			t.Fatalf("%s 的非空限制丢失或影响独立分支: %#v", operator, filter)
+		}
+		types, _ := branches[0]["state"].(bson.M)["$type"].([]int32)
+		if !slices.Contains(types, int32(bson.TypeArray)) || !slices.Contains(types, int32(bson.TypeString)) || slices.Contains(types, int32(bson.TypeNull)) {
+			t.Fatalf("%s 的非空类型限制错误: %#v", operator, types)
+		}
+	}
+}
+
+func TestMongoNegativePredicatesPreservePrimaryKeyAliasValidation(t *testing.T) {
+	conn := &MongoConnection{}
+	base := db.NewDB(conn).Table("items")
+	first, second := bson.NewObjectID().Hex(), bson.NewObjectID().Hex()
+	for _, names := range [][2]string{{"id", "_id"}, {"_id", "id"}} {
+		for _, negative := range []*db.Query{
+			base.Where(names[0], "!=", first), base.WhereNotIn(names[0], []any{first}),
+			base.Where(names[0], "NOT LIKE", "%"),
+		} {
+			and, err := negative.Where(names[1], second).Predicate()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := conn.compilePredicate(and, "_id", "id"); !errors.Is(err, db.ErrInvalidQuery) {
+				t.Errorf("同一合取中的两个主键名称未被拒绝: %v", err)
+			}
+			or, err := negative.WhereOr(names[1], second).Predicate()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := conn.compilePredicate(or, "_id", "id"); err != nil {
+				t.Errorf("独立 OR 分支中的主键被误判为冲突: %v", err)
+			}
+		}
+	}
+}
 
 // TestMongoNativePredicateRejectsInvalidBusinessInputs 验证原生条件树的主键别名、嵌套条件和后端能力边界。
 func TestMongoNativePredicateRejectsInvalidBusinessInputs(t *testing.T) {

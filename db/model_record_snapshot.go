@@ -1,6 +1,7 @@
 package db
 
 import (
+	"bytes"
 	"database/sql/driver"
 	"fmt"
 	"reflect"
@@ -93,6 +94,10 @@ func snapshotRecordValue(value reflect.Value, visiting map[recordSnapshotVisit]b
 		}
 		return result, nil
 	case reflect.Slice, reflect.Array:
+		// 普通 BLOB 和具名字节切片只需独立的连续副本。具名元素仍可能自定义 Valuer。
+		if value.Kind() == reflect.Slice && value.Type().Elem() == reflect.TypeFor[byte]() {
+			return bytes.Clone(value.Bytes()), nil
+		}
 		result := make([]any, value.Len())
 		for i := 0; i < value.Len(); i++ {
 			item, err := snapshotRecordValue(value.Index(i), visiting)
