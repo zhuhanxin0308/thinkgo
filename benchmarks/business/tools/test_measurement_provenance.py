@@ -256,6 +256,51 @@ class MeasurementBinaryIdentityTests(MeasurementRepositoryFixture, unittest.Test
                 self.assertRaisesRegex(ValueError, "源码提交已变化"):
             self.identity()
 
+    def test_historical_controls_use_their_own_framework_after_build_worktree_removal(self):
+        before = self.git("rev-parse", "HEAD")
+        subtree = provenance.BUSINESS_GO_PATH
+        current_framework = self.framework.with_name("framework_current.go")
+        self.framework.rename(current_framework)
+        current_framework.write_text('package framework\n\nconst Message = "current framework"\n', encoding="utf-8")
+        marker = self.root / "go/cmd/thinkgo/marker.go"
+        marker.write_text('package main\n\nfunc init() { println("shared benchmark") }\n', encoding="utf-8")
+        self.git("add", "-A")
+        self.git("commit", "-qm", "test: prepare current framework and shared benchmark")
+        candidate = self.git("rev-parse", "HEAD")
+        checkout = self.directory / "historical-worktree"
+        self.git("worktree", "add", "-q", "-b", "fixture-control-build", str(checkout), before)
+        self.git("-C", str(checkout), "checkout", candidate, "--", subtree)
+        self.git("-C", str(checkout), "commit", "-qm", "test: splice benchmark onto historical framework")
+        spliced = self.git("-C", str(checkout), "rev-parse", "HEAD")
+        control_root = checkout / "benchmarks/business"
+        with mock.patch.object(self, "root", control_root):
+            self.build()
+        controls = {"thinkgo-before": before, "thinkgo-before-direct": spliced}
+        current = next(variant for variant in self.protocol["variants"] if variant["id"] == "thinkgo")
+        for name, revision in controls.items():
+            shutil.copy2(control_root / "bin/thinkgo", self.root / "bin" / name)
+            self.protocol["variants"].append(
+                {**current, "id": name, "command": "thinkgo", "source_revision": revision})
+        shutil.rmtree(control_root / "bin")
+        self.git("worktree", "remove", str(checkout))
+        self.assertFalse(checkout.exists())
+        self.protocol_path.write_text(json.dumps(self.protocol), encoding="utf-8")
+        self.git("add", "benchmarks/business/contracts/protocol.json")
+        self.git("commit", "-qm", "test: record historical control revisions")
+        self.build()
+        records = self.identity()["go_build_provenance"]
+        shared_tree = self.git("rev-parse", "HEAD:" + subtree)
+        self.assertNotEqual(shared_tree, self.git("rev-parse", before + ":" + subtree))
+        for name, revision in controls.items():
+            with self.subTest(name=name):
+                record = records[name]
+                self.assertEqual(record["source_commit"], revision)
+                self.assertEqual(record["source_tree"], self.git("rev-parse", revision + "^{tree}"))
+                self.assertEqual(record["benchmark_go_tree"], shared_tree)
+        self.assertEqual(records["thinkgo-before"]["build_commit"], spliced)
+        self.assertEqual(records["thinkgo-before"]["build_tree"], self.git("rev-parse", spliced + "^{tree}"))
+        self.assertNotIn("build_commit", records["thinkgo-before-direct"])
+
     def assert_measurement_gate(self, rejected=None):
         class ReachedPreflight(Exception):
             pass
