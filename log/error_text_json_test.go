@@ -130,3 +130,37 @@ func TestFreeTextBoundariesAroundJSON(t *testing.T) {
 		}
 	}
 }
+
+func TestErrorTextJSONDiagnosticNames(t *testing.T) {
+	for _, policy := range []struct {
+		name     string
+		sanitize func(string) string
+		prefix   string
+	}{
+		{"日志", SanitizeErrorText, "样例数据"},
+		{"公开错误", SanitizeErrorTextFully, ""},
+	} {
+		t.Run(policy.name, func(t *testing.T) {
+			t.Run("既有明文策略", func(t *testing.T) {
+				for _, input := range []string{
+					`{"GET /check?password=样例数据甲&status=ok":"timeout"}`,
+					`{"Authorization: Bearer 样例数据甲":"retry"}`,
+				} {
+					output := policy.sanitize(input)
+					if strings.Contains(output, "样例数据甲") || !strings.Contains(output, logRedactedPlaceholder) {
+						t.Errorf("属性名内的诊断文本未执行既有脱敏策略: %q", output)
+					}
+				}
+			})
+			t.Run("保留字段语义", func(t *testing.T) {
+				const input = `{"items":[{"GET /check?pass\u0077ord=样例数据甲&status=ok":"timeout","Authorization\u003a Bearer 样例数据甲":"retry","Authorization: Bearer 样例数据甲":"last","detail":"Authorization: Bearer 样例数据甲","Authorization: Bearer 短 password":"隐藏值","publ\u0069c":1e999}]}`
+				header := "Authorization: Bearer " + policy.prefix + logRedactedPlaceholder
+				want := `{"items":[{"GET /check?password=[REDACTED]":"timeout","` + header + `":"retry","` + header + `":"last","detail":"` + header +
+					`","Authorization: Bearer [REDACTED]":"[REDACTED]","publ\u0069c":1e999}]}`
+				if output := policy.sanitize(input); output != want || !json.Valid([]byte(output)) || policy.sanitize(output) != output {
+					t.Errorf("属性名、值的分类或再次脱敏不正确: 得到 %q，预期 %q", output, want)
+				}
+			})
+		})
+	}
+}

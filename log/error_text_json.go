@@ -63,7 +63,7 @@ func startsErrorJSONArrayValue(rest string) bool {
 	return strings.HasPrefix(rest, ",") || strings.HasPrefix(rest, "]")
 }
 
-// errorJSONRedactor 按解码后的键分类，只替换对应值，保留原始键、数字精度和重复字段。
+// errorJSONRedactor 按解码后的原键分类，保留无需脱敏的原文、数字精度和重复字段。
 type errorJSONRedactor struct {
 	source  string
 	decoder *json.Decoder
@@ -121,6 +121,7 @@ func (s *errorJSONRedactor) value(depth int, field string, visible bool) bool {
 		for s.decoder.More() {
 			child := ""
 			if v == '{' {
+				keyBefore := int(s.decoder.InputOffset())
 				key, err := s.decoder.Token()
 				name, ok := key.(string)
 				if err != nil || !ok {
@@ -128,6 +129,7 @@ func (s *errorJSONRedactor) value(depth int, field string, visible bool) bool {
 				}
 				if visible && field == "" {
 					child = strings.ToLower(sensitiveErrorField(name))
+					s.redactDiagnosticText(keyBefore, int(s.decoder.InputOffset()), name)
 				}
 			}
 			if !s.value(depth+1, child, visible && field == "") {
@@ -139,13 +141,8 @@ func (s *errorJSONRedactor) value(depth int, field string, visible bool) bool {
 		}
 		end = int(s.decoder.InputOffset())
 	case string:
-		if visible && field == "" && strings.ContainsAny(v, ":=") {
-			// 普通字符串仍可能记录 HTTP 头等诊断文本；对其内容沿用既有明文策略。
-			var plain strings.Builder
-			redactPlainErrorText(&plain, v, len(v), s.mask)
-			if cleaned := plain.String(); cleaned != v {
-				s.replace(start, end, cleaned)
-			}
+		if visible && field == "" {
+			s.redactDiagnosticText(start, end, v)
 		} else if visible && field != "" {
 			replacement = maskErrorField(field, v, s.mask)
 		}
@@ -158,6 +155,20 @@ func (s *errorJSONRedactor) value(depth int, field string, visible bool) bool {
 		s.replace(start, end, replacement)
 	}
 	return true
+}
+
+// redactDiagnosticText 对属性名和普通字符串值中的诊断文本沿用同一明文策略。
+func (s *errorJSONRedactor) redactDiagnosticText(before, end int, value string) {
+	if !strings.ContainsAny(value, ":=") {
+		return
+	}
+	var plain strings.Builder
+	redactPlainErrorText(&plain, value, len(value), s.mask)
+	if cleaned := plain.String(); cleaned != value {
+		// Token 已确认当前为字符串；保留起始引号之前的原始逗号、冒号与空白。
+		start := before + strings.IndexByte(s.source[before:end], '"')
+		s.replace(start, end, cleaned)
+	}
 }
 
 func (s *errorJSONRedactor) replace(start, end int, value string) {
