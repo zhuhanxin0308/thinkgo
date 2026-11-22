@@ -4,6 +4,7 @@ import (
 	stdcontext "context"
 	"crypto/tls"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -134,37 +135,51 @@ func TestStaticMissingPrefixCacheExpires(t *testing.T) {
 		t.Fatalf("创建 public 目录失败: %v", err)
 	}
 	handler := newTestHTTPHandler(t, newTestHTTPApp(t, basePath, map[string]interface{}{"enable": false}))
-	if file, _, ok := handler.openPublicFile("/api/health"); ok || file != nil {
-		t.Fatal("不存在的静态前缀不得被视为可用文件")
-	}
+	synctest.Test(t, func(t *testing.T) {
+		const urlPath = "/api/health"
+		const content = "asset"
+		open := func() (*os.File, bool) {
+			file, _, ok := handler.openPublicFile(urlPath)
+			if file != nil {
+				t.Cleanup(func() {
+					if err := file.Close(); err != nil {
+						t.Errorf("关闭静态文件失败: %v", err)
+					}
+				})
+			}
+			return file, ok
+		}
+		if file, ok := open(); ok || file != nil {
+			t.Fatal("不存在的静态前缀不得被视为可用文件")
+		}
+		handler.staticMissMu.RLock()
+		entry, cached := handler.staticMisses["api"]
+		handler.staticMissMu.RUnlock()
+		if !cached || !entry.missing {
+			t.Fatal("缺失静态前缀应进入短期缓存")
+		}
 
-	handler.staticMissMu.RLock()
-	_, cached := handler.staticMisses["api"]
-	handler.staticMissMu.RUnlock()
-	if !cached {
-		t.Fatal("缺失静态前缀应进入短期缓存")
-	}
-
-	apiDir := filepath.Join(publicDir, "api")
-	if err := os.MkdirAll(apiDir, 0o755); err != nil {
-		t.Fatalf("创建静态前缀目录失败: %v", err)
-	}
-	assetPath := filepath.Join(apiDir, "health")
-	if err := os.WriteFile(assetPath, []byte("asset"), 0o600); err != nil {
-		t.Fatalf("写入静态文件失败: %v", err)
-	}
-	if file, _, ok := handler.openPublicFile("/api/health"); ok || file != nil {
-		t.Fatal("缓存窗口内不应重复探测刚创建的静态前缀")
-	}
-
-	handler.staticMissMu.Lock()
-	handler.staticMisses["api"] = staticPrefixEntry{at: time.Now().Add(-staticMissCacheTTL), missing: true}
-	handler.staticMissMu.Unlock()
-	file, _, ok := handler.openPublicFile("/api/health")
-	if !ok || file == nil {
-		t.Fatal("缓存过期后应重新发现静态文件")
-	}
-	_ = file.Close()
+		apiDir := filepath.Join(publicDir, "api")
+		if err := os.MkdirAll(apiDir, 0o755); err != nil {
+			t.Fatalf("创建静态前缀目录失败: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(apiDir, "health"), []byte(content), 0o600); err != nil {
+			t.Fatalf("写入静态文件失败: %v", err)
+		}
+		time.Sleep(staticMissCacheTTL - time.Nanosecond)
+		if file, ok := open(); ok || file != nil {
+			t.Fatal("缓存到期前不应重新探测静态前缀")
+		}
+		time.Sleep(time.Nanosecond)
+		file, ok := open()
+		if !ok || file == nil {
+			t.Fatal("缓存到期时应重新发现静态文件")
+		}
+		got, err := io.ReadAll(file)
+		if err != nil || string(got) != content {
+			t.Fatalf("缓存到期后应读取新建的静态文件: 内容=%q，错误=%v", got, err)
+		}
+	})
 }
 
 func TestStaticMissingChildDoesNotRenewAnExistingPrefixMiss(t *testing.T) {
