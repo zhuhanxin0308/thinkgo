@@ -3,6 +3,7 @@ package winfile
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 )
 
@@ -30,6 +31,27 @@ func TryWithGuard(ctx context.Context, path string, operation func() error) erro
 	}, operation)
 }
 
+// TrySharedGuard 在读写方式打开的独立元数据文件上持共享锁，调用方关闭返回的持有者以释放所有权。
+func TrySharedGuard(path string) (io.Closer, error) {
+	handle, err := acquireGuard(context.Background(), path, func(_ context.Context, handle *os.File) error {
+		locked, err := trySharedGuardLock(handle)
+		if err == nil && !locked {
+			return ErrGuardInUse
+		}
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return heldGuard{handle}, nil
+}
+
+type heldGuard struct{ file *os.File }
+
+func (guard heldGuard) Close() error {
+	return errors.Join(unlockGuard(guard.file), guard.file.Close())
+}
+
 func withGuard(ctx context.Context, path string, lock func(context.Context, *os.File) error, operation func() error) (result error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -40,34 +62,51 @@ func withGuard(ctx context.Context, path string, lock func(context.Context, *os.
 	if operation == nil {
 		return os.ErrInvalid
 	}
-	before, err := os.Lstat(path)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	if err == nil && (before.Mode()&os.ModeSymlink != 0 || !before.Mode().IsRegular()) {
-		return ErrUnsafeGuard
-	}
-	handle, err := openGuard(path)
+	handle, err := acquireGuard(ctx, path, lock)
 	if err != nil {
 		return err
 	}
-	defer func() { result = errors.Join(result, handle.Close()) }()
-	if err := lock(ctx, handle); err != nil {
-		return err
+	defer func() { result = errors.Join(result, heldGuard{handle}.Close()) }()
+	return operation()
+}
+
+func acquireGuard(ctx context.Context, path string, lock func(context.Context, *os.File) error) (acquired *os.File, result error) {
+	before, err := os.Lstat(path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, err
 	}
-	defer func() { result = errors.Join(result, unlockGuard(handle)) }()
+	if err == nil && (before.Mode()&os.ModeSymlink != 0 || !before.Mode().IsRegular()) {
+		return nil, ErrUnsafeGuard
+	}
+	handle, err := openGuard(path)
+	if err != nil {
+		return nil, err
+	}
+	locked := false
+	defer func() {
+		if acquired == nil {
+			if locked {
+				result = errors.Join(result, unlockGuard(handle))
+			}
+			result = errors.Join(result, handle.Close())
+		}
+	}()
+	if err := lock(ctx, handle); err != nil {
+		return nil, err
+	}
+	locked = true
 	opened, openedErr := handle.Stat()
 	current, currentErr := os.Lstat(path)
 	if openedErr != nil || currentErr != nil {
-		return errors.Join(ErrUnsafeGuard, openedErr, currentErr)
+		return nil, errors.Join(ErrUnsafeGuard, openedErr, currentErr)
 	}
 	if current.Mode()&os.ModeSymlink != 0 || !current.Mode().IsRegular() ||
 		!opened.Mode().IsRegular() || !os.SameFile(opened, current) ||
 		(before != nil && !os.SameFile(before, opened)) {
-		return ErrUnsafeGuard
+		return nil, ErrUnsafeGuard
 	}
 	if err := ctx.Err(); err != nil {
-		return err
+		return nil, err
 	}
-	return operation()
+	return handle, nil
 }

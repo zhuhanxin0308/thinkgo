@@ -10,6 +10,7 @@ import (
 	"github.com/zhuhanxin0308/thinkgo/v3"
 	cacheDriver "github.com/zhuhanxin0308/thinkgo/v3/cache/driver"
 	"github.com/zhuhanxin0308/thinkgo/v3/console"
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/logcoord"
 )
 
 // Clear 默认清理当前应用缓存，显式选项才允许清理日志或指定目录。
@@ -256,6 +257,24 @@ func clearRuntimeDirectory(root *os.Root, relative string, removeDirectories boo
 			continue
 		}
 		if information.Mode().IsRegular() || information.Mode()&os.ModeSymlink != 0 {
+			// 显式清理仍可删除日志内容，普通锁文件须保留，防止活动持有者的锁身份分裂。
+			if information.Mode().IsRegular() {
+				name := entry.Name()
+				if logcoord.IsMetadata(name) {
+					continue
+				}
+				if canonical := strings.ToLower(name); canonical != name && logcoord.IsMetadata(canonical) {
+					// 大小写不敏感卷可能列出旧的拼写；只保留真正指向协调文件的同一身份。
+					alias, aliasErr := root.Lstat(filepath.Join(relative, canonical))
+					if aliasErr == nil && os.SameFile(information, alias) {
+						continue
+					}
+					if aliasErr != nil && !errors.Is(aliasErr, os.ErrNotExist) {
+						clearErr = errors.Join(clearErr, aliasErr)
+						continue
+					}
+				}
+			}
 			if removeErr := root.Remove(path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
 				clearErr = errors.Join(clearErr, removeErr)
 			}

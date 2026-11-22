@@ -1,4 +1,4 @@
-//go:build (linux && !android) || (darwin && !ios)
+//go:build linux || darwin || freebsd || openbsd || netbsd || dragonfly || solaris
 
 package winfile
 
@@ -15,7 +15,15 @@ func openGuard(path string) (*os.File, error) {
 }
 
 func tryGuardLock(handle *os.File) (bool, error) {
-	err := Flock(handle, unix.LOCK_EX|unix.LOCK_NB)
+	return tryFlock(handle, unix.LOCK_EX)
+}
+
+func trySharedGuardLock(handle *os.File) (bool, error) {
+	return tryFlock(handle, unix.LOCK_SH)
+}
+
+func tryFlock(handle *os.File, mode int) (bool, error) {
+	err := Flock(handle, mode|unix.LOCK_NB)
 	if errors.Is(err, unix.EWOULDBLOCK) || errors.Is(err, unix.EAGAIN) {
 		return false, nil
 	}

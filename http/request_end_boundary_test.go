@@ -699,11 +699,12 @@ func TestDefaultFileAccessLogWaitsForBatchFlush(t *testing.T) {
 	if err = logger.Close(); err != nil {
 		t.Fatalf("关闭文件日志器失败: %v", err)
 	}
-	entries, err = os.ReadDir(logDirectory)
-	if err != nil || len(entries) != 1 {
-		t.Fatalf("关停后应生成一个批量日志文件: files=%d err=%v", len(entries), err)
+	// 某些平台在目录中保留进程间互斥文件，实际批量日志仍应只有一个。
+	logFiles, err := filepath.Glob(filepath.Join(logDirectory, "*.log"))
+	if err != nil || len(logFiles) != 1 {
+		t.Fatalf("关停后应生成一个批量日志文件: files=%d err=%v", len(logFiles), err)
 	}
-	content, err := os.ReadFile(filepath.Join(logDirectory, entries[0].Name()))
+	content, err := os.ReadFile(logFiles[0])
 	if err != nil {
 		t.Fatalf("读取关停后的访问日志失败: %v", err)
 	}
