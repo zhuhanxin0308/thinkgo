@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"sort"
-	"sync"
 )
 
 const (
@@ -100,11 +99,11 @@ type Status struct {
 	AppliedAt string
 }
 
-// Runner 串行执行一个应用的迁移，并在每次变更前校验完整历史。
+// Runner 串行执行一个应用的迁移，在每次变更前校验完整历史。等待同一运行器的调用可以通过上下文取消。
 type Runner struct {
 	migrations []Migration
 	store      Store
-	mu         sync.Mutex
+	running    chan struct{}
 }
 
 // NewRunner 冻结迁移注册表并创建运行器。
@@ -116,7 +115,7 @@ func NewRunner(registry *Registry, store Store) (*Runner, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Runner{migrations: migrations, store: store}, nil
+	return &Runner{migrations: migrations, store: store, running: make(chan struct{}, 1)}, nil
 }
 
 // Apply 校验历史后按名称升序应用全部待执行迁移。
@@ -124,8 +123,6 @@ func (runner *Runner) Apply(ctx context.Context) (Result, error) {
 	if runner == nil || ctx == nil {
 		return Result{}, fmt.Errorf("%w: 迁移运行器或上下文为空", ErrInvalidMigration)
 	}
-	runner.mu.Lock()
-	defer runner.mu.Unlock()
 	var result Result
 	err := runner.withMigrationLock(ctx, func(store Store) error {
 		var applyErr error
@@ -166,8 +163,6 @@ func (runner *Runner) Rollback(ctx context.Context, batches int) (Result, error)
 	if runner == nil || ctx == nil || batches <= 0 || batches > MaximumRollbackBatches {
 		return Result{}, fmt.Errorf("%w: 回滚上下文必须有效，批次数必须在 1 到 %d 之间", ErrInvalidMigration, MaximumRollbackBatches)
 	}
-	runner.mu.Lock()
-	defer runner.mu.Unlock()
 	var result Result
 	err := runner.withMigrationLock(ctx, func(store Store) error {
 		var rollbackErr error
@@ -235,8 +230,6 @@ func (runner *Runner) Status(ctx context.Context) ([]Status, error) {
 	if runner == nil || ctx == nil {
 		return nil, fmt.Errorf("%w: 迁移运行器或上下文为空", ErrInvalidMigration)
 	}
-	runner.mu.Lock()
-	defer runner.mu.Unlock()
 	var statuses []Status
 	err := runner.withMigrationLock(ctx, func(store Store) error {
 		history, _, _, historyErr := runner.validatedHistory(ctx, store)
@@ -254,8 +247,6 @@ func (runner *Runner) InspectStatus(ctx context.Context) ([]Status, bool, error)
 	if runner == nil || ctx == nil {
 		return nil, false, fmt.Errorf("%w: 迁移运行器或上下文为空", ErrInvalidMigration)
 	}
-	runner.mu.Lock()
-	defer runner.mu.Unlock()
 	var statuses []Status
 	initialized := false
 	err := runner.withMigrationReadLock(ctx, func(store Store) error {
@@ -286,8 +277,6 @@ func (runner *Runner) ResolveDirty(ctx context.Context, name string, resolution 
 	if resolution != RecoveryMarkApplied && resolution != RecoveryMarkReverted {
 		return fmt.Errorf("%w: 未知恢复结论 %q", ErrInvalidMigration, resolution)
 	}
-	runner.mu.Lock()
-	defer runner.mu.Unlock()
 	return runner.withMigrationLock(ctx, func(store Store) error {
 		if err := store.Ensure(ctx); err != nil {
 			return fmt.Errorf("初始化迁移历史失败: %w", err)
@@ -412,23 +401,41 @@ func (runner *Runner) validatedHistory(ctx context.Context, store Store) ([]Hist
 }
 
 func (runner *Runner) withMigrationLock(ctx context.Context, callback func(Store) error) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if locked, ok := runner.store.(LockedStore); ok && locked != nil {
-		return locked.WithMigrationLock(ctx, callback)
-	}
-	return callback(runner.store)
+	return runner.withRunnerLock(ctx, func() error {
+		if locked, ok := runner.store.(LockedStore); ok && locked != nil {
+			return locked.WithMigrationLock(ctx, callback)
+		}
+		return callback(runner.store)
+	})
 }
 
 func (runner *Runner) withMigrationReadLock(ctx context.Context, callback func(Store) error) error {
+	return runner.withRunnerLock(ctx, func() error {
+		if locked, ok := runner.store.(ReadLockedStore); ok && locked != nil {
+			return locked.WithMigrationReadLock(ctx, callback)
+		}
+		return callback(runner.store)
+	})
+}
+
+func (runner *Runner) withRunnerLock(ctx context.Context, operation func() error) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if locked, ok := runner.store.(ReadLockedStore); ok && locked != nil {
-		return locked.WithMigrationReadLock(ctx, callback)
+	if runner.running == nil {
+		return fmt.Errorf("%w: 迁移运行器尚未初始化", ErrInvalidMigration)
 	}
-	return callback(runner.store)
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case runner.running <- struct{}{}:
+		defer func() { <-runner.running }()
+	}
+	// 取消与取得执行权可能同时就绪；进入存储锁之前必须再次确认。
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return operation()
 }
 
 func (runner *Runner) validateJournal(ctx context.Context, store Store, history []History) error {

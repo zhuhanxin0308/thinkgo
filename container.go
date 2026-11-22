@@ -162,6 +162,12 @@ func (c *Container) instanceDirect(abstract string, instance interface{}) {
 
 // Make 解析服务；并发解析同名单例时共享一次构建结果。
 func (c *Container) Make(abstract string, params ...interface{}) (interface{}, error) {
+	if scope := c.lifetimeScope; scope != nil {
+		if !scope.beginResolution() {
+			return nil, ErrContainerScopeClosed
+		}
+		defer scope.endResolution()
+	}
 	return c.makeWithResolution(c.currentResolution(), abstract, params...)
 }
 

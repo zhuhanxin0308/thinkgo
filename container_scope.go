@@ -19,7 +19,7 @@ type scopedInstance struct {
 	generation uint64
 }
 
-// scopedBuildKey 让各代绑定独立构建，同时保留关闭时需要等待的所有构建。
+// scopedBuildKey 让各代绑定独立构建，同一代的解析共享构建结果。
 type scopedBuildKey struct {
 	name       string
 	generation uint64
@@ -31,6 +31,8 @@ type containerScopeState struct {
 	building     map[scopedBuildKey]*buildState
 	waiting      map[string]map[string]struct{}
 	created      []interface{}
+	resolving    int
+	drained      chan struct{}
 	nodeSequence uint64
 	closing      bool
 	closed       bool
@@ -61,15 +63,29 @@ func (c *Container) NewScope() *ContainerScope {
 	return scope
 }
 
+// beginResolution 将准入和登记放在同一临界区，防止关闭错过尚未进入工厂的解析。
+func (state *containerScopeState) beginResolution() bool {
+	state.lock.Lock()
+	defer state.lock.Unlock()
+	if state.closing || state.closed {
+		return false
+	}
+	state.resolving++
+	return true
+}
+
+func (state *containerScopeState) endResolution() {
+	state.lock.Lock()
+	defer state.lock.Unlock()
+	state.resolving--
+	if state.resolving == 0 && state.drained != nil {
+		close(state.drained)
+	}
+}
+
 // Make 在当前作用域解析服务；Singleton 仍由根容器共享，Factory 保持每次构建。
 func (s *ContainerScope) Make(abstract string, params ...interface{}) (interface{}, error) {
 	if s == nil || s.container == nil {
-		return nil, ErrContainerScopeClosed
-	}
-	s.state.lock.Lock()
-	closed := s.state.closing || s.state.closed
-	s.state.lock.Unlock()
-	if closed {
 		return nil, ErrContainerScopeClosed
 	}
 	return s.container.Make(abstract, params...)
@@ -84,17 +100,18 @@ func (s *ContainerScope) Get(abstract string) interface{} {
 	return instance
 }
 
-// HasRequestScopedResources 判断作用域是否已经创建或正在创建需要收尾的实例。
+// HasRequestScopedResources 判断关闭是否需要等待在途解析或收尾已创建的作用域实例。
 func (s *ContainerScope) HasRequestScopedResources() bool {
 	if s == nil || s.container == nil {
 		return false
 	}
 	s.state.lock.Lock()
 	defer s.state.lock.Unlock()
-	return len(s.state.created) != 0 || len(s.state.building) != 0
+	return s.state.resolving != 0 || len(s.state.created) != 0
 }
 
-// Close 等待在途构建和全部作用域资源真实关闭。
+// Close 等待已准入的解析结束，再按逆序关闭作用域拥有的资源。
+// 工厂同步关闭自身作用域会等待自己退出；需要在工厂内启动关闭时可用带截止时间的 CloseContext。
 func (s *ContainerScope) Close() error {
 	return s.CloseContext(context.Background())
 }
@@ -161,7 +178,7 @@ func (s *ContainerScope) CloseIfIdle() (bool, error) {
 	if s.state.closed {
 		return true, s.state.closeErr
 	}
-	if s.state.closing || len(s.state.building) != 0 || len(s.state.created) != 0 {
+	if s.state.closing || s.state.resolving != 0 || len(s.state.created) != 0 {
 		return false, nil
 	}
 	s.closeStarted = true
@@ -185,16 +202,14 @@ func (s *ContainerScope) close(ctx context.Context, done chan struct{}) {
 		state.lock.Unlock()
 	}()
 	state.lock.Lock()
-	active := make([]*buildState, 0, len(state.building))
-	for _, build := range state.building {
-		active = append(active, build)
+	if state.resolving != 0 {
+		// 已同步封闭准入，最后一个解析退出时会通知关闭任务；空闲路径不分配通道。
+		state.drained = make(chan struct{})
+		drained := state.drained
+		state.lock.Unlock()
+		<-drained
+		state.lock.Lock()
 	}
-	state.lock.Unlock()
-	for _, build := range active {
-		<-build.done
-	}
-
-	state.lock.Lock()
 	instances := make([]interface{}, 0, len(state.created))
 	for index := len(state.created) - 1; index >= 0; index-- {
 		instances = append(instances, state.created[index])
@@ -232,10 +247,6 @@ func (c *Container) makeScoped(abstract string, registered binding, resolutionSc
 		return nil, fmt.Errorf("%w: %s", ErrContainerScopeRequired, abstract)
 	}
 	state.lock.Lock()
-	if state.closing || state.closed {
-		state.lock.Unlock()
-		return nil, ErrContainerScopeClosed
-	}
 	if instance, ok := state.instances[abstract]; ok && instance.generation == registered.generation {
 		state.lock.Unlock()
 		return instance.value, nil

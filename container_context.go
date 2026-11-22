@@ -21,6 +21,13 @@ func (container *Container) Context() context.Context {
 
 // MakeContext 在独立的解析上下文中构造服务，嵌套工厂沿用同一上下文。
 func (container *Container) MakeContext(ctx context.Context, name string, params ...interface{}) (interface{}, error) {
+	if container != nil && container.lifetimeScope != nil {
+		scope := container.lifetimeScope
+		if !scope.beginResolution() {
+			return nil, ErrContainerScopeClosed
+		}
+		defer scope.endResolution()
+	}
 	if ctx == nil {
 		return nil, ErrInvalidContainerResolutionContext
 	}
@@ -46,15 +53,9 @@ func (app *App) MakeContext(ctx context.Context, name string, params ...interfac
 	return app.resolveService(ServiceName(name), ctx, params...)
 }
 
-// MakeContext 在当前请求或任务作用域中解析服务，不改变作用域共享状态。
+// MakeContext 在当前请求或任务作用域中解析服务，关闭会等待这次解析结束。
 func (scope *ContainerScope) MakeContext(ctx context.Context, name string, params ...interface{}) (interface{}, error) {
 	if scope == nil || scope.container == nil {
-		return nil, ErrContainerScopeClosed
-	}
-	scope.state.lock.Lock()
-	closed := scope.state.closing || scope.state.closed
-	scope.state.lock.Unlock()
-	if closed {
 		return nil, ErrContainerScopeClosed
 	}
 	return scope.container.MakeContext(ctx, name, params...)
