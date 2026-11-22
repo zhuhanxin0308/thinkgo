@@ -19,6 +19,13 @@
   "gateway_workers": 1,
   "gateway_connections": 4096,
   "gateway_upstream_keepalive": 64,
+  "build_provenance": {
+    "require_for_nonmeasurement": false,
+    "go_version": "go1.27.4",
+    "module": "github.com/zhuhanxin0308/thinkgo/benchmarks/business",
+    "absent_settings": ["-race", "-cover", "-asan", "-msan"],
+    "settings": {"-trimpath": "true", "CGO_ENABLED": "1", "GOAMD64": "v1", "GOOS": "linux", "GOARCH": "amd64"}
+  },
   "variants": [
     {"id": "thinkgo", "framework": "ThinkGo", "version": "3.0.3", "engine": "Go net/http", "kind": "go"},
     {"id": "gin", "framework": "Gin", "version": "1.12.0", "engine": "Go net/http", "kind": "go"},

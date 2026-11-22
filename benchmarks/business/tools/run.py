@@ -42,7 +42,7 @@ def write_json(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     compressed = path.suffix == ".gz"
     data = (json.dumps(value, ensure_ascii=False, sort_keys=True,
-                       indent=None if compressed else 2, allow_nan=False) + "\n").encode("utf-8")
+                       indent=None if compressed else 2, allow_nan=False) + "\n").encode("utf-8", errors="backslashreplace")
     if compressed:
         data = gzip.compress(data, mtime=0)
     publish_bytes(path, data)
@@ -123,13 +123,21 @@ def progress(output, event, **fields):
 def identity(environment, protocol, mode, *, go_tool="go"):
     root = environment.root
     repository = root.parents[1]
+    if mode == "measure":
+        from provenance import require_measurement_sources
+
+        require_measurement_sources(repository, protocol)
     git = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repository, text=True).strip()
-    files = subprocess.check_output(["git", "ls-files", "-z", "--", "benchmarks/business"], cwd=repository).split(b"\0")
-    source = {}
-    for name in files:
-        if name:
-            path = repository / os.fsdecode(name)
-            source[os.fsdecode(name)] = file_digest(path)
+    tree = subprocess.check_output(["git", "rev-parse", git + "^{tree}"], cwd=repository, text=True).strip()
+    if mode == "measure":
+        from provenance import committed_sources
+
+        source = committed_sources(repository, git)
+    else:
+        # verify/pilot 保留编辑中的基准快照，不把无关根模块文件的删除变成非正式试验门禁。
+        files = subprocess.check_output(["git", "ls-files", "-z", "--", "benchmarks/business"],
+                                        cwd=repository).split(b"\0")
+        source = {os.fsdecode(name): file_digest(repository / os.fsdecode(name)) for name in files if name}
     binaries = {variant["id"]: file_digest(root / "bin" / variant["id"])
                 for variant in protocol["variants"] if variant["kind"] == "go"}
     for name, path in {
@@ -145,7 +153,7 @@ def identity(environment, protocol, mode, *, go_tool="go"):
     model = next((line.split(":", 1)[1].strip() for line in cpu.splitlines() if line.startswith("model name")), "unknown")
     memory = pathlib.Path("/proc/meminfo").read_text().splitlines()
     total_memory = next(line.split(":", 1)[1].strip() for line in memory if line.startswith("MemTotal:"))
-    result = {"schema_version": 1, "mode": mode, "git_commit": git, "protocol": protocol,
+    result = {"schema_version": 1, "mode": mode, "git_commit": git, "git_tree": tree, "protocol": protocol,
             "sources_sha256": source, "binaries_sha256": binaries, "runtime_configuration_sha256": runtime_configuration,
             "go_runtime_environment": {key: os.getenv(key) for key in ["GOGC", "GOMEMLIMIT", "GODEBUG", "CGO_ENABLED", "GOTRACEBACK"]},
             "host": {"kernel": platform.release(), "machine": platform.machine(), "cpu_model": model,
@@ -153,10 +161,18 @@ def identity(environment, protocol, mode, *, go_tool="go"):
                      "cgroup_quota": "unavailable", "exclusive_cpu_allocation": False,
                      "total_memory": total_memory,
                      "cgroup_membership": pathlib.Path("/proc/self/cgroup").read_text()}}
-    if "build_provenance" in protocol:
-        from provenance import collect
+    if "build_provenance" in protocol and (mode == "measure" or
+            protocol["build_provenance"].get("require_for_nonmeasurement", True)):
+        from provenance import collect, validate
 
         result["go_build_provenance"] = collect(repository, root, protocol, binaries, go_tool)
+        # 采集器自行读取提交；再次绑定清单起始提交，防止采集期间切换 HEAD。
+        validate(protocol, result["go_build_provenance"], binaries, git, current_tree=tree)
+    if mode == "measure":
+        require_measurement_sources(repository, protocol)
+        current = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repository, text=True).strip()
+        if current != git:
+            raise ValueError("来源采集期间源码提交已变化，拒绝归档混合身份")
     return result
 
 
@@ -331,10 +347,9 @@ def execute(arguments):
     protocol = load_protocol(protocol_path)
     validate_execution_protocol(protocol)
     if arguments.mode == "measure":
-        changed = subprocess.check_output(["git", "status", "--porcelain", "--", "benchmarks/business"],
-                                          cwd=ROOT.parents[1], text=True)
-        if changed.strip():
-            raise ValueError("正式测量要求基准代码已提交，当前仍有未提交变更:\n" + changed)
+        from provenance import require_measurement_sources
+
+        require_measurement_sources(ROOT.parents[1], protocol)
     if arguments.variants:
         if arguments.mode == "measure":
             raise ValueError("正式矩阵必须包含协议中的全部变体")

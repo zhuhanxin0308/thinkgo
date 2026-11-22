@@ -113,6 +113,9 @@ def validate_protocol(protocol):
                      "variant.source_revision 必须为 HEAD 或完整提交 SHA")
     if "build_provenance" in protocol:
         provenance = _mapping(protocol["build_provenance"], "build_provenance")
+        if "require_for_nonmeasurement" in provenance:
+            _require(type(provenance["require_for_nonmeasurement"]) is bool,
+                     "build_provenance.require_for_nonmeasurement 必须为布尔值")
         for field in ("go_version", "module"):
             _require(isinstance(provenance.get(field), str) and bool(provenance[field].strip()) and
                      provenance[field].isprintable(), f"build_provenance.{field} 不能为空")

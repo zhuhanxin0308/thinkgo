@@ -25,8 +25,11 @@ class CohortTests(unittest.TestCase):
         comparison = experiment.load_protocol(COMPARISON)
         self.assertEqual(len(default["variants"]), 9)
         self.assertEqual(len(comparison["variants"]), 10)
-        for key in default.keys() - {"variants", "interpretation"}:
+        for key in default.keys() - {"variants", "interpretation", "build_provenance"}:
             self.assertEqual(comparison[key], default[key], key)
+        # 默认非正式试验仍允许编辑源码；正式测量与显式对照使用同一组构建条件。
+        expected_build = {**comparison["build_provenance"], "require_for_nonmeasurement": False}
+        self.assertEqual(default["build_provenance"], expected_build)
         variants = {item["id"]: item for item in comparison["variants"]}
         self.assertEqual(set(variants), {item["id"] for item in default["variants"]} | {"thinkgo-before"})
         self.assertEqual(variants["thinkgo-before"]["command"], "thinkgo")
@@ -75,6 +78,7 @@ class CohortTests(unittest.TestCase):
             lambda value: value["build_provenance"].update(absent_settings="-race"),
             lambda value: value["build_provenance"].update(absent_settings=["-race", "-race"]),
             lambda value: value["build_provenance"].update(absent_settings=["CGO_ENABLED"]),
+            lambda value: value["build_provenance"].update(require_for_nonmeasurement="false"),
         ]
         for change in changes:
             value = copy.deepcopy(original)
@@ -159,22 +163,27 @@ class CohortTests(unittest.TestCase):
             environment.start.assert_not_called()
             self.assertEqual((output / "manifest.json").read_bytes(), archived)
 
-    def test_identity_uses_actual_provenance_and_keeps_default_manifest_compatible(self):
+    def test_identity_collects_default_and_comparison_provenance(self):
         with tempfile.TemporaryDirectory() as directory:
             environment = SimpleNamespace(root=ROOT, runtime=pathlib.Path(directory),
                                           binary=lambda component, name: pathlib.Path(directory) / component / name)
             def git(arguments, **kwargs):
+                if arguments[1] == "status":
+                    return ""
                 return CURRENT if arguments[1] == "rev-parse" else b"benchmarks/business/tools/run.py\0"
             with mock.patch.object(run.subprocess, "check_output", side_effect=git), \
                     mock.patch.object(run, "file_digest", return_value="f" * 64), \
-                    mock.patch("provenance.collect", return_value={"actual": "provenance"}) as collect:
+                    mock.patch("provenance.committed_sources", return_value={"root.go": "e" * 64}), \
+                    mock.patch("provenance.collect", return_value={"actual": "provenance"}) as collect, \
+                    mock.patch("provenance.validate") as validate:
                 default = run.identity(environment, experiment.load_protocol(ROOT / "contracts/protocol.json"), "measure")
-                self.assertNotIn("go_build_provenance", default)
-                collect.assert_not_called()
+                self.assertEqual(default["go_build_provenance"], {"actual": "provenance"})
+                self.assertEqual(collect.call_count, 1)
                 comparison = experiment.load_protocol(COMPARISON)
                 result = run.identity(environment, comparison, "measure", go_tool="specified-go")
             self.assertEqual(result["go_build_provenance"], {"actual": "provenance"})
             self.assertEqual(collect.call_args.args[-1], "specified-go")
+            self.assertEqual(validate.call_count, 2)
             self.assertIn("thinkgo-before", result["binaries_sha256"])
             self.assertEqual(result["git_commit"], CURRENT)
 
@@ -197,6 +206,16 @@ class CohortTests(unittest.TestCase):
             summary = render.summarize(render.load_results(source, allow_synthetic=True))
             self.assertEqual(summary["go_build_provenance"], manifest["go_build_provenance"])
             self.assertEqual(summary["host"], manifest["host"])
+            # 历史清单没有根树字段仍可复验；新清单必须与 HEAD 的实际来源记录一致。
+            manifest["git_tree"] = CURRENT_TREE
+            write_json(source / "manifest.json", manifest)
+            render.load_results(source, allow_synthetic=True)
+            manifest["git_tree"] = "f" * 40
+            write_json(source / "manifest.json", manifest)
+            with self.assertRaisesRegex(ValueError, "源码树"):
+                render.load_results(source, allow_synthetic=True)
+            manifest["git_tree"] = CURRENT_TREE
+            write_json(source / "manifest.json", manifest)
             altered = copy.deepcopy(manifest["protocol"])
             altered["measurement_seconds"] += 1
             write_json(source / "contracts/protocol.json", altered)
