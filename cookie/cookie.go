@@ -436,11 +436,15 @@ func (c *Cookie) Has(name string) (bool, error) {
 	return found, err
 }
 
-// Delete 使用相同 Path、Domain 和安全属性删除 Cookie。
+// Delete 删除默认 Path 和 Domain 下的 Cookie。
 func (c *Cookie) Delete(name string) error {
-	opts := c.defaultOptions()
-	opts.Expire = -1
-	return c.Set(name, "", opts)
+	return c.DeleteWithOptions(name, CookieOptions{})
+}
+
+// DeleteWithOptions 使用与 Set 相同的作用域和安全选项删除 Cookie，忽略传入的有效期。
+func (c *Cookie) DeleteWithOptions(name string, options CookieOptions) error {
+	options.Expire = -1
+	return c.Set(name, "", options)
 }
 
 func (c *Cookie) finalName(name string) (string, error) {

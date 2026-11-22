@@ -43,6 +43,41 @@ func installSessionMutationPipeline(t *testing.T, handler *Http, manager *framew
 	})
 }
 
+func TestSessionResponsePreservesPartitionedCookieFromWriter(t *testing.T) {
+	const early = "COMMITSESSID=preference; Path=/; Secure; Partitioned"
+	app := newTestHTTPApp(t, t.TempDir(), map[string]interface{}{"enable": false})
+	router := mustHTTPRoute(t, app)
+	if _, err := router.Get("/two-cookies", func(req *frameworkContext.Request) *frameworkContext.Response {
+		writer, ok := req.ResponseWriter()
+		if !ok {
+			t.Fatal("缺少 HTTP 响应写入器")
+		}
+		writer.Header().Add("Set-Cookie", early)
+		return frameworkContext.NewResponse().Content("ok")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	handler := newTestHTTPHandler(t, app)
+	manager := newHTTPCommitSessionManager(t, sessionDriver.NewMemory())
+	installSessionMutationPipeline(t, handler, manager)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(stdhttp.MethodGet, "https://127.0.0.1/two-cookies", nil))
+	result := response.Result()
+	defer result.Body.Close()
+	cookies := result.Cookies()
+	if response.Code != stdhttp.StatusOK || response.Body.String() != "ok" || len(cookies) != 2 ||
+		result.Header.Values("Set-Cookie")[0] != early || cookies[1].Name != cookies[0].Name ||
+		cookies[1].Path != cookies[0].Path || cookies[1].Partitioned {
+		t.Fatalf("普通响应提交时必须同时保留分区业务 Cookie 和非分区会话 Cookie：%d %v", response.Code, result.Header)
+	}
+	next := httptest.NewRequest(stdhttp.MethodGet, "https://127.0.0.1/two-cookies", nil)
+	next.AddCookie(cookies[1])
+	resumed, err := manager.NewRequestSession(next, nil)
+	if err != nil || !resumed.Has("uid") {
+		t.Fatalf("最终会话 Cookie 未恢复：%v", err)
+	}
+}
+
 func TestStandardHandlerSessionCookieCommitsBeforeBusinessResponse(t *testing.T) {
 	app := newTestHTTPApp(t, t.TempDir(), map[string]interface{}{"enable": false})
 	router := mustHTTPRoute(t, app)

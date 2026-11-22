@@ -72,15 +72,19 @@ func TestHeadLengthFollowsCompressionOfTheEquivalentGet(t *testing.T) {
 	app := newTestHTTPApp(t, t.TempDir(), map[string]interface{}{"enable": true, "min_size": threshold})
 	router := mustHTTPRoute(t, app)
 	for _, test := range []struct {
-		path, body  string
-		noTransform bool
+		path, body, mediaType string
+		noTransform           bool
 	}{
-		{path: "/short", body: short},
-		{path: "/long", body: long},
+		{path: "/short", body: short, mediaType: "text/plain"},
+		{path: "/long", body: long, mediaType: "text/plain"},
+		{path: "/binary", body: long, mediaType: "application/octet-stream"},
 		{path: "/no-transform", body: long, noTransform: true},
 	} {
 		if _, err := router.Rule(test.path, func(*fwcontext.Request) *fwcontext.Response {
 			response := fwcontext.NewResponse().Content(test.body)
+			if test.mediaType != "" {
+				response.Header("Content-Type", test.mediaType)
+			}
 			if test.noTransform {
 				response.Cookie("preference", "sample").CacheControl("private, no-store, no-transform")
 			}
@@ -93,11 +97,17 @@ func TestHeadLengthFollowsCompressionOfTheEquivalentGet(t *testing.T) {
 	for _, test := range []struct {
 		path, accept string
 		compressed   bool
+		rejected     bool
 	}{
 		{path: "/short", accept: "gzip"},
+		{path: "/short", accept: "gzip, identity;q=0", compressed: true},
 		{path: "/long", accept: "gzip", compressed: true},
+		{path: "/long", accept: "gzip, identity;q=0", compressed: true},
 		{path: "/long", accept: "identity"},
+		{path: "/binary", accept: "gzip"},
+		{path: "/binary", accept: "gzip, identity;q=0", rejected: true},
 		{path: "/no-transform", accept: "gzip"},
+		{path: "/no-transform", accept: "gzip, identity;q=0", rejected: true},
 	} {
 		t.Run(test.path+"/"+test.accept, func(t *testing.T) {
 			record := func(method string) *httptest.ResponseRecorder {
@@ -110,15 +120,19 @@ func TestHeadLengthFollowsCompressionOfTheEquivalentGet(t *testing.T) {
 			get := record(http.MethodGet)
 			head := record(http.MethodHead)
 			assertIssue151HEAD(t, head, http.StatusOK)
-			if get.Code != http.StatusOK || (get.Header().Get("Content-Encoding") == "gzip") != test.compressed {
+			wantStatus := http.StatusOK
+			if test.rejected {
+				wantStatus = http.StatusNotAcceptable
+			}
+			if get.Code != wantStatus || (get.Header().Get("Content-Encoding") == "gzip") != test.compressed {
 				t.Fatalf("GET 未得到预期表示: %d, %v", get.Code, get.Header())
 			}
-			if test.path == "/no-transform" && (get.Header().Get("Set-Cookie") == "" ||
+			if test.path == "/no-transform" && !test.rejected && (get.Header().Get("Set-Cookie") == "" ||
 				get.Header().Get("Content-Encoding") != "" || get.Body.String() != long) {
 				t.Fatal("含 Cookie 的 no-transform 响应应保留原正文和 Cookie")
 			}
 			want := strconv.Itoa(get.Body.Len())
-			if test.compressed {
+			if test.compressed || test.rejected {
 				want = ""
 			}
 			if got := head.Result().Header.Get("Content-Length"); got != want {

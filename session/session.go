@@ -47,6 +47,8 @@ type Session struct {
 	driver         Driver
 	logger         Logger
 	cookie         *cookie.Cookie
+	responseWriter http.ResponseWriter
+	issuedCookies  []string
 	now            func() time.Time
 	requestContext context.Context
 
@@ -193,9 +195,9 @@ func (s *Session) newRequestSession(req *http.Request, writer http.ResponseWrite
 	var requestCookie *cookie.Cookie
 	var err error
 	if secureSet {
-		requestCookie, err = s.cookie.ForRequestWithSecure(req, writer, secure)
+		requestCookie, err = s.cookie.ForRequestWithSecure(req, nil, secure)
 	} else {
-		requestCookie, err = s.cookie.ForRequest(req, writer)
+		requestCookie, err = s.cookie.ForRequest(req, nil)
 	}
 	if err != nil {
 		return nil, errors.Join(ErrSessionCookie, err)
@@ -205,6 +207,7 @@ func (s *Session) newRequestSession(req *http.Request, writer http.ResponseWrite
 		driver:         s.driver,
 		logger:         logger,
 		cookie:         requestCookie,
+		responseWriter: writer,
 		now:            now,
 		requestContext: requestContextForHTTP(req),
 		requestState:   true,
@@ -233,9 +236,10 @@ func (s *Session) SetResponseWriter(writer http.ResponseWriter) error {
 	if s.responseSealing || s.responseCommitted {
 		return ErrSessionCommitted
 	}
-	if err := s.cookie.SetWriter(writer); err != nil {
-		return errors.Join(ErrSessionCookie, err)
+	if isNilSessionDependency(writer) {
+		return errors.Join(ErrSessionCookie, cookie.ErrCookieWriterUnavailable)
 	}
+	s.responseWriter = writer
 	return nil
 }
 
@@ -816,7 +820,19 @@ func (s *Session) writeSessionCookie(value string, expire int) error {
 		Path: s.config.CookiePath, Domain: s.config.Domain, Secure: s.config.Secure,
 		HttpOnly: true, SameSite: s.config.SameSite, Expire: expire,
 	}
-	if err := s.cookie.Set(s.config.Name, value, options); err != nil {
+	header, err := s.cookie.BuildHeader(s.config.Name, value, options)
+	if err == nil {
+		s.mu.RLock()
+		writer := s.responseWriter
+		s.mu.RUnlock()
+		if isNilSessionDependency(writer) {
+			err = cookie.ErrCookieWriterUnavailable
+		} else {
+			writer.Header().Add("Set-Cookie", header)
+			s.issuedCookies = append(s.issuedCookies, header)
+		}
+	}
+	if err != nil {
 		return s.reportError("写入 Session Cookie 失败", errors.Join(ErrSessionCookie, err), nil)
 	}
 	return nil

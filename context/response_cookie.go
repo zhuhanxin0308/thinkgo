@@ -9,6 +9,81 @@ import (
 	"time"
 )
 
+type setCookieIdentity struct {
+	name        string
+	domain      string
+	path        string
+	partitioned bool
+}
+
+func parseSetCookieIdentity(raw string) (setCookieIdentity, bool) {
+	parsed, err := http.ParseSetCookie(raw)
+	if err != nil || parsed == nil || parsed.Name == "" {
+		return setCookieIdentity{}, false
+	}
+	domain := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(parsed.Domain), "."))
+	return setCookieIdentity{
+		name:        parsed.Name,
+		domain:      domain,
+		path:        parsed.Path,
+		partitioned: parsed.Partitioned,
+	}, true
+}
+
+func mergeSetCookieHeaderValues(header http.Header, values []string) {
+	hasNonCanonical := false
+	existingCount := len(header["Set-Cookie"])
+	for name, items := range header {
+		if name != "Set-Cookie" && strings.EqualFold(name, "Set-Cookie") {
+			hasNonCanonical = true
+			existingCount += len(items)
+		}
+	}
+	if existingCount == 0 && !hasNonCanonical {
+		for _, value := range values {
+			header.Add("Set-Cookie", value)
+		}
+		return
+	}
+	existing := make([]string, 0, existingCount)
+	existing = append(existing, header["Set-Cookie"]...)
+	if hasNonCanonical {
+		for name, items := range header {
+			if name != "Set-Cookie" && strings.EqualFold(name, "Set-Cookie") {
+				existing = append(existing, items...)
+				delete(header, name)
+			}
+		}
+	}
+	if len(values) == 0 {
+		header["Set-Cookie"] = existing
+		return
+	}
+	overriddenRaw := make(map[string]struct{}, len(values))
+	overriddenCookies := make(map[setCookieIdentity]struct{}, len(values))
+	for _, value := range values {
+		overriddenRaw[value] = struct{}{}
+		if identity, ok := parseSetCookieIdentity(value); ok {
+			overriddenCookies[identity] = struct{}{}
+		}
+	}
+	header.Del("Set-Cookie")
+	for _, item := range existing {
+		if _, duplicate := overriddenRaw[item]; duplicate {
+			continue
+		}
+		if identity, ok := parseSetCookieIdentity(item); ok {
+			if _, overridden := overriddenCookies[identity]; overridden {
+				continue
+			}
+		}
+		header.Add("Set-Cookie", item)
+	}
+	for _, value := range values {
+		header.Add("Set-Cookie", value)
+	}
+}
+
 // Cookie 设置 Cookie，默认使用根路径、HttpOnly 和 SameSite=Lax。
 // option 可传过期秒数或包含 expire、path、domain、secure、httponly、samesite 的映射。
 // 为兼容已有 Go 调用，仍接受 maxAge、path、domain、secure、httpOnly 五个位置参数。
