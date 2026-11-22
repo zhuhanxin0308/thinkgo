@@ -370,6 +370,111 @@ class MeasurementBinaryIdentityTests(MeasurementRepositoryFixture, unittest.Test
         self.build()
         self.assert_measurement_gate(r"assets/local\.txt")
 
+    def test_assume_unchanged_framework_bytes_are_rejected(self):
+        self.git("update-index", "--assume-unchanged", "framework.go")
+        self.framework.write_text('package framework\n\nconst Message = "uncommitted framework bytes"\n', encoding="utf-8")
+        self.build()
+        self.assertEqual(self.git("status", "--porcelain", "--untracked-files=all"), "")
+        self.assert_measurement_gate(r"字节不符.*framework\.go")
+
+    def test_cgo_replays_binary_configuration_and_checks_selected_c_source(self):
+        bridge = self.repository / "bridge.go"
+        bridge.write_text('package framework\n\n/*\nint fixture_value(void);\n*/\nimport "C"\n\n'
+                          'func init() { if C.fixture_value() != 7 { panic("fixture value") } }\n', encoding="utf-8")
+        self.git("add", "bridge.go")
+        self.git("commit", "-qm", "test: link framework fixture through cgo")
+        self.ignored_input("local_value.c", "int fixture_value(void) { return 7; }\n")
+        self.build()
+        with mock.patch.dict(os.environ, {"CGO_ENABLED": "0"}):
+            self.assert_measurement_gate(r"local_value\.c")
+
+    def test_ignored_dependency_go_sum_is_not_a_build_input(self):
+        # 依赖模块的校验和文件不参与嵌套主模块的构建。
+        self.ignored_input("go.sum", "this is not a valid checksum record\n")
+        self.build()
+        self.assertEqual(self.git("status", "--porcelain", "--untracked-files=all"), "")
+        self.assert_measurement_gate()
+
+    def test_versioned_module_cache_inside_ignored_repository_directory_is_allowed(self):
+        import zipfile
+
+        module = "example.org/dependency"
+        version = "v1.0.0"
+        manifest = f"module {module}\n\ngo 1.20\n"
+        proxy = self.directory / "proxy"
+        versions = proxy / module / "@v"
+        versions.mkdir(parents=True)
+        (versions / "list").write_text(version + "\n", encoding="utf-8")
+        (versions / (version + ".info")).write_text(
+            json.dumps({"Version": version, "Time": "2020-01-01T00:00:00Z"}), encoding="utf-8")
+        (versions / (version + ".mod")).write_text(manifest, encoding="utf-8")
+        with zipfile.ZipFile(versions / (version + ".zip"), "w") as archive:
+            prefix = f"{module}@{version}/"
+            archive.writestr(prefix + "go.mod", manifest)
+            archive.writestr(prefix + "value.go", 'package dependency\n\nconst Value = "cached dependency"\n')
+        go_dir = self.root / "go"
+        with (go_dir / "go.mod").open("a", encoding="utf-8") as go_mod:
+            go_mod.write(f"\nrequire {module} {version}\n")
+        (go_dir / "cmd/load/dependency.go").write_text(
+            f'package main\n\nimport "{module}"\n\nfunc init() {{ println(dependency.Value) }}\n', encoding="utf-8")
+        cache = self.repository / "runtime-module-cache"
+        with (self.repository / ".gitignore").open("a", encoding="utf-8") as ignored:
+            ignored.write("/runtime-module-cache/\n")
+        with mock.patch.dict(os.environ, {"GOPROXY": proxy.as_uri(), "GOSUMDB": "off", "GONOPROXY": "none",
+                                          "GOMODCACHE": str(cache), "GOFLAGS": "", "GOWORK": "off"}):
+            subprocess.run([self.go_tool, "mod", "tidy"], cwd=go_dir, check=True, capture_output=True)
+            self.assertTrue((go_dir / "go.sum").is_file())
+            self.git("add", ".gitignore", "benchmarks/business/go")
+            self.git("commit", "-qm", "test: use a versioned module from an isolated proxy")
+            self.build()
+            cached = cache / f"{module}@{version}" / "value.go"
+            self.assertTrue(cached.is_file())
+            relative = cached.relative_to(self.repository).as_posix()
+            self.assertEqual(self.git("check-ignore", "--", relative), relative)
+            self.assertEqual(self.git("status", "--porcelain", "--untracked-files=all"), "")
+            self.assert_measurement_gate()
+
+    def test_binary_using_an_external_workspace_replacement_is_rejected(self):
+        external = self.directory / "external-framework"
+        external.mkdir()
+        shutil.copy2(self.repository / "go.mod", external / "go.mod")
+        (external / "framework.go").write_text(
+            'package framework\n\nconst Message = "alternate framework"\n', encoding="utf-8")
+        version = self.protocol["build_provenance"]["go_version"][2:]
+        workfile = self.directory / "go.work"
+        workfile.write_text(f"go {version}\n\nuse {json.dumps(str(self.root / 'go'))}\n\n"
+                            f"replace example.org/framework => {json.dumps(str(external))}\n", encoding="utf-8")
+        # 仅改变 load 的真实依赖，避免同一提交分组误用第一个命令的构建信息。
+        environment = {**os.environ, "GOWORK": str(workfile), "GOFLAGS": "", "GOTOOLCHAIN": "local",
+                       "CGO_ENABLED": "1", "GOOS": "linux", "GOARCH": "amd64", "GOAMD64": "v1"}
+        binary = self.root / "bin/load"
+        subprocess.run([self.go_tool, "build", "-trimpath", "-mod=readonly", "-buildvcs=true",
+                        "-o", str(binary), "./cmd/load"], cwd=self.root / "go",
+                       env=environment, check=True, capture_output=True)
+        raw = subprocess.check_output([self.go_tool, "version", "-m", str(binary)], text=True)
+        self.assertIn("\t=>\t" + str(external) + "\t(devel)", raw)
+        settings = provenance.parse_build_info(raw)["settings"]
+        self.assertEqual(settings["vcs.revision"], self.git("rev-parse", "HEAD"))
+        self.assertEqual(settings["vcs.modified"], "false")
+        self.assertEqual(self.git("status", "--porcelain", "--untracked-files=all"), "")
+        self.assert_measurement_gate(r"模块|替换")
+
+    def test_unreferenced_local_module_is_not_a_build_input(self):
+        module = "example.org/unreferenced"
+        with (self.root / "go/go.mod").open("a", encoding="utf-8") as go_mod:
+            go_mod.write(f"\nrequire {module} v0.0.0\nreplace {module} => ../../../unreferenced-module\n")
+        self.git("add", "benchmarks/business/go/go.mod")
+        self.git("commit", "-qm", "test: declare an unused local replacement")
+        self.assertFalse((self.repository / "unreferenced-module").exists())
+        self.build()
+        before = run.file_digest(self.root / "bin/load")
+        version = self.protocol["build_provenance"]["go_version"][2:]
+        self.ignored_input("unreferenced-module/go.mod", f"module {module}\n\ngo {version}\n")
+        self.build()
+        self.assertEqual(run.file_digest(self.root / "bin/load"), before)
+        self.assertEqual(self.git("status", "--porcelain", "--untracked-files=all"), "")
+        self.assert_measurement_gate()
+
     def test_ignored_files_outside_the_build_are_allowed(self):
         paths = {
             "local/runtime.log": "local runtime output\n",
@@ -379,7 +484,8 @@ class MeasurementBinaryIdentityTests(MeasurementRepositoryFixture, unittest.Test
         for path, content in paths.items():
             self.ignored_input(path, content)
         self.assertEqual(self.git("status", "--porcelain", "--untracked-files=all"), "")
-        self.assert_measurement_gate()
+        with mock.patch.dict(os.environ, {"GOFLAGS": "-tags=thinkgo_fixture_inactive", "GOOS": "windows"}):
+            self.assert_measurement_gate()
 
 
 if __name__ == "__main__":
