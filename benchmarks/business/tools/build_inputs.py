@@ -16,7 +16,8 @@ PACKAGE_INPUTS = (
     "GoFiles", "CgoFiles", "CFiles", "CXXFiles", "FFiles", "MFiles", "HFiles",
     "SFiles", "SysoFiles", "SwigFiles", "SwigCXXFiles", "EmbedFiles",
 )
-PACKAGE_FIELDS = ("Name", "ImportPath", "DepOnly", "Dir", "Standard", "Module", "Incomplete", "Error", *PACKAGE_INPUTS)
+PACKAGE_FIELDS = ("Name", "ImportPath", "Deps", "DepOnly", "Dir", "Standard", "Module", "Incomplete", "Error",
+                  *PACKAGE_INPUTS)
 ARCH_ENV = ("GO386", "GOAMD64", "GOARM", "GOARM64", "GOMIPS", "GOMIPS64", "GOPPC64", "GORISCV64", "GOWASM")
 CGO_FLAGS = ("CGO_CFLAGS", "CGO_CPPFLAGS", "CGO_CXXFLAGS", "CGO_LDFLAGS")
 SELECTOR_ENV = ("GOOS", "GOARCH", "CGO_ENABLED", "GOEXPERIMENT", "GOFIPS140", *ARCH_ENV, *CGO_FLAGS)
@@ -83,8 +84,36 @@ def regular_sources(repository, commit, sources):
     return result
 
 
+def binary_modules(raw):
+    result = {}
+    previous = None
+    for line in raw.splitlines()[1:]:
+        fields = line.removeprefix("\t").split("\t")
+        tag = fields[0]
+        if tag == "dep":
+            require(len(fields) in (3, 4) and all(fields[1:3]), "Go 二进制依赖记录无效")
+            path, version = fields[1:3]
+            require(path not in result, f"Go 二进制重复声明依赖: {path}")
+            result[path] = (version, "", "")
+            previous = path
+        elif tag == "=>":
+            require(previous is not None and len(fields) in (3, 4) and all(fields[1:3]),
+                    "Go 二进制替换记录无效")
+            result[previous] = (result[previous][0], fields[1], fields[2])
+            previous = None
+        else:
+            previous = None
+    return result
+
+
+def listed_module(module):
+    require(isinstance(module, dict) and module.get("Path"), "Go 包没有可验证的模块身份")
+    replacement = module.get("Replace")
+    return module["Path"], (module.get("Version") or "(devel)", replacement["Path"] if replacement else "",
+                            (replacement.get("Version") or "(devel)") if replacement else "")
+
+
 def module_directory(repo, module, selected, sources):
-    require(isinstance(module, dict), "Go 包没有可验证的模块归属")
     replacement = module.get("Replace")
     target = replacement if replacement is not None else module
     if not module.get("Main") and target.get("Version"):
@@ -96,49 +125,67 @@ def module_directory(repo, module, selected, sources):
     modfile = directory / "go.mod"
     require(target.get("GoMod") == str(modfile), f"本地模块使用了非预期的 go.mod: {directory}")
     selected.add(modfile)
-    sumfile = directory / "go.sum"
-    if sumfile.exists() or sumfile.is_symlink() or sumfile.relative_to(repo).as_posix() in sources:
-        selected.add(sumfile)
+    if module.get("Main"):
+        # 关闭工作区后，Go 只读取当前主模块的 go.sum。
+        sumfile = directory / "go.sum"
+        if sumfile.exists() or sumfile.is_symlink() or sumfile.relative_to(repo).as_posix() in sources:
+            selected.add(sumfile)
     return directory
 
 
-def enumerate_inputs(go, repo, sources, commands, module, info, env, flags):
-    go_dir = repo / BUSINESS_GO_PATH
+def verify_module_graphs(receipts, module, roots, modules_by_import):
+    for cmd, by_identifier in receipts.items():
+        dependencies = {}
+        for path in roots[module + "/cmd/" + cmd]:
+            require(path in modules_by_import, f"Go 依赖包未完整列出: {path}")
+            item = modules_by_import[path]
+            if item is not None and item[0] != module:
+                key, identity = item
+                require(key not in dependencies or dependencies[key] == identity, f"同一模块身份不一致: {key}")
+                dependencies[key] = identity
+        for identifier, embedded in by_identifier.items():
+            require(embedded == dependencies, f"Go 二进制依赖或替换与固定构建命令不符: {identifier}")
+
+
+def enumerate_inputs(go, repo, sources, receipts, module, info, env, flags):
+    go_dir = owned_path(repo, repo / BUSINESS_GO_PATH)
     selected = set()
-    expected = {module + "/cmd/" + name for name in commands}
-    found = set()
-    # 固定构建命令使用只读模块图；CGO 生成的缓存文件不属于待提交源码。
+    expected = {module + "/cmd/" + name for name in receipts}
+    roots = {}
+    modules_by_import = {}
+    # 同一次查询覆盖多个命令，但每个二进制只与自己实际导入的包和模块比较。
     args = [go, "list", "-mod=readonly", "-buildvcs=false", *flags, "-deps",
-            "-json=" + ",".join(PACKAGE_FIELDS), *("./cmd/" + name for name in sorted(commands))]
+            "-json=" + ",".join(PACKAGE_FIELDS), *("./cmd/" + name for name in sorted(receipts))]
     profile = info["settings"].get("-pgo")
     require(profile in (None, "default.pgo"), "无法按固定构建命令定位自定义 PGO 输入")
     for pkg in objects(command(args, go_dir, env)):
         require(not pkg.get("Incomplete") and not pkg.get("Error"), "Go 依赖清单包含不完整的包")
+        name = pkg["ImportPath"]
         if pkg.get("Standard"):
+            modules_by_import[name] = None
             continue
-        directory = module_directory(repo, pkg.get("Module"), selected, sources)
+        mod = pkg.get("Module")
+        modules_by_import[name] = listed_module(mod)
+        directory = module_directory(repo, mod, selected, sources)
         if directory is None:
             continue
         require(isinstance(pkg.get("Dir"), str), "本地 Go 包目录缺失")
         location = owned_path(directory, pkg["Dir"])
         if not pkg.get("DepOnly"):
-            name = pkg.get("ImportPath")
             require(pkg.get("Name") == "main" and name in expected, "枚举到了协议之外的 Go 命令")
-            found.add(name)
+            roots[name] = frozenset(pkg.get("Deps", ()))
             pgo = location / "default.pgo"
             exists = pgo.exists() or pgo.is_symlink()
             require(exists == bool(profile), f"工作树默认 PGO 输入与二进制不符: {name}")
             if exists:
                 selected.add(pgo)
         for field in PACKAGE_INPUTS:
-            for name in pkg.get(field, ()):
-                relative = Path(name)
+            for filename in pkg.get(field, ()):
+                relative = Path(filename)
                 require(not relative.is_absolute() and ".." not in relative.parts, "Go 输入不是包内相对路径")
                 selected.add(location / relative)
-    require(found == expected, "未能完整枚举协议中的 Go 命令")
-    # 未提供被导入包的本地模块，其 go.mod 仍可能影响最终版本选择。
-    for item in objects(command([go, "list", "-mod=readonly", "-m", "-json", "all"], go_dir, env)):
-        module_directory(repo, item, selected, sources)
+    require(roots.keys() == expected, "未能完整枚举协议中的 Go 命令")
+    verify_module_graphs(receipts, module, roots, modules_by_import)
     names = set()
     for path in sorted(selected):
         key = path.relative_to(repo).as_posix()
@@ -146,14 +193,11 @@ def enumerate_inputs(go, repo, sources, commands, module, info, env, flags):
         owned_path(repo, path)
         require(path.is_file() and digest(path) == sources[key], f"正式 Go 构建输入与固定提交字节不符: {key}")
         names.add(key)
-    return names
+    return names, roots
 
 
 @contextmanager
-def checkout(repository, commit, current):
-    if commit == current:
-        yield repository
-        return
+def fixed_checkout(repository, commit):
     with tempfile.TemporaryDirectory(prefix="benchmark-go-inputs-") as temporary:
         temp = Path(temporary).resolve()
         target = temp / "source"
@@ -167,7 +211,7 @@ def checkout(repository, commit, current):
         objects_dir = command([*git, "-c", f"safe.directory={repository}", "rev-parse", "--path-format=absolute",
                                "--git-path", "objects"], repository, env).removesuffix("\n")
         command([*git, "init", "--quiet", "--template=", str(target)], temp, env)
-        # alternates 中只写固定相对路径，仓库真实路径即使含换行符也不会被拆成多个对象目录。
+        # alternates 中只写固定相对路径；真实仓库路径中的换行符不会拆成多个目录。
         admin = target / ".git"
         (admin / "borrowed-objects").symlink_to(Path(objects_dir).resolve(strict=True), target_is_directory=True)
         (admin / "objects/info/alternates").write_bytes(b"../borrowed-objects\n")
@@ -186,20 +230,26 @@ def verify_inputs(repository, protocol, records, current_commit, current_sources
         for identifier, variant in definitions(protocol).items():
             record = records[identifier]
             actual = record.get("build_commit", record["source_commit"])
-            # 调用者已验证各二进制的工具链和所有非 VCS 构建设置一致。
-            info, commands = groups.setdefault(actual, (parse_build_info(record["build_info"]), set()))
-            commands.add(variant.get("command", identifier))
-        for commit, (info, commands) in groups.items():
+            # 工具链和非 VCS 构建设置已统一验证；依赖收据仍须区分每个实际二进制。
+            info, receipts = groups.setdefault(actual, (parse_build_info(record["build_info"]), {}))
+            cmd = variant.get("command", identifier)
+            receipts.setdefault(cmd, {})[identifier] = binary_modules(record["build_info"])
+        module = protocol["build_provenance"]["module"]
+        for commit, (info, receipts) in groups.items():
             sources = current_sources if commit == current_commit else committed_sources(repository, commit)
             sources = regular_sources(repository, commit, sources)
-            with checkout(repository, commit, current_commit) as repo:
-                go_dir = owned_path(repo, repo / BUSINESS_GO_PATH)
+
+            def inspect(root):
+                go_dir = owned_path(root, root / BUSINESS_GO_PATH)
                 env, flags = replay(go, go_dir, info)
-                module = protocol["build_provenance"]["module"]
-                names = enumerate_inputs(go, repo, sources, commands, module, info, env, flags)
-                if commit == current_commit:
-                    # 活动工作树会变动；重新枚举并校验字节，也核对两次观察的选择集合。
-                    final = enumerate_inputs(go, repo, sources, commands, module, info, env, flags)
-                    require(names == final, "采集期间 Go 构建输入集合已变化")
+                return enumerate_inputs(go, root, sources, receipts, module, info, env, flags)
+
+            live = inspect(repository) if commit == current_commit else None
+            with fixed_checkout(repository, commit) as fixed:
+                archived = inspect(fixed)
+            if live is not None:
+                # 固定树必须能重现实际命令的输入和传递包图，即使 Go 没有读取完整模块图。
+                require(live == archived, "工作树与固定提交的 Go 构建输入或包选择不同")
+                require(inspect(repository) == live, "采集期间 Go 构建输入或包选择已变化")
     except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
         raise ValueError(f"无法核对正式 Go 构建输入: {exc}") from exc

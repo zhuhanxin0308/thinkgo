@@ -54,3 +54,35 @@ jobs:
         if: always()
         working-directory: benchmarks/business/tools
         run: python -m coverage report --data-file="$RUNNER_TEMP/benchmark-source.coverage" --show-missing
+      - name: Build actual benchmark commands
+        working-directory: benchmarks/business/go
+        env:
+          GOFLAGS: ""
+          CGO_ENABLED: "1"
+          GOOS: linux
+          GOARCH: amd64
+          GOAMD64: v1
+        run: go build -trimpath -mod=readonly -buildvcs=true -p=2 -o ../bin/ ./cmd/...
+      - name: Validate actual repository build inputs
+        working-directory: benchmarks/business/tools
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          import subprocess
+
+          from build_inputs import verify_inputs
+          from experiment import load_protocol
+          from provenance import collect, committed_sources, definitions, digest, require_measurement_sources
+
+          root = Path.cwd().parent
+          repository = root.parents[1]
+          protocol = load_protocol(root / "contracts/protocol.json")
+          commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repository, text=True).strip()
+          require_measurement_sources(repository, protocol)
+          binaries = {name: digest(root / "bin" / name) for name in definitions(protocol)}
+          records = collect(repository, root, protocol, binaries, "go")
+          verify_inputs(repository, protocol, records, commit, committed_sources(repository, commit), "go")
+          require_measurement_sources(repository, protocol)
+          print(json.dumps({"commit": commit, "commands": sorted(binaries), "source_input_validation": "passed"}))
+          PY
