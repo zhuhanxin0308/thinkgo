@@ -40,6 +40,9 @@ func operationWithDocumentation(input, output reflect.Type, operationID string, 
 	if err != nil {
 		return nil, nil, err
 	}
+	if plan.schemaErr != nil {
+		return nil, nil, plan.schemaErr
+	}
 	builder := schemaBuilder{components: make(map[string]any), names: make(map[*node]string), documentation: docs}
 	parameters := make([]any, 0)
 	bodyFields := make([]field, 0)
@@ -85,7 +88,7 @@ func operationWithDocumentation(input, output reflect.Type, operationID string, 
 		for _, item := range fields {
 			required = required || ruleRequired(item.rules)
 		}
-		media := map[string]any{"schema": builder.objectSchema(bodyPlan, "request_"+mediaType)}
+		media := map[string]any{"schema": builder.componentSchema(bodyPlan, "request_"+mediaType, builder.objectDefinition)}
 		content := map[string]any{mediaType: media}
 		if len(formFields) > 0 {
 			content["multipart/form-data"] = media
@@ -95,9 +98,12 @@ func operationWithDocumentation(input, output reflect.Type, operationID string, 
 	response := map[string]any{"description": http.StatusText(successStatus)}
 	if output != nil {
 		builder.output = true
-		outputPlan, err := compileNode(output, false, true, make(map[planKey]*node), 0)
+		outputPlan, err := compileRootNode(output, false, true)
 		if err != nil {
 			return nil, nil, err
+		}
+		if outputPlan.schemaErr != nil {
+			return nil, nil, outputPlan.schemaErr
 		}
 		media := "application/json"
 		if output == reflect.TypeFor[string]() {
@@ -120,13 +126,23 @@ func operationWithDocumentation(input, output reflect.Type, operationID string, 
 
 func (builder *schemaBuilder) schema(plan *node) map[string]any {
 	result := builder.schemaValue(plan)
-	if description := builder.documentation.forType(plan.typ).Description; description != "" && result["$ref"] == nil {
-		result["description"] = description
+	if result["$ref"] == nil && builder.documentation != nil {
+		// 指针沿用目标类型说明；纯指针环没有最终目标，保留环上具名类型的说明。
+		for plan.typ.Kind() == reflect.Pointer && plan.elementCycle != nullCycle {
+			plan = plan.elem
+		}
+		if description := builder.documentation.forType(plan.typ).Description; description != "" {
+			result["description"] = description
+		}
 	}
 	return result
 }
 
 func (builder *schemaBuilder) schemaValue(plan *node) map[string]any {
+	if plan.elementCycle == nullCycle {
+		// 只有指针或 Optional 的环不会产生 JSON 容器，所有可编码的有限值最终都为 null。
+		return map[string]any{"type": "null"}
+	}
 	if plan.rawJSON {
 		return map[string]any{}
 	}
@@ -150,18 +166,12 @@ func (builder *schemaBuilder) schemaValue(plan *node) map[string]any {
 	case reflect.Interface:
 		return map[string]any{}
 	case reflect.Struct:
-		return builder.objectSchema(plan, "")
-	case reflect.Slice, reflect.Array:
-		result := map[string]any{"type": []string{"array", "null"}, "items": builder.schema(plan.elem)}
-		if plan.typ.Kind() == reflect.Array {
-			result["minItems"], result["maxItems"] = plan.typ.Len(), plan.typ.Len()
-			result["type"] = "array"
-		} else if !builder.output {
-			result["maxItems"] = maxSliceBindingElements
+		return builder.componentSchema(plan, "", builder.objectDefinition)
+	case reflect.Slice, reflect.Array, reflect.Map:
+		if plan.elementCycle == collectionCycle {
+			return builder.componentSchema(plan, "", builder.collectionDefinition)
 		}
-		return result
-	case reflect.Map:
-		return map[string]any{"type": []string{"object", "null"}, "additionalProperties": builder.schema(plan.elem)}
+		return builder.collectionDefinition(plan)
 	case reflect.Bool:
 		return map[string]any{"type": "boolean"}
 	case reflect.String:
@@ -184,23 +194,46 @@ func (builder *schemaBuilder) schemaValue(plan *node) map[string]any {
 	}
 }
 
-func (builder *schemaBuilder) objectSchema(plan *node, suffix string) map[string]any {
-	if name, exists := builder.names[plan]; exists {
-		return map[string]any{"$ref": "#/components/schemas/" + name}
+// componentSchema 先登记组件身份再展开子节点，保证同一类型从任意入口都能回到同一引用。
+func (builder *schemaBuilder) componentSchema(plan *node, suffix string, definition func(*node) map[string]any) map[string]any {
+	name, exists := builder.names[plan]
+	if !exists {
+		name = schemaComponentName(plan, suffix, builder.output)
+		builder.names[plan] = name
+		schema := definition(plan)
+		if description := builder.documentation.forType(plan.typ).Description; description != "" {
+			schema["description"] = description
+		}
+		builder.components[name] = schema
 	}
-	name := schemaComponentName(plan, suffix, builder.output)
-	builder.names[plan] = name
+	return map[string]any{"$ref": "#/components/schemas/" + name}
+}
+
+func (builder *schemaBuilder) collectionDefinition(plan *node) map[string]any {
+	return builder.collectionSchema(plan, builder.schema(plan.elem))
+}
+
+func (builder *schemaBuilder) collectionSchema(plan *node, element map[string]any) map[string]any {
+	if plan.typ.Kind() == reflect.Map {
+		return map[string]any{"type": []string{"object", "null"}, "additionalProperties": element}
+	}
+	result := map[string]any{"type": []string{"array", "null"}, "items": element}
+	if plan.typ.Kind() == reflect.Array {
+		result["type"], result["minItems"], result["maxItems"] = "array", plan.typ.Len(), plan.typ.Len()
+	} else if !builder.output {
+		result["maxItems"] = maxSliceBindingElements
+	}
+	return result
+}
+
+func (builder *schemaBuilder) objectDefinition(plan *node) map[string]any {
 	properties := make(map[string]any)
 	object := map[string]any{"type": "object", "properties": properties, "additionalProperties": false}
-	if description := builder.documentation.forType(plan.typ).Description; description != "" {
-		object["description"] = description
-	}
-	builder.components[name] = object
 	for _, item := range plan.fields {
 		properties[item.name] = builder.fieldSchema(item)
 	}
 	builder.objectPresence(plan, object)
-	return map[string]any{"$ref": "#/components/schemas/" + name}
+	return object
 }
 
 func schemaComponentName(plan *node, suffix string, output bool) string {
@@ -301,6 +334,11 @@ func (builder *schemaBuilder) fieldSchemaWithDocumentation(item field, docs Type
 	}
 	inline, exists := docs.Inline[item.goName]
 	result := builder.schemaWithInline(plan, inline, exists)
+	// 注册表序列化引用时只保存引用和扩展；字段的约束与说明应放在独立 Schema，
+	// 让相同组件在其他字段的可空性、默认值及长度规则保持独立。
+	if result["$ref"] != nil && (item.rules != "" || item.hasDefault || item.description != "") {
+		result = map[string]any{"allOf": []any{result}}
+	}
 	if ruleRequired(item.rules) {
 		result["not"] = map[string]any{"type": "null"}
 		kind := underlyingNode(item.node).typ.Kind()
@@ -321,7 +359,8 @@ func (builder *schemaBuilder) fieldSchemaWithDocumentation(item field, docs Type
 			nonEmpty["minProperties"] = 1
 		}
 		if len(nonEmpty) > 0 {
-			result["allOf"] = []any{nonEmpty}
+			entries, _ := result["allOf"].([]any)
+			result["allOf"] = append(entries, nonEmpty)
 		}
 	}
 	if item.description != "" {
@@ -406,7 +445,7 @@ func (builder *schemaBuilder) fieldSchemaWithDocumentation(item field, docs Type
 }
 
 func underlyingNode(plan *node) *node {
-	for plan != nil && (plan.optional || plan.typ.Kind() == reflect.Pointer) && plan.elem != nil {
+	for plan != nil && (plan.optional || plan.typ.Kind() == reflect.Pointer) && plan.elem != nil && plan.elementCycle != nullCycle {
 		plan = plan.elem
 	}
 	return plan

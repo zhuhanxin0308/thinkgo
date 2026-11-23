@@ -34,21 +34,34 @@ type planKey struct {
 	typ  reflect.Type
 	root bool
 }
+
+// elementCycle 区分需要组件引用的容器环和只能编码为 null 的解包环。
+type elementCycle uint8
+
+const (
+	noElementCycle elementCycle = iota
+	collectionCycle
+	nullCycle
+)
+
 type node struct {
-	typ           reflect.Type
-	elem          *node
-	fields        []field
-	knownFields   map[string]bool
-	rawJSONFields []string
-	validator     *validate.Validator
-	sources       fwcontext.SourceSelection
-	hasBody       bool
-	hasForm       bool
-	optional      bool
-	text          bool
-	binary        bool
-	number        bool
-	rawJSON       bool
+	typ             reflect.Type
+	elem            *node
+	elementCycle    elementCycle
+	schemaErr       error
+	fields          []field
+	knownFields     map[string]bool
+	rawJSONFields   []string
+	validator       *validate.Validator
+	sources         fwcontext.SourceSelection
+	hasBody         bool
+	hasForm         bool
+	optional        bool
+	wrappedOptional bool
+	text            bool
+	binary          bool
+	number          bool
+	rawJSON         bool
 }
 type field struct {
 	index                            []int
@@ -88,7 +101,7 @@ func planFor(typ reflect.Type) (*node, error) {
 		result := cached.(compiledPlan)
 		return result.root, result.err
 	}
-	result, err := compileNode(typ, true, false, make(map[planKey]*node), 0)
+	result, err := compileRootNode(typ, true, false)
 	if err == nil && (result.text || result.optional) {
 		err = fmt.Errorf("%w: 请求根类型必须描述对象字段", ErrDefinition)
 	}
@@ -118,10 +131,12 @@ func compileNode(typ reflect.Type, root, output bool, building map[planKey]*node
 	if typ.Kind() != reflect.Pointer && reflect.PointerTo(typ).Implements(optionalInterface) {
 		result.optional = true
 		holder := reflect.New(typ).Interface().(optionalValue)
-		element := reflect.TypeOf(holder.valuePointer()).Elem()
-		var err error
-		result.elem, err = compileNode(element, false, output, building, depth+1)
-		return result, err
+		native, element := inspectOptionalTypes(holder)
+		if native == nil {
+			return nil, fmt.Errorf("%w: %s 的零值缺少 Optional 存储", ErrDefinition, typ)
+		}
+		result.wrappedOptional = native != typ
+		return result.withElement(compileNode(element, false, output, building, depth+1))
 	}
 	if typ.Kind() != reflect.Pointer && (typ.PkgPath() != "time" || typ.Name() != "Time") {
 		pointer := reflect.PointerTo(typ)
@@ -142,9 +157,7 @@ func compileNode(typ reflect.Type, root, output bool, building map[planKey]*node
 		if typ.Kind() == reflect.Map && typ.Key().Kind() != reflect.String {
 			return nil, fmt.Errorf("%w: map 键必须是字符串", ErrDefinition)
 		}
-		var err error
-		result.elem, err = compileNode(typ.Elem(), root && typ.Kind() == reflect.Pointer, output, building, depth+1)
-		return result, err
+		return result.withElement(compileNode(typ.Elem(), root && typ.Kind() == reflect.Pointer, output, building, depth+1))
 	case reflect.Struct:
 		fields, err := compileFields(typ, root, output, building, depth, nil, make(map[reflect.Type]bool))
 		if err != nil {
@@ -182,7 +195,7 @@ func compileNode(typ reflect.Type, root, output bool, building map[planKey]*node
 				return nil, fmt.Errorf("%w: 字段名 %q 重复", ErrDefinition, item.name)
 			}
 			names[item.name] = true
-			if isRawJSONType(item.node.typ) {
+			if underlyingNode(item.node).rawJSON {
 				result.rawJSONFields = append(result.rawJSONFields, item.name)
 			}
 			if item.rules != "" {
@@ -312,15 +325,15 @@ func compileFields(typ reflect.Type, root, output bool, building map[planKey]*no
 		}
 		if raw, exists := spec.Tag.Lookup("default"); exists {
 			item.hasDefault = true
-			defaultType := spec.Type
-			if child.optional {
-				defaultType = child.elem.typ
+			defaultPlan := child
+			if child.optional && child.elem != nil {
+				defaultPlan = child.elem
 			}
-			for defaultType.Kind() == reflect.Pointer {
-				defaultType = defaultType.Elem()
+			for defaultPlan.typ.Kind() == reflect.Pointer && defaultPlan.elementCycle != nullCycle && defaultPlan.elem != nil {
+				defaultPlan = defaultPlan.elem
 			}
 			encoded := raw
-			if defaultType.Kind() == reflect.String && !underlyingNode(child).number || underlyingNode(child).text || underlyingNode(child).binary {
+			if defaultPlan.typ.Kind() == reflect.String && !underlyingNode(child).number || underlyingNode(child).text || underlyingNode(child).binary {
 				encoded = strconv.Quote(raw)
 			}
 			if !json.Valid([]byte(encoded)) {
@@ -381,23 +394,26 @@ func compileFields(typ reflect.Type, root, output bool, building map[planKey]*no
 	return result, nil
 }
 
-func isRawJSONType(typ reflect.Type) bool {
-	for typ != nil {
-		if typ == reflect.TypeFor[json.RawMessage]() {
-			return true
-		}
-		if typ.Kind() == reflect.Pointer {
-			typ = typ.Elem()
-			continue
-		}
-		if reflect.PointerTo(typ).Implements(optionalInterface) {
-			holder := reflect.New(typ).Interface().(optionalValue)
-			typ = reflect.TypeOf(holder.valuePointer()).Elem()
-			continue
-		}
-		return false
+// withElement 在计划发布前连上元素边。只有新边闭合的环需要标记，
+// 链尾的普通节点、已有环和通过结构体字段的递归都保持原有表示。
+func (plan *node) withElement(elem *node, err error) (*node, error) {
+	plan.elem = elem
+	if err != nil {
+		return plan, err
 	}
-	return false
+	cycle := nullCycle
+	for child := elem; child != nil && child.elementCycle == noElementCycle; child = child.elem {
+		if !child.optional && child.typ.Kind() != reflect.Pointer {
+			cycle = collectionCycle
+		}
+		if child == plan {
+			for member := plan; member.elementCycle == noElementCycle; member = member.elem {
+				member.elementCycle = cycle
+			}
+			break
+		}
+	}
+	return plan, nil
 }
 
 func validParameterNode(plan *node) bool {

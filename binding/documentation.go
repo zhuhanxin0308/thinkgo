@@ -26,9 +26,6 @@ func (docs Documentation) forType(typ reflect.Type) TypeDocumentation {
 	if typ == nil {
 		return TypeDocumentation{}
 	}
-	for typ.Kind() == reflect.Pointer {
-		typ = typ.Elem()
-	}
 	name := typ.Name()
 	if position := strings.IndexByte(name, '['); position >= 0 {
 		name = name[:position]
@@ -45,23 +42,16 @@ func (builder *schemaBuilder) documentedField(item field) field {
 
 // schemaWithInline 为匿名对象保留声明位置，防止相同结构在不同业务字段下串用说明。
 func (builder *schemaBuilder) schemaWithInline(plan *node, docs TypeDocumentation, exists bool) map[string]any {
-	if !exists || plan.rawJSON || plan.text || plan.binary || plan.number {
+	// 元素链自身成环时不存在需要内联说明的匿名对象，必须复用正常的组件或 null 表示。
+	if !exists || plan.elementCycle != noElementCycle || plan.rawJSON || plan.text || plan.binary || plan.number {
 		return builder.schema(plan)
 	}
 	if plan.optional || plan.typ.Kind() == reflect.Pointer {
 		return map[string]any{"anyOf": []any{builder.schemaWithInline(plan.elem, docs, true), map[string]any{"type": "null"}}}
 	}
 	switch plan.typ.Kind() {
-	case reflect.Slice, reflect.Array:
-		result := map[string]any{"type": []string{"array", "null"}, "items": builder.schemaWithInline(plan.elem, docs, true)}
-		if plan.typ.Kind() == reflect.Array {
-			result["type"], result["minItems"], result["maxItems"] = "array", plan.typ.Len(), plan.typ.Len()
-		} else if !builder.output {
-			result["maxItems"] = maxSliceBindingElements
-		}
-		return result
-	case reflect.Map:
-		return map[string]any{"type": []string{"object", "null"}, "additionalProperties": builder.schemaWithInline(plan.elem, docs, true)}
+	case reflect.Slice, reflect.Array, reflect.Map:
+		return builder.collectionSchema(plan, builder.schemaWithInline(plan.elem, docs, true))
 	case reflect.Struct:
 		if plan.typ.Name() != "" {
 			return builder.schema(plan)

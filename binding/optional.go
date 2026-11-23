@@ -4,6 +4,7 @@ package binding
 import (
 	"bytes"
 	"encoding/json"
+	"reflect"
 )
 
 // Optional 保存未提交、显式 null 和具体值，供 PATCH 接口区分清空与保持原值。
@@ -46,8 +47,28 @@ func (o *Optional[T]) UnmarshalJSON(data []byte) error {
 }
 
 type optionalValue interface {
+	optionalTypes() (reflect.Type, reflect.Type)
 	valuePointer() any
 	setPresence(bool)
+}
+
+// optionalTypes 返回可绑定存储的实际泛型实例和元素类型；提升的方法仍保留原实例身份。
+func (o *Optional[T]) optionalTypes() (reflect.Type, reflect.Type) {
+	if o == nil {
+		return nil, nil
+	}
+	return reflect.TypeFor[Optional[T]](), reflect.TypeFor[T]()
+}
+
+// inspectOptionalTypes 仅调用框架私有的类型查询。多层匿名指针为 nil 时，Go 的提升方法可能在进入
+// optionalTypes 前就访问空指针；此时零值 DTO 没有可供绑定的存储，交给编译器报告定义错误。
+func inspectOptionalTypes(holder optionalValue) (native, element reflect.Type) {
+	defer func() {
+		if recover() != nil {
+			native, element = nil, nil
+		}
+	}()
+	return holder.optionalTypes()
 }
 
 func (o *Optional[T]) valuePointer() any     { return &o.value }
