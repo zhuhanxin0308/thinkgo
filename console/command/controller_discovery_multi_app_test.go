@@ -9,9 +9,8 @@ import (
 	"github.com/zhuhanxin0308/thinkgo/v3"
 )
 
-// TestRefreshControllerDiscoveryGeneratesNativeApplications 验证服务发现按
-// ThinkPHP 多应用目录生成根应用清单和各业务应用自己的装配入口。
-func TestRefreshControllerDiscoveryGeneratesNativeApplications(t *testing.T) {
+func prepareNativeApplicationDiscovery(t testing.TB) *framework.App {
+	t.Helper()
 	basePath := t.TempDir()
 	writeDiscoveryModuleFixture(t, basePath, "example.com/project")
 	writeDiscoveryFixture(t, basePath, "app/service.go", "package app\n\nfunc Services() []interface{} { return nil }\n")
@@ -64,12 +63,27 @@ func Load(route *framework.Route) {}
 		}
 	}
 
-	application := &framework.App{BasePath: basePath, ApplicationPath: filepath.Join(basePath, "app")}
+	return &framework.App{BasePath: basePath, ApplicationPath: filepath.Join(basePath, "app")}
+}
+
+// TestRefreshControllerDiscoveryGeneratesNativeApplications 验证服务发现按
+// ThinkPHP 多应用目录生成根应用清单和各业务应用自己的装配入口。
+func TestRefreshControllerDiscoveryGeneratesNativeApplications(t *testing.T) {
+	application := prepareNativeApplicationDiscovery(t)
 	if err := RefreshControllerDiscovery(application); err != nil {
 		t.Fatalf("生成原生多应用装配入口失败: %v", err)
 	}
+	assertNativeApplicationRegistrations(t, func(path string) string {
+		return readGeneratedDiscoverySource(t, application.BasePath, path)
+	})
+	if err := CheckControllerDiscovery(application); err != nil {
+		t.Fatalf("刚生成的多应用发现文件应通过校验: %v", err)
+	}
+}
 
-	rootSource := readGeneratedDiscoverySource(t, basePath, "autoload_generated.go")
+func assertNativeApplicationRegistrations(t testing.TB, source func(string) string) {
+	t.Helper()
+	rootSource := source("autoload_generated.go")
 	for _, expected := range []string{
 		"RegisterApplications(businessapp.RegisterGlobals",
 		`applicationAdmin.Definition()`,
@@ -87,12 +101,12 @@ func Load(route *framework.Route) {}
 	if strings.Contains(rootSource, "applicationEmpty") || strings.Contains(rootSource, `"example.com/project/app/view"`) {
 		t.Fatalf("空目录不得被识别为业务应用:\n%s", rootSource)
 	}
-	globalSource := readGeneratedDiscoverySource(t, basePath, "app/autoload_generated.go")
+	globalSource := source("app/autoload_generated.go")
 	if !strings.Contains(globalSource, "RegisterGlobalComponents") || strings.Contains(globalSource, "example.com/project/app/") {
 		t.Fatalf("公共包只声明全局组件，不得导入子应用:\n%s", globalSource)
 	}
 
-	indexSource := readGeneratedDiscoverySource(t, basePath, "app/index/autoload_generated.go")
+	indexSource := source("app/index/autoload_generated.go")
 	for _, expected := range []string{
 		"package index",
 		`Name: "index"`,
@@ -111,7 +125,7 @@ func Load(route *framework.Route) {}
 		}
 	}
 
-	adminSource := readGeneratedDiscoverySource(t, basePath, "app/admin/autoload_generated.go")
+	adminSource := source("app/admin/autoload_generated.go")
 	for _, expected := range []string{"package admin", `Name: "admin"`, "applicationController.User", "applicationRoute.Load"} {
 		if !strings.Contains(adminSource, expected) {
 			t.Errorf("admin 应用装配入口缺少 %q:\n%s", expected, adminSource)
@@ -121,9 +135,6 @@ func Load(route *framework.Route) {}
 		if strings.Contains(adminSource, unexpected) {
 			t.Errorf("未声明可选入口时不得生成 %q 调用:\n%s", unexpected, adminSource)
 		}
-	}
-	if err := CheckControllerDiscovery(application); err != nil {
-		t.Fatalf("刚生成的多应用发现文件应通过校验: %v", err)
 	}
 }
 

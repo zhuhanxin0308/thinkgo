@@ -212,7 +212,7 @@ func TestGeneratedValidatorBinding(t *testing.T) {
 	}
 }
 
-func writeDiscoveryFixture(t *testing.T, basePath, relativePath, content string) {
+func writeDiscoveryFixture(t testing.TB, basePath, relativePath, content string) {
 	t.Helper()
 	path := filepath.Join(basePath, filepath.FromSlash(relativePath))
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -225,7 +225,7 @@ func writeDiscoveryFixture(t *testing.T, basePath, relativePath, content string)
 
 // writeDiscoveryModuleFixture 创建具备真实框架依赖及完整校验和的只读下游模块，
 // 保证语义发现通过目标项目自己的 go.mod 解析框架类型。
-func writeDiscoveryModuleFixture(t *testing.T, basePath, modulePath string) {
+func writeDiscoveryModuleFixture(t testing.TB, basePath, modulePath string) {
 	t.Helper()
 	frameworkPath, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {

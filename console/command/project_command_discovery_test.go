@@ -12,8 +12,8 @@ import (
 	"github.com/zhuhanxin0308/thinkgo/v3/console"
 )
 
-// TestProjectCommandDiscoveryUsesStaticTypes 验证多应用和嵌套命令按真实接口发现，排除辅助类型与未实例化泛型。
-func TestProjectCommandDiscoveryUsesStaticTypes(t *testing.T) {
+func prepareStaticProjectCommands(t testing.TB) string {
+	t.Helper()
 	base := t.TempDir()
 	writeDiscoveryModuleFixture(t, base, "example.com/commands")
 	writeDiscoveryFixture(t, base, "app/index/command/audit.go", `package command
@@ -41,6 +41,12 @@ import "github.com/zhuhanxin0308/thinkgo/v3/console"
 type Private struct { console.Command }
 `)
 	writeDiscoveryFixture(t, base, "app/index/command/excluded.go", "//go:build thinkgo_missing_command_tag\n\npackage command\nthis cannot compile\n")
+	return base
+}
+
+// TestProjectCommandDiscoveryUsesStaticTypes 验证多应用和嵌套命令按真实接口发现，排除辅助类型与未实例化泛型。
+func TestProjectCommandDiscoveryUsesStaticTypes(t *testing.T) {
+	base := prepareStaticProjectCommands(t)
 	commands, err := DiscoverProjectCommands(base)
 	if err != nil || len(commands) != 2 {
 		t.Fatalf("命令发现失败: %#v %v", commands, err)
