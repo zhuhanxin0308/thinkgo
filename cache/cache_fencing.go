@@ -487,6 +487,13 @@ func (c *Cache) deleteExactGenerationContext(ctx context.Context, driver Driver,
 // deleteAtFenceContext 只删除不晚于失效代际的值；更新后的新一代值保持不变。
 func (c *Cache) deleteAtFenceContext(ctx context.Context, driver Driver, key string, fence uint64) (bool, error) {
 	if !cacheDriverSupportsAtomicFencing(driver) {
+		if lease := guardedTagLease(ctx, driver); lease.owner != "" {
+			// 没有失效水位时，标签清理只能在仍然持有租约的原子边界内删除业务值。
+			err := updateLeasedTagValue(ctx, driver, lease, key, func(interface{}, bool) (interface{}, bool, error) {
+				return nil, true, nil
+			})
+			return err == nil, err
+		}
 		return true, deleteCacheValueContext(ctx, driver, key)
 	}
 	deleted := false

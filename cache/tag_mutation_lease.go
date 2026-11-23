@@ -12,12 +12,17 @@ type tagMutationLease struct {
 // writeLeasedTagMetadata 把持有者检查与元数据写入放在同一后端原子区间。
 // 回滚沿用同一租约；丢锁后不能用旧快照覆盖新持有者的成员。
 func writeLeasedTagMetadata(ctx context.Context, driver Driver, lease tagMutationLease, key string, values []string) error {
+	return updateLeasedTagValue(ctx, driver, lease, key, func(interface{}, bool) (interface{}, bool, error) {
+		return values, len(values) == 0, nil
+	})
+}
+
+func updateLeasedTagValue(ctx context.Context, driver Driver, lease tagMutationLease, key string, update func(interface{}, bool) (interface{}, bool, error)) error {
 	if !cacheDriverSupportsGuardedUpdates(driver) {
 		// 旧锁驱动仍可执行普通缓存操作，但不能宣称提供跨进程安全的标签写入。
 		return ErrCacheLockUnsupported
 	}
-	committed, err := driver.(LockGuardedUpdater).UpdateIfLockOwnerContext(ctx, key, 0, lease.key, lease.owner,
-		func(interface{}, bool) (interface{}, bool, error) { return values, len(values) == 0, nil })
+	committed, err := driver.(LockGuardedUpdater).UpdateIfLockOwnerContext(ctx, key, 0, lease.key, lease.owner, update)
 	if err != nil {
 		return err
 	}
@@ -25,4 +30,13 @@ func writeLeasedTagMetadata(ctx context.Context, driver Driver, lease tagMutatio
 		return ErrCacheLockLost
 	}
 	return nil
+}
+
+// guardedTagLease 只对支持原子所有权校验的标签清理启用提交保护，保留旧驱动的单键原子路径。
+func guardedTagLease(ctx context.Context, driver Driver) tagMutationLease {
+	lease, held := ctx.Value(tagMutationLeaseKey{}).(tagMutationLease)
+	if held && cacheDriverSupportsGuardedUpdates(driver) {
+		return lease
+	}
+	return tagMutationLease{}
 }

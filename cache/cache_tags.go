@@ -133,6 +133,14 @@ func (c *TaggedCache) FlushContext(ctx context.Context) error {
 	return c.cache.withTagMutationLockContext(ctx, driver, func(ctx context.Context) error {
 		c.cache.state.tagMu.Lock()
 		defer c.cache.state.tagMu.Unlock()
+		// 先领票再读取成员，接管租约的新写者始终可以用更高代际提交。
+		var fence uint64
+		if cacheDriverSupportsAtomicFencing(driver) {
+			fence, err = c.cache.nextFenceGenerationContext(ctx, driver)
+			if err != nil {
+				return err
+			}
+		}
 		keys := make(map[string][]string)
 		for _, tag := range c.tags {
 			members, memberErr := c.cache.tagMembersLockedContext(ctx, driver, tag)
@@ -143,60 +151,57 @@ func (c *TaggedCache) FlushContext(ctx context.Context) error {
 				keys[key] = append(keys[key], tag)
 			}
 		}
-		fence := uint64(0)
-		if cacheDriverSupportsAtomicFencing(driver) {
-			members := make([]string, 0, len(keys))
-			for key := range keys {
-				members = append(members, key)
-			}
-			fence, err = c.cache.beginKeyInvalidation(ctx, driver, members)
-			if err != nil {
-				return err
-			}
-		}
-		liveKeys := make(map[string]bool, len(keys))
+		var provenKeys, liveKeys []string
+		missingKeys := make(map[string][]string)
 		forwardGhosts := make(map[string][]string)
-		preservedKeys := make(map[string]bool)
-		// 变更前区分已过期幽灵成员和仍存在的业务值；只有后者要求完整反向关系。
+		// 只要一个目标标签有双向证明，该键就属于并集。业务值即使暂缺，旧写者仍受水位约束。
 		for key, requiredTags := range keys {
 			raw, found, valueErr := getCacheValueContext(ctx, driver, key)
 			if valueErr != nil {
 				return valueErr
 			}
-			if !found {
-				continue
-			}
-			if fence > 0 {
+			var preserveValue bool
+			if found && fence > 0 {
 				_, generation, _, decodeErr := decodeCacheValueAtOrigin(raw)
 				if decodeErr != nil {
 					return decodeErr
 				}
-				if generation > fence {
-					preservedKeys[key] = true
-					continue
-				}
+				preserveValue = generation > fence
 			}
 			reverse, reverseErr := c.cache.reverseTagsLockedContext(ctx, driver, key)
 			if reverseErr != nil {
 				return reverseErr
 			}
-			consistent := true
+			proven := false
 			for _, tag := range requiredTags {
-				if !containsString(reverse, tag) {
-					consistent = false
+				if containsString(reverse, tag) {
+					proven = true
+					break
 				}
 			}
-			if consistent {
-				liveKeys[key] = true
-			} else {
+			if proven {
+				provenKeys = append(provenKeys, key)
+			}
+			// 较新值和标签应当保留，但该键仍需发布本次水位，防止新值过期后更早的写者回填。
+			if preserveValue {
+				continue
+			}
+			switch {
+			case !found:
+				missingKeys[key] = requiredTags
+			case proven:
+				liveKeys = append(liveKeys, key)
+			default:
 				forwardGhosts[key] = requiredTags
 			}
 		}
-		resultErr := error(nil)
-		for key, requiredTags := range keys {
-			if liveKeys[key] || preservedKeys[key] || len(forwardGhosts[key]) > 0 {
-				continue
+		if fence > 0 && len(provenKeys) > 0 {
+			if err := c.cache.publishKeyInvalidation(ctx, driver, provenKeys, fence, guardedTagLease(ctx, driver)); err != nil {
+				return err
 			}
+		}
+		resultErr := error(nil)
+		for key, requiredTags := range missingKeys {
 			_, cleanupErr := c.cache.removeKeyFromTagsLockedContext(ctx, driver, key, requiredTags)
 			resultErr = errors.Join(resultErr, cleanupErr)
 		}
@@ -204,7 +209,7 @@ func (c *TaggedCache) FlushContext(ctx context.Context) error {
 			_, cleanupErr := c.cache.removeForwardMembersLockedContext(ctx, driver, key, tags)
 			resultErr = errors.Join(resultErr, cleanupErr)
 		}
-		for key := range liveKeys {
+		for _, key := range liveKeys {
 			deleted, deleteErr := c.cache.deleteAtFenceContext(ctx, driver, key, fence)
 			if deleteErr != nil {
 				resultErr = errors.Join(resultErr, deleteErr)
@@ -213,7 +218,7 @@ func (c *TaggedCache) FlushContext(ctx context.Context) error {
 			if !deleted {
 				continue
 			}
-			_, unbindErr := c.cache.unbindKeyFromAllTagsLockedContext(ctx, driver, key)
+			_, unbindErr := c.cache.removeKeyFromTagsLockedContext(ctx, driver, key, keys[key])
 			resultErr = errors.Join(resultErr, unbindErr)
 		}
 		return resultErr

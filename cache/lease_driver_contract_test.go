@@ -12,9 +12,8 @@ import (
 	redisDriver "github.com/zhuhanxin0308/thinkgo/v3/cache/driver/redis"
 )
 
-// TestLeaseCommitBackendContracts 验证内置后端与命名空间包装的 owner 校验、失败原子性和删除语义。
-func TestLeaseCommitBackendContracts(t *testing.T) {
-	factories := map[string]func(*testing.T) Driver{
+func leaseTestBackends() map[string]func(*testing.T) Driver {
+	return map[string]func(*testing.T) Driver{
 		"memory": func(*testing.T) Driver { return cacheDriver.NewMemory() },
 		"file": func(t *testing.T) Driver {
 			backend, err := cacheDriver.NewFile(t.TempDir())
@@ -37,7 +36,11 @@ func TestLeaseCommitBackendContracts(t *testing.T) {
 			return backend
 		},
 	}
-	for name, factory := range factories {
+}
+
+// TestLeaseCommitBackendContracts 验证内置后端与命名空间包装的 owner 校验、失败原子性和删除语义。
+func TestLeaseCommitBackendContracts(t *testing.T) {
+	for name, factory := range leaseTestBackends() {
 		for _, namespaced := range []bool{false, true} {
 			t.Run(name+"/namespace="+strconv.FormatBool(namespaced), func(t *testing.T) {
 				backend := factory(t)

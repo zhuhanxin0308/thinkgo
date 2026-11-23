@@ -30,16 +30,8 @@ func rollbackCacheBatchSnapshot(ctx context.Context, updater ExpiryAtomicUpdater
 		if !previous.found {
 			return nil, true, nil, nil
 		}
-		_, _, previousEnveloped, err := decodeCacheValueEnvelope(previous.value)
-		if err != nil {
-			return nil, false, nil, err
-		}
-		value := previous.value
-		if !previousEnveloped {
-			// 旧格式值也必须受批次期间或之后的失效水位保护，不能借恢复复活已失效数据。
-			value = newCacheValueEnvelope(generation, value)
-		}
-		return value, false, &previous.expiry, nil
+		// 按原样恢复，使裸值仍按代际零判断可见性，旧信封也保留原来的来源和提交代际。
+		return previous.value, false, &previous.expiry, nil
 	})
 	if errors.Is(err, errCacheFenceNoChange) {
 		return nil
