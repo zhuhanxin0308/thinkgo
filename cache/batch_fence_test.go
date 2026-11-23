@@ -55,6 +55,9 @@ func TestBatchReadsDistinctFenceKeysOnceAndRejectsStaleValues(t *testing.T) {
 	if err := manager.SetMany(input, time.Minute); err != nil {
 		t.Fatal(err)
 	}
+	if len(probe.fenceReads) != 2 {
+		t.Fatalf("批写必须在发送前和提交后各批量核验一次：%v", probe.fenceReads)
+	}
 	if _, err := manager.beginKeyInvalidation(ctx, driver, []string{"exact"}); err != nil {
 		t.Fatal(err)
 	}
@@ -65,6 +68,7 @@ func TestBatchReadsDistinctFenceKeysOnceAndRejectsStaleValues(t *testing.T) {
 		t.Fatal(err)
 	}
 	probe.single = 0
+	probe.fenceReads = nil
 	keys := []string{"exact", "prefix:old", "visible", "visible", "prefix:new"}
 	values, err := manager.GetManyContext(ctx, keys)
 	if value, found := values["visible"]; err != nil || len(values) != 2 || !found || value != nil || values["prefix:new"] != "updated" {

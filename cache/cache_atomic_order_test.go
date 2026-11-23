@@ -207,7 +207,7 @@ func TestAtomicRebaseKeepsUniqueCommitIdentity(t *testing.T) {
 	if _, err := slow.Inc(wrapped.target, 1); err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.deleteExactGenerationContext(context.Background(), backend, wrapped.target, batchGeneration); err != nil {
+	if err := manager.deleteExactGenerationContext(context.Background(), backend, wrapped.target, batchGeneration, batchGeneration); err != nil {
 		t.Fatal(err)
 	}
 	if value, found, err := manager.Get(wrapped.target); err != nil || !found || value != int64(11) {

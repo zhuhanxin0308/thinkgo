@@ -71,6 +71,10 @@ func liveScopedRedis(tb testing.TB) (*Cache, *Cache) {
 
 // TestLiveRedisScopedInvalidation 验证实际 Redis namespace、标签失效、旧写者读取边界以及 Flush 保留活动锁。
 func TestLiveRedisScopedInvalidation(t *testing.T) {
+	t.Run("equal-watermark", func(t *testing.T) {
+		manager, _ := liveScopedRedis(t)
+		assertWritesRejectEqualInvalidation(t, manager)
+	})
 	first, second := liveScopedRedis(t)
 	for _, manager := range []*Cache{first, second} {
 		if err := manager.Set("session:active", "saved", time.Minute); err != nil {

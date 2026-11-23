@@ -13,30 +13,11 @@ var ErrAborted = errors.New("清理回调异常退出")
 // 调用方应通过 defer 登记需要继续执行的步骤，并在这些步骤之后发布完成；
 // 本函数不会吞掉 Goexit、重试回调或另外创建协程。
 func Run(result *error, stage string, callback func() error) {
-	returned := false
-	defer func() {
-		if !returned {
+	callbackErr := Call(callback, func(panicked bool) {
+		if !panicked {
 			*result = errors.Join(*result, fmt.Errorf("%s: %w", stage, ErrAborted))
 		}
-	}()
-	var callbackErr error
-	var panicValue interface{}
-	callbackReturned := false
-	func() {
-		defer func() {
-			if !callbackReturned {
-				panicValue = recover()
-			}
-		}()
-		callbackErr = callback()
-		callbackReturned = true
-	}()
-	// recover 即使取得旧兼容模式的 nil panic，内层函数也会恢复返回；
-	// Goexit 则不会抵达此处，只会继续执行外层 defer 链。
-	returned = true
-	if !callbackReturned {
-		panic(panicValue)
-	}
+	})
 	if callbackErr != nil {
 		*result = errors.Join(*result, callbackErr)
 	}

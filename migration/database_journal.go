@@ -240,27 +240,58 @@ func (store *DatabaseStore) runAtomic(ctx context.Context, callback func(Executo
 }
 
 func (store *DatabaseStore) runSQLiteSavepoint(ctx context.Context, callback func(Executor) error) (resultErr error) {
+	if err := store.sqliteSavepointFailure(); err != nil {
+		return err
+	}
 	if _, err := store.activeExecutor().ExecuteContext(ctx, "SAVEPOINT "+sqliteMigrationSavepoint); err != nil {
 		return err
 	}
+	returned := false
 	defer func() {
-		if recovered := recover(); recovered != nil {
-			cleanupCtx, cancel := context.WithTimeout(context.Background(), migrationCleanupTimeout)
-			_, _ = store.activeExecutor().ExecuteContext(cleanupCtx, "ROLLBACK TO SAVEPOINT "+sqliteMigrationSavepoint)
-			_, _ = store.activeExecutor().ExecuteContext(cleanupCtx, "RELEASE SAVEPOINT "+sqliteMigrationSavepoint)
-			cancel()
-			panic(recovered)
+		// 不恢复异常，让普通 panic、旧式 nil panic 和 Goexit 都沿原栈传播。
+		if !returned {
+			_ = store.rollbackSQLiteSavepoint()
 		}
 	}()
 	if callbackErr := callback(store.activeExecutor()); callbackErr != nil {
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), migrationCleanupTimeout)
-		_, rollbackErr := store.activeExecutor().ExecuteContext(cleanupCtx, "ROLLBACK TO SAVEPOINT "+sqliteMigrationSavepoint)
-		_, releaseErr := store.activeExecutor().ExecuteContext(cleanupCtx, "RELEASE SAVEPOINT "+sqliteMigrationSavepoint)
-		cancel()
-		return errors.Join(callbackErr, rollbackErr, releaseErr)
+		cleanupErr := store.rollbackSQLiteSavepoint()
+		returned = true
+		return errors.Join(callbackErr, cleanupErr)
 	}
 	_, err := store.activeExecutor().ExecuteContext(ctx, "RELEASE SAVEPOINT "+sqliteMigrationSavepoint)
+	store.recordSQLiteSavepointFailure(err)
+	returned = true
 	return err
+}
+
+func (store *DatabaseStore) rollbackSQLiteSavepoint() error {
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), migrationCleanupTimeout)
+	defer cancel()
+	_, rollbackErr := store.activeExecutor().ExecuteContext(cleanupCtx, "ROLLBACK TO SAVEPOINT "+sqliteMigrationSavepoint)
+	store.recordSQLiteSavepointFailure(rollbackErr)
+	_, releaseErr := store.activeExecutor().ExecuteContext(cleanupCtx, "RELEASE SAVEPOINT "+sqliteMigrationSavepoint)
+	store.recordSQLiteSavepointFailure(releaseErr)
+	return store.sqliteSavepointFailure()
+}
+
+// 失败状态只属于本次迁移锁创建的绑定 store，不能污染下一次独立迁移。
+func (store *DatabaseStore) recordSQLiteSavepointFailure(err error) {
+	if err == nil {
+		return
+	}
+	store.savepointMu.Lock()
+	defer store.savepointMu.Unlock()
+	if store.savepointErr == nil {
+		store.savepointErr = err
+	} else {
+		store.savepointErr = errors.Join(store.savepointErr, err)
+	}
+}
+
+func (store *DatabaseStore) sqliteSavepointFailure() error {
+	store.savepointMu.Lock()
+	defer store.savepointMu.Unlock()
+	return store.savepointErr
 }
 
 func (store *DatabaseStore) nextAppliedTimestamp() time.Time {

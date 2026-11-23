@@ -20,11 +20,12 @@ func rollbackCacheBatchSnapshot(ctx context.Context, updater ExpiryAtomicUpdater
 		if !found {
 			return nil, false, nil, errCacheFenceNoChange
 		}
-		_, current, enveloped, err := decodeCacheValueEnvelope(raw)
+		_, current, origin, enveloped, err := decodeCacheValueFence(raw)
 		if err != nil {
 			return nil, false, nil, err
 		}
-		if !enveloped || current != generation {
+		// 批次信封的来源就是提交票；同一票号下不同的来源属于另一写者。
+		if !enveloped || current != generation || origin != generation {
 			return nil, false, nil, errCacheFenceNoChange
 		}
 		if !previous.found {

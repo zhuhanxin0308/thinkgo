@@ -25,6 +25,8 @@ type pinnedSQLDriverState struct {
 	started    chan struct{}
 	release    chan struct{}
 	startOnce  sync.Once
+
+	rollbackErr error
 }
 
 type pinnedSQLOperation struct {
@@ -112,7 +114,7 @@ func (transaction *pinnedSQLDriverTransaction) Commit() error {
 
 func (transaction *pinnedSQLDriverTransaction) Rollback() error {
 	transaction.connection.state.recordOperation(transaction.connection.id, "ROLLBACK")
-	return nil
+	return transaction.connection.state.rollbackErr
 }
 
 type pinnedSQLDriverRows struct {

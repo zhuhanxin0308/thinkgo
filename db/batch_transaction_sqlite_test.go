@@ -5,6 +5,7 @@ package db
 import (
 	"context"
 	"errors"
+	"os"
 	"runtime"
 	"testing"
 	"time"
@@ -13,7 +14,7 @@ import (
 )
 
 func TestSQLiteBatchTransactionOnAbnormalExit(t *testing.T) {
-	for _, exit := range []string{"panic", "goexit", "explicit_panic"} {
+	for _, exit := range []string{"panic", "legacy_nil_panic", "goexit", "explicit_panic"} {
 		t.Run(exit, func(t *testing.T) {
 			database, connection := newSQLiteQuoteDatabase(t)
 			if _, err := database.Execute("CREATE TABLE records (id INTEGER PRIMARY KEY)"); err != nil {
@@ -33,7 +34,11 @@ func TestSQLiteBatchTransactionOnAbnormalExit(t *testing.T) {
 				defer explicit.Rollback()
 				query = explicit.Table("records")
 			}
-			panicValue := errors.New("方言构造第二批时退出")
+			var panicValue interface{} = errors.New("方言构造第二批时退出")
+			if exit == "legacy_nil_panic" {
+				t.Setenv("GODEBUG", os.Getenv("GODEBUG")+",panicnil=1")
+				panicValue = nil
+			}
 			dialect := &batchTransactionBuilder{onRebind: func(batch int) {
 				if batch == 2 {
 					if exit == "goexit" {
@@ -45,17 +50,20 @@ func TestSQLiteBatchTransactionOnAbnormalExit(t *testing.T) {
 			connection.Builder = dialect
 			rows := []map[string]interface{}{{"id": 1}, {"id": 2}}
 			done := make(chan struct{})
-			var returned bool
+			var returned, resumed bool
 			var recovered interface{}
 			go func() {
 				defer close(done)
-				defer func() { recovered = recover() }()
-				_, _ = query.InsertAll(rows)
-				returned = true
+				func() {
+					defer func() { recovered = recover() }()
+					_, _ = query.InsertAll(rows)
+					returned = true
+				}()
+				resumed = true
 			}()
 			<-done
-			if returned || ctx.Err() != nil || dialect.batches != 2 || (exit == "goexit" && recovered != nil) || (exit != "goexit" && recovered != panicValue) {
-				t.Fatalf("未保留第二批的退出方式：returned=%t panic=%v batches=%d ctx=%v", returned, recovered, dialect.batches, ctx.Err())
+			if returned || resumed != (exit != "goexit") || ctx.Err() != nil || dialect.batches != 2 || (exit == "goexit" && recovered != nil) || (exit != "goexit" && recovered != panicValue) {
+				t.Fatalf("未保留第二批的退出方式：returned=%t resumed=%t panic=%v batches=%d ctx=%v", returned, resumed, recovered, dialect.batches, ctx.Err())
 			}
 			if explicit != nil {
 				values, err := explicit.QueryContext(ctx, "SELECT id FROM records")

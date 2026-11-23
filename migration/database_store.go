@@ -32,6 +32,8 @@ type DatabaseStore struct {
 	session       db.PinnedSQLConnection
 	fencingToken  int64
 	sqliteLocked  bool
+	savepointMu   sync.Mutex
+	savepointErr  error
 	schemaMu      sync.Mutex
 	appliedTimeMu sync.Mutex
 	lastAppliedAt time.Time
@@ -162,6 +164,10 @@ func (store *DatabaseStore) Apply(ctx context.Context, current Migration, batch 
 	if operationErr == nil {
 		return nil
 	}
+	// 整笔事务已经不可提交，不能再记录 failed journal 或重复返回同一个清理错误。
+	if store.sqliteSavepointFailure() != nil {
+		return operationErr
+	}
 	failureCode := migrationFailureOperation
 	if errors.Is(operationErr, ErrMigrationLockLost) {
 		failureCode = migrationFailureFinalization
@@ -195,6 +201,9 @@ func (store *DatabaseStore) Revert(ctx context.Context, current Migration) error
 	operationErr := store.revertMigration(ctx, current)
 	if operationErr == nil {
 		return nil
+	}
+	if store.sqliteSavepointFailure() != nil {
+		return operationErr
 	}
 	cleanupCtx, cancel := context.WithTimeout(context.Background(), migrationCleanupTimeout)
 	defer cancel()
