@@ -40,22 +40,14 @@ var (
 	ErrInvalidFormBody = errors.New("表单请求体非法")
 	// ErrInvalidContentType 表示 Content-Type 请求头语法非法。
 	ErrInvalidContentType = errors.New("Content-Type 非法")
-	// ErrRequestCleaned 表示请求资源已清理，不能再次解析上传文件。
-	ErrRequestCleaned = errors.New("请求资源已清理")
-	// ErrInvalidRequestCleanupContext 表示请求清理收到 nil 上下文。
-	ErrInvalidRequestCleanupContext = errors.New("请求清理上下文不能为空")
 )
 
 // Request 封装原生 HTTP 请求，并为参数解析、上传清理和代理解析提供并发安全边界。
 type Request struct {
+	requestResourceState
 	raw               *http.Request
 	constructing      bool
 	responseWriter    http.ResponseWriter
-	serviceMu         sync.RWMutex
-	serviceResolver   ServiceResolver
-	serviceClosers    []io.Closer
-	serviceIdleCloser IdleServiceScopeCloser
-	serviceClosed     bool
 	compatibility     atomic.Pointer[requestThinkPHPState]
 	compatibilityOnce sync.Once
 	createdAt         time.Time
@@ -111,14 +103,7 @@ type Request struct {
 	jsonStateMu   sync.RWMutex
 	jsonValidated bool
 
-	formOnce               sync.Once
-	formMu                 sync.Mutex
-	cleanupOnce            sync.Once
-	cleanupDone            chan struct{}
-	cleanupStarted         atomic.Bool
-	cleanupNeedsSupervisor atomic.Bool
-	cleaned                bool
-	cleanupErr             error
+	formOnce sync.Once
 
 	errorMu sync.RWMutex
 	bodyErr error
@@ -578,11 +563,6 @@ func (r *Request) Context() stdcontext.Context {
 		return stdcontext.Background()
 	}
 	return r.raw.Context()
-}
-
-// CleanupRequiresSupervisor 返回请求是否可能持有需要收尾截止时间监督的资源。
-func (r *Request) CleanupRequiresSupervisor() bool {
-	return r != nil && r.cleanupNeedsSupervisor.Load()
 }
 
 func (r *Request) IsGet() bool    { return r.Method() == http.MethodGet }

@@ -192,10 +192,29 @@ func parseCacheEnvelopeGeneration(marker, generationText string) (uint64, error)
 	return generation, nil
 }
 
+type cacheFenceOperation uint8
+
+const (
+	fenceInvalidation cacheFenceOperation = iota
+	fenceCounter
+	fenceBatchWrite
+	fenceGuardedWrite
+)
+
 func cacheDriverSupportsAtomicFencing(driver Driver) bool {
-	if capability, ok := driver.(interface{ supportsAtomicFencing() bool }); ok {
-		return capability.supportsAtomicFencing()
+	return cacheDriverUsesFencing(driver, fenceInvalidation)
+}
+
+func cacheDriverUsesFencing(driver Driver, operation cacheFenceOperation) bool {
+	if capability, ok := driver.(interface {
+		usesFencing(cacheFenceOperation) bool
+	}); ok {
+		return capability.usesFencing(operation)
 	}
+	return cacheDriverHasAtomicUpdaters(driver)
+}
+
+func cacheDriverHasAtomicUpdaters(driver Driver) bool {
 	_, atomic := driver.(AtomicUpdater)
 	_, preservesTTL := driver.(TTLAtomicUpdater)
 	return atomic && preservesTTL
@@ -468,6 +487,13 @@ func (c *Cache) deleteExactGenerationContext(ctx context.Context, driver Driver,
 // deleteAtFenceContext 只删除不晚于失效代际的值；更新后的新一代值保持不变。
 func (c *Cache) deleteAtFenceContext(ctx context.Context, driver Driver, key string, fence uint64) (bool, error) {
 	if !cacheDriverSupportsAtomicFencing(driver) {
+		if lease := guardedTagLease(ctx, driver); lease.owner != "" {
+			// 没有失效水位时，标签清理只能在仍然持有租约的原子边界内删除业务值。
+			err := updateLeasedTagValue(ctx, driver, lease, key, func(interface{}, bool) (interface{}, bool, error) {
+				return nil, true, nil
+			})
+			return err == nil, err
+		}
 		return true, deleteCacheValueContext(ctx, driver, key)
 	}
 	deleted := false

@@ -1,7 +1,9 @@
 package database
 
 import (
+	"bytes"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -11,12 +13,13 @@ import (
 	"time"
 
 	"github.com/zhuhanxin0308/thinkgo/v3/db"
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/cachekey"
 )
 
 const (
-	maxDBCacheKeyBytes       = 255
+	maxDBCacheKeyBytes       = cachekey.MaxLogicalKeyBytes
+	maxDBPhysicalKeyBytes    = 255
 	millisecondEpochBoundary = int64(1_000_000_000_000)
-	dbUpsertAttempts         = 2
 	dbLockAcquireAttempts    = 3
 	dbLockStoragePrefix      = "__thinkgo_db_lock__:"
 )
@@ -109,10 +112,7 @@ func (c *DB) Set(key string, value interface{}, ttl time.Duration) error {
 	if err := validateDriverTTL(ttl); err != nil {
 		return err
 	}
-	expiry := int64(0)
-	if ttl > 0 {
-		expiry = time.Now().Add(ttl).UnixMilli()
-	}
+	expiry := dbExpiryMillis(time.Now(), ttl)
 	physicalKey, err := c.storageKey(key)
 	if err != nil {
 		return err
@@ -150,29 +150,27 @@ func (c *DB) AcquireLock(key string, owner string, ttl time.Duration) (bool, err
 	if err != nil {
 		return false, err
 	}
-	now := time.Now().UnixMilli()
-	data := map[string]interface{}{
-		"key":    dbLockStorageKey(key),
-		"value":  ownerValue,
-		"expiry": time.Now().Add(ttl).UnixMilli(),
-	}
+	physical := dbLockStorageKey(key)
+	table := db.NewDB(c.conn).Table(c.table)
 	for attempt := 0; attempt < dbLockAcquireAttempts; attempt++ {
-		query := db.NewDB(c.conn).Table(c.table).Where("key", data["key"])
-		if _, insertErr := db.NewDB(c.conn).Table(c.table).Insert(data); insertErr == nil {
+		now := time.Now()
+		data := map[string]interface{}{"key": physical, "value": ownerValue, "expiry": dbExpiryMillis(now, ttl)}
+		query := table.Where("key", physical)
+		insertErr := requireCacheMutation(table.Insert(data))
+		if insertErr == nil {
 			return true, nil
-		} else {
-			existing, findErr := query.Find()
-			if findErr != nil {
-				return false, errors.Join(insertErr, findErr)
-			}
-			if existing == nil {
-				if attempt+1 < dbLockAcquireAttempts {
-					continue
-				}
-				return false, insertErr
-			}
 		}
-		updated, updateErr := query.Where("expiry", "<=", now).Update(data)
+		existing, findErr := query.Find()
+		if findErr != nil {
+			return false, errors.Join(insertErr, findErr)
+		}
+		if existing == nil {
+			if attempt+1 < dbLockAcquireAttempts {
+				continue
+			}
+			return false, insertErr
+		}
+		updated, updateErr := query.Where("expiry", "<=", now.UnixMilli()).Update(data)
 		if updateErr != nil {
 			return false, updateErr
 		}
@@ -205,13 +203,21 @@ func (c *DB) RenewLock(key string, owner string, ttl time.Duration) (bool, error
 	if err != nil {
 		return false, err
 	}
-	data := map[string]interface{}{
-		"expiry": time.Now().Add(ttl).UnixMilli(),
+	now := time.Now()
+	expiry := dbExpiryMillis(now, ttl)
+	physical := dbLockStorageKey(key)
+	updated, err := c.compareValue(physical, ownerValue).
+		Where("expiry", ">", now.UnixMilli()).
+		Update(map[string]interface{}{"expiry": expiry})
+	if err != nil || updated > 0 {
+		return updated > 0, err
 	}
-	updated, err := c.compareValue(dbLockStorageKey(key), ownerValue).
-		Where("expiry", ">", time.Now().UnixMilli()).
-		Update(data)
-	return updated > 0, err
+	// 只报告变化行的驱动会把续到相同刻度的更新计为零。点查后按字节验证持有者，并再次核对时钟。
+	row, err := db.NewDB(c.conn).Table(c.table).Where("key", physical).Find()
+	if err != nil {
+		return false, err
+	}
+	return storedRecordMatches(row, []byte(ownerValue), expiry) && expiry > time.Now().UnixMilli(), nil
 }
 
 func dbLockOwnerValue(owner string) (string, error) {
@@ -279,7 +285,8 @@ func (c *DB) changeCounter(key string, step int64, subtract bool) (int64, error)
 		}
 		encoded := strconv.FormatInt(value, 10)
 		if row == nil {
-			_, insertErr := db.NewDB(c.conn).Table(c.table).Insert(map[string]interface{}{"key": physicalKey, "value": encoded, "expiry": expiry})
+			data := map[string]interface{}{"key": physicalKey, "value": encoded, "expiry": expiry}
+			insertErr := requireCacheMutation(db.NewDB(c.conn).Table(c.table).Insert(data))
 			if insertErr == nil {
 				return value, c.reclaimObsoleteWrite(physicalKey)
 			}
@@ -323,7 +330,7 @@ func (c *DB) getStored(key string) (interface{}, bool, int64, error) {
 }
 
 func (c *DB) readStoredRecord(key string) (map[string]interface{}, int64, error) {
-	if err := c.validateKey(key); err != nil {
+	if err := c.validateKeySize(len(key), maxDBPhysicalKeyBytes); err != nil {
 		return nil, 0, err
 	}
 	result, err := db.NewDB(c.conn).Table(c.table).Where("key", key).Find()
@@ -345,7 +352,7 @@ func (c *DB) readStoredRecord(key string) (map[string]interface{}, int64, error)
 }
 
 func (c *DB) deleteExpiredVersion(key string, rawExpiry interface{}) error {
-	if err := c.validateKey(key); err != nil {
+	if err := c.validateKeySize(len(key), maxDBPhysicalKeyBytes); err != nil {
 		return err
 	}
 	_, err := db.NewDB(c.conn).
@@ -357,7 +364,7 @@ func (c *DB) deleteExpiredVersion(key string, rawExpiry interface{}) error {
 }
 
 func (c *DB) writeStored(key string, value interface{}, expiry int64) error {
-	if err := c.validateKey(key); err != nil {
+	if err := c.validateKeySize(len(key), maxDBPhysicalKeyBytes); err != nil {
 		return err
 	}
 	encoded, err := json.Marshal(value)
@@ -365,9 +372,11 @@ func (c *DB) writeStored(key string, value interface{}, expiry int64) error {
 		return err
 	}
 	data := map[string]interface{}{"key": key, "value": string(encoded), "expiry": expiry}
-	var lastInsertErr error
-	for attempt := 0; attempt < dbUpsertAttempts; attempt++ {
-		updated, updateErr := db.NewDB(c.conn).Table(c.table).Where("key", key).Update(data)
+	table := db.NewDB(c.conn).Table(c.table)
+	query := table.Where("key", key)
+	deadline := time.Now().Add(dbCompareWait)
+	for attempt := 0; attempt < dbCompareAttempts && (attempt == 0 || time.Now().Before(deadline)); attempt++ {
+		updated, updateErr := query.Update(data)
 		if updateErr != nil {
 			return updateErr
 		}
@@ -375,32 +384,69 @@ func (c *DB) writeStored(key string, value interface{}, expiry int64) error {
 			return nil
 		}
 
-		// 某些数据库在值未变化时返回 0，但记录实际已匹配；先确认存在再决定插入。
-		existing, findErr := db.NewDB(c.conn).Table(c.table).Where("key", key).Find()
+		// 零影响行既可能是幂等写入，也可能是查询前刚有其他请求插入了不同值。
+		existing, findErr := query.Find()
 		if findErr != nil {
 			return findErr
 		}
 		if existing != nil {
-			return nil
+			if storedRecordMatches(existing, encoded, expiry) {
+				return nil
+			}
+			continue
 		}
 
-		if _, insertErr := db.NewDB(c.conn).Table(c.table).Insert(data); insertErr == nil {
+		insertErr := requireCacheMutation(table.Insert(data))
+		if insertErr == nil {
 			return nil
-		} else {
-			lastInsertErr = insertErr
+		}
+		// 插入冲突时重新尝试覆写；若目标行仍不存在，保留真正的后端错误。
+		existing, findErr = query.Find()
+		if findErr != nil || existing == nil {
+			return errors.Join(insertErr, findErr)
 		}
 	}
-	return lastInsertErr
+	return ErrCacheLockBusy
 }
 
-func (c *DB) validateKey(key string) error {
+// 需要改变记录的操作必须有影响行；触发器可以忽略写入并让驱动返回空错误。
+func requireCacheMutation(affected int64, err error) error {
+	if err == nil && affected <= 0 {
+		return sql.ErrNoRows
+	}
+	return err
+}
+
+func storedRecordMatches(row map[string]interface{}, value []byte, expiry int64) bool {
+	if row == nil {
+		return false
+	}
+	stored, valueErr := databaseCacheBytes(row["value"])
+	storedExpiry, expiryErr := parseDBExpiry(row["expiry"])
+	return valueErr == nil && expiryErr == nil && bytes.Equal(stored, value) && storedExpiry == expiry
+}
+
+func (c *DB) validateKeySize(size, limit int) error {
 	if c == nil || c.conn == nil {
 		return ErrInvalidCacheDatabase
 	}
-	if len(key) > maxDBCacheKeyBytes {
-		return fmt.Errorf("%w: %d", ErrCacheKeyTooLong, len(key))
+	if size > limit {
+		return fmt.Errorf("%w: %d", ErrCacheKeyTooLong, size)
 	}
 	return nil
+}
+
+// dbExpiryMillis 将绝对截止时刻向上取整到数据库的毫秒精度，避免正时长提前到期。
+func dbExpiryMillis(now time.Time, ttl time.Duration) int64 {
+	if ttl == 0 {
+		return 0
+	}
+	deadline := now.Add(ttl)
+	millis := deadline.UnixMilli()
+	if deadline.Nanosecond()%int(time.Millisecond) != 0 {
+		millis++
+	}
+	return millis
 }
 
 func parseDBExpiry(raw interface{}) (int64, error) {

@@ -18,14 +18,54 @@ type NamespaceDriver struct {
 }
 
 func (driver *NamespaceDriver) supportsTagMutationLock() bool {
-	_, supported := driver.driver.(DistributedLocker)
-	return supported
+	backend := driver.namespaceBackend()
+	// 应用装饰器可能覆盖租约方法，不能用其嵌入对象的私有判断绕过实际锁策略。
+	if _, decorated := backend.(interface{ namespaceBackend() Driver }); !decorated && !tagMutationLockEnabled(backend) {
+		return false
+	}
+	if _, basic := backend.(DistributedLocker); basic {
+		return true
+	}
+	// 旧版从第二层开始由内层包装提供同步锁接口，实际操作会转交叶子的上下文租约。
+	_, nested := driver.driver.(*NamespaceDriver)
+	_, contextual := backend.(ContextualDistributedLocker)
+	return nested && contextual
 }
 
-func (driver *NamespaceDriver) supportsAtomicFencing() bool {
-	_, atomic := driver.driver.(AtomicUpdater)
-	_, preservesTTL := driver.driver.(TTLAtomicUpdater)
-	return atomic && preservesTTL
+// namespaceBackend 只穿透框架自己的命名空间；应用可嵌入它并覆盖公开方法。
+func (driver *NamespaceDriver) namespaceBackend() Driver {
+	if nested, ok := driver.driver.(*NamespaceDriver); ok {
+		return nested.namespaceBackend()
+	}
+	return driver.driver
+}
+
+func (driver *NamespaceDriver) usesFencing(operation cacheFenceOperation) bool {
+	nested, ok := driver.driver.(*NamespaceDriver)
+	if !ok {
+		return cacheDriverHasAtomicUpdaters(driver.driver)
+	}
+	// 旧版双层包装会启用代际协议。能发布水位的驱动必须继续屏蔽水位之前的信封和原始值，
+	// 后续写入也要带代际，缺少单项更新能力时仍由对应操作返回错误。
+	backend := nested.namespaceBackend()
+	switch backend.(type) {
+	case AtomicUpdater, ContextualAtomicUpdater:
+		return true
+	}
+	// 其余驱动无法发布水位，但旧计数、批量或租约写入可能已通过各自的原子能力保存了信封。
+	switch operation {
+	case fenceCounter:
+		switch backend.(type) {
+		case TTLAtomicUpdater, ConditionalTTLAtomicUpdater:
+			return true
+		}
+	case fenceBatchWrite:
+		_, ok := backend.(ExpiryAtomicUpdater)
+		return ok
+	case fenceGuardedWrite:
+		return cacheDriverSupportsGuardedUpdates(backend)
+	}
+	return false
 }
 
 func (driver *NamespaceDriver) supportsGuardedUpdates() bool {

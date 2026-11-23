@@ -28,7 +28,7 @@ func (c *Cache) commitRememberValue(ctx context.Context, key string, value inter
 	}
 	c.trace("SET", key)
 	return c.mutateWithTagRepairContext(ctx, driver, key, func() error {
-		fenced := cacheDriverSupportsAtomicFencing(driver)
+		fenced := cacheDriverUsesFencing(driver, fenceGuardedWrite)
 		generation := uint64(0)
 		if fenced {
 			var err error

@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -52,8 +53,7 @@ func (c *DB) UpdateIfLockOwnerContext(ctx context.Context, key string, ttl time.
 		if err := c.updateLeasedRecord(transaction, physicalKey, ttl, update); err != nil {
 			return err
 		}
-		_, err = lease.Update(map[string]interface{}{"value": ownerValue})
-		return err
+		return requireCacheMutation(lease.Update(map[string]interface{}{"value": ownerValue}))
 	})
 	if errors.Is(err, errDatabaseLeaseChanged) {
 		return false, nil
@@ -94,22 +94,33 @@ func (c *DB) updateLeasedRecord(transaction *db.Tx, key string, ttl time.Duratio
 		return err
 	}
 	if remove {
-		_, err := query.Delete()
-		return err
+		deleted, err := query.Delete()
+		if err != nil || deleted > 0 {
+			return err
+		}
+		remaining, err := query.Find()
+		if err != nil || remaining == nil {
+			return err
+		}
+		return sql.ErrNoRows
 	}
 	encoded, err := json.Marshal(next)
 	if err != nil {
 		return err
 	}
-	expiry := int64(0)
-	if ttl > 0 {
-		expiry = time.Now().Add(ttl).UnixMilli()
-	}
+	expiry := dbExpiryMillis(time.Now(), ttl)
 	data := map[string]interface{}{"key": key, "value": string(encoded), "expiry": expiry}
-	if row != nil {
-		_, err = query.Update(data)
-	} else {
-		_, err = transaction.Table(c.table).Insert(data)
+	if row == nil {
+		return requireCacheMutation(transaction.Table(c.table).Insert(data))
 	}
-	return err
+	updated, err := query.Update(data)
+	if err != nil || updated > 0 {
+		return err
+	}
+	// 幂等更新可以返回零行，只有事务中可见的值与有效期都已满足时才能提交。
+	stored, err := query.Find()
+	if err != nil || storedRecordMatches(stored, encoded, expiry) {
+		return err
+	}
+	return sql.ErrNoRows
 }

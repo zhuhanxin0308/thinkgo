@@ -15,8 +15,8 @@ const maxCacheAtomicRebaseAttempts = 64
 
 // withFreshAtomicFence 仅在后端尚未提交且票据过时时重入；真实失效与业务错误直接返回。
 // 领取全局票据必须在单键原子锁之外，避免内存互斥锁或文件分片锁的嵌套死锁。
-func (c *Cache) withFreshAtomicFence(ctx context.Context, driver Driver, key string, run func(uint64, uint64, uint64) error) (generation, origin uint64, err error) {
-	if !cacheDriverSupportsAtomicFencing(driver) {
+func (c *Cache) withFreshAtomicFence(ctx context.Context, driver Driver, key string, operation cacheFenceOperation, run func(uint64, uint64, uint64) error) (generation, origin uint64, err error) {
+	if !cacheDriverUsesFencing(driver, operation) {
 		return 0, 0, run(0, 0, 0)
 	}
 	for attempt := 0; attempt < maxCacheAtomicRebaseAttempts; attempt++ {

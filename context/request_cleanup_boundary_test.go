@@ -106,8 +106,8 @@ func TestRequestCleanupDoesNotInvokeUntrustedIdleExtension(t *testing.T) {
 	}
 }
 
-// TestRequestCleanupBoundsBlockingResolverAdmission 验证已有 Make 即使持有读锁并
-// 阻塞在外部解析器中，CleanupContext 仍按截止返回，且新的 Make 会立即被拒绝。
+// TestRequestCleanupBoundsBlockingResolverAdmission 验证已有 Make 阻塞在外部解析器中时，
+// CleanupContext 仍按截止返回，且新的 Make 会立即被拒绝。
 func TestRequestCleanupBoundsBlockingResolverAdmission(t *testing.T) {
 	resolver := &blockingRequestServiceResolver{
 		entered: make(chan struct{}),
@@ -145,7 +145,7 @@ func TestRequestCleanupBoundsBlockingResolverAdmission(t *testing.T) {
 	case <-time.After(requestCleanupBoundaryWait):
 		close(resolver.release)
 		<-cleanupDone
-		t.Fatal("CleanupContext 同步等待了阻塞 Make 持有的 serviceMu")
+		t.Fatal("CleanupContext 未在截止时间内结束对在途解析的等待")
 	}
 	if _, makeErr := request.Make("new"); !errors.Is(makeErr, ErrRequestServiceScopeUnavailable) {
 		close(resolver.release)

@@ -93,3 +93,18 @@ func TestTagMetadataRejectsMalformedFrames(t *testing.T) {
 		})
 	}
 }
+
+func TestLogicalKeyBoundsPreserveStoredTagClassification(t *testing.T) {
+	metadata := TagMetadataPrefix + TagNamespace("tag:") + "default:users"
+	legacy := Namespace(strings.Repeat("p", MaxLogicalKeyBytes+1)) + metadata
+	if !IsTagMetadata(legacy) {
+		t.Fatal("已有完整帧内的标签元数据失去保护")
+	}
+	if _, ok := LogicalKey(legacy); ok {
+		t.Fatal("超出构造器上限的前缀不能用于放宽新业务键校验")
+	}
+	key := Namespace("外层") + Namespace("inner:") + "document"
+	if got, ok := LogicalKey(key); !ok || got != "document" {
+		t.Fatalf("嵌套业务键解帧错误：%q %t", got, ok)
+	}
+}

@@ -40,6 +40,21 @@ type binding struct {
 	generation uint64
 }
 
+// missingBindingError 保留所在边界的诊断文本，只公开服务未绑定的错误分类。
+type missingBindingError string
+
+func bindingNotFound(name string) error {
+	return missingBindingError("binding not found: " + name)
+}
+
+func (message missingBindingError) Error() string {
+	return string(message)
+}
+
+func (missingBindingError) Unwrap() error {
+	return ErrServiceNotBound
+}
+
 // buildState 保存一次单例构建的完成信号和最终结果。
 type buildState struct {
 	done       chan struct{}
@@ -200,7 +215,7 @@ func (c *Container) makeWithResolution(scope *resolution, abstract string, param
 	registered, ok := state.bindings[abstract]
 	if !ok {
 		state.lock.RUnlock()
-		return nil, fmt.Errorf("binding not found: %s", abstract)
+		return nil, bindingNotFound(abstract)
 	}
 
 	if registered.lifecycle == Scoped {
@@ -237,7 +252,7 @@ func (c *Container) makeWithResolution(scope *resolution, abstract string, param
 	registered, ok = state.bindings[abstract]
 	if !ok {
 		state.lock.Unlock()
-		return nil, fmt.Errorf("binding not found: %s", abstract)
+		return nil, bindingNotFound(abstract)
 	}
 	if registered.lifecycle == Factory {
 		state.lock.Unlock()
@@ -343,6 +358,10 @@ func (c *Container) callFactory(plan *factoryPlan, scope *resolution, params []i
 		if recovered := recover(); recovered != nil {
 			result = nil
 			err = fmt.Errorf("工厂执行 panic: %v", recovered)
+			if cause, ok := recovered.(error); ok && factoryPanicIsMissingBinding(cause) {
+				// 仅传播缺少依赖这一分类；工厂内的其他错误不能触发外层解析器重试。
+				err = missingBindingError(err.Error())
+			}
 		}
 	}()
 
@@ -368,6 +387,16 @@ func (c *Container) callFactory(plan *factoryPlan, scope *resolution, params []i
 		return outputs[0].Interface(), outputs[1].Interface().(error)
 	}
 	return outputs[0].Interface(), nil
+}
+
+// 分类会调用外部错误的 Is 或 Unwrap；这些方法也可能 panic，此时仅返回原始诊断。
+func factoryPanicIsMissingBinding(cause error) (missing bool) {
+	defer func() {
+		if recover() != nil {
+			missing = false
+		}
+	}()
+	return errors.Is(cause, ErrServiceNotBound)
 }
 
 // reflectErrorOutputIsNil 只把 nil 接口和 nil 指针视为无错误，避免对具体值类型调用 IsNil 导致反射 panic。

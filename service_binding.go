@@ -50,7 +50,7 @@ var (
 	ErrInvalidServiceName = errors.New("服务名称无效")
 	// ErrServiceNotReady 表示服务所属应用尚未完成可用状态的装配。
 	ErrServiceNotReady = errors.New("服务尚未就绪")
-	// ErrServiceNotBound 表示应用已进入运行阶段，但目标服务没有绑定。
+	// ErrServiceNotBound 表示容器中缺少目标服务或其依赖的绑定；应用尚未就绪时直接访问未绑定服务仍返回 ErrServiceNotReady。
 	ErrServiceNotBound = errors.New("服务尚未绑定")
 	// ErrServiceUnavailable 表示服务已有绑定，但实例解析或实例状态不可用。
 	ErrServiceUnavailable = errors.New("服务不可用")

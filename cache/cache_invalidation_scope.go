@@ -70,6 +70,14 @@ func (c *Cache) beginKeyInvalidation(ctx context.Context, driver Driver, keys []
 	if err != nil {
 		return 0, err
 	}
+	if err := c.publishKeyInvalidation(ctx, driver, keys, generation, tagMutationLease{}); err != nil {
+		return 0, err
+	}
+	return generation, nil
+}
+
+// publishKeyInvalidation 用已预留的代际更新各桶，较早的清理不能抬高票号或覆盖较新的水位。
+func (c *Cache) publishKeyInvalidation(ctx context.Context, driver Driver, keys []string, generation uint64, lease tagMutationLease) error {
 	groups := [cacheInvalidationBuckets][]string{}
 	for _, key := range keys {
 		bucket := keyInvalidationBucket(key)
@@ -82,24 +90,31 @@ func (c *Cache) beginKeyInvalidation(ctx context.Context, driver Driver, keys []
 		}
 		raw, found, err := getCacheValueContext(ctx, driver, c.keyInvalidationBucketKey(bucket))
 		if err != nil {
-			return 0, err
+			return err
 		}
 		if _, _, err := keyScopeWatermarks(raw, found, keys, generation); err != nil {
-			return 0, err
+			return err
 		}
 	}
 	for bucket, keys := range groups {
 		if len(keys) == 0 {
 			continue
 		}
-		err = atomicUpdateCacheValueContext(ctx, driver, c.keyInvalidationBucketKey(bucket), 0, func(raw interface{}, found bool) (interface{}, bool, error) {
+		update := func(raw interface{}, found bool) (interface{}, bool, error) {
 			return keyScopeWatermarks(raw, found, keys, generation)
-		})
+		}
+		key := c.keyInvalidationBucketKey(bucket)
+		var err error
+		if lease.owner != "" {
+			err = updateLeasedTagValue(ctx, driver, lease, key, update)
+		} else {
+			err = atomicUpdateCacheValueContext(ctx, driver, key, 0, update)
+		}
 		if err != nil {
-			return 0, err
+			return err
 		}
 	}
-	return generation, nil
+	return nil
 }
 
 func keyScopeWatermarks(raw interface{}, found bool, keys []string, generation uint64) (interface{}, bool, error) {

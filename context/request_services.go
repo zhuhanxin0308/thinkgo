@@ -89,22 +89,42 @@ func (r *Request) Make(abstract string, params ...interface{}) (interface{}, err
 	if r.cleanupStarted.Load() {
 		return nil, ErrRequestServiceScopeUnavailable
 	}
-	r.serviceMu.RLock()
-	defer r.serviceMu.RUnlock()
-	if r.cleanupStarted.Load() || r.serviceClosed || isNilServiceScopeDependency(r.serviceResolver) {
+	resolver := r.beginServiceResolution()
+	if resolver == nil {
 		return nil, ErrRequestServiceScopeUnavailable
 	}
+	defer r.endServiceResolution()
 	var resolved interface{}
 	var err error
-	if contextual, ok := r.serviceResolver.(ContextualServiceResolver); ok {
+	if contextual, ok := resolver.(ContextualServiceResolver); ok {
 		resolved, err = contextual.MakeContext(r.Context(), abstract, params...)
 	} else {
-		resolved, err = r.serviceResolver.Make(abstract, params...)
+		resolved, err = resolver.Make(abstract, params...)
 	}
-	if aware, ok := r.serviceResolver.(cleanupAwareServiceResolver); !ok || aware.HasRequestScopedResources() {
+	if aware, ok := resolver.(cleanupAwareServiceResolver); !ok || aware.HasRequestScopedResources() {
 		r.cleanupNeedsSupervisor.Store(true)
 	}
 	return resolved, err
+}
+
+// 解析器快照与准入计数在同一临界区取得。回调可以重绑定，原作用域仍由请求持有至统一清理。
+func (r *Request) beginServiceResolution() ServiceResolver {
+	r.serviceMu.Lock()
+	defer r.serviceMu.Unlock()
+	if r.cleanupStarted.Load() || r.serviceClosed || r.serviceResolver == nil {
+		return nil
+	}
+	r.serviceResolving++
+	return r.serviceResolver
+}
+
+func (r *Request) endServiceResolution() {
+	r.serviceMu.Lock()
+	defer r.serviceMu.Unlock()
+	r.serviceResolving--
+	if r.serviceResolving == 0 && r.serviceDrained != nil {
+		close(r.serviceDrained)
+	}
 }
 
 func sameServiceScopeDependency(left, right interface{}) bool {
