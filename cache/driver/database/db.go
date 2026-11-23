@@ -317,14 +317,9 @@ func (c *DB) getStored(key string) (interface{}, bool, int64, error) {
 	if err != nil || result == nil {
 		return nil, false, 0, err
 	}
-	encoded, err := databaseCacheBytes(result["value"])
+	value, err := decodeDatabaseCacheValue(result["value"])
 	if err != nil {
 		return nil, false, 0, err
-	}
-	var value interface{}
-	err = json.Unmarshal(encoded, &value)
-	if err != nil {
-		return nil, false, 0, fmt.Errorf("%w: %v", ErrCorruptCacheEntry, err)
 	}
 	return value, true, expiry, nil
 }
@@ -486,6 +481,24 @@ func databaseCacheBytes(raw interface{}) ([]byte, error) {
 	default:
 		return nil, fmt.Errorf("%w: value 类型 %T", ErrCorruptCacheEntry, raw)
 	}
+}
+
+func decodeDatabaseCacheValue(raw interface{}) (interface{}, error) {
+	encoded, err := databaseCacheBytes(raw)
+	if err != nil {
+		return nil, err
+	}
+	var value interface{}
+	if err = json.Unmarshal(encoded, &value); err == nil {
+		return value, nil
+	}
+	// 仅恢复旧解码器无法表示的顶层整数，保持已有数值类型和嵌套值的解码语义。
+	literal := bytes.Trim(encoded, " \t\r\n")
+	if len(literal) > 0 && (literal[0] == '-' || literal[0] >= '0' && literal[0] <= '9') &&
+		!bytes.ContainsAny(literal, ".eE") && json.Valid(encoded) {
+		return json.Number(literal), nil
+	}
+	return nil, fmt.Errorf("%w: %v", ErrCorruptCacheEntry, err)
 }
 
 func cacheExpiryReached(expiry int64, now time.Time) bool {
