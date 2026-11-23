@@ -532,11 +532,8 @@ func (r *Request) postValue(key string) (interface{}, bool) {
 	}
 	mediaType, _ := r.parsedMediaType()
 	if isFormMediaType(mediaType) {
-		_ = r.ensureFormParsed()
-		if r.raw != nil {
-			if values, ok := r.raw.PostForm[key]; ok && len(values) > 0 {
-				return normalizeStringSliceValue(values), true
-			}
+		if values := r.compatiblePostForm()[key]; len(values) > 0 {
+			return normalizeStringSliceValue(values), true
 		}
 	}
 	if isJSONMediaType(mediaType) {

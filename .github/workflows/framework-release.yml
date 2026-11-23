@@ -326,6 +326,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           go test -race -mod=readonly -run '^TestFileSessionProcessAtomicCounter$' -count=10 -timeout=5m ./session/driver
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # 每轮启动独立写者验证慢更新的进度截止，三轮共享六分钟预算。
+          go test -race -mod=readonly -run '^TestFileSessionProcessSlowAtomicCounter$' -count=3 -timeout=6m ./session/driver
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify Windows CLI entrypoint
         shell: pwsh

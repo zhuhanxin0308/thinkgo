@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"unicode/utf8"
+
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/cachekey"
 )
 
 // ErrAmbiguousRedisClearScope 表示扫描范围包含无法确认归属的锁或 fencing
@@ -25,6 +28,15 @@ func redisClearKeyEligible(key, driverPrefix, scopePrefix string) (bool, error) 
 	}
 	logical := strings.TrimPrefix(key, driverPrefix)
 	if strings.Contains(logical, managerLockKeyPrefix) || strings.Contains(logical, cacheFenceMetadataPrefix) {
+		// 驱动前缀后的完整命名空间帧可证明内部锁或栅栏的归属；其余候选仍可能来自其他驱动的原始前缀。
+		if inner, valid := cachekey.LogicalKey(logical); valid &&
+			(strings.HasPrefix(inner, managerLockKeyPrefix) || strings.HasPrefix(inner, cacheFenceMetadataPrefix)) {
+			// 帧的长度字段和分隔符均为 ASCII；验证整段即可覆盖各层配置前缀，锁名保留原始字节。
+			frames := logical[:len(logical)-len(inner)]
+			if utf8.ValidString(frames) && !containsControlCharacter(frames) {
+				return false, nil
+			}
+		}
 		return false, errors.Join(ErrUnsafeRedisFlush, ErrAmbiguousRedisClearScope)
 	}
 	return true, nil

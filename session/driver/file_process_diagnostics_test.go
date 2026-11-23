@@ -71,18 +71,21 @@ func fileProcessMeasureUpdate(
 func fileProcessTimingDiagnostics(timings []fileProcessUpdateTiming) string {
 	var output strings.Builder
 	for index, timing := range timings {
-		fmt.Fprintf(&output, "update=%d start=%s end=%s total=%s",
-			index+1, timing.started.UTC().Format(time.RFC3339Nano),
-			timing.finished.UTC().Format(time.RFC3339Nano), timing.finished.Sub(timing.started))
-		if timing.callbackStarted.IsZero() {
-			output.WriteString(" callback=not_entered\n")
-			continue
-		}
-		fmt.Fprintf(&output, " callback=entered before_callback=%s callback_time=%s after_callback=%s\n",
-			timing.callbackStarted.Sub(timing.started), timing.callbackFinished.Sub(timing.callbackStarted),
-			timing.finished.Sub(timing.callbackFinished))
+		output.WriteString(timing.diagnosticLine(index + 1))
 	}
 	return output.String()
+}
+
+func (timing fileProcessUpdateTiming) diagnosticLine(round int) string {
+	prefix := fmt.Sprintf("update=%d start=%s end=%s total=%s",
+		round, timing.started.UTC().Format(time.RFC3339Nano),
+		timing.finished.UTC().Format(time.RFC3339Nano), timing.finished.Sub(timing.started))
+	if timing.callbackStarted.IsZero() {
+		return prefix + " callback=not_entered\n"
+	}
+	return prefix + fmt.Sprintf(" callback=entered before_callback=%s callback_time=%s after_callback=%s\n",
+		timing.callbackStarted.Sub(timing.started), timing.callbackFinished.Sub(timing.callbackStarted),
+		timing.finished.Sub(timing.callbackFinished))
 }
 
 // 使用离散时钟验证区段归属，不依赖真实睡眠或机器调度。
