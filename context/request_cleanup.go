@@ -8,6 +8,8 @@ import (
 	"mime/multipart"
 	"sync"
 	"sync/atomic"
+
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/cleanup"
 )
 
 var (
@@ -157,14 +159,15 @@ func (r *Request) cleanupResources(
 	multipartForm := r.detachMultipartFormForCleanup()
 	serviceClosers := r.detachServiceClosersForCleanup()
 
+	// 按登记顺序压入 defer，使所有关闭器在 Goexit 时仍按原来的逆序执行；
+	// cleanupDone 的发布位于整条清理链之后，不会越过尚未结束的资源。
+	for _, closer := range serviceClosers {
+		defer cleanup.Run(&cleanupErr, "请求作用域关闭", func() error {
+			return closeRequestService(ctx, closer)
+		})
+	}
 	if multipartForm != nil {
 		cleanupErr = errors.Join(cleanupErr, runRequestCleanupTask(multipartForm.RemoveAll))
-	}
-	for index := len(serviceClosers) - 1; index >= 0; index-- {
-		closer := serviceClosers[index]
-		cleanupErr = errors.Join(cleanupErr, runRequestCleanupTask(func() error {
-			return closeRequestService(ctx, closer)
-		}))
 	}
 }
 

@@ -235,73 +235,23 @@ func closeTestLogger(t *testing.T, logger *Log) {
 	}
 }
 
-// TestLogAsyncFlush 验证异步批量刷盘
-func TestLogAsyncFlush(t *testing.T) {
-	driver := newMockDriver()
-	logger := NewLog(driver)
-	logger.SetBufferSize(5)
-	logger.SetFlushInterval(100 * time.Millisecond)
-
-	// 写入 3 条日志（不够 bufferSize）
-	logger.Record("msg1", "info")
-	logger.Record("msg2", "info")
-	logger.Record("msg3", "info")
-
-	// 等待定时刷盘触发
-	time.Sleep(200 * time.Millisecond)
-
-	count := driver.totalSavedCount()
-	if count != 3 {
-		t.Fatalf("定时刷盘后应有 3 条日志，实际 %d", count)
-	}
-
-	closeTestLogger(t, logger)
-}
-
-// TestLogAsyncBufferFull 验证缓冲区满触发刷盘
-func TestLogAsyncBufferFull(t *testing.T) {
-	driver := newMockDriver()
-	logger := NewLog(driver)
-	logger.SetBufferSize(5)
-	logger.SetFlushInterval(10 * time.Second)
-
-	// 写入 6 条日志（超过 bufferSize=5）
-	for i := 0; i < 6; i++ {
-		logger.Record("msg", "info")
-	}
-
-	// 等待异步处理
-	time.Sleep(100 * time.Millisecond)
-
-	count := driver.totalSavedCount()
-	if count < 5 {
-		t.Fatalf("缓冲区满时应至少刷出 5 条日志，实际 %d", count)
-	}
-
-	closeTestLogger(t, logger)
-}
-
 // TestLogLevelFilter 验证日志级别过滤
 func TestLogLevelFilter(t *testing.T) {
 	driver := newMockDriver()
 	logger := NewLog(driver)
 	logger.SetLevels([]string{"error", "warning"})
-	logger.SetFlushInterval(50 * time.Millisecond)
 
 	logger.Record("debug msg", "debug")     // 应被过滤
 	logger.Record("info msg", "info")       // 应被过滤
 	logger.Record("error msg", "error")     // 应通过
 	logger.Record("warning msg", "warning") // 应通过
 
-	// 等待刷盘
-	time.Sleep(100 * time.Millisecond)
+	closeTestLogger(t, logger)
 
 	count := driver.totalSavedCount()
 	if count != 2 {
 		t.Fatalf("过滤后应有 2 条日志，实际 %d", count)
 	}
-
-	closeTestLogger(t, logger)
 }
 
 // TestLogShutdownFlushesRemaining 验证 Shutdown 刷出剩余日志
@@ -354,7 +304,6 @@ func TestLogConcurrentSafety(t *testing.T) {
 func TestLogHelperMethods(t *testing.T) {
 	driver := newMockDriver()
 	logger := NewLog(driver)
-	logger.SetFlushInterval(50 * time.Millisecond)
 
 	logger.Error("error msg")
 	logger.Warning("warning msg")
@@ -362,14 +311,12 @@ func TestLogHelperMethods(t *testing.T) {
 	logger.Debug("debug msg")
 	logger.Sql("sql msg")
 
-	time.Sleep(100 * time.Millisecond)
+	closeTestLogger(t, logger)
 
 	count := driver.totalSavedCount()
 	if count != 5 {
 		t.Fatalf("5 个快捷方法应产生 5 条日志，实际 %d", count)
 	}
-
-	closeTestLogger(t, logger)
 
 	// 验证日志条目包含正确的级别
 	allEntries := driver.allEntries()
@@ -521,7 +468,6 @@ func TestLogEntryFormatDoesNotInvokeCustomMapKeyStringer(t *testing.T) {
 func TestLogContextMethods(t *testing.T) {
 	driver := newMockDriver()
 	logger := NewLog(driver)
-	logger.SetFlushInterval(50 * time.Millisecond)
 
 	ctx := map[string]interface{}{
 		"user_id": 42,
@@ -530,7 +476,6 @@ func TestLogContextMethods(t *testing.T) {
 	logger.ErrorCtx("用户登录失败", ctx)
 	logger.InfoCtx("用户登录成功", ctx)
 
-	time.Sleep(100 * time.Millisecond)
 	closeTestLogger(t, logger)
 
 	count := driver.totalSavedCount()
@@ -554,12 +499,10 @@ func TestLogContextMethods(t *testing.T) {
 func TestLogFormatMethods(t *testing.T) {
 	driver := newMockDriver()
 	logger := NewLog(driver)
-	logger.SetFlushInterval(50 * time.Millisecond)
 
 	logger.Errorf("错误: %s, 代码: %d", "连接超时", 504)
 	logger.Infof("用户 %d 登录", 123)
 
-	time.Sleep(100 * time.Millisecond)
 	closeTestLogger(t, logger)
 
 	entries := driver.allEntries()
@@ -584,11 +527,8 @@ func TestLogMultiDriver(t *testing.T) {
 	if err := logger.AddDriver(driver2); err != nil {
 		t.Fatalf("添加第二个日志驱动失败: %v", err)
 	}
-	logger.SetFlushInterval(50 * time.Millisecond)
-
 	logger.Info("multi-driver test")
 
-	time.Sleep(100 * time.Millisecond)
 	closeTestLogger(t, logger)
 
 	// 两个驱动都应收到日志
@@ -605,11 +545,9 @@ func TestLogCallerEnabled(t *testing.T) {
 	driver := newMockDriver()
 	logger := NewLog(driver)
 	logger.SetCallerEnabled(true)
-	logger.SetFlushInterval(50 * time.Millisecond)
 
 	logger.Info("caller test")
 
-	time.Sleep(100 * time.Millisecond)
 	closeTestLogger(t, logger)
 
 	entries := driver.allEntries()
@@ -632,11 +570,9 @@ func TestLogCallerDisabled(t *testing.T) {
 	driver := newMockDriver()
 	logger := NewLog(driver)
 	logger.SetCallerEnabled(false)
-	logger.SetFlushInterval(50 * time.Millisecond)
 
 	logger.Info("no caller test")
 
-	time.Sleep(100 * time.Millisecond)
 	closeTestLogger(t, logger)
 
 	entries := driver.allEntries()
@@ -672,7 +608,6 @@ func TestLogSyncWrite(t *testing.T) {
 func TestLogContextSnapshot(t *testing.T) {
 	driver := newMockDriver()
 	logger := NewLog(driver)
-	logger.SetFlushInterval(50 * time.Millisecond)
 
 	ctx := map[string]interface{}{
 		"user_id": 7,
@@ -683,7 +618,6 @@ func TestLogContextSnapshot(t *testing.T) {
 	ctx["user_id"] = 99
 	ctx["tags"].([]interface{})[0] = "mutated"
 
-	time.Sleep(100 * time.Millisecond)
 	closeTestLogger(t, logger)
 
 	entries := driver.allEntries()
@@ -750,13 +684,11 @@ func TestLogDriverFailureFallsBackToStderr(t *testing.T) {
 		closeErr: errors.New("close failed"),
 	}
 	logger := NewLog(driver)
-	logger.SetFlushInterval(50 * time.Millisecond)
 
 	var fallback bytes.Buffer
 	logger.SetFallbackWriter(&fallback)
 
 	logger.Info("driver failure")
-	time.Sleep(100 * time.Millisecond)
 	shutdownErr := logger.Shutdown()
 	if !errors.Is(shutdownErr, driver.saveErr) || !errors.Is(shutdownErr, driver.closeErr) {
 		t.Fatalf("Shutdown 应返回保存和关闭错误，实际为 %v", shutdownErr)

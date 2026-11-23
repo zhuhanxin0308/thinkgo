@@ -3,7 +3,6 @@ package db
 import (
 	"database/sql"
 	"database/sql/driver"
-	"errors"
 	"fmt"
 	"math"
 	"sort"
@@ -141,21 +140,23 @@ func (q *Query) InsertAll(dataList []map[string]interface{}) (int64, error) {
 		return q.insertAllBatched(leasedSQLConnection, fields, workingList, batchRows)
 	}
 
-	// 多批且不在事务中：包裹事务保证整体原子性，避免部分批次成功部分失败。
-	tx, err := q.db.BeginTx(q.context(), nil)
+	// 隐式事务由 TransactionContext 收尾，方言异常退出或上下文取消时也等待回滚。
+	var affected int64
+	var batchErr error
+	err := q.db.TransactionContext(q.context(), func(tx *Tx) error {
+		txQuery := q.clone()
+		txQuery.txExecutor = tx.tx
+		txQuery.txOwner = tx
+		txQuery.ctx = tx.ctx
+		affected, batchErr = txQuery.insertAllBatched(tx.connection, fields, workingList, batchRows)
+		return batchErr
+	})
 	if err != nil {
-		return 0, q.reportError("insert_all", err, nil)
-	}
-	txQuery := q.clone()
-	txQuery.txExecutor = tx.tx
-	txQuery.txOwner = tx
-	txQuery.ctx = tx.ctx
-	affected, err := txQuery.insertAllBatched(tx.connection, fields, workingList, batchRows)
-	if err != nil {
-		return 0, errors.Join(err, tx.Rollback())
-	}
-	if err := tx.Commit(); err != nil {
-		return 0, q.reportError("insert_all", err, nil)
+		// 批次执行错误已在语句处记录；只有开启或提交失败需要在此上报。
+		if batchErr == nil {
+			err = q.reportError("insert_all", err, nil)
+		}
+		return 0, err
 	}
 	return affected, nil
 }

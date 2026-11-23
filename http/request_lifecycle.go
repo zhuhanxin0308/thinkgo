@@ -12,6 +12,7 @@ import (
 	fwcontext "github.com/zhuhanxin0308/thinkgo/v3/context"
 	"github.com/zhuhanxin0308/thinkgo/v3/event"
 	"github.com/zhuhanxin0308/thinkgo/v3/exception"
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/cleanup"
 	"github.com/zhuhanxin0308/thinkgo/v3/middleware"
 )
 
@@ -19,6 +20,11 @@ type requestEndState struct {
 	request     *fwcontext.Request
 	terminators []middleware.TerminationCallback
 	task        *framework.RequestTask
+}
+
+type requestRunState struct {
+	request   *fwcontext.Request
+	delegated bool
 }
 
 // Run 执行一次应用请求并返回 Response，对应 ThinkPHP Http::run。
@@ -36,32 +42,57 @@ func (h *Http) Run(requests ...*fwcontext.Request) (response *fwcontext.Response
 
 // run 复用完整请求生命周期；仅静态模式禁止缺失文件继续进入业务应用。
 func (h *Http) run(request *fwcontext.Request, publicOnly, defaultRequest bool) (response *fwcontext.Response) {
-	delegated := false
-
+	state := requestRunState{request: request}
+	handedOff := false
 	defer func() {
-		if delegated {
-			return
+		// 执行或异常渲染中的 Goexit 都不会把响应交还宿主。
+		if !handedOff {
+			h.endUnreturnedRequest(state.request, response)
 		}
-		recovered := recover()
+	}()
+	var recovered interface{}
+	func() {
+		// 恢复旧式 nil panic 后仍会返回此处，Goexit 则直接展开外层收尾。
+		defer func() { recovered = recover() }()
+		response = h.executeRequest(&state, publicOnly, defaultRequest)
+	}()
+	if !state.delegated {
 		if recovered == http.ErrAbortHandler {
 			response = fwcontext.NewCommittedResponse(http.StatusOK)
-		} else if recovered != nil {
-			response = h.responseForRecoveredRequest(request, recovered)
+			panic(recovered)
+		}
+		if recovered != nil {
+			response = h.responseForRecoveredRequest(state.request, recovered)
 		}
 		if response == nil {
 			response = internalServerErrorResponse()
 		}
-		if recovered == http.ErrAbortHandler {
-			// 直接 Run 没有可交给调用方 End 的返回值，必须在透传中断信号前收尾。
-			if !h.requestTaskHostManaged(request) {
-				h.rememberRequestEndState(response, request)
-				h.End(response)
-			}
-			panic(http.ErrAbortHandler)
-		}
-		h.rememberRequestEndState(response, request)
-	}()
+		h.rememberRequestEndState(response, state.request)
+	}
+	handedOff = true
+	return response
+}
 
+// 只有直接 Run 已登记的租约需要在此收尾。ServeHTTP 及多应用子宿主各自持有唯一的收尾责任。
+func (h *Http) endUnreturnedRequest(request *fwcontext.Request, response *fwcontext.Response) {
+	if h == nil || request == nil {
+		return
+	}
+	h.endStateMu.Lock()
+	entry, registered := h.requestTasks[request]
+	h.endStateMu.Unlock()
+	if !registered || entry.hostManaged {
+		return
+	}
+	if response == nil {
+		response = internalServerErrorResponse()
+	}
+	h.rememberRequestEndState(response, request)
+	h.End(response)
+}
+
+func (h *Http) executeRequest(state *requestRunState, publicOnly, defaultRequest bool) (response *fwcontext.Response) {
+	request := state.request
 	if h == nil || h.app == nil {
 		return internalServerErrorResponse()
 	}
@@ -73,7 +104,7 @@ func (h *Http) run(request *fwcontext.Request, publicOnly, defaultRequest bool) 
 		if !defaultRequest && request != nil && request.Raw() != nil && !h.isAllowedHost(request.Raw().Host) {
 			return fwcontext.NewResponse().Code(http.StatusMisdirectedRequest).Content(http.StatusText(http.StatusMisdirectedRequest))
 		}
-		response, delegated = h.applicationHost.run(request)
+		response, state.delegated = h.applicationHost.run(request)
 		return response
 	}
 	if request == nil {
@@ -83,6 +114,7 @@ func (h *Http) run(request *fwcontext.Request, publicOnly, defaultRequest bool) 
 			h.logHTTPError("创建默认请求失败", err)
 			return internalServerErrorResponse()
 		}
+		state.request = request
 	}
 
 	raw := request.Raw()
@@ -275,9 +307,28 @@ func (h *Http) endRequestContext(
 	response *fwcontext.Response,
 	state *requestEndState,
 ) error {
-	return runRequestEndStep(endContext, func() error {
-		return h.runRequestEndLifecycle(endContext, response, state)
-	})
+	result := make(chan error, 1)
+	go func() {
+		var endErr error
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				endErr = errors.Join(endErr, fmt.Errorf("请求收尾监督任务 panic: %v", recovered))
+			}
+			result <- endErr
+		}()
+		h.runRequestEndLifecycle(endContext, response, state, &endErr)
+	}()
+	select {
+	case err := <-result:
+		return err
+	case <-endContext.Done():
+		select {
+		case err := <-result:
+			return err
+		default:
+			return endContext.Err()
+		}
+	}
 }
 
 // endRequestInline 在已确认没有可阻塞扩展时同步完成轻量收尾，避免普通请求创建监督协程。
@@ -285,7 +336,9 @@ func (h *Http) endRequestInline(response *fwcontext.Response) error {
 	if h == nil || response == nil {
 		return nil
 	}
-	return h.runRequestEndLifecycle(stdcontext.Background(), response, h.takeRequestEndState(response))
+	var err error
+	h.runRequestEndLifecycle(stdcontext.Background(), response, h.takeRequestEndState(response), &err)
+	return err
 }
 
 // runRequestEndLifecycle 在唯一监督任务中严格按 HttpEnd、terminate、cleanup 推进。
@@ -294,35 +347,40 @@ func (h *Http) runRequestEndLifecycle(
 	endContext stdcontext.Context,
 	response *fwcontext.Response,
 	state *requestEndState,
-) error {
+	endErr *error,
+) {
 	if state != nil {
 		defer state.task.Release()
+		if request := state.request; request != nil {
+			// Goexit 会继续展开 defer。先登记资源清理，再登记终结回调，保持执行及租约归还顺序。
+			defer cleanup.Run(endErr, "请求资源清理", func() error {
+				return wrapRequestEndError("请求资源清理", runRequestEndStage(func() error {
+					return waitRequestCleanup(endContext, request)
+				}))
+			})
+			if len(state.terminators) != 0 {
+				defer h.runTerminators(endContext, request, response, state.terminators, 0, endErr)
+			}
+		}
 	}
-	var endErr error
 
 	if h.event != nil && h.event.HasListeners(event.EventHttpEnd) {
 		// 只有当前存在监听器时才创建事件，普通请求不承担未使用的载荷分配。
 		endEvent := event.NewHttpEndEvent(response.GetStatus())
 		endEvent.Data = response
-		eventErr := runRequestEndStage(func() error {
-			return h.event.DispatchTerminalSerialContext(endContext, endEvent)
+		// 监听器可能退出整个监督协程，此时返回值无法交付，使用分发器在同一栈上留下的完整结果。
+		var eventErr error
+		defer func() {
+			if eventErr != nil {
+				*endErr = errors.Join(*endErr, wrapRequestEndError("HttpEnd 事件", eventErr))
+			}
+		}()
+		eventErr = runRequestEndStage(func() error {
+			return h.event.DispatchTerminalSerialContext(cleanup.WithTerminalResult(endContext, &eventErr), endEvent)
 		})
-		endErr = errors.Join(endErr, wrapRequestEndError("HttpEnd 事件", eventErr))
-	}
-	var request *fwcontext.Request
-	if state != nil {
-		request = state.request
-	}
-	if state != nil && request != nil {
-		endErr = errors.Join(endErr, h.runTerminators(endContext, request, response, state.terminators))
-		cleanupErr := runRequestEndStage(func() error {
-			return waitRequestCleanup(endContext, request)
-		})
-		endErr = errors.Join(endErr, wrapRequestEndError("请求资源清理", cleanupErr))
 	}
 	// 访问日志保持异步批处理；显式 Flush 仅作为调用方屏障，应用关停时
 	// Log.Close 会可靠排空已接受条目，不能在每个请求上退化为 fsync。
-	return endErr
 }
 
 func (h *Http) newDefaultRequest() (*fwcontext.Request, error) {
@@ -363,7 +421,17 @@ func (h *Http) newRequest(scope *framework.ContainerScope, raw *http.Request, op
 	if raw != nil {
 		requestContext = raw.Context()
 	}
+	// 请求工厂异常退出时，调用方无法获得 Request，作用域仍归创建它的宿主所有。
+	providerReturned := false
+	defer func() {
+		if !providerReturned {
+			if err := scope.Close(); err != nil {
+				h.logHTTPError("关闭中断的请求工厂作用域失败", err)
+			}
+		}
+	}()
 	created, err := scope.MakeContext(requestContext, string(framework.ServiceRequest), parameters...)
+	providerReturned = true
 	if err != nil {
 		return nil, fmt.Errorf("解析应用请求对象失败: %w", err)
 	}
@@ -501,34 +569,6 @@ func (h *Http) requestEndRequiresSupervisor(state *requestServeState) bool {
 		return true
 	}
 	return state.req.CleanupRequiresSupervisor()
-}
-
-func runRequestEndStep(ctx stdcontext.Context, step func() error) (err error) {
-	if step == nil {
-		return nil
-	}
-	result := make(chan error, 1)
-	go func() {
-		var stepErr error
-		defer func() {
-			if recovered := recover(); recovered != nil {
-				stepErr = fmt.Errorf("请求收尾监督任务 panic: %v", recovered)
-			}
-			result <- stepErr
-		}()
-		stepErr = step()
-	}()
-	select {
-	case err = <-result:
-		return err
-	case <-ctx.Done():
-		select {
-		case err = <-result:
-			return err
-		default:
-			return ctx.Err()
-		}
-	}
 }
 
 func runRequestEndStage(stage func() error) (stageErr error) {
