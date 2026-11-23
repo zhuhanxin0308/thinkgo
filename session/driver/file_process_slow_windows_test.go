@@ -5,9 +5,12 @@ package driver
 import (
 	"bufio"
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -16,16 +19,13 @@ import (
 
 const (
 	fileProcessSlowWorkerMode = "slow-atomic-counter"
-	fileProcessSlowReadyLine  = "thinkgo-slow-counter-ready\n"
 	fileProcessSlowStartLine  = "start\n"
 	fileProcessSlowHold       = 125 * time.Millisecond
+	fileProcessReapReserve    = 5 * time.Second
 )
 
-// TestFileSessionProcessSlowAtomicCounter keeps the original 8 x 25 updates,
-// 15-second production lock wait and 45-second parent deadline. The callback's
-// fixed hold models slow work inside the mutation boundary: 25 seconds of total
-// ownership, while a fair first turn needs roughly eight holds, not 25 seconds.
-// Every child finishes initialization before the parent releases the start gate.
+// 八个独立写者从同一屏障出发，各执行 25 次带慢回调的真实 Update。
+// 生产锁限制单次等待；父进程只限制单个写者连续没有提交或退出的时长。
 func TestFileSessionProcessSlowAtomicCounter(t *testing.T) {
 	if mode, enabled := os.LookupEnv(fileProcessWorkerModeEnv); enabled {
 		if mode != fileProcessSlowWorkerMode {
@@ -37,25 +37,35 @@ func TestFileSessionProcessSlowAtomicCounter(t *testing.T) {
 
 	driver, directory := newTestFileDriver(t)
 	const sessionID = "process-slow-atomic-counter"
-	ctx, cancel := context.WithTimeout(context.Background(), fileProcessTimeout)
-	defer cancel()
+	budget := t.Context()
+	if deadline, ok := t.Deadline(); ok {
+		// 避免包级超时先杀死父进程，留出回收 Windows 子进程和输出管道的时间。
+		var stop context.CancelFunc
+		budget, stop = context.WithDeadlineCause(budget, deadline.Add(-fileProcessReapReserve),
+			errors.New("包级测试时限即将到达，开始回收慢更新子进程"))
+		defer stop()
+	}
+	ctx, cancel := context.WithCancelCause(budget)
+	defer cancel(nil)
 	children := make([]*fileProcessSlowChild, 0, fileProcessWorkerCount)
-	transcriptsLogged := false
 	t.Cleanup(func() {
-		cancel()
+		cancel(nil)
 		for _, child := range children {
 			_ = child.input.Close()
 		}
 		fileProcessWaitSlowChildren(children)
-		if t.Failed() && !transcriptsLogged {
-			t.Logf("全部慢更新子进程诊断:\n%s", fileProcessChildDiagnostics(fileProcessSlowTranscripts(children)))
+		for _, child := range children {
+			t.Logf("子进程 %d 已报告 %d/%d 次成功提交", child.transcript.index, child.output.completed, fileProcessUpdatesPerWorker)
 		}
+		t.Logf("各进程均为单写者。回调前包括内核锁排队、身份校验和读取；回调后包括写入、Sync、替换和解锁。调度延迟可落在任一区段。\n%s",
+			fileProcessChildDiagnostics(fileProcessSlowTranscripts(children)))
 	})
 
+	startup, stopStartup := context.WithTimeout(ctx, fileProcessTimeout)
+	defer stopStartup()
 	for index := 0; index < fileProcessWorkerCount; index++ {
 		child := &fileProcessSlowChild{
 			transcript: &fileProcessChild{index: index},
-			ready:      make(chan struct{}),
 			done:       make(chan struct{}),
 		}
 		command := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestFileSessionProcessSlowAtomicCounter$", "-test.v")
@@ -67,7 +77,8 @@ func TestFileSessionProcessSlowAtomicCounter(t *testing.T) {
 				command.Env[i] = fileProcessWorkerModeEnv + "=" + fileProcessSlowWorkerMode
 			}
 		}
-		command.Stdout = &fileProcessSlowReadyWriter{output: &child.transcript.stdout, ready: child.ready}
+		child.output = newFileProcessSlowOutput(&child.transcript.stdout)
+		command.Stdout = child.output
 		command.Stderr = &child.transcript.stderr
 		var err error
 		child.input, err = command.StdinPipe()
@@ -80,7 +91,7 @@ func TestFileSessionProcessSlowAtomicCounter(t *testing.T) {
 		}
 		children = append(children, child)
 		go func() {
-			// Wait also joins stdout/stderr copying before publishing the transcript.
+			// Wait 同时等待 stdout/stderr 复制完成，再发布退出状态和完整记录。
 			child.transcript.waitErr = command.Wait()
 			close(child.done)
 		}()
@@ -88,26 +99,39 @@ func TestFileSessionProcessSlowAtomicCounter(t *testing.T) {
 
 	for _, child := range children {
 		select {
-		case <-child.ready:
+		case <-child.output.ready:
 		case <-child.done:
 			t.Fatalf("第 %d 个慢更新子进程在就绪前退出: %v", child.transcript.index, child.transcript.waitErr)
-		case <-ctx.Done():
-			t.Fatalf("等待慢更新子进程全部就绪失败: %v", ctx.Err())
+		case <-startup.Done():
+			t.Fatalf("等待慢更新子进程全部就绪失败: %v", context.Cause(startup))
 		}
 	}
+	stopStartup()
 	for _, child := range children {
 		if _, err := io.WriteString(child.input, fileProcessSlowStartLine); err != nil {
 			t.Fatalf("放行第 %d 个慢更新子进程失败: %v", child.transcript.index, err)
 		}
 		_ = child.input.Close()
 	}
+	var monitors sync.WaitGroup
+	for _, child := range children {
+		monitors.Go(func() {
+			if !fileProcessWaitForProgress(child.output.progress, child.done) {
+				cancel(fmt.Errorf("子进程 %d 连续 %s 未报告成功提交或退出", child.transcript.index, fileProcessSlowIdleTimeout))
+			}
+		})
+	}
+	monitors.Wait()
 	failed := fileProcessWaitSlowChildren(children)
-	// Retain the ownership progression of successful and failed samples alike.
-	t.Logf("全部慢更新子进程诊断:\n%s", fileProcessChildDiagnostics(fileProcessSlowTranscripts(children)))
-	transcriptsLogged = true
 	if failed || ctx.Err() != nil {
 		t.Fatalf("慢更新跨进程原子计数失败: child_failed=%t context=%v\n%s",
-			failed, ctx.Err(), fileProcessLockDiagnostics(driver, sessionID))
+			failed, context.Cause(ctx), fileProcessLockDiagnostics(driver, sessionID))
+	}
+	for _, child := range children {
+		if child.output.completed != fileProcessUpdatesPerWorker {
+			t.Fatalf("第 %d 个子进程的提交记录不完整: actual=%d expected=%d",
+				child.transcript.index, child.output.completed, fileProcessUpdatesPerWorker)
+		}
 	}
 	content, found, err := driver.Read(sessionID)
 	if err != nil || !found {
@@ -126,8 +150,8 @@ func fileProcessRunSlowCounterWorker(t *testing.T) {
 	t.Helper()
 	directory := fileProcessRequiredEnvironment(t, fileProcessSessionDirectoryEnv)
 	id := fileProcessRequiredEnvironment(t, fileProcessSessionIDEnv)
-	if updates := fileProcessRequiredEnvironment(t, fileProcessUpdateCountEnv); updates != "25" {
-		t.Fatalf("慢更新子进程必须执行原 25 轮，实际为 %q", updates)
+	if updates := fileProcessRequiredEnvironment(t, fileProcessUpdateCountEnv); updates != strconv.Itoa(fileProcessUpdatesPerWorker) {
+		t.Fatalf("慢更新子进程必须执行 %d 轮，实际为 %q", fileProcessUpdatesPerWorker, updates)
 	}
 	driver, err := NewFile(directory)
 	if err != nil {
@@ -144,31 +168,46 @@ func fileProcessRunSlowCounterWorker(t *testing.T) {
 		t.Fatalf("慢更新子进程启动握手失败: command=%q err=%v", start, err)
 	}
 
-	timings := make([]fileProcessUpdateTiming, 0, fileProcessUpdatesPerWorker)
+	// 容量覆盖完整批次，写者释放锁后只投递快照；格式化和管道写入不阻塞下一轮竞争。
+	commits := make(chan fileProcessUpdateTiming, fileProcessUpdatesPerWorker)
+	reported := make(chan error, 1)
+	go func() {
+		round := 1
+		for timing := range commits {
+			if _, err := io.WriteString(os.Stdout, timing.diagnosticLine(round)); err != nil {
+				reported <- err
+				return
+			}
+			round++
+		}
+		reported <- nil
+	}()
 	defer func() {
-		t.Logf("慢更新阶段时序（callback 固定持锁 %s；其余阶段不是纯锁等待／持锁时间）:\n%s",
-			fileProcessSlowHold, fileProcessTimingDiagnostics(timings))
+		close(commits)
+		if err := <-reported; err != nil {
+			t.Errorf("报告慢更新进度失败: %v", err)
+		}
 	}()
 	run := func(update func(string, bool) (string, bool, error)) error { return driver.Update(id, update) }
 	for index := 0; index < fileProcessUpdatesPerWorker; index++ {
 		timing, err := fileProcessMeasureUpdate(run, func(current string, found bool) (string, bool, error) {
 			next, remove, err := fileProcessIncrementEnvelope(current, found)
-			// No logging or IPC inside the held mutation guard.
+			// 持锁回调内仅做业务更新与固定等待。
 			time.Sleep(fileProcessSlowHold)
 			return next, remove, err
 		}, time.Now)
-		timings = append(timings, timing)
 		if err != nil {
-			t.Fatalf("慢更新子进程第 %d 次原子更新失败，Update 总耗时 %s:\n%s",
-				index+1, timing.finished.Sub(timing.started), fileProcessErrorChain(err))
+			t.Fatalf("慢更新子进程第 %d 次原子更新失败，生产锁等待超时=%t:\n%s%s",
+				index+1, errors.Is(err, ErrSessionLockTimeout), timing.diagnosticLine(index+1), fileProcessErrorChain(err))
 		}
+		commits <- timing
 	}
 }
 
 type fileProcessSlowChild struct {
 	transcript *fileProcessChild
 	input      io.WriteCloser
-	ready      chan struct{}
+	output     *fileProcessSlowOutput
 	done       chan struct{}
 }
 
@@ -187,28 +226,4 @@ func fileProcessSlowTranscripts(children []*fileProcessSlowChild) []*fileProcess
 		transcripts[i] = child.transcript
 	}
 	return transcripts
-}
-
-// Ready detection shares the stdout copier with transcript retention. Unlike a
-// StdoutPipe scanner followed by Wait, Wait cannot close the pipe before the
-// remaining child output is copied. The marker may span arbitrary Write chunks.
-type fileProcessSlowReadyWriter struct {
-	output io.Writer
-	ready  chan struct{}
-	once   sync.Once
-	tail   string
-}
-
-func (writer *fileProcessSlowReadyWriter) Write(data []byte) (int, error) {
-	n, err := writer.output.Write(data)
-	combined := writer.tail + string(data[:n])
-	if strings.Contains(combined, fileProcessSlowReadyLine) {
-		writer.once.Do(func() { close(writer.ready) })
-	}
-	if limit := len(fileProcessSlowReadyLine) - 1; len(combined) > limit {
-		writer.tail = combined[len(combined)-limit:]
-	} else {
-		writer.tail = combined
-	}
-	return n, err
 }
