@@ -60,6 +60,20 @@ func clearCacheDriverContext(ctx context.Context, driver Driver) error {
 	return driver.Clear()
 }
 
+func tagMutationLockEnabled(driver Driver) bool {
+	capability, ok := driver.(interface{ supportsTagMutationLock() bool })
+	return !ok || capability.supportsTagMutationLock()
+}
+
+// tagMutationLocker 核实底层锁能力，并保留当前包装层对锁键的映射。
+func tagMutationLocker(driver Driver) (DistributedLocker, bool) {
+	if !tagMutationLockEnabled(driver) {
+		return nil, false
+	}
+	locker, ok := driver.(DistributedLocker)
+	return locker, ok
+}
+
 // withTagMutationLockContext 在有限窗口内获取标签变更锁，并响应调用方取消。
 func (c *Cache) withTagMutationLockContext(ctx context.Context, driver Driver, callback func(context.Context) error) (resultErr error) {
 	if ctx == nil {
@@ -71,10 +85,7 @@ func (c *Cache) withTagMutationLockContext(ctx context.Context, driver Driver, c
 	if c == nil || c.state == nil {
 		return ErrCacheDriverNotConfigured
 	}
-	if capability, ok := driver.(interface{ supportsTagMutationLock() bool }); ok && !capability.supportsTagMutationLock() {
-		return callback(ctx)
-	}
-	locker, supported := driver.(DistributedLocker)
+	locker, supported := tagMutationLocker(driver)
 	if !supported {
 		if err := ctx.Err(); err != nil {
 			return err

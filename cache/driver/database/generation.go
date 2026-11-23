@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/zhuhanxin0308/thinkgo/v3/db"
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/cachekey"
 )
 
 const (
@@ -26,15 +27,17 @@ func (c *DB) currentGeneration() (int64, error) {
 	if c == nil || c.conn == nil {
 		return 0, ErrInvalidCacheDatabase
 	}
-	query := db.NewDB(c.conn).Table(c.table).Where("key", dbGenerationKey)
+	table := db.NewDB(c.conn).Table(c.table)
+	query := table.Where("key", dbGenerationKey)
 	row, err := query.Find()
 	if err != nil {
 		return 0, err
 	}
 	if row == nil {
-		_, insertErr := db.NewDB(c.conn).Table(c.table).Insert(map[string]interface{}{
+		data := map[string]interface{}{
 			"key": dbGenerationKey, "value": strconv.FormatInt(dbInitialGeneration, 10), "expiry": int64(0),
-		})
+		}
+		insertErr := requireCacheMutation(table.Insert(data))
 		if insertErr == nil {
 			return dbInitialGeneration, nil
 		}
@@ -59,7 +62,14 @@ func generationPrefix(generation int64) string {
 }
 
 func (c *DB) storageKey(key string) (string, error) {
-	if err := c.validateKey(key); err != nil {
+	// 只有完整的命名空间帧不计入业务键上限；物理摘要始终包含整条路径。
+	size := len(key)
+	if size > maxDBCacheKeyBytes {
+		if logical, ok := cachekey.LogicalKey(key); ok {
+			size = len(logical)
+		}
+	}
+	if err := c.validateKeySize(size, maxDBCacheKeyBytes); err != nil {
 		return "", err
 	}
 	generation, err := c.currentGeneration()

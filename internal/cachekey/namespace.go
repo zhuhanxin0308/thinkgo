@@ -18,6 +18,9 @@ const TagReverseMetadataPrefix = "__thinkgo_tag_reverse__:"
 
 const namespaceV2Prefix = NamespacePrefix + "v2:"
 
+// MaxLogicalKeyBytes 是业务键及单层命名空间前缀的字节上限。
+const MaxLogicalKeyBytes = 1024
+
 // Namespace returns the existing v2 byte-length frame for a store prefix.
 func Namespace(prefix string) string {
 	return namespaceV2Prefix + frame(prefix)
@@ -36,15 +39,13 @@ func frame(value string) string {
 // NamespaceDriver, including nested wrappers. Markers embedded in a business key
 // or inside a framed prefix do not determine the key's type.
 func IsTagMetadata(key string) bool {
-	namespaced := false
-	for strings.HasPrefix(key, namespaceV2Prefix) {
-		var ok bool
-		key, ok = unframe(key[len(namespaceV2Prefix):])
-		if !ok {
-			return false
-		}
-		namespaced = true
+	// 已存元数据沿用原有的结构识别规则，避免配置上限影响既有保护。
+	inner, valid := unframeNamespaces(key, len(key))
+	if !valid {
+		return false
 	}
+	namespaced := len(inner) != len(key)
+	key = inner
 	metadata, tag := strings.CutPrefix(key, TagMetadataPrefix)
 	if !tag {
 		var reverse bool
@@ -57,29 +58,44 @@ func IsTagMetadata(key string) bool {
 		// Direct keys predate namespace framing and retain their prefix contract.
 		return true
 	}
-	_, ok := unframe(metadata)
+	_, _, ok := unframe(metadata)
 	return ok
 }
 
-// unframe consumes one canonical decimal byte-length frame. It leaves the
-// remaining key opaque and rejects truncated, overflowing or ambiguous frames.
-func unframe(value string) (string, bool) {
+// LogicalKey 剥离命名空间构造器允许的完整帧，并保留业务键本身的字节。
+func LogicalKey(key string) (string, bool) {
+	return unframeNamespaces(key, MaxLogicalKeyBytes)
+}
+
+func unframeNamespaces(key string, maxPrefixBytes int) (string, bool) {
+	for strings.HasPrefix(key, namespaceV2Prefix) {
+		prefix, tail, ok := unframe(key[len(namespaceV2Prefix):])
+		if !ok || len(prefix) > maxPrefixBytes {
+			return "", false
+		}
+		key = tail
+	}
+	return key, !strings.HasPrefix(key, NamespacePrefix)
+}
+
+// unframe 读取一个规范的十进制字节长度，返回帧内容和剩余键。
+func unframe(value string) (string, string, bool) {
 	separator := strings.IndexByte(value, ':')
 	if separator <= 0 || separator > 1 && value[0] == '0' {
-		return "", false
+		return "", "", false
 	}
 	for index := 0; index < separator; index++ {
 		if value[index] < '0' || value[index] > '9' {
-			return "", false
+			return "", "", false
 		}
 	}
 	length, err := strconv.Atoi(value[:separator])
 	if err != nil {
-		return "", false
+		return "", "", false
 	}
 	framed := value[separator+1:]
 	if length >= len(framed) || framed[length] != ':' {
-		return "", false
+		return "", "", false
 	}
-	return framed[length+1:], true
+	return framed[:length], framed[length+1:], true
 }

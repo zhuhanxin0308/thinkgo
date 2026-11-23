@@ -32,7 +32,7 @@ const (
 	lockRetryInterval  = 5 * time.Millisecond
 	// MaxCacheTTL 是缓存值和默认过期配置支持的最长时长。
 	MaxCacheTTL          = 100 * 365 * 24 * time.Hour
-	maxCacheKeyBytes     = 1024
+	maxCacheKeyBytes     = cachekey.MaxLogicalKeyBytes
 	maxCacheTagBytes     = 128
 	maxTagMembers        = 10000
 	maxTagsPerCacheKey   = 64

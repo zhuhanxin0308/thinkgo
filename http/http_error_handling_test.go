@@ -243,6 +243,48 @@ func TestDispatchShowsDetailedErrorsInDebug(t *testing.T) {
 	}
 }
 
+// 已绑定请求作用域时，工厂 panic 中的错误不能触发控制器在应用根容器内再次构建。
+func TestControllerFactoryPanicDoesNotRetryInRoot(t *testing.T) {
+	app := newTestHTTPApp(t, t.TempDir(), map[string]interface{}{"enable": false})
+	handler := newTestHTTPHandler(t, app)
+	other := errors.New("启动控制器失败")
+	for _, tc := range []struct {
+		name    string
+		cause   error
+		missing bool
+	}{
+		{"scope", fwcontext.ErrRequestServiceScopeUnavailable, false},
+		{"joined", errors.Join(other, framework.ErrServiceNotBound, fwcontext.ErrRequestServiceScopeUnavailable), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const name = "PanicController"
+			calls := 0
+			if err := app.BindFactory(name, func() interface{} {
+				calls++
+				panic(tc.cause)
+			}); err != nil {
+				t.Fatal(err)
+			}
+			scope, err := app.NewScope()
+			if err != nil {
+				t.Fatal(err)
+			}
+			req := fwcontext.MustNewRequest(httptest.NewRequest(http.MethodGet, "/", nil), fwcontext.WithServiceScope(scope, scope))
+			t.Cleanup(func() { _ = req.Cleanup() })
+			_, err = handler.resolveController(req, name)
+			if calls != 1 {
+				t.Errorf("一次请求触发了 %d 次控制器工厂调用", calls)
+			}
+			if err == nil || err.Error() != "build factory "+name+" failed: 工厂执行 panic: "+tc.cause.Error() {
+				t.Fatalf("工厂失败的诊断文本发生变化：%v", err)
+			}
+			if errors.Is(err, fwcontext.ErrRequestServiceScopeUnavailable) || errors.Is(err, other) || errors.Is(err, framework.ErrServiceNotBound) != tc.missing {
+				t.Fatalf("工厂 panic 暴露了错误的分类：%v", err)
+			}
+		})
+	}
+}
+
 // TestDispatchMasksMethodResolutionErrorsOutsideDebug 验证控制器方法解析失败时，生产模式同样不暴露内部细节。
 func TestDispatchMasksMethodResolutionErrorsOutsideDebug(t *testing.T) {
 	app := newTestHTTPApp(t, t.TempDir(), map[string]interface{}{"enable": false})

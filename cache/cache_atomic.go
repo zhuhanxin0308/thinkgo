@@ -58,7 +58,7 @@ func (c *Cache) UpdateContext(ctx context.Context, key string, ttl time.Duration
 	runUpdate := func(ctx context.Context, cleanMetadata bool) (bool, error) {
 		removed := false
 		committedOrigin := uint64(0)
-		generation, _, err := c.withFreshAtomicFence(ctx, driver, key, func(generation, started, invalidation uint64) error {
+		generation, _, err := c.withFreshAtomicFence(ctx, driver, key, fenceInvalidation, func(generation, started, invalidation uint64) error {
 			wrapped := func(raw interface{}, found bool) (interface{}, bool, error) {
 				value, found, origin, decodeErr := decodeAtomicCacheValue(raw, found, generation, started, invalidation)
 				if decodeErr != nil {

@@ -6,9 +6,49 @@ import (
 	"fmt"
 	"io"
 	"mime/multipart"
+	"sync"
+	"sync/atomic"
 )
 
+var (
+	// ErrRequestCleaned 表示请求资源已清理，不能再次解析上传文件。
+	ErrRequestCleaned = errors.New("请求资源已清理")
+	// ErrInvalidRequestCleanupContext 表示请求清理收到 nil 上下文。
+	ErrInvalidRequestCleanupContext = errors.New("请求清理上下文不能为空")
+)
+
+type requestResourceState struct {
+	serviceMu         sync.Mutex
+	serviceResolver   ServiceResolver
+	serviceClosers    []io.Closer
+	serviceIdleCloser IdleServiceScopeCloser
+	serviceResolving  int
+	serviceDrained    chan struct{}
+	serviceClosed     bool
+
+	formMu                 sync.Mutex
+	cleanupOnce            sync.Once
+	cleanupDone            chan struct{}
+	cleanupStarted         atomic.Bool
+	cleanupNeedsSupervisor atomic.Bool
+	cleaned                bool
+	cleanupErr             error
+}
+
+// CleanupRequiresSupervisor 返回请求是否可能持有需要收尾截止时间监督的资源。
+func (r *Request) CleanupRequiresSupervisor() bool {
+	if r == nil {
+		return false
+	}
+	if !r.serviceMu.TryLock() {
+		return true
+	}
+	defer r.serviceMu.Unlock()
+	return r.serviceResolving != 0 || r.cleanupNeedsSupervisor.Load()
+}
+
 // Cleanup 幂等释放 multipart 临时文件和请求作用域，并等待全部资源实际关闭。
+// 解析回调内需要主动清理时，应使用带截止时间的 CleanupContext，以便回调退出后完成释放。
 func (r *Request) Cleanup() error {
 	return r.CleanupContext(stdcontext.Background())
 }
@@ -75,7 +115,7 @@ func (r *Request) cleanupIdleRequestScope() (closed bool, err error) {
 		return false, nil
 	}
 	defer r.serviceMu.Unlock()
-	if len(r.serviceClosers) > 1 {
+	if r.serviceResolving != 0 || len(r.serviceClosers) > 1 {
 		return false, nil
 	}
 	if len(r.serviceClosers) == 1 {
@@ -142,16 +182,23 @@ func (r *Request) detachMultipartFormForCleanup() *multipart.Form {
 	return multipartForm
 }
 
-// detachServiceClosersForCleanup 在后台监督器内等待在途 Make 退出，然后一次性
-// 封闭服务状态；锁释放由 defer 保障，避免 panic 让 cleanupDone 永久悬挂。
+// 入口已封闭，监督器接管关闭器并等已准入的解析退出；仅发生重叠时才分配通知通道。
 func (r *Request) detachServiceClosersForCleanup() []io.Closer {
 	r.serviceMu.Lock()
-	defer r.serviceMu.Unlock()
-	serviceClosers := append([]io.Closer(nil), r.serviceClosers...)
+	serviceClosers := r.serviceClosers
 	r.serviceResolver = nil
 	r.serviceClosers = nil
 	r.serviceIdleCloser = nil
 	r.serviceClosed = true
+	var drained chan struct{}
+	if r.serviceResolving != 0 {
+		drained = make(chan struct{})
+		r.serviceDrained = drained
+	}
+	r.serviceMu.Unlock()
+	if drained != nil {
+		<-drained
+	}
 	return serviceClosers
 }
 

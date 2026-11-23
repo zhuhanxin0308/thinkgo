@@ -138,7 +138,7 @@ func (c *Cache) setCacheValueWithFenceContext(ctx context.Context, driver Driver
 // changeCounterWithFence 在保留现有 TTL 的单键原子边界内更新计数，并拒绝跨越更新后的失效代际。
 func (c *Cache) changeCounterWithFence(driver Driver, key string, step int64, subtract bool) (value int64, resultErr error) {
 	resultErr = c.mutateWithTagRepairContext(context.Background(), driver, key, func() error {
-		if !cacheDriverSupportsAtomicFencing(driver) {
+		if !cacheDriverUsesFencing(driver, fenceCounter) {
 			if subtract {
 				value, resultErr = driver.Dec(key, step)
 			} else {
@@ -147,7 +147,7 @@ func (c *Cache) changeCounterWithFence(driver Driver, key string, step int64, su
 			return resultErr
 		}
 		committedOrigin := uint64(0)
-		generation, _, err := c.withFreshAtomicFence(context.Background(), driver, key, func(generation, started, invalidation uint64) error {
+		generation, _, err := c.withFreshAtomicFence(context.Background(), driver, key, fenceCounter, func(generation, started, invalidation uint64) error {
 			return atomicUpdateCacheValueConditionalTTL(driver, key, func(raw interface{}, found bool) (interface{}, bool, bool, error) {
 				decoded, found, origin, decodeErr := decodeAtomicCacheValue(raw, found, generation, started, invalidation)
 				if decodeErr != nil {

@@ -126,7 +126,7 @@ func (c *Cache) SetManyContext(ctx context.Context, values map[string]interface{
 		c.trace("SET", key)
 	}
 	writeValues := func() error {
-		if cacheDriverSupportsAtomicFencing(driver) {
+		if cacheDriverUsesFencing(driver, fenceBatchWrite) {
 			return c.writeFencedCacheValuesContext(ctx, driver, keys, values, resolvedTTL)
 		}
 		var writeErr error

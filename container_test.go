@@ -216,12 +216,45 @@ func TestContainerDelete(t *testing.T) {
 	}
 }
 
-// TestContainerNotFound 验证未绑定服务的错误
+// TestContainerNotFound 验证各解析入口能凭同一错误判断绑定缺失，同时保留原诊断文本。
 func TestContainerNotFound(t *testing.T) {
-	c := NewContainer()
-	_, err := c.Make("nonexistent")
-	if err == nil {
-		t.Fatal("未绑定的服务应返回 error")
+	container := NewContainer()
+	scope := container.NewScope()
+	defer scope.Close()
+
+	const missing = "missing.service"
+	const message = "binding not found: " + missing
+	container.BindFactory("outer", func(current *Container) (interface{}, error) {
+		return current.Make(missing)
+	})
+	container.BindScoped("required", func(current *Container) interface{} {
+		return current.Get(missing)
+	})
+	for _, test := range []struct {
+		name    string
+		resolve func() (interface{}, error)
+		want    string
+	}{
+		{"根容器", func() (interface{}, error) { return container.Make(missing) }, message},
+		{"根容器上下文", func() (interface{}, error) { return container.MakeContext(t.Context(), missing) }, message},
+		{"作用域", func() (interface{}, error) { return scope.Make(missing) }, message},
+		{"作用域上下文", func() (interface{}, error) { return scope.MakeContext(t.Context(), missing) }, message},
+		{"工厂返回依赖错误", func() (interface{}, error) { return container.Make("outer") }, "build factory outer failed: " + message},
+		{"工厂中必需依赖缺失", func() (interface{}, error) { return scope.Make("required") }, "build scoped required failed: 工厂执行 panic: " + message},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := test.resolve()
+			if !errors.Is(err, ErrServiceNotBound) || err.Error() != test.want {
+				t.Fatalf("缺失绑定的错误分类或文本不符：得到 %v，期望可识别的 %q", err, test.want)
+			}
+		})
+	}
+
+	// 工厂可以报告外观相同的业务错误，其文本不能让调用方误判为绑定缺失。
+	container.BindFactory("panic-text", func() interface{} { panic(message) })
+	_, err := container.Make("panic-text")
+	if err == nil || errors.Is(err, ErrServiceNotBound) || err.Error() != "build factory panic-text failed: 工厂执行 panic: "+message {
+		t.Fatalf("普通 panic 的错误分类或诊断文本被改变：%v", err)
 	}
 }
 
