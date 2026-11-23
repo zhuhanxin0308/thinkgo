@@ -17,7 +17,7 @@ func TestDBSubMillisecondExpiryAndLease(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		// 在毫秒末尾开始，确保申请的时长跨越刻度，并避开旧秒级时间戳的兼容区间。
 		start := time.Date(2024, 1, 1, 0, 0, 0, 950_000, time.UTC)
-		time.Sleep(start.Sub(time.Now()))
+		time.Sleep(time.Until(start))
 		store, err := NewDB(newRecordingCacheConn(), "cache_records")
 		if err != nil {
 			t.Fatal(err)
