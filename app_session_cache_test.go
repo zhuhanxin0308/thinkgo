@@ -5,24 +5,16 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"sync"
 	"testing"
 	"time"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/zhuhanxin0308/thinkgo/v3/cache"
 	cacheDriver "github.com/zhuhanxin0308/thinkgo/v3/cache/driver"
+	redisDriver "github.com/zhuhanxin0308/thinkgo/v3/cache/driver/redis"
 	frameworkCookie "github.com/zhuhanxin0308/thinkgo/v3/cookie"
 	frameworkSession "github.com/zhuhanxin0308/thinkgo/v3/session"
 )
-
-type expiringCacheSessionLockDriver struct {
-	*cacheDriver.Memory
-	lease time.Duration
-}
-
-func (driver *expiringCacheSessionLockDriver) AcquireLock(key, owner string, _ time.Duration) (bool, error) {
-	return driver.Memory.AcquireLock(key, owner, driver.lease)
-}
 
 // TestCacheSessionDriverThinkPHPPersistenceAPI 验证 session.type=cache 的读取、
 // 写入、删除、清空和原子更新都通过同一个已配置 Cache store。
@@ -148,52 +140,49 @@ func TestCacheSessionDriverNamespacesAreIsolated(t *testing.T) {
 	}
 }
 
-// TestCacheSessionUpdateCannotReviveAfterLeaseLoss 验证旧更新即使丢失租约，
-// 也不能在较新的 Destroy 删除之后重新写回会话。
-func TestCacheSessionUpdateCannotReviveAfterLeaseLoss(t *testing.T) {
-	backend := &expiringCacheSessionLockDriver{Memory: cacheDriver.NewMemory(), lease: 15 * time.Millisecond}
+// TestCacheSessionUpdateCannotReviveAfterNamespaceClear 验证旧更新不能越过命名空间清理水位。
+func TestCacheSessionUpdateCannotReviveAfterNamespaceClear(t *testing.T) {
+	server := miniredis.RunT(t)
+	backend, err := redisDriver.NewRedis(map[string]interface{}{"host": server.Host(), "port": server.Server().Addr().Port})
+	if err != nil {
+		t.Fatal(err)
+	}
 	store := cache.NewCache(nil, backend)
-	driver := &cacheSessionDriver{store: store, expire: time.Minute}
-	if err := driver.Write("shared", "old"); err != nil {
-		t.Fatalf("准备 Session 失败: %v", err)
+	t.Cleanup(func() { _ = store.Close() })
+	driver := newCacheSessionDriver(store, time.Minute, "sessions")
+	const id = "shared"
+	if err := driver.Write(id, "old"); err != nil {
+		t.Fatal(err)
 	}
 
-	started := make(chan struct{})
-	release := make(chan struct{})
-	var once sync.Once
-	staleDone := make(chan error, 1)
-	go func() {
-		staleDone <- driver.Update("shared", func(current string, found bool) (string, bool, error) {
+	// Redis 首次 WATCH 已读到旧值，此时让另一笔操作清理命名空间，再允许 EXEC。
+	// WATCH 冲突允许重跑业务回调；每次都返回待写值，确保测试真正检验提交屏障。
+	cleared := false
+	err = driver.Update(id, func(current string, found bool) (string, bool, error) {
+		if !cleared {
 			if !found || current != "old" {
 				return "", false, errors.New("旧更新未读取初始 Session")
 			}
-			once.Do(func() { close(started) })
-			<-release
-			return "stale", false, nil
-		})
-	}()
-	select {
-	case <-started:
-	case <-time.After(time.Second):
-		t.Fatal("旧更新未进入回调")
+			if clearErr := driver.Clear(); clearErr != nil {
+				return "", false, clearErr
+			}
+			if _, exists, readErr := backend.Get(driver.key(id)); readErr != nil {
+				return "", false, readErr
+			} else if exists {
+				return "", false, errors.New("清理完成后原记录仍在")
+			}
+			cleared = true
+		}
+		return "stale", false, nil
+	})
+	if !cleared || !errors.Is(err, cache.ErrCacheLockLost) {
+		t.Errorf("越过清理水位的旧更新应明确失败：cleared=%t err=%v", cleared, err)
 	}
-	time.Sleep(30 * time.Millisecond)
-	destroyDone := make(chan error, 1)
-	go func() {
-		destroyDone <- driver.Update("shared", func(string, bool) (string, bool, error) {
-			return "", true, nil
-		})
-	}()
-	time.Sleep(20 * time.Millisecond)
-	close(release)
-	if err := <-staleDone; err != nil && !errors.Is(err, cache.ErrCacheLockLost) {
-		t.Fatalf("旧更新返回非预期错误: %v", err)
+	if value, found, err := driver.Read(id); err != nil || found {
+		t.Errorf("旧更新复活了已清理 Session：%q %t %v", value, found, err)
 	}
-	if err := <-destroyDone; err != nil && !errors.Is(err, cache.ErrCacheLockLost) {
-		t.Fatalf("较新 Destroy 更新失败: %v", err)
-	}
-	if value, found, err := driver.Read("shared"); err != nil || found {
-		t.Fatalf("旧更新复活了已删除 Session: value=%q found=%t err=%v", value, found, err)
+	if value, found, err := backend.Get(driver.key(id)); err != nil || found {
+		t.Fatalf("底层仍残留旧更新的写入：%v %t %v", value, found, err)
 	}
 }
 

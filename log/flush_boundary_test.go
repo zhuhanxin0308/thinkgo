@@ -1,6 +1,71 @@
 package log
 
-import "testing"
+import (
+	"testing"
+	"testing/synctest"
+	"time"
+)
+
+// TestLogAsyncFlush 检查未满批次的日志只在第一个刷盘周期到达时交给驱动。
+func TestLogAsyncFlush(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const interval = time.Second
+		const pending = 3
+		driver := newMockDriver()
+		logger := NewLog(driver)
+		defer closeTestLogger(t, logger)
+		if err := logger.SetBufferSize(pending + 1); err != nil {
+			t.Fatal(err)
+		}
+		if err := logger.SetFlushInterval(interval); err != nil {
+			t.Fatal(err)
+		}
+		for range pending {
+			logger.Info("等待定时刷盘")
+		}
+		synctest.Wait()
+		time.Sleep(interval - time.Nanosecond)
+		synctest.Wait()
+		if got := driver.totalSavedCount(); got != 0 {
+			t.Fatalf("第一个周期尚未结束，已刷盘 %d 条", got)
+		}
+		time.Sleep(time.Nanosecond)
+		synctest.Wait()
+		if got := driver.totalSavedCount(); got != pending {
+			t.Fatalf("第一个周期到达时已刷盘 %d 条，期望 %d 条", got, pending)
+		}
+	})
+}
+
+// TestLogAsyncBufferFull 在虚拟时间不前进时验证第五条日志触发整批刷盘。
+func TestLogAsyncBufferFull(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const batchSize = 5
+		driver := newMockDriver()
+		logger := NewLog(driver)
+		defer closeTestLogger(t, logger)
+		if err := logger.SetBufferSize(batchSize); err != nil {
+			t.Fatal(err)
+		}
+		for range batchSize - 1 {
+			logger.Info("尚未满批")
+		}
+		synctest.Wait()
+		if got := driver.totalSavedCount(); got != 0 {
+			t.Fatalf("未满批时已刷盘 %d 条", got)
+		}
+		logger.Info("填满批次")
+		synctest.Wait()
+		if got := driver.totalSavedCount(); got != batchSize {
+			t.Fatalf("满批时已刷盘 %d 条，期望 %d 条", got, batchSize)
+		}
+		logger.Info("下一批首条")
+		synctest.Wait()
+		if got := driver.totalSavedCount(); got != batchSize {
+			t.Fatalf("下一批尚未填满，累计已刷盘 %d 条", got)
+		}
+	})
+}
 
 type replenishingFlushDriver struct {
 	logger *Log

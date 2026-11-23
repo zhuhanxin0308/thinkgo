@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/cleanup"
 	"github.com/zhuhanxin0308/thinkgo/v3/internal/resourceidentity"
 )
 
@@ -220,6 +221,7 @@ func (s *ContainerScope) close(ctx context.Context, done chan struct{}) {
 	state.lock.Unlock()
 
 	closed := make(map[resourceidentity.Identity]struct{}, len(instances))
+	closers := instances[:0]
 	for _, instance := range instances {
 		closer, ok := instance.(io.Closer)
 		if !ok || isNilServiceInstance(closer) {
@@ -231,7 +233,15 @@ func (s *ContainerScope) close(ctx context.Context, done chan struct{}) {
 			}
 			closed[identity] = struct{}{}
 		}
-		closeErr = errors.Join(closeErr, closeScopedServiceContext(ctx, closer))
+		closers = append(closers, closer)
+	}
+	// 沿用已确定的逆序和去重结果，先登记完整 defer 链；一个关闭器 Goexit
+	// 也会继续执行余下资源，最后才由上方的完成 defer 发布结果。
+	for index := len(closers) - 1; index >= 0; index-- {
+		closer := closers[index].(io.Closer)
+		defer cleanup.Run(&closeErr, "作用域服务关闭", func() error {
+			return closeScopedServiceContext(ctx, closer)
+		})
 	}
 }
 

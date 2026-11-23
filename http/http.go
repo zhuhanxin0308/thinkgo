@@ -18,6 +18,7 @@ import (
 	"github.com/zhuhanxin0308/thinkgo/v3/context"
 	"github.com/zhuhanxin0308/thinkgo/v3/event"
 	"github.com/zhuhanxin0308/thinkgo/v3/exception"
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/cleanup"
 	frameworkLog "github.com/zhuhanxin0308/thinkgo/v3/log"
 	"github.com/zhuhanxin0308/thinkgo/v3/metrics"
 	"github.com/zhuhanxin0308/thinkgo/v3/middleware"
@@ -513,9 +514,6 @@ func (h *Http) finishRequest(state *requestServeState, recovered interface{}) {
 	}
 	defer cancelEnd()
 	requestErr := state.transmissionErr
-	if recovered != nil && recovered != http.ErrAbortHandler {
-		requestErr = fmt.Errorf("HTTP 请求 panic: %v", recovered)
-	}
 	// 指标和服务端 Span 必须覆盖完整请求生命周期，但不能被扩展回调的
 	// panic 绕过；请求收尾自身有独立截止时间，因此该 defer 最终必定执行。
 	defer func() {
@@ -537,7 +535,12 @@ func (h *Http) finishRequest(state *requestServeState, recovered interface{}) {
 			}
 		}
 	}()
+	// 异常渲染、响应提交和访问日志都可能调用扩展；先登记收尾，再执行这些步骤。
+	defer func() {
+		requestErr = errors.Join(requestErr, h.endServedRequest(endContext, state, boundedEnd))
+	}()
 	if recovered != nil && recovered != http.ErrAbortHandler {
+		requestErr = fmt.Errorf("HTTP 请求 panic: %v", recovered)
 		if !state.statusWriter.Written() {
 			state.statusWriter.ResetUncommitted()
 			if state.compressionWriter != nil {
@@ -607,6 +610,9 @@ func (h *Http) finishRequest(state *requestServeState, recovered interface{}) {
 	if accessLogErr != nil {
 		requestErr = errors.Join(requestErr, wrapRequestEndError("访问日志入队", accessLogErr))
 	}
+}
+
+func (h *Http) endServedRequest(endContext stdcontext.Context, state *requestServeState, boundedEnd bool) error {
 	terminatorResponse := state.response
 	// 文件、流和提交钩子都可能在 Send 内改变最终状态，结束阶段统一使用真实传输结果。
 	if terminatorResponse != nil && state.statusWriter.Written() {
@@ -616,22 +622,17 @@ func (h *Http) finishRequest(state *requestServeState, recovered interface{}) {
 		terminatorResponse = context.NewResponse().ObserveTransmission(state.statusWriter.Status(), state.statusWriter.Hijacked())
 		h.rememberRequestEndState(terminatorResponse, state.req)
 	}
-	if terminatorResponse != nil {
-		var endErr error
-		if boundedEnd {
-			endErr = h.endWithContext(endContext, terminatorResponse)
-		} else {
-			endErr = h.endRequestInline(terminatorResponse)
-		}
-		requestErr = errors.Join(requestErr, endErr)
-		if endErr != nil {
-			if boundedEnd {
-				requestErr = errors.Join(requestErr, h.logHTTPErrorContext(endContext, "HTTP 请求收尾失败", endErr))
-			} else {
-				requestErr = errors.Join(requestErr, h.logHTTPErrorNonBlocking("HTTP 请求收尾失败", endErr))
-			}
-		}
+	if terminatorResponse == nil {
+		return nil
 	}
+	if boundedEnd {
+		if err := h.endWithContext(endContext, terminatorResponse); err != nil {
+			return errors.Join(err, h.logHTTPErrorContext(endContext, "HTTP 请求收尾失败", err))
+		}
+	} else if err := h.endRequestInline(terminatorResponse); err != nil {
+		return errors.Join(err, h.logHTTPErrorNonBlocking("HTTP 请求收尾失败", err))
+	}
+	return nil
 }
 
 // ensureRouteFrozen 在启动阶段或直接 ServeHTTP 的首个请求中冻结路由，成功后仅执行原子读。
@@ -800,18 +801,25 @@ func (h *Http) runTerminators(
 	req *context.Request,
 	resp *context.Response,
 	terminators []middleware.TerminationCallback,
-) error {
-	var terminateErr error
-	for index, callback := range terminators {
-		err := invokeRequestTerminator(ctx, callback, req, resp)
-		if err != nil {
-			terminateErr = errors.Join(
-				terminateErr,
-				fmt.Errorf("第 %d 个 HTTP terminate 回调失败: %w", index+1, err),
-			)
+	next int,
+	result *error,
+) {
+	// 正常完成时只迭代一次；当前协程提前退出时，defer 接续尚未执行的回调。
+	defer func() {
+		if next < len(terminators) {
+			h.runTerminators(ctx, req, resp, terminators, next, result)
 		}
+	}()
+	for next < len(terminators) {
+		index := next
+		next++
+		cleanup.Run(result, "HTTP terminate 回调", func() error {
+			if err := invokeRequestTerminator(ctx, terminators[index], req, resp); err != nil {
+				return fmt.Errorf("第 %d 个 HTTP terminate 回调失败: %w", index+1, err)
+			}
+			return nil
+		})
 	}
-	return terminateErr
 }
 
 func invokeRequestTerminator(

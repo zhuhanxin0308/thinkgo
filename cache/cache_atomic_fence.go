@@ -46,23 +46,25 @@ func (c *Cache) withFreshAtomicFence(ctx context.Context, driver Driver, key str
 func decodeAtomicCacheValue(raw interface{}, found bool, generation, started, invalidation uint64) (interface{}, bool, uint64, error) {
 	origin := started
 	var value interface{}
+	var storedGeneration uint64
 	if found {
 		decoded, currentGeneration, currentOrigin, _, err := decodeCacheValueFence(raw)
 		if err != nil {
 			return nil, false, origin, err
 		}
-		if generation > 0 && currentGeneration >= generation {
-			return nil, false, origin, errCacheAtomicFenceStale
-		}
-		if invalidation == 0 || currentOrigin > invalidation {
+		storedGeneration = currentGeneration
+		if !cacheOriginInvalidated(currentOrigin, invalidation) {
 			value = decoded
 			origin = max(origin, currentOrigin)
 		} else {
 			found = false
 		}
 	}
-	if invalidation > origin {
+	if cacheOriginInvalidated(origin, invalidation) {
 		return nil, false, origin, ErrCacheLockLost
+	}
+	if generation > 0 && storedGeneration >= generation {
+		return nil, false, origin, errCacheAtomicFenceStale
 	}
 	return value, found, origin, nil
 }

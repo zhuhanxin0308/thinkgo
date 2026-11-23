@@ -1,7 +1,6 @@
 package http
 
 import (
-	stdcontext "context"
 	stdhttp "net/http"
 	"testing"
 
@@ -44,7 +43,7 @@ func TestRequestEndAllocationTracksDynamicListeners(t *testing.T) {
 	}}); err != nil {
 		t.Fatalf("添加监听器失败: %v", err)
 	}
-	if err := handler.runRequestEndLifecycle(stdcontext.Background(), response, nil); err != nil {
+	if err := handler.endRequestInline(response); err != nil {
 		t.Fatalf("事件收尾失败: %v", err)
 	}
 	if calls != 1 {
@@ -63,7 +62,7 @@ func assertRequestEndWithoutAllocation(t *testing.T, handler *Http) {
 	t.Helper()
 	response := fwcontext.NewResponse()
 	allocations := testing.AllocsPerRun(requestEndAllocationSamples, func() {
-		if err := handler.runRequestEndLifecycle(stdcontext.Background(), response, nil); err != nil {
+		if err := handler.endRequestInline(response); err != nil {
 			t.Fatalf("无扩展收尾失败: %v", err)
 		}
 	})

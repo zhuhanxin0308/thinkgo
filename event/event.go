@@ -11,6 +11,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"unicode"
+
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/cleanup"
 )
 
 const maxEventNameBytes = 256
@@ -560,7 +562,10 @@ func (d *Dispatcher) DispatchTerminalContext(ctx context.Context, currentEvent E
 	}
 	result := make(chan error, 1)
 	go func() {
-		result <- dispatchTerminalListeners(ctx, eventName, currentEvent, listeners)
+		var dispatchErr error
+		// 监听器可通过 Goexit 结束监督协程，所有收尾完成后仍须唤醒等待者。
+		defer func() { result <- dispatchErr }()
+		dispatchTerminalListeners(ctx, eventName, currentEvent, listeners, &dispatchErr)
 	}()
 	select {
 	case dispatchErr := <-result:
@@ -577,12 +582,18 @@ func (d *Dispatcher) DispatchTerminalContext(ctx context.Context, currentEvent E
 
 // DispatchTerminalSerialContext 同步串行分发终止事件。它把 ctx 原样传给上下文监听器，
 // 但不会把取消当作跳过剩余监听器的信号；调用方必须在自己的监督任务中使用该原语。
-func (d *Dispatcher) DispatchTerminalSerialContext(ctx context.Context, currentEvent Event) error {
+func (d *Dispatcher) DispatchTerminalSerialContext(ctx context.Context, currentEvent Event) (err error) {
+	ctx, result := cleanup.UnwrapTerminalResult(ctx)
+	if result != nil {
+		// Goexit 会跳过 return，但所有监听器收尾后仍可把错误交给同栈的监督者。
+		defer func() { *result = err }()
+	}
 	eventName, listeners, err := d.prepareTerminalDispatch(ctx, currentEvent)
 	if err != nil {
 		return err
 	}
-	return dispatchTerminalListeners(ctx, eventName, currentEvent, listeners)
+	dispatchTerminalListeners(ctx, eventName, currentEvent, listeners, &err)
+	return err
 }
 
 func (d *Dispatcher) prepareTerminalDispatch(
@@ -610,19 +621,25 @@ func dispatchTerminalListeners(
 	eventName string,
 	currentEvent Event,
 	listeners []listenerEntry,
-) error {
+	result *error,
+) {
 	var failures []error
-	for index, entry := range listeners {
-		if listenerErr := safeHandleContext(ctx, entry.listener, currentEvent); listenerErr != nil {
-			failures = append(failures, fmt.Errorf(
-				"终止分发事件 %q 的第 %d 个监听器失败: %w",
-				eventName,
-				index+1,
-				listenerErr,
-			))
-		}
+	defer func() { *result = errors.Join(failures...) }()
+	handle := func(index int) {
+		var listenerErr error
+		defer func() {
+			if listenerErr != nil {
+				failures = append(failures, fmt.Errorf("终止分发事件 %q 的第 %d 个监听器失败: %w", eventName, index+1, listenerErr))
+			}
+		}()
+		cleanup.Run(&listenerErr, "终止监听器", func() error {
+			return safeHandleContext(ctx, listeners[index].listener, currentEvent)
+		})
 	}
-	return errors.Join(failures...)
+	// 从末项登记，让每个监听器按原优先级执行，即使前项结束协程也仍在同一协程收尾。
+	for index := len(listeners) - 1; index >= 0; index-- {
+		defer handle(index)
+	}
 }
 
 // DispatchProjectContext 只向项目级监听器分发事件，用于 ThinkPHP 多应用

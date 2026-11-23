@@ -231,25 +231,35 @@ func (c *Cache) compactScopeBucketAtFence(ctx context.Context, driver Driver, ke
 
 // invalidationForKey 合并整 store、当前键与匹配前缀的水位，其他键的失效不参与判定。
 func (c *Cache) invalidationForKey(ctx context.Context, driver Driver, key string) (uint64, error) {
+	state, err := c.readKeyInvalidation(ctx, driver, key, 0, 0)
+	return state.highest, err
+}
+
+type keyInvalidationState struct {
+	highest uint64
+	reused  bool
+}
+
+func (c *Cache) readKeyInvalidation(ctx context.Context, driver Driver, key string, origin, commit uint64) (keyInvalidationState, error) {
 	raw, found, err := getCacheValueContext(ctx, driver, c.keyInvalidationBucketKey(keyInvalidationBucket(key)))
 	if err != nil {
-		return 0, err
+		return keyInvalidationState{}, err
 	}
 	exact, err := exactKeyInvalidation(raw, found, key)
 	if err != nil {
-		return 0, err
+		return keyInvalidationState{}, err
 	}
 	raw, found, err = getCacheValueContext(ctx, driver, c.scopedInvalidationKey())
 	if err != nil {
-		return 0, err
+		return keyInvalidationState{}, err
 	}
 	watermarks, err := scopeWatermarks(raw, found)
 	if err != nil {
-		return 0, err
+		return keyInvalidationState{}, err
 	}
 	// 先读取范围，再读取全局水位；Flush 先发布全局水位再压缩范围，读取不能落入两者之间的空窗。
 	global, err := c.currentInvalidationGeneration(ctx, driver)
-	return max(exact, matchingPrefixInvalidation(watermarks, key), global), err
+	return summarizeKeyInvalidation(key, exact, global, watermarks, origin, commit), err
 }
 
 func exactKeyInvalidation(raw interface{}, found bool, key string) (uint64, error) {
@@ -266,15 +276,24 @@ func exactKeyInvalidation(raw interface{}, found bool, key string) (uint64, erro
 	return 0, nil
 }
 
-func matchingPrefixInvalidation(watermarks map[string]interface{}, key string) uint64 {
-	var maximum uint64
+// 较高水位决定可见性，但不能抹去仍在同一键的其他适用范围中观察到的重号。
+func summarizeKeyInvalidation(key string, exact, global uint64, watermarks map[string]interface{}, origin, commit uint64) keyInvalidationState {
+	var state keyInvalidationState
+	observe := func(watermark uint64) {
+		state.highest = max(state.highest, watermark)
+		if watermark > 0 && (watermark == origin || watermark == commit) {
+			state.reused = true
+		}
+	}
+	observe(exact)
+	observe(global)
 	for scope, value := range watermarks {
 		if prefix, isPrefix := strings.CutPrefix(scope, prefixInvalidationScopePrefix); isPrefix && strings.HasPrefix(key, prefix) {
 			generation, _ := parseFenceGenerationValue(value)
-			maximum = max(maximum, generation)
+			observe(generation)
 		}
 	}
-	return maximum
+	return state
 }
 
 // visibleCacheValue 在读取边界屏蔽迟到旧写者，不能依赖仍可能暂停的写者自行回滚。
@@ -296,10 +315,15 @@ func visibleCacheValueAtFence(raw interface{}, invalidationForKey func() (uint64
 	if err != nil {
 		return nil, false, err
 	}
-	if invalidation > 0 && generation <= invalidation {
+	if cacheOriginInvalidated(generation, invalidation) {
 		return nil, false, nil
 	}
 	return value, true, nil
+}
+
+// cacheOriginInvalidated 统一读写对来源代际的判定；零水位仍允许升级前的裸值。
+func cacheOriginInvalidated(origin, watermark uint64) bool {
+	return watermark > 0 && origin <= watermark
 }
 
 func (c *Cache) getVisibleCacheValue(ctx context.Context, driver Driver, key string) (interface{}, bool, error) {

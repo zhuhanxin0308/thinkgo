@@ -85,15 +85,8 @@ func (c *Cache) UpdateContext(ctx context.Context, key string, ttl time.Duration
 			return false, err
 		}
 		if generation > 0 {
-			current, fenceErr := c.invalidationForKey(ctx, driver, key)
-			if fenceErr != nil {
-				return false, fenceErr
-			}
-			if current > committedOrigin {
-				if !removed {
-					fenceErr = c.deleteExactGenerationContext(context.WithoutCancel(ctx), driver, key, generation)
-				}
-				return false, errors.Join(ErrCacheLockLost, fenceErr)
+			if err := c.verifyAtomicFenceCommitContext(ctx, driver, key, generation, committedOrigin, removed); err != nil {
+				return false, err
 			}
 		}
 		if !removed || !cleanMetadata {

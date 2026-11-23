@@ -13,16 +13,12 @@ func TestLogChannelsAreIsolated(t *testing.T) {
 
 	logger := NewLog(defaultDriver)
 	sqlChannel := NewLog(sqlDriver)
-	sqlChannel.SetFlushInterval(50 * time.Millisecond)
 	if err := logger.RegisterChannel("sql", sqlChannel); err != nil {
 		t.Fatalf("注册 SQL 日志通道失败: %v", err)
 	}
-	logger.SetFlushInterval(50 * time.Millisecond)
-
 	logger.Info("default")
 	logger.Channel("sql").Info("sql")
 
-	time.Sleep(100 * time.Millisecond)
 	if err := logger.Close(); err != nil {
 		t.Fatalf("关闭日志通道失败: %v", err)
 	}

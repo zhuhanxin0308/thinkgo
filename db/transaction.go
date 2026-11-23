@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/cleanup"
 )
 
 type transactionState uint8
@@ -145,30 +147,20 @@ func (db *DB) TransactionContext(ctx context.Context, fn func(tx *Tx) error) err
 		return err
 	}
 
-	callbackReturned := false
-	defer func() {
-		recovered := recover()
-		// Goexit 执行 defer 但 recover 返回 nil；不能只在 panic 时回收事务租约。
-		if recovered != nil || !callbackReturned {
+	return cleanup.Call(func() error {
+		if callbackErr := fn(transaction); callbackErr != nil {
+			return errors.Join(callbackErr, transaction.rollbackAfterCallback())
+		}
+		return transaction.commitAfterCallback()
+	}, func(panicked bool) {
+		if rollbackErr := transaction.rollbackAfterCallback(); rollbackErr != nil && !errors.Is(rollbackErr, ErrTransactionDone) {
 			operation := "rollback_after_callback_exit"
-			if recovered != nil {
+			if panicked {
 				operation = "rollback_after_panic"
 			}
-			if rollbackErr := transaction.rollbackAfterCallback(); rollbackErr != nil && !errors.Is(rollbackErr, ErrTransactionDone) {
-				_ = db.reportError(operation, rollbackErr, nil)
-			}
+			_ = db.reportError(operation, rollbackErr, nil)
 		}
-		if recovered != nil {
-			panic(recovered)
-		}
-	}()
-
-	callbackErr := fn(transaction)
-	callbackReturned = true
-	if callbackErr != nil {
-		return errors.Join(callbackErr, transaction.rollbackAfterCallback())
-	}
-	return transaction.commitAfterCallback()
+	})
 }
 
 func (t *Tx) Commit() error {

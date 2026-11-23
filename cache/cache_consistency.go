@@ -176,7 +176,7 @@ func (c *Cache) changeCounterWithFence(driver Driver, key string, step int64, su
 		if err != nil {
 			return err
 		}
-		return c.verifyAtomicFenceCommitContext(context.Background(), driver, key, generation, committedOrigin)
+		return c.verifyAtomicFenceCommitContext(context.Background(), driver, key, generation, committedOrigin, false)
 	})
 	return value, resultErr
 }

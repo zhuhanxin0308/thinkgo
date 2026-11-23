@@ -401,6 +401,10 @@ func (c *Cache) writeFencedCacheValuesContext(ctx context.Context, driver Driver
 	if err != nil {
 		return err
 	}
+	// 在写第一项之前检查整批，已存在的失效水位不能让无关键留下部分提交。
+	if _, err := c.checkBatchWriteFence(ctx, driver, keys, values, generation); err != nil {
+		return err
+	}
 	committed := make([]cacheBatchSnapshot, 0, len(keys))
 	for _, key := range keys {
 		snapshot := cacheBatchSnapshot{key: key}
@@ -426,54 +430,58 @@ func (c *Cache) writeFencedCacheValuesContext(ctx context.Context, driver Driver
 			break
 		}
 	}
+	if len(committed) == 0 {
+		return err
+	}
 	if err == nil {
-		for _, snapshot := range committed {
-			latestInvalidation, fenceErr := c.invalidationForKey(ctx, driver, snapshot.key)
-			if fenceErr != nil {
-				err = fenceErr
-				break
-			}
-			if latestInvalidation > generation {
-				err = ErrCacheLockLost
-				break
-			}
+		var status batchFenceStatus
+		status, err = c.checkBatchWriteFence(ctx, driver, keys, values, generation)
+		// 已发现代际重号，其他键上相同票号、值和 TTL 也无法证明属于本批。
+		if status == batchFenceReused || err == nil {
+			return err
 		}
 	}
-	if err == nil {
-		return nil
+	cleanupCtx := context.WithoutCancel(ctx)
+	// 提交应答丢失或调用被取消时，补偿前仍须核验水位，不能仅凭提交票认领值。
+	if status, fenceErr := c.checkBatchWriteFence(cleanupCtx, driver, keys, values, generation); status != batchFenceChecked {
+		return errors.Join(err, fenceErr)
 	}
 	for index := len(committed) - 1; index >= 0; index-- {
-		err = errors.Join(err, rollbackCacheBatchSnapshot(context.WithoutCancel(ctx), updater, committed[index], generation))
+		err = errors.Join(err, rollbackCacheBatchSnapshot(cleanupCtx, updater, committed[index], generation))
 	}
 	return err
 }
 
 func (c *Cache) verifyFenceCommitContext(ctx context.Context, driver Driver, key string, generation uint64) error {
-	return c.verifyAtomicFenceCommitContext(ctx, driver, key, generation, generation)
+	return c.verifyAtomicFenceCommitContext(ctx, driver, key, generation, generation, false)
 }
 
-func (c *Cache) verifyAtomicFenceCommitContext(ctx context.Context, driver Driver, key string, generation, origin uint64) error {
-	current, err := c.invalidationForKey(ctx, driver, key)
+func (c *Cache) verifyAtomicFenceCommitContext(ctx context.Context, driver Driver, key string, generation, origin uint64, removed bool) error {
+	state, err := c.readKeyInvalidation(ctx, driver, key, origin, generation)
 	if err != nil {
 		return err
 	}
-	if current <= origin {
+	if !cacheOriginInvalidated(origin, state.highest) {
 		return nil
 	}
-	cleanupErr := c.deleteExactGenerationContext(context.WithoutCancel(ctx), driver, key, generation)
+	// 水位与来源或提交票重号时，现有票号不能证明写入者身份；失效值已受读屏障保护。
+	if state.reused || removed {
+		return ErrCacheLockLost
+	}
+	cleanupErr := c.deleteExactGenerationContext(context.WithoutCancel(ctx), driver, key, generation, origin)
 	return errors.Join(ErrCacheLockLost, cleanupErr)
 }
 
-func (c *Cache) deleteExactGenerationContext(ctx context.Context, driver Driver, key string, generation uint64) error {
+func (c *Cache) deleteExactGenerationContext(ctx context.Context, driver Driver, key string, generation, origin uint64) error {
 	err := atomicUpdateCacheValueContext(ctx, driver, key, 0, func(raw interface{}, found bool) (interface{}, bool, error) {
 		if !found {
 			return nil, false, errCacheFenceNoChange
 		}
-		_, currentGeneration, enveloped, decodeErr := decodeCacheValueEnvelope(raw)
+		_, currentGeneration, currentOrigin, enveloped, decodeErr := decodeCacheValueFence(raw)
 		if decodeErr != nil {
 			return nil, false, decodeErr
 		}
-		if !enveloped || currentGeneration != generation {
+		if !enveloped || currentGeneration != generation || currentOrigin != origin {
 			return nil, false, errCacheFenceNoChange
 		}
 		return nil, true, nil

@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/cleanup"
 )
 
 // PinnedSQLConnection 表示在 callback 生命周期内固定到同一物理 SQL 会话的原生执行器。
@@ -33,7 +35,7 @@ type pinnedSQLConnection struct {
 
 // WithPinnedSQLConnection 在一个受 DB 生命周期租约保护的物理 SQL 连接上执行 callback。
 // callback 返回、panic 或上下文取消后都会先停止新操作，再安全归还或丢弃物理连接。
-func (database *DB) WithPinnedSQLConnection(ctx context.Context, callback func(PinnedSQLConnection) error) (resultErr error) {
+func (database *DB) WithPinnedSQLConnection(ctx context.Context, callback func(PinnedSQLConnection) error) error {
 	if database == nil {
 		return ErrDatabaseUnavailable
 	}
@@ -65,32 +67,22 @@ func (database *DB) WithPinnedSQLConnection(ctx context.Context, callback func(P
 	}
 	defer release()
 
-	callbackReturned := false
-	defer func() {
-		recovered := recover()
-		// 清理必须属于拥有连接的栈帧；Goexit 不会返回到回调之后的普通语句。
-		if recovered != nil || !callbackReturned {
-			pinned.Invalidate()
+	resultErr := cleanup.Call(func() error {
+		return callback(pinned)
+	}, func(panicked bool) {
+		pinned.Invalidate()
+		if cleanupErr := pinned.finish(); cleanupErr != nil {
 			operation := "pinned_cleanup_after_callback_exit"
-			if recovered != nil {
+			if panicked {
 				operation = "pinned_cleanup_after_panic"
 			}
-			if cleanupErr := pinned.finish(); cleanupErr != nil {
-				_ = database.reportError(operation, cleanupErr, nil)
-			}
-			if recovered != nil {
-				panic(recovered)
-			}
-			return
+			_ = database.reportError(operation, cleanupErr, nil)
 		}
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			resultErr = errors.Join(resultErr, ctxErr)
-		}
-		resultErr = errors.Join(resultErr, pinned.finish())
-	}()
-	resultErr = callback(pinned)
-	callbackReturned = true
-	return resultErr
+	})
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		resultErr = errors.Join(resultErr, ctxErr)
+	}
+	return errors.Join(resultErr, pinned.finish())
 }
 
 func normalizePinnedDialect(dialect string) string {
@@ -184,7 +176,7 @@ func (connection *pinnedSQLConnection) ExecuteContext(ctx context.Context, rawSQ
 	return result.RowsAffected()
 }
 
-func (connection *pinnedSQLConnection) TransactionContext(ctx context.Context, callback func(ContextualRawQueryable) error) (resultErr error) {
+func (connection *pinnedSQLConnection) TransactionContext(ctx context.Context, callback func(ContextualRawQueryable) error) error {
 	if ctx == nil || callback == nil {
 		return fmt.Errorf("%w: pinned 事务上下文和回调不能为空", ErrInvalidTransaction)
 	}
@@ -197,35 +189,27 @@ func (connection *pinnedSQLConnection) TransactionContext(ctx context.Context, c
 		return err
 	}
 	transaction := &pinnedSQLTransaction{handle: handle, connection: connection.connection, owner: connection}
-	callbackReturned := false
-	defer func() {
-		recovered := recover()
-		if recovered != nil || !callbackReturned {
+	return cleanup.Call(func() error {
+		if callbackErr := callback(transaction); callbackErr != nil {
 			transaction.close()
+			return errors.Join(callbackErr, handle.Rollback())
+		}
+		if ownerErr := connection.usable(); ownerErr != nil {
+			transaction.close()
+			return errors.Join(ownerErr, handle.Rollback())
+		}
+		transaction.close()
+		return handle.Commit()
+	}, func(panicked bool) {
+		transaction.close()
+		if rollbackErr := handle.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
 			operation := "pinned_rollback_after_callback_exit"
-			if recovered != nil {
+			if panicked {
 				operation = "pinned_rollback_after_panic"
 			}
-			if rollbackErr := handle.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
-				_ = connection.database.reportError(operation, rollbackErr, nil)
-			}
+			_ = connection.database.reportError(operation, rollbackErr, nil)
 		}
-		if recovered != nil {
-			panic(recovered)
-		}
-	}()
-	callbackErr := callback(transaction)
-	callbackReturned = true
-	if callbackErr != nil {
-		transaction.close()
-		return errors.Join(callbackErr, handle.Rollback())
-	}
-	if ownerErr := connection.usable(); ownerErr != nil {
-		transaction.close()
-		return errors.Join(ownerErr, handle.Rollback())
-	}
-	transaction.close()
-	return handle.Commit()
+	})
 }
 
 func (connection *pinnedSQLConnection) finish() error {

@@ -3,10 +3,16 @@ package event
 import (
 	"context"
 	"errors"
+	"net/http"
+	"runtime"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
+
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/cleanup"
 )
 
 const (
@@ -24,6 +30,147 @@ func (listener *terminalContextListener) Handle(Event) error {
 
 func (listener *terminalContextListener) HandleContext(ctx context.Context, currentEvent Event) error {
 	return listener.handle(ctx, currentEvent)
+}
+
+// 终止监听器即使连续异常退出，也要在原协程按序收尾，监督入口须在最后一项完成后发布结果。
+func TestTerminalDispatchContinuesAfterGoexit(t *testing.T) {
+	for _, mode := range []string{"serial", "supervised"} {
+		t.Run(mode, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				dispatcher := NewDispatcher()
+				firstErr, lastErr := errors.New("先前错误"), errors.New("末项错误")
+				releaseLast := make(chan struct{})
+				var order []string
+				for _, name := range []string{"先前错误", "退出", "panic", "再次退出", "末项错误"} {
+					if err := dispatcher.Listen(EventHttpEnd, &SimpleListener{Handler: func(Event) error {
+						order = append(order, name)
+						switch name {
+						case "先前错误":
+							return firstErr
+						case "退出", "再次退出":
+							defer func() { order = append(order, "回调已收尾") }()
+							runtime.Goexit()
+						case "panic":
+							panic("监听器 panic")
+						case "末项错误":
+							<-releaseLast
+							return lastErr
+						}
+						return nil
+					}}); err != nil {
+						t.Fatal(err)
+					}
+				}
+
+				var result error
+				returned := false
+				finished := make(chan struct{})
+				go func() {
+					defer close(finished)
+					end := NewHttpEndEvent(http.StatusOK)
+					if mode == "serial" {
+						result = dispatcher.DispatchTerminalSerialContext(ctx, end)
+					} else {
+						result = dispatcher.DispatchTerminalContext(ctx, end)
+					}
+					returned = true
+				}()
+				synctest.Wait()
+				select {
+				case <-finished:
+					t.Error("最后一个监听器仍在等待，终止分发却已结束")
+				default:
+				}
+				close(releaseLast)
+				synctest.Wait()
+				select {
+				case <-finished:
+				default:
+					t.Fatal("所有监听器均已解除阻塞，终止分发仍未结束")
+				}
+				want := []string{"先前错误", "退出", "回调已收尾", "panic", "再次退出", "回调已收尾", "末项错误"}
+				if !slices.Equal(order, want) {
+					t.Errorf("监听器执行顺序为 %v，期望 %v", order, want)
+				}
+				if returned != (mode == "supervised") {
+					t.Errorf("原调用协程的退出语义改变：returned=%t", returned)
+				}
+				if mode == "supervised" && (!errors.Is(result, cleanup.ErrAborted) || !errors.Is(result, ErrEventCallbackPanic) ||
+					!errors.Is(result, firstErr) || !errors.Is(result, lastErr)) {
+					t.Errorf("监督结果缺少监听器的失败原因：%v", result)
+				}
+			})
+		})
+	}
+}
+
+// 串行监督者在原协程退出后也能收到本次分发的错误，监听器只接收原上下文。
+func TestTerminalSerialPublishesOwnResultAfterListenersFinish(t *testing.T) {
+	type contextKey struct{}
+	for _, exits := range []bool{false, true} {
+		mode := "return"
+		if exits {
+			mode = "goexit"
+		}
+		t.Run(mode, func(t *testing.T) {
+			original, cancel := context.WithTimeout(context.WithValue(t.Context(), contextKey{}, mode), terminalListenerWait)
+			defer cancel()
+			deadline, _ := original.Deadline()
+			firstErr, lastErr := errors.New("首个监听器失败"), errors.New("末个监听器失败")
+			nestedErr := errors.New("嵌套事件失败")
+			unpublished := errors.New("尚未发布")
+			published := unpublished
+			dispatcher := NewDispatcher()
+			if err := dispatcher.Listen("nested", &SimpleListener{Handler: func(Event) error { return nestedErr }}); err != nil {
+				t.Fatal(err)
+			}
+			if err := dispatcher.Listen(EventHttpEnd, &SimpleListener{Handler: func(Event) error { return firstErr }}); err != nil {
+				t.Fatal(err)
+			}
+			if err := dispatcher.Listen(EventHttpEnd, &terminalContextListener{handle: func(ctx context.Context, _ Event) error {
+				receivedDeadline, hasDeadline := ctx.Deadline()
+				if ctx != original || ctx.Value(contextKey{}) != mode || !hasDeadline || !receivedDeadline.Equal(deadline) {
+					t.Error("终止监听器没有收到原始上下文")
+				}
+				err := dispatcher.DispatchTerminalSerialContext(ctx, NewEvent("nested", nil))
+				if !errors.Is(err, nestedErr) || published != unpublished {
+					t.Errorf("嵌套分发改写了外层结果：nested=%v，outer=%v", err, published)
+				}
+				if exits {
+					runtime.Goexit()
+				}
+				return nil
+			}}); err != nil {
+				t.Fatal(err)
+			}
+			if err := dispatcher.Listen(EventHttpEnd, &SimpleListener{Handler: func(Event) error {
+				if published != unpublished {
+					t.Error("末个监听器运行前已发布分发结果")
+				}
+				return lastErr
+			}}); err != nil {
+				t.Fatal(err)
+			}
+
+			finished := make(chan struct{})
+			var returned error
+			go func() {
+				defer close(finished)
+				ctx := cleanup.WithTerminalResult(original, &published)
+				returned = dispatcher.DispatchTerminalSerialContext(ctx, NewHttpEndEvent(http.StatusOK))
+			}()
+			<-finished
+			if !errors.Is(published, firstErr) || !errors.Is(published, lastErr) || errors.Is(published, nestedErr) ||
+				errors.Is(published, cleanup.ErrAborted) != exits {
+				t.Errorf("监督者未获得本次分发的完整结果：%v", published)
+			}
+			if exits && returned != nil || !exits && returned != published {
+				t.Errorf("分发返回的结果错误：%v", returned)
+			}
+		})
+	}
 }
 
 // TestDispatcherDispatchTerminalContextPreservesSequentialOrderAfterDeadline 验证不感知

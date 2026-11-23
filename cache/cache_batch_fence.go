@@ -11,9 +11,52 @@ func (c *Cache) batchInvalidationReader(ctx context.Context, driver Driver, valu
 	if !cacheDriverSupportsAtomicFencing(driver) {
 		return func(string) (uint64, error) { return 0, nil }, nil
 	}
+	read, err := c.readBatchWatermarks(ctx, driver, values, 0)
+	if err != nil {
+		return nil, err
+	}
+	return func(key string) (uint64, error) {
+		state, err := read(key)
+		return state.highest, err
+	}, nil
+}
+
+type batchFenceStatus uint8
+
+const (
+	batchFenceUnreadable batchFenceStatus = iota
+	batchFenceChecked
+	batchFenceReused
+)
+
+// checkBatchWriteFence 识别重号时需要检查整批，某个键的较高水位不能掩盖另一键的等值水位。
+func (c *Cache) checkBatchWriteFence(ctx context.Context, driver Driver, keys []string, values map[string]interface{}, generation uint64) (batchFenceStatus, error) {
+	read, err := c.readBatchWatermarks(ctx, driver, values, generation)
+	if err != nil {
+		return batchFenceUnreadable, err
+	}
+	var stale error
+	for _, key := range keys {
+		state, err := read(key)
+		if err != nil {
+			return batchFenceUnreadable, err
+		}
+		if state.reused {
+			return batchFenceReused, ErrCacheLockLost
+		}
+		if cacheOriginInvalidated(generation, state.highest) {
+			stale = ErrCacheLockLost
+		}
+	}
+	return batchFenceChecked, stale
+}
+
+func (c *Cache) readBatchWatermarks(ctx context.Context, driver Driver, values map[string]interface{}, ticket uint64) (func(string) (keyInvalidationState, error), error) {
 	batch, ok := driver.(strictBatchGetter)
 	if !ok || len(values) == 0 {
-		return func(key string) (uint64, error) { return c.invalidationForKey(ctx, driver, key) }, nil
+		return func(key string) (keyInvalidationState, error) {
+			return c.readKeyInvalidation(ctx, driver, key, ticket, ticket)
+		}, nil
 	}
 	var buckets [cacheInvalidationBuckets]bool
 	keys := make([]string, 0, min(len(values), cacheInvalidationBuckets)+2)
@@ -42,9 +85,9 @@ func (c *Cache) batchInvalidationReader(ctx context.Context, driver Driver, valu
 			return nil, err
 		}
 	}
-	return func(key string) (uint64, error) {
+	return func(key string) (keyInvalidationState, error) {
 		raw, exists := fences[c.keyInvalidationBucketKey(keyInvalidationBucket(key))]
 		exact, err := exactKeyInvalidation(raw, exists, key)
-		return max(exact, matchingPrefixInvalidation(prefixes, key), global), err
+		return summarizeKeyInvalidation(key, exact, global, prefixes, ticket, ticket), err
 	}, nil
 }

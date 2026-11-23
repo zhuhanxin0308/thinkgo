@@ -53,8 +53,16 @@ func (store *DatabaseStore) withMigrationSession(ctx context.Context, session db
 			return false, err
 		}
 		bound.fencingToken = token
-		// callback 返回错误时仍需提交其已经持久化的 failed/applying journal。
-		return true, callback(bound)
+		callbackErr := callback(bound)
+		if cleanupErr := bound.sqliteSavepointFailure(); cleanupErr != nil {
+			// 业务层可能捕获 panic 或忽略返回错误；保存点清理不确定时仍必须回滚整笔事务。
+			if !errors.Is(callbackErr, cleanupErr) {
+				callbackErr = errors.Join(callbackErr, cleanupErr)
+			}
+			return false, callbackErr
+		}
+		// 保存点成功回滚的业务错误仍需提交其已经持久化的 failed/applying journal。
+		return true, callbackErr
 	})
 }
 
@@ -106,18 +114,14 @@ func (store *DatabaseStore) withAcquiredMigrationSession(
 	}
 
 	safeSQLiteCommit := false
+	callbackReturned := false
 	defer func() {
 		cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), migrationCleanupTimeout)
 		defer cancelCleanup()
-		if recovered := recover(); recovered != nil {
-			if releaseErr := locker.Release(cleanupCtx, false); releaseErr != nil {
-				session.Invalidate()
-			}
-			panic(recovered)
-		}
-		commit := true
+		// 只用实际返回标记决定能否提交，禁止 recover 吞掉旧式 nil panic。
+		commit := callbackReturned
 		if store.dialect == "sqlite" {
-			commit = safeSQLiteCommit
+			commit = callbackReturned && safeSQLiteCommit
 		}
 		releaseErr := locker.Release(cleanupCtx, commit)
 		if releaseErr != nil {
@@ -126,5 +130,6 @@ func (store *DatabaseStore) withAcquiredMigrationSession(
 		resultErr = errors.Join(resultErr, releaseErr)
 	}()
 	safeSQLiteCommit, resultErr = callback()
+	callbackReturned = true
 	return resultErr
 }

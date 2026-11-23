@@ -221,12 +221,16 @@ func TestHTTPHelpersHandleLoggingAndPanicBoundaries(t *testing.T) {
 			func(*fwcontext.Request, *fwcontext.Response) { panic("terminator panic") },
 		)
 	pipeline.Then(request, func(*fwcontext.Request) *fwcontext.Response { return fwcontext.NewResponse() })
-	if err := handler.runTerminators(
+	var terminateErr error
+	handler.runTerminators(
 		stdcontext.Background(),
 		request,
 		fwcontext.NewResponse(),
 		middleware.RequestTerminationCallbacks(request),
-	); err == nil {
+		0,
+		&terminateErr,
+	)
+	if terminateErr == nil {
 		t.Fatal("terminate panic 应转换为收尾错误")
 	}
 	if !terminatorCalled {

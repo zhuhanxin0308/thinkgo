@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"sync"
+
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/cleanup"
 )
 
 type rememberCall struct {
@@ -98,35 +100,35 @@ func (s *cacheState) doRememberContext(ctx context.Context, key string, load fun
 	}
 }
 
-func (s *cacheState) runRemember(ctx context.Context, key string, call *rememberCall, load func(*rememberCall) (interface{}, error)) (value interface{}, err error) {
+func (s *cacheState) runRemember(ctx context.Context, key string, call *rememberCall, load func(*rememberCall) (interface{}, error)) (interface{}, error) {
 	if done := ctx.Done(); done != nil {
 		// 首个调用在自身协程执行回调，后端阻塞时仍需响应最后一个订阅者取消。
 		stop := context.AfterFunc(ctx, func() { call.unsubscribe(done) })
 		defer stop()
 	}
 	defer call.cancel()
-	returned := false
-	defer func() {
-		recovered := recover()
-		if recovered != nil {
-			value, err = nil, errors.New("Remember 回调发生 panic")
-		} else if !returned {
-			// Goexit 必须唤醒等待者，并释放此键以供后续加载。
-			value, err = nil, errors.New("Remember 回调异常退出")
-		}
-		s.rememberMu.Lock()
-		call.value, call.err = value, err
-		delete(s.remembering, key)
-		close(call.done)
-		s.rememberMu.Unlock()
-		if recovered != nil {
-			panic(recovered)
-		}
-		if ctxErr := ctx.Err(); ctxErr != nil && !call.callbackFailed {
-			value, err = nil, ctxErr
-		}
+	func() {
+		// 共享结果先于首个调用者的取消检查发布，即使加载回调退出原协程也要唤醒等待者。
+		defer func() {
+			s.rememberMu.Lock()
+			delete(s.remembering, key)
+			close(call.done)
+			s.rememberMu.Unlock()
+		}()
+		call.err = cleanup.Call(func() error {
+			var err error
+			call.value, err = load(call)
+			return err
+		}, func(panicked bool) {
+			if panicked {
+				call.err = errors.New("Remember 回调发生 panic")
+			} else {
+				call.err = errors.New("Remember 回调异常退出")
+			}
+		})
 	}()
-	value, err = load(call)
-	returned = true
-	return value, err
+	if ctxErr := ctx.Err(); ctxErr != nil && !call.callbackFailed {
+		return nil, ctxErr
+	}
+	return call.value, call.err
 }
