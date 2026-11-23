@@ -115,7 +115,7 @@ func (r *Router) registerDefinitionsWithCommit(definitions []routeDefinition, co
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.frozen {
+	if r.frozen.Load() {
 		return nil, ErrRouterFrozen
 	}
 	for _, candidate := range prepared {

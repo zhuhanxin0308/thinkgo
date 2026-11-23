@@ -33,7 +33,7 @@ func (r *Route) WithoutMiddleware(targets ...middleware.Handler) error {
 	}
 	router.mu.RLock()
 	defer router.mu.RUnlock()
-	if router.frozen {
+	if router.frozen.Load() {
 		return ErrRouterFrozen
 	}
 	return fmt.Errorf("%w: 无法确认函数的注册身份，请按名称移除", ErrInvalidRouteMiddleware)
@@ -47,7 +47,7 @@ func (r *Route) WithoutNamedMiddleware(names ...string) error {
 	}
 	router.mu.Lock()
 	defer router.mu.Unlock()
-	if router.frozen {
+	if router.frozen.Load() {
 		return ErrRouterFrozen
 	}
 	working := slices.Clone(r.middlewares)
@@ -72,7 +72,7 @@ func (r *Route) WithNamedMiddleware(name string, handler middleware.Handler) err
 	}
 	router.mu.Lock()
 	defer router.mu.Unlock()
-	if router.frozen {
+	if router.frozen.Load() {
 		return ErrRouterFrozen
 	}
 	entries, err := appendNamedMiddleware(r.middlewares, name, handler)
@@ -91,7 +91,7 @@ func (g *Group) WithNamedMiddleware(name string, handler middleware.Handler) (*G
 	}
 	g.router.mu.RLock()
 	defer g.router.mu.RUnlock()
-	if g.router.frozen {
+	if g.router.frozen.Load() {
 		return nil, ErrRouterFrozen
 	}
 	entries, err := appendNamedMiddleware(slices.Clone(g.middlewares), name, handler)
@@ -113,7 +113,7 @@ func (g *Group) WithMiddleware(handlers ...middleware.Handler) (*Group, error) {
 	}
 	g.router.mu.RLock()
 	defer g.router.mu.RUnlock()
-	if g.router.frozen {
+	if g.router.frozen.Load() {
 		return nil, ErrRouterFrozen
 	}
 	next := g.clone()
@@ -128,7 +128,7 @@ func (g *Group) WithoutNamedMiddleware(names ...string) (*Group, error) {
 	}
 	g.router.mu.RLock()
 	defer g.router.mu.RUnlock()
-	if g.router.frozen {
+	if g.router.frozen.Load() {
 		return nil, ErrRouterFrozen
 	}
 	working, err := removeNamedMiddlewares(g.middlewares, names)
@@ -153,7 +153,7 @@ func (g *Group) WithoutMiddleware(targets ...middleware.Handler) (*Group, error)
 	}
 	g.router.mu.RLock()
 	defer g.router.mu.RUnlock()
-	if g.router.frozen {
+	if g.router.frozen.Load() {
 		return nil, ErrRouterFrozen
 	}
 	return nil, fmt.Errorf("%w: 无法确认函数的注册身份，请按名称移除", ErrInvalidRouteMiddleware)
@@ -169,7 +169,7 @@ func (g *Group) ApplyMiddlewareToRoutes(routes []*Route, handlers ...middleware.
 	}
 	g.router.mu.Lock()
 	defer g.router.mu.Unlock()
-	if g.router.frozen {
+	if g.router.frozen.Load() {
 		return nil, ErrRouterFrozen
 	}
 	added := newMiddlewareEntries(handlers)
@@ -193,7 +193,7 @@ func (g *Group) ApplyNamedMiddlewareToRoutes(routes []*Route, name string, handl
 	}
 	g.router.mu.Lock()
 	defer g.router.mu.Unlock()
-	if g.router.frozen {
+	if g.router.frozen.Load() {
 		return nil, ErrRouterFrozen
 	}
 	nextEntries, err := appendNamedMiddleware(slices.Clone(g.middlewares), name, handler)
@@ -224,7 +224,7 @@ func (g *Group) ApplyWithoutNamedMiddlewareToRoutes(routes []*Route, names ...st
 	}
 	g.router.mu.Lock()
 	defer g.router.mu.Unlock()
-	if g.router.frozen {
+	if g.router.frozen.Load() {
 		return nil, ErrRouterFrozen
 	}
 	workingGroup, err := removeNamedMiddlewares(g.middlewares, names)
@@ -324,7 +324,7 @@ func (r *Route) WithMiddleware(handlers ...middleware.Handler) error {
 	}
 	router.mu.Lock()
 	defer router.mu.Unlock()
-	if router.frozen {
+	if router.frozen.Load() {
 		return ErrRouterFrozen
 	}
 	r.middlewares = mergeMiddleware(r.middlewares, handlers)
