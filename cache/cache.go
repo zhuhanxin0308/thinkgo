@@ -100,12 +100,6 @@ type cacheResourceIdentified interface {
 	CacheResourceIdentity() string
 }
 
-type rememberCall struct {
-	done  chan struct{}
-	value interface{}
-	err   error
-}
-
 type cacheState struct {
 	stores       map[string]Driver
 	storeOptions map[string]StoreOptions
@@ -459,7 +453,8 @@ func (c *Cache) Remember(key string, ttl time.Duration, callback func() (interfa
 	return c.RememberContext(context.Background(), key, ttl, callback)
 }
 
-// RememberContext 合并并发加载，并允许等待共享加载结果的调用方响应取消。
+// RememberContext 合并并发加载。只要仍有调用方等待，框架的二次读取和写回就继续。
+// 回调在首个调用者的协程运行，其返回的错误会传给仍在等待的调用方。
 func (c *Cache) RememberContext(ctx context.Context, key string, ttl time.Duration, callback func() (interface{}, error)) (interface{}, error) {
 	if ctx == nil {
 		return nil, ErrInvalidCacheContext
@@ -483,15 +478,19 @@ func (c *Cache) RememberContext(ctx context.Context, key string, ttl time.Durati
 	rememberNamespace := c.state.rememberNamespaces[c.storeName]
 	c.state.storesMu.RUnlock()
 	callKey := rememberNamespace + "\x00" + key
-	return c.state.doRememberContext(ctx, callKey, func() (interface{}, error) {
-		if value, found, err := c.GetContext(ctx, key); err != nil || found {
+	return c.state.doRememberContext(ctx, callKey, func(call *rememberCall) (interface{}, error) {
+		if value, found, err := c.GetContext(call.activeContext(), key); err != nil || found {
 			return value, err
+		}
+		if err := call.activeContext().Err(); err != nil {
+			return nil, err
 		}
 		value, err := callback()
 		if err != nil {
+			call.callbackFailed = true
 			return nil, err
 		}
-		if err = c.SetContext(ctx, key, value, ttl); err != nil {
+		if err = c.SetContext(call.activeContext(), key, value, ttl); err != nil {
 			return nil, err
 		}
 		return value, nil
@@ -866,60 +865,6 @@ func (c *Cache) trace(action, key string) {
 	if c != nil && c.debug != nil {
 		c.debug.AddCache(action, key)
 	}
-}
-
-func (s *cacheState) doRememberContext(ctx context.Context, key string, callback func() (interface{}, error)) (value interface{}, err error) {
-	if ctx == nil {
-		return nil, ErrInvalidCacheContext
-	}
-	s.rememberMu.Lock()
-	if existing := s.remembering[key]; existing != nil {
-		s.rememberMu.Unlock()
-		select {
-		case <-existing.done:
-			return existing.value, existing.err
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
-	}
-	if err := ctx.Err(); err != nil {
-		s.rememberMu.Unlock()
-		return nil, err
-	}
-	call := &rememberCall{done: make(chan struct{})}
-	s.remembering[key] = call
-	s.rememberMu.Unlock()
-	if err := ctx.Err(); err != nil {
-		s.finishRemember(key, call, nil, err)
-		return nil, err
-	}
-
-	callbackReturned := false
-	defer func() {
-		recovered := recover()
-		if recovered != nil {
-			value, err = nil, errors.New("Remember 回调发生 panic")
-		} else if !callbackReturned {
-			// Goexit 没有返回值，必须通知等待者失败，不能永久保留共享加载状态。
-			value, err = nil, errors.New("Remember 回调异常退出")
-		}
-		s.finishRemember(key, call, value, err)
-		if recovered != nil {
-			panic(recovered)
-		}
-	}()
-	value, err = callback()
-	callbackReturned = true
-	return value, err
-}
-
-func (s *cacheState) finishRemember(key string, call *rememberCall, value interface{}, err error) {
-	s.rememberMu.Lock()
-	call.value = value
-	call.err = err
-	delete(s.remembering, key)
-	close(call.done)
-	s.rememberMu.Unlock()
 }
 
 func validatePublicCacheKey(key string) error {
