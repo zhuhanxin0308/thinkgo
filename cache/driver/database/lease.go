@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/zhuhanxin0308/thinkgo/v3/cache/contract"
@@ -80,12 +79,9 @@ func (c *DB) updateLeasedRecord(transaction *db.Tx, key string, ttl time.Duratio
 		}
 		found = !cacheExpiryReached(expiry, time.Now())
 		if found {
-			encoded, err := databaseCacheBytes(row["value"])
+			current, err = decodeDatabaseCacheValue(row["value"])
 			if err != nil {
 				return err
-			}
-			if err := json.Unmarshal(encoded, &current); err != nil {
-				return fmt.Errorf("%w: %v", ErrCorruptCacheEntry, err)
 			}
 		}
 	}
