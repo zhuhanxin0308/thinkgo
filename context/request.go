@@ -103,7 +103,8 @@ type Request struct {
 	jsonStateMu   sync.RWMutex
 	jsonValidated bool
 
-	formOnce sync.Once
+	formOnce     sync.Once
+	formFinished atomic.Bool
 
 	errorMu sync.RWMutex
 	bodyErr error
@@ -333,11 +334,8 @@ func (r *Request) All() map[string]interface{} {
 		} else {
 			mediaType, _ := r.parsedMediaType()
 			if isFormMediaType(mediaType) {
-				_ = r.ensureFormParsed()
-				if r.raw != nil {
-					for key, values := range r.raw.PostForm {
-						result[key] = normalizeStringSliceValue(values)
-					}
+				for key, values := range r.compatiblePostForm() {
+					result[key] = normalizeStringSliceValue(values)
 				}
 			}
 			if isJSONMediaType(mediaType) {
@@ -795,7 +793,7 @@ func (r *Request) readOriginalBody() ([]byte, error) {
 		return []byte{}, nil
 	}
 	r.bodyOnce.Do(func() {
-		source := r.originalBody()
+		source := r.boundedOriginalBody()
 		if source == nil || source == http.NoBody {
 			r.bodyCache = []byte{}
 			return
@@ -837,6 +835,7 @@ func (r *Request) ensureFormParsed() error {
 		return ErrRequestCleaned
 	}
 	r.formOnce.Do(func() {
+		defer r.formFinished.Store(true)
 		if r.cleanupStarted.Load() {
 			r.setFormError(ErrRequestCleaned)
 			return
@@ -880,8 +879,8 @@ func (r *Request) ensureFormParsed() error {
 			r.bodyOnce.Do(func() {
 				r.setBodyError(ErrRequestBodyUnavailable)
 			})
-			if err := r.raw.ParseMultipartForm(r.multipartMemoryLimit); err != nil {
-				r.setFormError(fmt.Errorf("%w: %w", ErrInvalidFormBody, normalizeBodyReadError(err, r.maxBodyBytes)))
+			if err := r.parseBoundedMultipartForm(); err != nil {
+				r.setFormError(fmt.Errorf("%w: %w", ErrInvalidFormBody, err))
 			}
 		}
 	})
@@ -957,12 +956,13 @@ func normalizeBodyReadError(err error, limit int64) error {
 
 type bodyLimitReadCloser struct {
 	source    io.ReadCloser
+	limit     int64
 	remaining int64
 	consumed  atomic.Int64
 }
 
 func newBodyLimitReadCloser(source io.ReadCloser, limit int64) *bodyLimitReadCloser {
-	return &bodyLimitReadCloser{source: source, remaining: limit}
+	return &bodyLimitReadCloser{source: source, limit: limit, remaining: limit}
 }
 
 func (r *bodyLimitReadCloser) Read(buffer []byte) (int, error) {

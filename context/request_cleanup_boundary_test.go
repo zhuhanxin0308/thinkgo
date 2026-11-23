@@ -200,6 +200,17 @@ func TestRequestCleanupBoundsBlockingMultipartParse(t *testing.T) {
 		<-cleanupDone
 		t.Fatal("CleanupContext 同步等待了 multipart 解析持有的 formMu")
 	}
+	fields := make(chan string, 1)
+	go func() { fields <- request.Post("pending", "不可用") }()
+	select {
+	case value := <-fields:
+		if value != "不可用" {
+			t.Errorf("清理期间发布了未解析完的表单值: %q", value)
+		}
+	case <-time.After(requestCleanupBoundaryWait):
+		close(body.release)
+		t.Fatal("清理期间的表单访问仍在等待读取器")
+	}
 	close(body.release)
 	if parseErr := <-parseDone; parseErr == nil {
 		t.Fatal("不完整 multipart 正文应返回解析错误")
