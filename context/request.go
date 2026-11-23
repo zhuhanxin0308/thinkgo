@@ -107,7 +107,7 @@ type Request struct {
 	formFinished atomic.Bool
 
 	errorMu sync.RWMutex
-	bodyErr error
+	bodyErr atomic.Pointer[error]
 	jsonErr error
 	formErr error
 
@@ -423,9 +423,7 @@ func (r *Request) BodyReadError() error {
 		}
 		return nil
 	}
-	r.errorMu.RLock()
-	defer r.errorMu.RUnlock()
-	return r.bodyErr
+	return r.originalBodyError()
 }
 
 // Parse 根据 Content-Type 预解析结构化请求体，用于在业务逻辑前阻断非法输入。
@@ -469,6 +467,9 @@ func (r *Request) parseBody(materialize bool) error {
 	// 没有请求体时不触发 io.ReadAll 和 ParseForm；查询参数仍由 Get/All 惰性读取。
 	_, inputConfigured := r.inputOverride()
 	if !r.hasOriginalBody() && !inputConfigured {
+		if err := r.originalBodyError(); !errors.Is(err, ErrRequestBodyUnavailable) {
+			return err
+		}
 		return nil
 	}
 	switch {
@@ -490,7 +491,7 @@ func (r *Request) ParseError() error {
 	}
 	_, contentTypeErr := r.parsedMediaType()
 	r.errorMu.RLock()
-	bodyErr := r.bodyErr
+	bodyErr := r.originalBodyError()
 	jsonErr := r.jsonErr
 	formErr := r.formErr
 	r.errorMu.RUnlock()
@@ -821,10 +822,7 @@ func (r *Request) readOriginalBody() ([]byte, error) {
 		r.bodyCacheSize.Store(int64(len(body)))
 		r.replaceOriginalBody(io.NopCloser(bytes.NewReader(body)))
 	})
-	r.errorMu.RLock()
-	err := r.bodyErr
-	r.errorMu.RUnlock()
-	return r.bodyCache, err
+	return r.bodyCache, r.originalBodyError()
 }
 
 func (r *Request) ensureFormParsed() error {
@@ -921,9 +919,7 @@ func (r *Request) paramValue(key string) (interface{}, bool) {
 }
 
 func (r *Request) setBodyError(err error) {
-	r.errorMu.Lock()
-	r.bodyErr = err
-	r.errorMu.Unlock()
+	r.bodyErr.Store(&err)
 }
 
 func (r *Request) setJSONError(err error) {

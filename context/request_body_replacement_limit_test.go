@@ -73,6 +73,9 @@ func TestReplacedRawBodyCacheLimit(t *testing.T) {
 			if source.readBytes != test.wantBytes || source.closes != 1 {
 				t.Fatalf("读取 %d 字节，关闭 %d 次，期望读取 %d 字节并关闭一次", source.readBytes, source.closes, test.wantBytes)
 			}
+			if test.wantErr != nil && !errors.Is(request.ValidateBody(), test.wantErr) {
+				t.Fatal("后续校验丢失已发生的原生正文错误")
+			}
 		})
 	}
 }
@@ -234,5 +237,47 @@ func TestReplacedRawBodyParsingLimit(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+// TestRejectedRawBodyRemainsRejected 验证关闭超限流后所有解析入口仍报告原错误，
+// 调用方显式替换为合法输入后则按已有覆盖规则读取新值。
+func TestRejectedRawBodyRemainsRejected(t *testing.T) {
+	const limit = 3
+	for _, media := range []string{"application/octet-stream", "application/x-www-form-urlencoded"} {
+		for _, first := range []string{"直接读取", "预校验", "绑定来源"} {
+			t.Run(media+"/"+first, func(t *testing.T) {
+				raw := httptest.NewRequest(http.MethodPost, "/", nil)
+				raw.Header.Set("Content-Type", media)
+				request := newRequestForTest(t, raw, WithMaxBodyBytes(limit))
+				raw.ContentLength = -1
+				raw.Body = io.NopCloser(strings.NewReader("k=ab"))
+				var err error
+				switch first {
+				case "直接读取":
+					_, err = request.Body()
+				case "预校验":
+					err = request.ValidateBody()
+				case "绑定来源":
+					_, err = request.SourcesFor(SourceSelection{Form: true})
+				}
+				if !errors.Is(err, ErrRequestBodyTooLarge) || raw.Body != http.NoBody {
+					t.Fatalf("首次超限未拒绝并释放正文: %v", err)
+				}
+				if !errors.Is(request.Parse(), ErrRequestBodyTooLarge) || !errors.Is(request.ValidateBody(), ErrRequestBodyTooLarge) {
+					t.Fatal("空流掩盖了先前的大小错误")
+				}
+				if _, err := request.SourcesFor(SourceSelection{Form: true}); !errors.Is(err, ErrRequestBodyTooLarge) {
+					t.Fatalf("绑定来源丢失大小错误: %v", err)
+				}
+				request.WithInput("k=v")
+				if body, err := request.Body(); err != nil || string(body) != "k=v" {
+					t.Fatalf("合法覆盖未生效: %q, %v", body, err)
+				}
+				if err := request.ValidateBody(); err != nil {
+					t.Fatalf("仍在校验旧流: %v", err)
+				}
+			})
+		}
 	}
 }

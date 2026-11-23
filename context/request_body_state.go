@@ -7,6 +7,14 @@ import (
 	"net/url"
 )
 
+// originalBodyError 独立于已关闭的原生流发布错误；正常空请求只读一次空指针。
+func (r *Request) originalBodyError() error {
+	if stored := r.bodyErr.Load(); stored != nil {
+		return *stored
+	}
+	return nil
+}
+
 // boundedOriginalBody 在实际消费前确认当前流的上限。中间件可依约顺序替换 Raw().Body，
 // multipart 也必须读到同一受限流；保留原有限制器能继续计算已消费的字节。
 func (r *Request) boundedOriginalBody() io.ReadCloser {
