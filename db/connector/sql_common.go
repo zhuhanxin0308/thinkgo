@@ -235,16 +235,24 @@ func mysqlHostPort(host, port string) string {
 }
 
 func buildOracleConnectString(config db.Config) (string, error) {
-	protocol := "tcps"
+	const tlsProtocol = "tcps"
+	protocol := tlsProtocol
+	protocolSet := false
 	query := url.Values{}
 	for key, value := range config.Params {
 		if strings.EqualFold(key, "protocol") {
-			protocol = strings.ToLower(strings.TrimSpace(value))
+			normalized := strings.ToLower(strings.TrimSpace(value))
+			// 同义键可以重复声明同一协议；相互冲突的声明没有覆盖优先级。
+			if protocolSet && normalized != protocol {
+				return "", fmt.Errorf("%w: Oracle protocol 的重复声明不一致", db.ErrInvalidDatabaseConfig)
+			}
+			protocol = normalized
+			protocolSet = true
 			continue
 		}
 		query.Set(key, value)
 	}
-	if protocol != "tcp" && protocol != "tcps" {
+	if protocol != "tcp" && protocol != tlsProtocol {
 		return "", fmt.Errorf("%w: Oracle protocol 只能是 tcp 或 tcps", db.ErrInvalidDatabaseConfig)
 	}
 	uri := url.URL{
