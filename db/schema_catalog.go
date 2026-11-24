@@ -34,7 +34,20 @@ func schemaCatalogQuery(dialect, table string) (string, []interface{}, error) {
 	case "mysql":
 		return "SELECT COLUMN_NAME AS name, COLUMN_TYPE AS data_type, IS_NULLABLE AS nullable, COLUMN_DEFAULT AS default_value, COLUMN_KEY AS primary_key, EXTRA AS extra FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = COALESCE(NULLIF(?, ''), DATABASE()) AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION", []interface{}{namespace, name}, nil
 	case "postgres":
-		return "SELECT a.attname AS name, pg_catalog.format_type(a.atttypid, a.atttypmod) AS data_type, NOT a.attnotnull AS nullable, pg_get_expr(d.adbin, d.adrelid) AS default_value, EXISTS (SELECT 1 FROM pg_index i WHERE i.indrelid = t.oid AND i.indisprimary AND a.attnum = ANY(i.indkey)) AS primary_key, (a.attidentity <> '' OR pg_get_serial_sequence(format('%I.%I', n.nspname, t.relname), a.attname) IS NOT NULL) AS auto_increment FROM pg_attribute a JOIN pg_class t ON t.oid = a.attrelid JOIN pg_namespace n ON n.oid = t.relnamespace LEFT JOIN pg_attrdef d ON d.adrelid = t.oid AND d.adnum = a.attnum WHERE t.relname = ? AND n.nspname = COALESCE(NULLIF(?, ''), current_schema()) AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum", []interface{}{name, namespace}, nil
+		// 未限定表交给数据库按搜索路径解析；逐段引用保留模型查询的大小写语义。
+		// 主键约束的 conkey 只包含键列，覆盖索引附带的 INCLUDE 列不属于主键。
+		return `SELECT a.attname AS name, pg_catalog.format_type(a.atttypid, a.atttypmod) AS data_type,
+       NOT a.attnotnull AS nullable, pg_catalog.pg_get_expr(d.adbin, d.adrelid) AS default_value,
+       COALESCE(a.attnum = ANY(k.conkey), false) AS primary_key,
+       (a.attidentity <> '' OR pg_catalog.pg_get_serial_sequence(pg_catalog.format('%I.%I', n.nspname, t.relname), a.attname) IS NOT NULL) AS auto_increment
+FROM pg_catalog.pg_class t
+JOIN pg_catalog.pg_attribute a ON a.attrelid = t.oid
+JOIN pg_catalog.pg_namespace n ON n.oid = t.relnamespace
+LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid = t.oid AND d.adnum = a.attnum
+LEFT JOIN pg_catalog.pg_constraint k ON k.conrelid = t.oid AND k.contype = 'p'
+WHERE t.oid = pg_catalog.to_regclass(pg_catalog.concat_ws('.', pg_catalog.quote_ident(NULLIF(?, '')), pg_catalog.quote_ident(?)))
+  AND a.attnum > 0 AND NOT a.attisdropped
+ORDER BY a.attnum`, []interface{}{namespace, name}, nil
 	case "sqlite":
 		if namespace == "" {
 			namespace = "main"
@@ -44,7 +57,7 @@ func schemaCatalogQuery(dialect, table string) (string, []interface{}, error) {
 	case "sqlserver":
 		return "SELECT c.name AS name, t.name AS data_type, c.is_nullable AS nullable, OBJECT_DEFINITION(c.default_object_id) AS default_value, c.is_identity AS auto_increment, CASE WHEN EXISTS (SELECT 1 FROM sys.index_columns ic JOIN sys.indexes i ON i.object_id = ic.object_id AND i.index_id = ic.index_id WHERE ic.object_id = c.object_id AND ic.column_id = c.column_id AND i.is_primary_key = 1) THEN 1 ELSE 0 END AS primary_key FROM sys.columns c JOIN sys.types t ON t.user_type_id = c.user_type_id WHERE c.object_id = OBJECT_ID(?) ORDER BY c.column_id", []interface{}{table}, nil
 	case "oracle":
-		return `SELECT c.column_name AS "name", c.data_type AS "data_type", c.nullable AS "nullable", c.data_default AS "default_value", CASE WHEN EXISTS (SELECT 1 FROM all_cons_columns cc JOIN all_constraints k ON k.owner = cc.owner AND k.constraint_name = cc.constraint_name WHERE k.constraint_type = 'P' AND cc.owner = c.owner AND cc.table_name = c.table_name AND cc.column_name = c.column_name) THEN 1 ELSE 0 END AS "primary_key" FROM all_tab_columns c WHERE c.owner = NVL(?, SYS_CONTEXT('USERENV', 'CURRENT_SCHEMA')) AND c.table_name = ? ORDER BY c.column_id`, []interface{}{strings.ToUpper(namespace), strings.ToUpper(name)}, nil
+		return `SELECT c.column_name AS "name", c.data_type AS "data_type", c.nullable AS "nullable", c.data_default AS "default_value", c.identity_column AS "auto_increment", CASE WHEN EXISTS (SELECT 1 FROM all_cons_columns cc JOIN all_constraints k ON k.owner = cc.owner AND k.constraint_name = cc.constraint_name WHERE k.constraint_type = 'P' AND cc.owner = c.owner AND cc.table_name = c.table_name AND cc.column_name = c.column_name) THEN 1 ELSE 0 END AS "primary_key" FROM all_tab_columns c WHERE c.owner = NVL(?, SYS_CONTEXT('USERENV', 'CURRENT_SCHEMA')) AND c.table_name = ? ORDER BY c.column_id`, []interface{}{strings.ToUpper(namespace), strings.ToUpper(name)}, nil
 	default:
 		return "", nil, fmt.Errorf("%w: 方言 %q 不支持关系型结构缓存", ErrInvalidQuery, dialect)
 	}
@@ -65,7 +78,7 @@ func schemaTablesQuery(dialect, namespace string) (string, []interface{}, error)
 		if namespace == "" {
 			namespace = "main"
 		}
-		return `SELECT name FROM "` + namespace + `".sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`, nil, nil
+		return `SELECT name FROM "` + namespace + `".sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite!_%' ESCAPE '!' ORDER BY name`, nil, nil
 	case "sqlserver":
 		return "SELECT TABLE_NAME AS name FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = COALESCE(NULLIF(?, ''), SCHEMA_NAME()) AND TABLE_TYPE = 'BASE TABLE' ORDER BY TABLE_NAME", []interface{}{namespace}, nil
 	case "oracle":

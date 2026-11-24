@@ -6,27 +6,26 @@ import (
 	"net/http/httptest"
 
 	fwcontext "github.com/zhuhanxin0308/thinkgo/v3/context"
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/cleanup"
 )
 
 // ReportAndRender 统一异常上报和渲染顺序，并将处理器自身的 panic 交回宿主处理。
-func ReportAndRender(handler Handler, writer http.ResponseWriter, request *http.Request, recovered any) (err error) {
-	defer func() {
-		if nested := recover(); nested != nil {
-			if cause, ok := nested.(error); ok {
-				err = fmt.Errorf("异常渲染 panic: %w", cause)
-			} else {
-				err = fmt.Errorf("异常渲染 panic: %v", nested)
-			}
-		}
-	}()
+func ReportAndRender(handler Handler, writer http.ResponseWriter, request *http.Request, recovered any) error {
 	if handler == nil {
 		handler = &Handle{}
 	}
 	if request == nil {
 		request = httptest.NewRequest(http.MethodGet, "http://localhost/", nil)
 	}
-	handler.Report(recovered)
-	return handler.Render(writer, request, recovered)
+	return cleanup.Catch(func() error {
+		handler.Report(recovered)
+		return handler.Render(writer, request, recovered)
+	}, func(nested any) error {
+		if cause, ok := nested.(error); ok {
+			return fmt.Errorf("异常渲染 panic: %w", cause)
+		}
+		return fmt.Errorf("异常渲染 panic: %v", nested)
+	})
 }
 
 // RenderResponse 先在内存中完成渲染；任何失败都丢弃部分实体和响应头，返回安全的 500。

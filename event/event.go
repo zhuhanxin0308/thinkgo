@@ -361,7 +361,7 @@ func (d *Dispatcher) RegisterTransactionWithCommitGuard(
 func (d *Dispatcher) registerTransaction(
 	register func(*Dispatcher) error,
 	guard func() (release func(), err error),
-) (err error) {
+) error {
 	if d == nil {
 		return fmt.Errorf("%w: 调度器不能为空", ErrInvalidSubscriber)
 	}
@@ -371,28 +371,22 @@ func (d *Dispatcher) registerTransaction(
 	d.subscriptionLock.Lock()
 	defer d.subscriptionLock.Unlock()
 	staged := d.cloneForSubscription()
-	var release func()
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			err = fmt.Errorf("%w: RegisterTransaction: %v", ErrEventCallbackPanic, recovered)
-		}
-	}()
-	defer func() {
-		if release != nil {
-			release()
-		}
-	}()
-	if err = register(staged); err != nil {
-		return err
-	}
-	if guard != nil {
-		release, err = guard()
-		if err != nil {
+	return callEventCallback("RegisterTransaction", func() error {
+		if err := register(staged); err != nil {
 			return err
 		}
-	}
-	d.commitSubscription(staged)
-	return nil
+		if guard != nil {
+			release, err := guard()
+			if release != nil {
+				defer release()
+			}
+			if err != nil {
+				return err
+			}
+		}
+		d.commitSubscription(staged)
+		return nil
+	})
 }
 
 // Subscribe 以独立事务注册订阅者；回调失败或 panic 时只丢弃本次暂存变更。
@@ -405,7 +399,7 @@ func (d *Dispatcher) SubscribeApplication(subscriber Subscriber) error {
 	return d.subscribe(subscriber, true)
 }
 
-func (d *Dispatcher) subscribe(subscriber Subscriber, application bool) (err error) {
+func (d *Dispatcher) subscribe(subscriber Subscriber, application bool) error {
 	if d == nil {
 		return fmt.Errorf("%w: 调度器不能为空", ErrInvalidSubscriber)
 	}
@@ -419,19 +413,16 @@ func (d *Dispatcher) subscribe(subscriber Subscriber, application bool) (err err
 	staged := d.cloneForSubscription()
 	registrationSequence := staged.sequence
 
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			err = fmt.Errorf("%w: Subscribe: %v", ErrEventCallbackPanic, recovered)
+	return callEventCallback("Subscribe", func() error {
+		if err := subscriber.Subscribe(staged); err != nil {
+			return err
 		}
-	}()
-	if err = subscriber.Subscribe(staged); err != nil {
-		return err
-	}
-	if application {
-		staged.markApplicationListenersAfter(registrationSequence)
-	}
-	d.commitSubscription(staged)
-	return nil
+		if application {
+			staged.markApplicationListenersAfter(registrationSequence)
+		}
+		d.commitSubscription(staged)
+		return nil
+	})
 }
 
 func (d *Dispatcher) markApplicationListenersAfter(sequence int64) {
@@ -852,16 +843,14 @@ func (d *Dispatcher) boundEventName(eventName string) string {
 }
 
 func safeCreateEvent(factory Factory, data interface{}) (currentEvent Event, err error) {
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			err = fmt.Errorf("%w: Event.Factory: %v", ErrEventCallbackPanic, recovered)
-		}
-	}()
-	currentEvent = factory(data)
-	if isNilEventValue(currentEvent) {
+	err = callEventCallback("Event.Factory", func() error {
+		currentEvent = factory(data)
+		return nil
+	})
+	if err == nil && isNilEventValue(currentEvent) {
 		return nil, fmt.Errorf("%w: 事件工厂返回空事件", ErrInvalidEventBinding)
 	}
-	return currentEvent, nil
+	return currentEvent, err
 }
 
 func validateEventName(eventName string, allowPattern bool) error {
@@ -898,22 +887,24 @@ func isNilEventValue(value interface{}) bool {
 }
 
 func safeEventName(currentEvent Event) (eventName string, err error) {
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			err = fmt.Errorf("%w: Event.Name: %v", ErrEventCallbackPanic, recovered)
-		}
-	}()
-	return currentEvent.Name(), nil
+	err = callEventCallback("Event.Name", func() error {
+		eventName = currentEvent.Name()
+		return nil
+	})
+	return eventName, err
 }
 
-func safeHandleContext(ctx context.Context, listener Listener, currentEvent Event) (err error) {
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			err = fmt.Errorf("%w: Listener.HandleContext: %v", ErrEventCallbackPanic, recovered)
+func safeHandleContext(ctx context.Context, listener Listener, currentEvent Event) error {
+	return callEventCallback("Listener.HandleContext", func() error {
+		if contextual, ok := listener.(ContextualListener); ok {
+			return contextual.HandleContext(ctx, currentEvent)
 		}
-	}()
-	if contextual, ok := listener.(ContextualListener); ok {
-		return contextual.HandleContext(ctx, currentEvent)
-	}
-	return listener.Handle(currentEvent)
+		return listener.Handle(currentEvent)
+	})
+}
+
+func callEventCallback(stage string, callback func() error) error {
+	return cleanup.Catch(callback, func(recovered any) error {
+		return fmt.Errorf("%w: %s: %v", ErrEventCallbackPanic, stage, recovered)
+	})
 }

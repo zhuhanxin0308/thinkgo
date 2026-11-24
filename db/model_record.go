@@ -32,7 +32,7 @@ type modelRecord struct {
 	identity   any
 	persisted  bool
 	deleted    bool
-	uncertain  bool
+	uncertain  error
 	table      string
 	primaryKey string
 	database   *DB
@@ -106,9 +106,10 @@ func (m *Model) recordForWrite() (*modelRecord, error) {
 		r.mu.Unlock()
 		return nil, err
 	}
-	if r.uncertain {
+	if r.uncertain != nil {
+		reason := r.uncertain
 		r.mu.Unlock()
-		return nil, fmt.Errorf("%w: 请重新查询记录后操作", ErrPartialWrite)
+		return nil, fmt.Errorf("%w: 请重新查询记录后操作", reason)
 	}
 	if r.tx != nil && r.tx != m.transaction {
 		r.tx.mu.Lock()
@@ -133,6 +134,20 @@ func (r *modelRecord) validateOwner() error {
 		return ErrModelRecordStale
 	}
 	return nil
+}
+
+// writeError 固定已执行写操作的错误类别和事务归属，直到从数据库刷新共享记录。
+func (r *modelRecord) writeError(err error, tx *Tx) error {
+	switch {
+	case errors.Is(err, ErrRowsAffectedUnknown):
+		r.uncertain = ErrRowsAffectedUnknown
+	case errors.Is(err, ErrPartialWrite):
+		r.uncertain = ErrPartialWrite
+	default:
+		return err
+	}
+	r.tx = tx
+	return err
 }
 
 func (m *Model) validateRecordIdentity(r *modelRecord, snapshot map[string]any) error {
@@ -209,7 +224,7 @@ func (m *Model) saveRecord(fields []string, requirePersisted bool) error {
 	query := m.newModelQuery().withModelType(r.owner.Type()).Where(r.primaryKey+" = ?", r.identity)
 	result, err := query.updateResult(data)
 	if err != nil {
-		return err
+		return r.writeError(err, query.query.txOwner)
 	}
 	m.mu.RLock()
 	tx := m.transaction
@@ -230,12 +245,12 @@ func (m *Model) saveRecord(fields []string, requirePersisted bool) error {
 		}
 	}
 	if err := m.syncRecordTimestamps(r, result.Data, false); err != nil {
-		r.uncertain = true
+		r.uncertain = ErrPartialWrite
 		return fmt.Errorf("%w: %w", ErrPartialWrite, err)
 	}
 	updated, err := snapshotModelFields(r.owner)
 	if err != nil {
-		r.uncertain = true
+		r.uncertain = ErrPartialWrite
 		return fmt.Errorf("%w: %w", ErrPartialWrite, err)
 	}
 	for column := range data {
@@ -268,10 +283,10 @@ func (m *Model) insertOwnedRecord(r *modelRecord) error {
 	if _, exists := data[pk]; !exists {
 		data[pk] = modelFieldWriteValue(binding.field)
 	}
-	result, err := m.newModelQuery().withModelType(r.owner.Type()).insertStructResult(data, binding)
+	query := m.newModelQuery().withModelType(r.owner.Type())
+	result, err := query.insertStructResult(data, binding)
 	if err != nil {
-		r.uncertain = errors.Is(err, ErrPartialWrite)
-		return err
+		return r.writeError(err, query.query.txOwner)
 	}
 	m.mu.RLock()
 	tx := m.transaction
@@ -283,16 +298,16 @@ func (m *Model) insertOwnedRecord(r *modelRecord) error {
 	m.mu.RUnlock()
 	r.tx = tx
 	if err := binding.assignInsertedKey(result, pk); err != nil {
-		r.uncertain = true
+		r.uncertain = ErrPartialWrite
 		return err
 	}
 	if err := m.syncRecordTimestamps(r, result.Data, true); err != nil {
-		r.uncertain = true
+		r.uncertain = ErrPartialWrite
 		return &PartialWriteError{Result: result, Cause: err}
 	}
 	snapshot, err := snapshotModelFields(r.owner)
 	if err != nil {
-		r.uncertain = true
+		r.uncertain = ErrPartialWrite
 		return &PartialWriteError{Result: result, Cause: err}
 	}
 	r.persisted = true
@@ -308,7 +323,7 @@ func (m *Model) insertOwnedRecord(r *modelRecord) error {
 	r.original = before
 	r.identity, err = cloneDatabaseValue(binding.field.Interface())
 	if err != nil {
-		r.uncertain = true
+		r.uncertain = ErrPartialWrite
 		return &PartialWriteError{Result: result, Cause: err}
 	}
 	r.loaded = make(map[string]bool, len(result.Data)+1)
@@ -378,7 +393,7 @@ func (m *Model) deleteOwnedRecord(force, restore bool) error {
 		count, persisted, err = query.deleteResult()
 	}
 	if err != nil {
-		return err
+		return r.writeError(err, query.query.txOwner)
 	}
 	if count == 0 {
 		return ErrModelRecordMissing
@@ -393,23 +408,23 @@ func (m *Model) deleteOwnedRecord(force, restore bool) error {
 	r.deleted = !restore
 	if softDelete && !force {
 		if err := m.syncRecordTimestamps(r, persisted, false); err != nil {
-			r.uncertain = true
+			r.uncertain = ErrPartialWrite
 			return fmt.Errorf("%w: %w", ErrPartialWrite, err)
 		}
 		field, _, found, err := findModelColumn(r.owner, deleteField)
 		if err != nil {
-			r.uncertain = true
+			r.uncertain = ErrPartialWrite
 			return fmt.Errorf("%w: %w", ErrPartialWrite, err)
 		}
 		if found {
 			if err := assignModelScanValue(field, persisted[deleteField]); err != nil {
-				r.uncertain = true
+				r.uncertain = ErrPartialWrite
 				return fmt.Errorf("%w: %w", ErrPartialWrite, err)
 			}
 		}
 		snapshot, err := snapshotModelFields(r.owner)
 		if err != nil {
-			r.uncertain = true
+			r.uncertain = ErrPartialWrite
 			return fmt.Errorf("%w: %w", ErrPartialWrite, err)
 		}
 		for _, column := range []string{deleteField, updateField} {

@@ -2,10 +2,30 @@ package framework
 
 import (
 	"errors"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/zhuhanxin0308/thinkgo/v3/metrics"
 )
+
+func TestOperationalMetricsHonorsRegistryState(t *testing.T) {
+	app := &App{operationalAccess: OperationalAccessPublic}
+	registry := metrics.NewRegistry()
+	registry.Enable()
+	registry.Observe(http.StatusServiceUnavailable, time.Millisecond)
+	response := app.metricsRouteWithRegistry(registry, nil)
+	if response.GetStatus() != http.StatusOK || response.GetHeader("Cache-Control") != "no-store" ||
+		string(response.GetBody()) != registry.Prometheus()+app.requestTaskPrometheus() {
+		t.Fatal("公开运维端点没有返回完整的 HTTP 与任务指标")
+	}
+	registry.Disable()
+	response = app.metricsRouteWithRegistry(registry, nil)
+	if response.GetStatus() != http.StatusNotFound || strings.Contains(string(response.GetBody()), "thinkgo_") {
+		t.Fatal("关闭采集后仍输出了部分指标")
+	}
+}
 
 // TestRequestTaskMetricsReflectActualCleanup 验证指标区分真实在途任务、运维请求、拒绝和完成。
 func TestRequestTaskMetricsReflectActualCleanup(t *testing.T) {

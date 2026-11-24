@@ -15,7 +15,7 @@ import (
 // The driver distinguishes a completed Exec from a later metadata failure.
 // Real SQLite row/rollback verification is in the separate integration test.
 type insertIDFailureState struct {
-	idErr, execErr                 error
+	idErr, execErr, affectedErr    error
 	execs, ids, commits, rollbacks atomic.Int64
 }
 type insertIDFailureConnector struct{ state *insertIDFailureState }
@@ -67,7 +67,7 @@ func (r insertIDFailureResult) LastInsertId() (int64, error) {
 	// Even nonzero metadata is untrusted when returned together with an error.
 	return 73, r.state.idErr
 }
-func (insertIDFailureResult) RowsAffected() (int64, error) { return 1, nil }
+func (r insertIDFailureResult) RowsAffected() (int64, error) { return 1, r.state.affectedErr }
 
 type insertIDFailureTx struct{ state *insertIDFailureState }
 
@@ -242,6 +242,117 @@ func TestInsertIDFailureBlocksBoundRecordReplay(t *testing.T) {
 	requireInsertIDPartial(t, initialErr, cause)
 }
 
+func TestRowsAffectedFailureBlocksBoundInsertReplay(t *testing.T) {
+	for _, cached := range []bool{false, true} {
+		type boundRow struct {
+			*Model
+			ID   int64
+			Name string
+		}
+		cause := errors.New("执行后无法读取影响行数")
+		state := &insertIDFailureState{affectedErr: cause}
+		database, _ := newInsertIDFailureDB(t, state, cached)
+		row := &boundRow{Name: "Ada"}
+		if _, err := NewModelFor(t.Context(), database, row); err != nil {
+			t.Fatal(err)
+		}
+		if err := row.Save(); !errors.Is(err, ErrRowsAffectedUnknown) || !errors.Is(err, cause) || errors.Is(err, ErrPartialWrite) {
+			t.Fatalf("未保留结果读取错误，或虚报已经写入：%v", err)
+		}
+		if err := row.Save(); !errors.Is(err, ErrRowsAffectedUnknown) || errors.Is(err, ErrPartialWrite) || state.execs.Load() != 1 || state.ids.Load() != 0 || row.ID != 0 {
+			t.Fatalf("行数未知的插入被重放或伪造主键：%v 次数=%d ID=%d", err, state.execs.Load(), row.ID)
+		}
+	}
+}
+
+func TestRowsAffectedFailureAcrossSQLEntryPoints(t *testing.T) {
+	cause := errors.New("结果不可读")
+	state := &insertIDFailureState{affectedErr: cause}
+	database, _ := newInsertIDFailureDB(t, state, true)
+	check := func(name string, execute func() (int64, error)) {
+		t.Helper()
+		before := state.execs.Load()
+		count, err := execute()
+		if count != 0 || !errors.Is(err, ErrRowsAffectedUnknown) || !errors.Is(err, cause) || errors.Is(err, ErrPartialWrite) || state.execs.Load() != before+1 {
+			t.Errorf("%s 应仅执行一次并丢弃不可用数量：%d %v", name, count, err)
+		}
+	}
+	run := func(query *Query, raw ContextualRawQueryable) {
+		t.Helper()
+		data := map[string]any{"name": "Ada"}
+		row := query.Where("id", 1)
+		check("插入", func() (int64, error) { return query.Insert(data) })
+		check("批量插入", func() (int64, error) { return query.InsertAll([]map[string]any{data}) })
+		check("更新", func() (int64, error) { return row.Update(data) })
+		check("增量更新", func() (int64, error) { return row.Inc("score").Update(data) })
+		check("删除", row.Delete)
+		check("原生执行", func() (int64, error) { return raw.ExecuteContext(t.Context(), "DELETE FROM records") })
+	}
+	run(database.Table("records"), database)
+	tx, err := database.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	run(tx.Table("records"), tx)
+	if err := tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	err = database.WithPinnedSQLConnection(t.Context(), func(session PinnedSQLConnection) error {
+		check("固定连接", func() (int64, error) { return session.ExecuteContext(t.Context(), "DELETE FROM records") })
+		return session.TransactionContext(t.Context(), func(tx ContextualRawQueryable) error {
+			check("固定连接事务", func() (int64, error) { return tx.ExecuteContext(t.Context(), "DELETE FROM records") })
+			return nil
+		})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPartialUpdateRetainsExplicitTransactionOwner(t *testing.T) {
+	for _, commit := range []bool{false, true} {
+		type record struct {
+			*Model
+			ID   int64
+			Name string
+		}
+		state := &insertIDFailureState{}
+		database, _ := newInsertIDFailureDB(t, state, false)
+		row := &record{Name: "before"}
+		if _, err := NewModelFor(t.Context(), database, row); err != nil {
+			t.Fatal(err)
+		}
+		if err := row.Save(); err != nil {
+			t.Fatal(err)
+		}
+		tx, err := database.Begin()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = tx.Rollback() }()
+		state.execErr = errors.Join(ErrPartialWrite, errors.New("扩展驱动无法绑定更新结果"))
+		row.Name = "after"
+		bound := row.WithTx(tx)
+		if err := bound.Save(); err != state.execErr {
+			t.Fatalf("丢失扩展驱动的原始更新错误：%v", err)
+		}
+		if err := row.Refresh(); !errors.Is(err, ErrModelRecordTransaction) {
+			t.Fatalf("活跃事务被其它句柄跨过：%v", err)
+		}
+		if err := bound.Save(); !errors.Is(err, ErrPartialWrite) || state.execs.Load() != 2 {
+			t.Fatalf("不确定的事务内更新发生重放：%v，执行次数=%d", err, state.execs.Load())
+		}
+		if commit {
+			err = tx.Commit()
+		} else {
+			err = tx.Rollback()
+		}
+		if err != nil || state.commits.Load()+state.rollbacks.Load() != 1 || (state.commits.Load() == 1) != commit {
+			t.Fatalf("事务未由所有者独立收尾：%v", err)
+		}
+	}
+}
+
 func TestInsertIDFailureDoesNotChangeOtherOutcomes(t *testing.T) {
 	t.Run("plain_insert_does_not_read_id", func(t *testing.T) {
 		state := &insertIDFailureState{idErr: errors.New("unused ID failure")}
@@ -264,7 +375,7 @@ func TestInsertIDFailureDoesNotChangeOtherOutcomes(t *testing.T) {
 		state := &insertIDFailureState{execErr: cause}
 		database, _ := newInsertIDFailureDB(t, state, false)
 		_, err := database.Name("users").InsertGetId(map[string]any{"name": "Ada"})
-		if err != cause || errors.Is(err, ErrPartialWrite) || state.ids.Load() != 0 {
+		if err != cause || errors.Is(err, ErrPartialWrite) || errors.Is(err, ErrRowsAffectedUnknown) || state.ids.Load() != 0 {
 			t.Fatalf("execute error misclassified: %v", err)
 		}
 	})
@@ -274,7 +385,7 @@ func TestInsertIDFailureDoesNotChangeOtherOutcomes(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 		_, err := database.Name("users").WithContext(ctx).InsertGetId(map[string]any{"name": "Ada"})
-		if !errors.Is(err, context.Canceled) || errors.Is(err, ErrPartialWrite) || state.execs.Load() != 0 {
+		if !errors.Is(err, context.Canceled) || errors.Is(err, ErrPartialWrite) || errors.Is(err, ErrRowsAffectedUnknown) || state.execs.Load() != 0 {
 			t.Fatalf("prewrite cancellation misclassified: %v", err)
 		}
 	})

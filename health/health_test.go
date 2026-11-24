@@ -5,10 +5,28 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestReadinessRejectsLegacyNilPanic(t *testing.T) {
+	t.Setenv("GODEBUG", os.Getenv("GODEBUG")+",panicnil=1")
+	registry := NewRegistry()
+	if err := registry.Register("database", func(context.Context) error { panic(nil) }); err != nil {
+		t.Fatal(err)
+	}
+	report := registry.Readiness(t.Context())
+	if report.Status != StatusFail || report.Checks["database"].Error == nil {
+		t.Fatalf("崩溃的检查被报告为就绪：%+v", report)
+	}
+	recorder := httptest.NewRecorder()
+	registry.ReadinessHandler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/ready", nil))
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("健康检查异常状态码错误：%d", recorder.Code)
+	}
+}
 
 // nilHealthContext 保留健康检查对 nil 上下文的兼容边界测试，避免在业务代码中传递 nil。
 func nilHealthContext() context.Context {

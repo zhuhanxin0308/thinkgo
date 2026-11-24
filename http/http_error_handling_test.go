@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -14,8 +15,26 @@ import (
 	"github.com/zhuhanxin0308/thinkgo/v3/event"
 	"github.com/zhuhanxin0308/thinkgo/v3/exception"
 	"github.com/zhuhanxin0308/thinkgo/v3/log"
+	"github.com/zhuhanxin0308/thinkgo/v3/middleware"
 	"github.com/zhuhanxin0308/thinkgo/v3/route"
 )
+
+func TestRecoveryReportsLegacyNilPanicThroughHTTPKernel(t *testing.T) {
+	t.Setenv("GODEBUG", os.Getenv("GODEBUG")+",panicnil=1")
+	app := newTestHTTPApp(t, t.TempDir(), map[string]interface{}{"enable": false})
+	probe := &applicationExceptionHandlerProbe{}
+	mustHTTPMiddleware(t, app).Pipe((&middleware.Recovery{Handler: probe}).Handle)
+	if _, err := mustHTTPRoute(t, app).Get("/nil-panic", func(*fwcontext.Request) *fwcontext.Response {
+		panic(nil)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	newTestHTTPHandler(t, app).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "http://example.com/nil-panic", nil))
+	if recorder.Code != http.StatusTeapot || probe.reports.Load() != 1 || probe.renders.Load() != 1 {
+		t.Fatalf("HTTP 内核应交付恢复中间件的响应：状态=%d，上报=%d，渲染=%d", recorder.Code, probe.reports.Load(), probe.renders.Load())
+	}
+}
 
 // TestServeHTTPTurnsHttpRunListenerErrorInto500 验证请求开始事件错误进入统一异常处理而非继续执行业务路由。
 func TestServeHTTPTurnsHttpRunListenerErrorInto500(t *testing.T) {

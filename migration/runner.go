@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"sync/atomic"
 )
 
 const (
@@ -84,7 +85,8 @@ type JournalStore interface {
 	ResolveDirty(context.Context, string, RecoveryResolution) error
 }
 
-// Result 描述一次迁移或回滚实际变更的名称和批次。
+// Result 的 Names 列出实际完成的变更，Batch 表示所处理的批次；首项业务失败时也可能有批次号。
+// SQLite 外层事务未确认提交时返回空 Result；错误链含 ErrMigrationOutcomeUnknown 时需核验持久状态。
 type Result struct {
 	Batch int64
 	Names []string
@@ -123,13 +125,9 @@ func (runner *Runner) Apply(ctx context.Context) (Result, error) {
 	if runner == nil || ctx == nil {
 		return Result{}, fmt.Errorf("%w: 迁移运行器或上下文为空", ErrInvalidMigration)
 	}
-	var result Result
-	err := runner.withMigrationLock(ctx, func(store Store) error {
-		var applyErr error
-		result, applyErr = runner.applyLocked(ctx, store)
-		return applyErr
+	return runner.withMigrationResult(ctx, func(store Store) (Result, error) {
+		return runner.applyLocked(ctx, store)
 	})
-	return result, err
 }
 
 func (runner *Runner) applyLocked(ctx context.Context, store Store) (Result, error) {
@@ -163,12 +161,32 @@ func (runner *Runner) Rollback(ctx context.Context, batches int) (Result, error)
 	if runner == nil || ctx == nil || batches <= 0 || batches > MaximumRollbackBatches {
 		return Result{}, fmt.Errorf("%w: 回滚上下文必须有效，批次数必须在 1 到 %d 之间", ErrInvalidMigration, MaximumRollbackBatches)
 	}
-	var result Result
-	err := runner.withMigrationLock(ctx, func(store Store) error {
-		var rollbackErr error
-		result, rollbackErr = runner.rollbackLocked(ctx, store, batches)
-		return rollbackErr
+	return runner.withMigrationResult(ctx, func(store Store) (Result, error) {
+		return runner.rollbackLocked(ctx, store, batches)
 	})
+}
+
+type migrationResultKey struct{}
+
+type migrationResultObservation struct {
+	returned    atomic.Bool
+	unconfirmed atomic.Bool
+}
+
+func (runner *Runner) withMigrationResult(ctx context.Context, operation func(Store) (Result, error)) (Result, error) {
+	var result Result
+	observation := new(migrationResultObservation)
+	// 观察信息仅沿加锁调用传递。迁移代码继续使用调用方的上下文，嵌套操作独立报告结果。
+	lockCtx := context.WithValue(ctx, migrationResultKey{}, observation)
+	err := runner.withMigrationLock(lockCtx, func(store Store) error {
+		var err error
+		result, err = operation(store)
+		observation.returned.Store(true)
+		return err
+	})
+	if observation.unconfirmed.Load() {
+		return Result{}, err
+	}
 	return result, err
 }
 

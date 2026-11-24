@@ -223,7 +223,8 @@ func (r *Request) SourcesFor(selection SourceSelection) (SelectedRequestSources,
 	}
 	state.mu.RUnlock()
 	if !inputConfigured {
-		result.HasBody = r.hasOriginalBody()
+		// Parse 已完成缓存或流式表单解析；空正文的回放流不能被误判为有实体。
+		result.HasBody = r.bodyCacheSize.Load() > 0 || errors.Is(r.originalBodyError(), ErrRequestBodyUnavailable)
 	}
 	formMedia := isFormMediaType(result.MediaType)
 	copyValues := selection.Body

@@ -9,15 +9,20 @@ import (
 // sqliteSchemaCatalogQuery 在同一语句、同一物理连接中读取字段和建表声明。
 // namespace 已经过 splitSchemaTable 校验，表名始终绑定；DDL 仅返回一次，避免按字段数放大数据量。
 func sqliteSchemaCatalogQuery(namespace, name string) (string, []interface{}) {
-	query := `WITH columns AS (SELECT * FROM pragma_table_info(?, ?))
-SELECT name, type AS data_type, "notnull" AS not_null,
+	// table_xinfo 的 hidden=1 是虚拟表隐藏列，生成列仍属于可见字段。
+	// 普通表中，只有行号别名主键没有独立的 pk 索引；列级 DESC 和复合主键均有该索引。
+	query := `WITH columns AS (SELECT * FROM pragma_table_xinfo(?, ?) WHERE hidden <> 1),
+     table_def AS (SELECT sql, rootpage FROM "` + namespace + `".sqlite_master
+                   WHERE type = 'table' AND name = ? COLLATE NOCASE)
+SELECT name, type AS data_type,
+       CASE WHEN pk = 1 AND type = 'INTEGER' COLLATE NOCASE AND (SELECT rootpage FROM table_def) > 0
+                 AND NOT EXISTS (SELECT 1 FROM pragma_index_list(?, ?) WHERE origin = 'pk')
+            THEN 1 ELSE "notnull" END AS not_null,
        dflt_value AS default_value, pk AS primary_key,
        CASE WHEN cid = (SELECT MIN(cid) FROM columns)
-            THEN (SELECT sql FROM "` + namespace + `".sqlite_master
-                  WHERE type = 'table' AND name = ? COLLATE NOCASE)
-       END AS create_sql
+            THEN (SELECT sql FROM table_def) END AS create_sql
 FROM columns ORDER BY cid`
-	return query, []interface{}{name, namespace, name}
+	return query, []interface{}{name, namespace, name, name, namespace}
 }
 
 // applySQLiteAutoIncrement 结合 SQLite 已验证的 DDL 与 PRAGMA 主键信息确定目标列。

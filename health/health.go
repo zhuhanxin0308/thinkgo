@@ -12,6 +12,8 @@ import (
 	"sync"
 	"time"
 	"unicode"
+
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/cleanup"
 )
 
 const (
@@ -227,13 +229,10 @@ func (r *Registry) snapshotChecks() ([]namedCheck, time.Duration) {
 	return checks, timeout
 }
 
-func runCheck(check Check, ctx context.Context) (err error) {
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			err = fmt.Errorf("健康检查 panic: %v", recovered)
-		}
-	}()
-	return check(ctx)
+func runCheck(check Check, ctx context.Context) error {
+	return cleanup.Catch(func() error { return check(ctx) }, func(recovered any) error {
+		return fmt.Errorf("健康检查 panic: %v", recovered)
+	})
 }
 
 // runCheckWithinBudget 通过有界执行槽隔离不遵守 Context 的检查，防止探针被永久阻塞或无界泄漏 goroutine。

@@ -173,7 +173,7 @@ func (connection *pinnedSQLConnection) ExecuteContext(ctx context.Context, rawSQ
 	if err != nil {
 		return 0, err
 	}
-	return result.RowsAffected()
+	return sqlRowsAffected(result)
 }
 
 func (connection *pinnedSQLConnection) TransactionContext(ctx context.Context, callback func(ContextualRawQueryable) error) error {
@@ -314,5 +314,5 @@ func (transaction *pinnedSQLTransaction) ExecuteContext(ctx context.Context, raw
 	if err != nil {
 		return 0, err
 	}
-	return result.RowsAffected()
+	return sqlRowsAffected(result)
 }

@@ -29,6 +29,8 @@ var (
 	ErrConnectionNotFound = errors.New("数据库连接不存在")
 	// ErrDatabaseManagerClosed 表示连接管理器已经关闭。
 	ErrDatabaseManagerClosed = errors.New("数据库连接管理器已关闭")
+	// ErrConnectionFactoryAborted 表示连接工厂在返回前退出，等待者可以重新发起构建。
+	ErrConnectionFactoryAborted = errors.New("数据库连接工厂在返回前退出")
 	// ErrTimestampOverflow 表示 Unix 时间戳无法安全写入字段当前整数类型。
 	ErrTimestampOverflow = errors.New("自动时间戳整数溢出")
 	// ErrInvalidQuery 表示查询器依赖、状态或参数非法。
@@ -69,6 +71,9 @@ var (
 	ErrInsertIDUnavailable = errors.New("数据库插入主键不可用")
 	// ErrPartialWrite 表示数据库写入已经完成，但本地结果绑定失败。
 	ErrPartialWrite = errors.New("数据库写入已完成但本地结果绑定失败")
+	// ErrRowsAffectedUnknown 表示 SQL 已执行成功，但驱动无法提供影响行数；此时返回的数量无效。
+	// 当前事务仍由其所有者决定提交或回滚，错误链保留驱动原因。
+	ErrRowsAffectedUnknown = errors.New("SQL 已执行但影响行数未知")
 	// ErrUnsafeExpression 表示低层驱动收到无法证明来源安全的表达式。
 	ErrUnsafeExpression = errors.New("数据库表达式来源不安全")
 	// ErrInvalidOperationResult 表示驱动返回的写入数量或主键状态互相矛盾。

@@ -18,6 +18,35 @@ func enabledTelemetryValues() map[string]interface{} {
 	}
 }
 
+// 三种公开配置表示都要在构造导出器前拒绝 HTTP 传输不能发送的字段值。
+func TestProviderValidatesHeaderValueBeforeExport(t *testing.T) {
+	for _, value := range []string{"private\x01value", "private\x7fvalue", "tenant id\tregion"} {
+		header := map[string]string{"X-Tenant": value}
+		encoded, err := json.Marshal(header)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, raw := range []any{header, map[string]any{"X-Tenant": value}, string(encoded)} {
+			app, cfg := telemetryProviderTestApp(t)
+			values := enabledTelemetryValues()
+			values["headers"] = raw
+			if err := cfg.Set("telemetry", values); err != nil {
+				t.Fatal(err)
+			}
+			provider := NewProvider()
+			t.Cleanup(func() { _ = provider.Shutdown(app) })
+			err := provider.Initialize(app)
+			if value == "tenant id\tregion" {
+				if err != nil {
+					t.Fatalf("合法空格与制表符未被接受：%T: %v", raw, err)
+				}
+			} else if err == nil || provider.sdk != nil || !strings.Contains(strings.ToLower(err.Error()), "x-tenant") || strings.Contains(err.Error(), "private") {
+				t.Fatalf("非法值应在创建 SDK 前被拒绝并保护配置内容：%T: %v", raw, err)
+			}
+		}
+	}
+}
+
 // TestParseProviderConfigRejectsUnsafeTypesAndBounds 验证配置解析不会把浮点、越界、
 // 凭据 URL 或错误集合类型静默转换成可运行配置。
 func TestParseProviderConfigRejectsUnsafeTypesAndBounds(t *testing.T) {

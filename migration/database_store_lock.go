@@ -115,6 +115,9 @@ func (store *DatabaseStore) withAcquiredMigrationSession(
 
 	safeSQLiteCommit := false
 	callbackReturned := false
+	// 只观察跨越本次 Runner 回调的 SQLite 写锁，装饰存储可在回调前后使用其它锁。
+	observation, _ := ctx.Value(migrationResultKey{}).(*migrationResultObservation)
+	observe := observation != nil && !observation.returned.Load()
 	defer func() {
 		cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), migrationCleanupTimeout)
 		defer cancelCleanup()
@@ -124,6 +127,9 @@ func (store *DatabaseStore) withAcquiredMigrationSession(
 			commit = callbackReturned && safeSQLiteCommit
 		}
 		releaseErr := locker.Release(cleanupCtx, commit)
+		if sqlite, ok := locker.(*sqliteMigrationLocker); ok && observe && observation.returned.Load() && !sqlite.committed {
+			observation.unconfirmed.Store(true)
+		}
 		if releaseErr != nil {
 			session.Invalidate()
 		}

@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -187,6 +188,50 @@ func newTrackedTestDatabase(t *testing.T) (*db.DB, *atomic.Int32) {
 	}
 	_ = conn.Close()
 	return db.NewDB(db.NewSQLConnection(raw, &builder.Sqlite{})), closed
+}
+
+// 构造器交付宿主前必须在原协程退出时关闭已接收资源，退出原因对调用者保持可见。
+func TestHostClosesOwnedResourcesOnAbnormalExit(t *testing.T) {
+	for _, stage := range []string{"register", "configure"} {
+		for _, mode := range []string{"panic", "goexit"} {
+			t.Run(stage+"/"+mode, func(t *testing.T) {
+				database, closed := newTrackedTestDatabase(t)
+				t.Cleanup(func() { _ = database.Close() })
+				marker := errors.New("装配失败")
+				var app *framework.App
+				callback := func(current *framework.App) error {
+					app = current
+					if mode == "panic" {
+						panic(marker)
+					}
+					runtime.Goexit()
+					return nil
+				}
+				opts := Options{Database: database}
+				if stage == "register" {
+					opts.Register = callback
+				} else {
+					opts.Configure = callback
+				}
+				var recovered any
+				var returned bool
+				done := make(chan struct{})
+				go func() {
+					defer close(done)
+					defer func() { recovered = recover() }()
+					New(t, opts)
+					returned = true
+				}()
+				<-done
+				if returned || (mode == "panic" && recovered != marker) || (mode == "goexit" && recovered != nil) {
+					t.Fatalf("构造异常未保留：返回=%t，异常=%v", returned, recovered)
+				}
+				if closed.Load() != 1 || app == nil || app.State() != framework.ApplicationStateClosed {
+					t.Fatalf("未交付的宿主没有完成清理：数据库关闭次数=%d，应用=%v", closed.Load(), app != nil)
+				}
+			})
+		}
+	}
 }
 
 // TestHostRunsAsHTTPApplicationAndFreezesContainer 验证 testkit.New 以非控制台 HTTP 模式运行、

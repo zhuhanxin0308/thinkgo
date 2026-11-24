@@ -66,11 +66,11 @@ func New(t testing.TB, options Options) *Host {
 	return host
 }
 
-func newHost(basePath string, options Options) (_ *Host, returnErr error) {
+func newHost(basePath string, options Options) (host *Host, returnErr error) {
 	connector.RegisterBuiltins()
 	databaseOwned := false
 	defer func() {
-		if returnErr != nil && options.Database != nil && !databaseOwned {
+		if options.Database != nil && !databaseOwned {
 			returnErr = errors.Join(returnErr, options.Database.Close())
 		}
 	}()
@@ -80,7 +80,8 @@ func newHost(basePath string, options Options) (_ *Host, returnErr error) {
 	app := framework.NewApp(basePath)
 	var releaseServing func() error
 	defer func() {
-		if returnErr != nil {
+		// 仅成功交付的宿主接管租约与应用；回调 panic 或 Goexit 时在原栈收尾。
+		if host == nil {
 			var releaseErr error
 			if releaseServing != nil {
 				releaseErr = releaseServing()

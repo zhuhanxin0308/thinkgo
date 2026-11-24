@@ -3,6 +3,8 @@ package middleware
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -12,6 +14,67 @@ import (
 
 type recoveryTestApp struct {
 	debug bool
+}
+
+func TestRecoveryReportsNilPanicOnce(t *testing.T) {
+	for _, mode := range []string{"0", "1"} {
+		t.Run("panicnil="+mode, func(t *testing.T) {
+			t.Setenv("GODEBUG", os.Getenv("GODEBUG")+",panicnil="+mode)
+			logger := &recoveryTestLogger{}
+			req := fwcontext.MustNewRequest(httptest.NewRequest(http.MethodGet, "/", nil))
+			resp := (&Recovery{Log: logger}).Handle(req, func(*fwcontext.Request) *fwcontext.Response { panic(nil) })
+			if resp == nil || resp.GetStatus() != http.StatusInternalServerError || len(logger.errorCalls) != 1 {
+				t.Fatalf("nil panic 必须产生一次报告与 500 响应：响应=%v，报告=%d", resp, len(logger.errorCalls))
+			}
+		})
+	}
+}
+
+type committedRecoveryWriter struct{ *httptest.ResponseRecorder }
+
+func (committedRecoveryWriter) ResetUncommitted() bool { return false }
+
+// 业务中止、已提交响应和协程退出都不能在恢复路径上产生第二份响应或错误报告。
+func TestRecoveryPreservesAbortsAndGoexit(t *testing.T) {
+	t.Setenv("GODEBUG", os.Getenv("GODEBUG")+",panicnil=1")
+	for _, mode := range []string{"abort", "committed", "goexit"} {
+		t.Run(mode, func(t *testing.T) {
+			logger := &recoveryTestLogger{}
+			writer := httptest.NewRecorder()
+			var target http.ResponseWriter = writer
+			if mode == "committed" {
+				writer.WriteHeader(http.StatusAccepted)
+				target = committedRecoveryWriter{writer}
+			}
+			req := fwcontext.MustNewRequest(httptest.NewRequest(http.MethodGet, "/", nil), fwcontext.WithResponseWriter(target))
+			done := make(chan struct{})
+			var returned bool
+			var recovered any
+			go func() {
+				defer close(done)
+				defer func() { recovered = recover() }()
+				(&Recovery{Log: logger}).Handle(req, func(*fwcontext.Request) *fwcontext.Response {
+					switch mode {
+					case "abort":
+						panic(http.ErrAbortHandler)
+					case "committed":
+						panic(nil)
+					}
+					runtime.Goexit()
+					return nil
+				})
+				returned = true
+			}()
+			<-done
+			if returned || (mode != "goexit" && recovered != http.ErrAbortHandler) ||
+				(mode == "goexit" && recovered != nil) || len(logger.errorCalls) != 0 {
+				t.Fatalf("退出方式或报告错误：返回=%t，异常=%v，报告=%d", returned, recovered, len(logger.errorCalls))
+			}
+			if mode == "committed" && writer.Code != http.StatusAccepted {
+				t.Fatalf("已提交状态被覆盖：%d", writer.Code)
+			}
+		})
+	}
 }
 
 func (a *recoveryTestApp) IsDebug() bool {

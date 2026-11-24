@@ -33,10 +33,21 @@ func newSQLiteMigrationFaultDatabase(t *testing.T, fault string) (*db.DB, *atomi
 	t.Helper()
 	var armed atomic.Bool
 	var rejected atomic.Int32
+	database := newSQLiteMigrationAuthorizerDB(t, func(operation int, action, _ string) bool {
+		if operation == sqlite3.SQLITE_SAVEPOINT && action == fault && armed.CompareAndSwap(true, false) {
+			rejected.Add(1)
+			return true
+		}
+		return false
+	})
+	return database, &armed, &rejected
+}
+
+func newSQLiteMigrationAuthorizerDB(t *testing.T, deny func(operation int, action, argument string) bool) *db.DB {
+	t.Helper()
 	backend := &sqlite3.SQLiteDriver{ConnectHook: func(connection *sqlite3.SQLiteConn) error {
-		connection.RegisterAuthorizer(func(operation int, action, _, _ string) int {
-			if operation == sqlite3.SQLITE_SAVEPOINT && action == fault && armed.CompareAndSwap(true, false) {
-				rejected.Add(1)
+		connection.RegisterAuthorizer(func(operation int, action, argument, _ string) int {
+			if deny(operation, action, argument) {
 				return sqlite3.SQLITE_DENY
 			}
 			return sqlite3.SQLITE_OK
@@ -51,7 +62,7 @@ func newSQLiteMigrationFaultDatabase(t *testing.T, fault string) (*db.DB, *atomi
 			t.Errorf("关闭故障测试数据库失败：%v", err)
 		}
 	})
-	return database, &armed, &rejected
+	return database
 }
 
 // 在真实引擎中仅拒绝一个保存点操作，整事务回滚和之后的连接复用仍然可用。

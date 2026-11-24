@@ -3,9 +3,99 @@ package db
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"testing"
 )
+
+// 故障连接在完成写入后才返回结果错误；每次执行都计入审计次数。
+type partialRecordConnection struct {
+	recordLifecycleConnection
+	writes int
+	fault  error
+}
+
+func (c *partialRecordConnection) Update(ctx context.Context, req UpdateRequest) (UpdateResult, error) {
+	result, err := c.recordLifecycleConnection.Update(ctx, req)
+	if err != nil {
+		return result, err
+	}
+	c.writes++
+	if len(c.rows) > 0 {
+		for column, value := range req.Data() {
+			c.rows[0][column] = value
+		}
+	}
+	return result, c.fault
+}
+
+func (c *partialRecordConnection) Delete(context.Context, DeleteRequest) (DeleteResult, error) {
+	c.writes++
+	c.rows = nil
+	return DeleteResult{Deleted: 1}, c.fault
+}
+
+func TestBoundPartialWriteProtectsRecordUntilRefresh(t *testing.T) {
+	for _, action := range []string{"Save", "SaveFields", "Delete", "ForceDelete", "Restore"} {
+		t.Run(action, func(t *testing.T) {
+			c := &partialRecordConnection{
+				recordLifecycleConnection: recordLifecycleConnection{rows: []map[string]any{{"id": int64(7), "name": "before"}}},
+				fault:                     fmt.Errorf("驱动已执行：%w", ErrPartialWrite),
+			}
+			if action == "Restore" {
+				c.rows[0]["delete_time"] = int64(42)
+			}
+			model := NewModel(NewDB(c), "records").SoftDelete()
+			var row lifecycleRecord
+			if found, err := model.WithTrashed().Find(&row); err != nil || !found {
+				t.Fatal(err)
+			}
+			derived := row.WithContext(t.Context())
+			row.Name = "after"
+			var err error
+			switch action {
+			case "Save":
+				err = row.Save()
+			case "SaveFields":
+				err = row.SaveFields("name")
+			case "Delete":
+				err = row.Delete()
+			case "ForceDelete":
+				err = row.ForceDelete()
+			case "Restore":
+				err = row.Restore()
+			}
+			if err != c.fault || c.writes != 1 {
+				t.Fatalf("应返回第一次写入的原始错误：%v，次数=%d", err, c.writes)
+			}
+			c.fault = nil
+			for _, retry := range []func() error{func() error { return row.Save() }, func() error { return row.SaveFields("name") }, derived.ForceDelete, derived.Restore} {
+				if err := retry(); !errors.Is(err, ErrPartialWrite) || c.writes != 1 {
+					t.Fatalf("派生句柄或原记录重放了写入：%v，次数=%d", err, c.writes)
+				}
+			}
+			err = row.Refresh()
+			if action == "ForceDelete" {
+				if !errors.Is(err, ErrModelRecordMissing) {
+					t.Fatalf("已物理删除的记录不能刷新：%v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if action == "Delete" {
+				err = row.Restore()
+			} else {
+				row.Name = "after refresh"
+				err = row.Save()
+			}
+			if err != nil || c.writes != 2 {
+				t.Fatalf("刷新后应允许下一次写入：%v，次数=%d", err, c.writes)
+			}
+		})
+	}
+}
 
 type lifecycleRecord struct {
 	*Model

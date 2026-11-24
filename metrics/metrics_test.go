@@ -9,6 +9,42 @@ import (
 	"time"
 )
 
+type pausedMetricsWriter struct {
+	*httptest.ResponseRecorder
+	once    sync.Once
+	entered chan struct{}
+	resume  chan struct{}
+}
+
+func (writer *pausedMetricsWriter) Header() http.Header {
+	writer.once.Do(func() {
+		close(writer.entered)
+		<-writer.resume
+	})
+	return writer.ResponseRecorder.Header()
+}
+
+// 让关闭发生在成功抓取首次访问响应头后，验证已接受的响应包含完整指标。
+func TestScrapeCompletesAcrossDisable(t *testing.T) {
+	registry := NewRegistry()
+	registry.Enable()
+	registry.Observe(http.StatusOK, time.Millisecond)
+	want := registry.Prometheus()
+	writer := &pausedMetricsWriter{ResponseRecorder: httptest.NewRecorder(), entered: make(chan struct{}), resume: make(chan struct{})}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		registry.ServeHTTP(writer, nil)
+	}()
+	<-writer.entered
+	registry.Disable()
+	close(writer.resume)
+	<-done
+	if writer.Code != http.StatusOK || writer.Body.String() != want || writer.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("抓取返回不完整：状态=%d，正文=%q", writer.Code, writer.Body.String())
+	}
+}
+
 func TestRegistryEnableObserveAndPrometheus(t *testing.T) {
 	registry := NewRegistry()
 	if registry.Enabled() {

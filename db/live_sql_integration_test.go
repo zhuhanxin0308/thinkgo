@@ -259,6 +259,8 @@ func TestLivePostgreSQLQueryAndTransactionContract(t *testing.T) {
 
 // TestLivePostgreSQLGeneratedColumnSchema 验证序列列和身份列都能被识别为自动生成。
 func TestLivePostgreSQLGeneratedColumnSchema(t *testing.T) {
+	t.Run("搜索路径", testPostgresCatalogSearchPath)
+	t.Run("主键约束", testPostgresCatalogPrimaryKeys)
 	database := connectLiveSQL(t, "pgsql")
 	serialTable := createLiveSQLTable(t, database, "pgsql")
 	identityTable := liveSQLTableName()

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/cleanup"
 )
 
 // Manager 管理不可静默覆盖的命名连接，并提供幂等关闭生命周期。
@@ -231,8 +233,28 @@ func (m *Manager) Connection(name string) (*DB, error) {
 	registered.active = attempt
 	m.factoryWG.Add(1)
 	m.lock.Unlock()
+	return m.buildConnection(name, registered, attempt)
+}
 
-	connection, err := callConnectionFactorySafely(registered.build)
+// buildConnection 在工厂的原协程中结算结果；Goexit 继续退出，但不得遗留等待者和关闭计数。
+func (m *Manager) buildConnection(name string, registered *lazyConnectionFactory, attempt *lazyConnectionAttempt) (connection *DB, err error) {
+	returned := false
+	defer func() {
+		defer m.factoryWG.Done()
+		if !returned {
+			connection = nil
+			err = fmt.Errorf("创建数据库连接 %q 失败: %w", name, ErrConnectionFactoryAborted)
+		}
+		m.lock.Lock()
+		defer m.lock.Unlock()
+		if registered.active == attempt {
+			registered.active = nil
+		}
+		attempt.connection = connection
+		attempt.err = err
+		close(attempt.done)
+	}()
+	connection, err = callConnectionFactorySafely(registered.build)
 	if err == nil && connection == nil {
 		err = ErrDatabaseUnavailable
 	}
@@ -248,19 +270,11 @@ func (m *Manager) Connection(name string) (*DB, error) {
 			}
 		}
 	}
+	// 格式化错误可能调用第三方 Error/Format，必须在结果结算之前完成。
 	if err != nil {
 		err = fmt.Errorf("创建数据库连接 %q 失败: %w", name, err)
 	}
-
-	m.lock.Lock()
-	if registered.active == attempt {
-		registered.active = nil
-	}
-	attempt.connection = connection
-	attempt.err = err
-	close(attempt.done)
-	m.lock.Unlock()
-	m.factoryWG.Done()
+	returned = true
 	return connection, err
 }
 
@@ -283,13 +297,15 @@ func (m *Manager) closeUnattachedConnection(connection *DB) error {
 }
 
 func callConnectionFactorySafely(factory ConnectionFactory) (connection *DB, err error) {
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			connection = nil
-			err = fmt.Errorf("数据库连接工厂 panic: %v", recovered)
-		}
-	}()
-	return factory()
+	err = cleanup.Catch(func() error {
+		var buildErr error
+		connection, buildErr = factory()
+		return buildErr
+	}, func(recovered any) error {
+		connection = nil
+		return fmt.Errorf("数据库连接工厂 panic: %v", recovered)
+	})
+	return connection, err
 }
 
 // Close 唤醒等待惰性连接的调用者，关闭每个唯一 DB，并等待在途工厂实际退出。

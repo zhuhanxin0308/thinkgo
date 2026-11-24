@@ -12,6 +12,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/cleanup"
 )
 
 var (
@@ -772,60 +774,49 @@ func (l *Log) takeDriverErrors() error {
 	return joined
 }
 
-func safeDriverWrite(driver Driver, entry *LogEntry) (err error) {
+func safeDriverWrite(driver Driver, entry *LogEntry) error {
 	if isNilDriver(driver) {
 		return ErrNilLogDriver
 	}
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			err = fmt.Errorf("日志驱动 WriteEntry 发生 panic: %v", recovered)
-		}
-	}()
-	return driver.WriteEntry(entry.forDriver())
+	return catchLogPanic("日志驱动 WriteEntry", func() error { return driver.WriteEntry(entry.forDriver()) })
 }
 
-func safeDriverSave(driver Driver, entries []*LogEntry) (err error) {
+func safeDriverSave(driver Driver, entries []*LogEntry) error {
 	if isNilDriver(driver) {
 		return ErrNilLogDriver
 	}
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			err = fmt.Errorf("日志驱动 SaveEntries 发生 panic: %v", recovered)
+	return catchLogPanic("日志驱动 SaveEntries", func() error {
+		isolation := make([]*LogEntry, len(entries))
+		for index, entry := range entries {
+			isolation[index] = entry.forDriver()
 		}
-	}()
-	isolation := make([]*LogEntry, len(entries))
-	for index, entry := range entries {
-		isolation[index] = entry.forDriver()
-	}
-	return driver.SaveEntries(isolation)
+		return driver.SaveEntries(isolation)
+	})
 }
 
-func safeDriverClose(driver Driver) (err error) {
+func safeDriverClose(driver Driver) error {
 	if isNilDriver(driver) {
 		return ErrNilLogDriver
 	}
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			err = fmt.Errorf("日志驱动 Close 发生 panic: %v", recovered)
-		}
-	}()
-	return driver.Close()
+	return catchLogPanic("日志驱动 Close", driver.Close)
 }
 
-func safeFallbackWrite(writer io.Writer, message string) (err error) {
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			err = fmt.Errorf("兜底输出发生 panic: %v", recovered)
+func safeFallbackWrite(writer io.Writer, message string) error {
+	return cleanup.Catch(func() error {
+		written, err := io.WriteString(writer, message)
+		if err == nil && written != len(message) {
+			return io.ErrShortWrite
 		}
-	}()
-	written, err := io.WriteString(writer, message)
-	if err != nil {
 		return err
-	}
-	if written != len(message) {
-		return io.ErrShortWrite
-	}
-	return nil
+	}, func(recovered any) error {
+		return fmt.Errorf("兜底输出发生 panic: %v", recovered)
+	})
+}
+
+func catchLogPanic(stage string, callback func() error) error {
+	return cleanup.Catch(callback, func(recovered any) error {
+		return fmt.Errorf("%s 发生 panic: %v", stage, recovered)
+	})
 }
 
 func isNilDriver(driver Driver) bool {
