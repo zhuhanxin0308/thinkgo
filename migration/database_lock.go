@@ -204,6 +204,7 @@ type sqliteMigrationLocker struct {
 	session             db.PinnedSQLConnection
 	previousBusyTimeout int64
 	busyTimeoutChanged  bool
+	committed           bool
 }
 
 func (locker *sqliteMigrationLocker) Acquire(ctx context.Context, _ time.Duration) error {
@@ -235,6 +236,12 @@ func (locker *sqliteMigrationLocker) Release(ctx context.Context, commit bool) e
 		releaseErr = locker.executeWithRetry(ctx, statement)
 	} else {
 		_, releaseErr = locker.session.ExecuteContext(ctx, statement)
+	}
+	// 事务结局由 COMMIT/ROLLBACK 的执行阶段决定，独立于后续的连接设置恢复。
+	if releaseErr == nil || errors.Is(releaseErr, db.ErrRowsAffectedUnknown) {
+		locker.committed = commit
+	} else {
+		releaseErr = fmt.Errorf("%w: %w", ErrMigrationOutcomeUnknown, releaseErr)
 	}
 	var restoreErr error
 	if locker.busyTimeoutChanged {
@@ -305,7 +312,7 @@ func (locker *sqliteMigrationLocker) executeWithRetry(ctx context.Context, state
 		if err == nil {
 			return nil
 		}
-		if !isSQLiteBusyOrLocked(err) {
+		if errors.Is(err, db.ErrRowsAffectedUnknown) || !isSQLiteBusyOrLocked(err) {
 			return err
 		}
 		timer := time.NewTimer(delay)

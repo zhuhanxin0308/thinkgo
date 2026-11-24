@@ -92,9 +92,9 @@ func (r *Request) replaceOriginalBody(body io.ReadCloser) {
 	r.errorMu.Unlock()
 }
 
-// hasOriginalBody 保留零长度为空体的语义；空 GET 不访问会变化的正文指针，也不加锁。
+// hasOriginalBody 检查实际正文流，顺序替换 Raw().Body 后的旧长度不能充当空体依据。
 func (r *Request) hasOriginalBody() bool {
-	if r == nil || r.raw == nil || r.raw.ContentLength == 0 {
+	if r == nil || r.raw == nil {
 		return false
 	}
 	body := r.originalBody()

@@ -198,7 +198,7 @@ func (c *SQLConnection) Insert(ctx context.Context, request InsertRequest) (Inse
 	if err != nil {
 		return InsertResult{}, err
 	}
-	affected, err := result.RowsAffected()
+	affected, err := sqlRowsAffected(result)
 	if err != nil {
 		return InsertResult{}, err
 	}
@@ -286,7 +286,7 @@ func (c *SQLConnection) Update(ctx context.Context, request UpdateRequest) (Upda
 	if err != nil {
 		return UpdateResult{}, err
 	}
-	affected, err := result.RowsAffected()
+	affected, err := sqlRowsAffected(result)
 	if err != nil {
 		return UpdateResult{}, err
 	}
@@ -315,7 +315,7 @@ func (c *SQLConnection) Delete(ctx context.Context, request DeleteRequest) (Dele
 	if err != nil {
 		return DeleteResult{}, err
 	}
-	affected, err := result.RowsAffected()
+	affected, err := sqlRowsAffected(result)
 	if err != nil {
 		return DeleteResult{}, err
 	}
@@ -413,7 +413,16 @@ func (c *SQLConnection) ExecuteContext(ctx context.Context, rawSQL string, args 
 	if err != nil {
 		return 0, err
 	}
-	return result.RowsAffected()
+	return sqlRowsAffected(result)
+}
+
+// sqlRowsAffected 只在 Exec 成功后读取结果，不发布驱动在报错时附带的数量。
+func sqlRowsAffected(result sql.Result) (int64, error) {
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("%w: %w", ErrRowsAffectedUnknown, err)
+	}
+	return affected, nil
 }
 
 // queryRowsContext 优先复用连接级语句，缓存未启用时退回 database/sql 原生路径。

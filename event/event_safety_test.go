@@ -2,10 +2,59 @@ package event
 
 import (
 	"errors"
+	"os"
 	"testing"
 )
 
 type panickingEvent struct{}
+
+type nilPanicEvent struct{}
+
+func (nilPanicEvent) Name() string { panic(nil) }
+
+func TestDispatcherIsolatesLegacyNilPanic(t *testing.T) {
+	t.Setenv("GODEBUG", os.Getenv("GODEBUG")+",panicnil=1")
+	dispatcher := NewDispatcher()
+	register := func(staged *Dispatcher) error {
+		if err := staged.Listen("staged", &SimpleListener{}); err != nil {
+			return err
+		}
+		panic(nil)
+	}
+	for _, err := range []error{
+		dispatcher.RegisterTransaction(register),
+		dispatcher.Subscribe(issue33Subscriber(register)),
+		dispatcher.Dispatch(nilPanicEvent{}),
+	} {
+		if !errors.Is(err, ErrEventCallbackPanic) || dispatcher.HasListener("staged") {
+			t.Fatalf("注册或事件回调的异常未隔离：%v", err)
+		}
+	}
+	if err := dispatcher.Bind(map[string]Factory{"alias": func(data any) Event {
+		if data != nil {
+			panic(nil)
+		}
+		return NewEvent("bound", nil)
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := dispatcher.Trigger("alias", "value"); !errors.Is(err, ErrEventCallbackPanic) {
+		t.Fatalf("工厂异常分类错误：%v", err)
+	}
+	var calls int
+	if err := dispatcher.Listen("test", &SimpleListener{Handler: func(Event) error { panic(nil) }}); err != nil {
+		t.Fatal(err)
+	}
+	if err := dispatcher.Listen("test", &SimpleListener{Handler: func(Event) error { calls++; return nil }}); err != nil {
+		t.Fatal(err)
+	}
+	if err := dispatcher.Dispatch(NewEvent("test", nil)); !errors.Is(err, ErrEventCallbackPanic) || calls != 0 {
+		t.Fatalf("普通分发应在异常时停下：错误=%v，后续次数=%d", err, calls)
+	}
+	if err := dispatcher.DispatchTerminalContext(t.Context(), NewEvent("test", nil)); !errors.Is(err, ErrEventCallbackPanic) || calls != 1 {
+		t.Fatalf("终止分发应记录异常并继续：错误=%v，后续次数=%d", err, calls)
+	}
+}
 
 func (panickingEvent) Name() string { panic("event name panic") }
 

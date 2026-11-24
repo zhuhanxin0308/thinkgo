@@ -26,6 +26,8 @@ var (
 	ErrMigrationLockUnavailable = errors.New("migration lock unavailable")
 	// ErrMigrationLockLost 表示当前持有者已经不能证明自己仍拥有迁移锁或最新 fencing token。
 	ErrMigrationLockLost = errors.New("migration lock lost")
+	// ErrMigrationOutcomeUnknown 表示无法确认外层迁移事务已提交或回滚，应核验持久状态。
+	ErrMigrationOutcomeUnknown = errors.New("migration transaction outcome is unknown")
 	// ErrMigrationLockRequired 表示数据库迁移写入绕过了受保护的固定会话。
 	ErrMigrationLockRequired = errors.New("migration lock required")
 	// ErrMigrationDirty 表示上一次迁移没有到达可证明的最终状态，需要人工核验后显式恢复。

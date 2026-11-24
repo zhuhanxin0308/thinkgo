@@ -187,7 +187,7 @@ func (q *Query) insertAllBatched(sqlConn *SQLConnection, fields []string, dataLi
 		if err != nil {
 			return 0, q.reportError("insert_all", err, nil)
 		}
-		affected, err := result.RowsAffected()
+		affected, err := sqlRowsAffected(result)
 		if err != nil {
 			return 0, q.reportError("insert_all", err, nil)
 		}
@@ -424,10 +424,10 @@ func (q *Query) ChunkByIdWithCodec(count int, pkField string, codec CursorCodec,
 	for {
 		cloned := q.clone()
 		if lastID != nil {
-			cloned = cloned.WhereField(pkField, ">", lastID)
+			cloned = cloned.WhereField(cursorField.source, ">", lastID)
 		}
 		// 主键升序 + LIMIT 实现游标分页（不使用 OFFSET）。
-		cloned.order = pkField
+		cloned.order = cursorField.source
 		cloned.limit = readLimit
 		cloned.offset = 0
 

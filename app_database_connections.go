@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/zhuhanxin0308/thinkgo/v3/db"
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/cleanup"
 	"github.com/zhuhanxin0308/thinkgo/v3/log"
 )
 
@@ -210,8 +211,7 @@ func initializeDatabaseConnections(specs []databaseConnectionSpec) map[string]da
 		go func() {
 			defer workers.Done()
 			for spec := range jobs {
-				database, err := connectDatabaseSafely(spec.config)
-				resultChannel <- databaseConnectionResult{name: spec.name, database: database, err: err}
+				resultChannel <- initializeDatabaseConnection(spec)
 			}
 		}()
 	}
@@ -229,15 +229,32 @@ func initializeDatabaseConnections(specs []databaseConnectionSpec) map[string]da
 	return results
 }
 
+// initializeDatabaseConnection 隔离每项连接器的协程退出，固定 worker 等本项结算后再领取下一项。
+// 因此同时连接数仍受 worker 上限约束，Goexit 既不会丢失结果，也不会耗尽调度者。
+func initializeDatabaseConnection(spec databaseConnectionSpec) databaseConnectionResult {
+	completed := make(chan databaseConnectionResult, 1)
+	go func() {
+		result := databaseConnectionResult{
+			name: spec.name,
+			err:  fmt.Errorf("数据库连接器在返回前退出: %w", db.ErrDatabaseUnavailable),
+		}
+		defer func() { completed <- result }()
+		result.database, result.err = connectDatabaseSafely(spec.config)
+	}()
+	return <-completed
+}
+
 // connectDatabaseSafely 将第三方连接器 panic 收敛为连接失败，避免后台 worker 直接崩溃宿主进程。
 func connectDatabaseSafely(config db.Config) (database *db.DB, err error) {
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			database = nil
-			err = fmt.Errorf("数据库连接器 panic: %v", recovered)
-		}
-	}()
-	return db.Connect(config)
+	err = cleanup.Catch(func() error {
+		var connectErr error
+		database, connectErr = db.Connect(config)
+		return connectErr
+	}, func(recovered any) error {
+		database = nil
+		return fmt.Errorf("数据库连接器 panic: %v", recovered)
+	})
+	return database, err
 }
 
 func readDefaultDatabaseConnection(config map[string]interface{}) (string, error) {

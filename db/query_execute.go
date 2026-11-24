@@ -317,7 +317,7 @@ func (q *Query) insertResultInTx(request InsertRequest) (InsertResult, error) {
 	if err != nil {
 		return InsertResult{}, err
 	}
-	affected, err := sqlResult.RowsAffected()
+	affected, err := sqlRowsAffected(sqlResult)
 	if err != nil {
 		return InsertResult{}, err
 	}
@@ -401,7 +401,7 @@ func (q *Query) UpdateResult(data map[string]interface{}) (UpdateResult, error) 
 		if err != nil {
 			return UpdateResult{}, q.reportWriteError("update", err, workingData, nil)
 		}
-		affected, err := result.RowsAffected()
+		affected, err := sqlRowsAffected(result)
 		if err != nil {
 			return UpdateResult{}, q.reportError("update", err, nil)
 		}
@@ -535,7 +535,7 @@ func (q *Query) deleteResult(detachRelations bool) (DeleteResult, error) {
 		if err != nil {
 			return DeleteResult{}, q.reportError("delete", err, nil)
 		}
-		deleted, err := result.RowsAffected()
+		deleted, err := sqlRowsAffected(result)
 		if err != nil {
 			return DeleteResult{}, q.reportError("delete", err, nil)
 		}
@@ -680,7 +680,7 @@ func (q *Query) executeSQLInTx(query string, args ...interface{}) (int64, error)
 	if err != nil {
 		return 0, err
 	}
-	return result.RowsAffected()
+	return sqlRowsAffected(result)
 }
 
 // parseCountValue 精确解析 Count 返回值，拒绝小数、负数、溢出和格式错误。

@@ -153,11 +153,14 @@ func (r *Registry) observe(status int, duration time.Duration) {
 // Snapshot 返回当前指标快照。累计桶在同一次读取中构造，保证非递减且 +Inf 等于 DurationCount；
 // 其它计数和耗时总和仍是独立原子读取的近似快照。
 func (r *Registry) Snapshot() Snapshot {
-	var snapshot Snapshot
+	return r.snapshot(r.Enabled())
+}
+
+func (r *Registry) snapshot(enabled bool) Snapshot {
+	snapshot := Snapshot{Enabled: enabled}
 	if r == nil {
 		return snapshot
 	}
-	snapshot.Enabled = r.Enabled()
 	snapshot.InFlight = r.inFlight.Load()
 	snapshot.Requests = r.requests.Load()
 	snapshot.Errors = r.errors.Load()
@@ -201,7 +204,7 @@ func (r *Registry) Prometheus() string {
 	if !r.Enabled() {
 		return ""
 	}
-	snapshot := r.Snapshot()
+	snapshot := r.snapshot(true)
 	var builder strings.Builder
 	builder.Grow(1024)
 	writeMetricHeader(&builder, "thinkgo_http_requests_total", "counter", "HTTP 请求总数。")
@@ -233,13 +236,14 @@ func (r *Registry) Prometheus() string {
 
 // ServeHTTP 导出 Prometheus 指标；未启用时返回 404，避免意外暴露观测端点。
 func (r *Registry) ServeHTTP(writer http.ResponseWriter, _ *http.Request) {
-	if r == nil || !r.Enabled() {
+	output := r.Prometheus()
+	if output == "" {
 		http.NotFound(writer, nil)
 		return
 	}
 	writer.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	writer.Header().Set("Cache-Control", "no-store")
-	_, _ = writer.Write([]byte(r.Prometheus()))
+	_, _ = writer.Write([]byte(output))
 }
 
 func writeMetricHeader(builder *strings.Builder, name, metricType, help string) {

@@ -361,7 +361,7 @@ func (t *Tx) ExecuteContext(ctx context.Context, rawSQL string, args ...interfac
 	if err != nil {
 		return 0, err
 	}
-	return result.RowsAffected()
+	return sqlRowsAffected(result)
 }
 
 // bindQuery 绑定事务所有者，使结束后的查询不会退回普通连接执行。

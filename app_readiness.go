@@ -198,10 +198,11 @@ func (app *App) metricsRouteWithRegistry(registry *metrics.Registry, request *fw
 	if !app.operationalRequestAllowed(request) {
 		return operationalAccessDeniedResponse()
 	}
-	if registry == nil || !registry.Enabled() {
+	output := registry.Prometheus()
+	if output == "" {
 		return fwcontext.NewResponse().Code(404).Content("404 Not Found")
 	}
-	return fwcontext.NewResponse().Content(registry.Prometheus() + app.requestTaskPrometheus()).ContentType("text/plain; version=0.0.4").CacheControl("no-store")
+	return fwcontext.NewResponse().Content(output + app.requestTaskPrometheus()).ContentType("text/plain; version=0.0.4").CacheControl("no-store")
 }
 
 // operationalRequestAllowed 按直连来源地址执行运维端点白名单；反向代理部署应配置可信代理自身网段。

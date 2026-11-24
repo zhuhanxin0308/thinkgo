@@ -8,10 +8,11 @@ import (
 	"math"
 	"net/url"
 	"os"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/net/http/httpguts"
 )
 
 const (
@@ -26,8 +27,6 @@ const (
 	maximumHeaderCount        = 64
 	maximumHeaderValueBytes   = 8 * 1024
 )
-
-var headerNamePattern = regexp.MustCompile(`^[!#$%&'*+.^_` + "`" + `|~0-9A-Za-z-]+$`)
 
 type providerConfig struct {
 	Enabled            bool
@@ -190,7 +189,7 @@ func strictHeaders(raw interface{}) (map[string]string, error) {
 			return nil, fmt.Errorf("telemetry.headers 中的 %q 由 OTLP HTTP 传输管理，不能自定义", name)
 		}
 		value, ok := rawValue.(string)
-		if !ok || !headerNamePattern.MatchString(name) || len(value) > maximumHeaderValueBytes || strings.ContainsAny(value, "\r\n\x00") {
+		if !ok || !httpguts.ValidHeaderFieldName(name) || len(value) > maximumHeaderValueBytes || !httpguts.ValidHeaderFieldValue(value) {
 			return nil, fmt.Errorf("telemetry.headers 中的 %q 非法", name)
 		}
 		// HTTP 字段名不区分 ASCII 大小写，不能让 map 遍历顺序决定最终凭据。

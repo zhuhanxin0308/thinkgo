@@ -78,12 +78,12 @@ func (q *Query) SeekPageWithCodec(pageSize int, pkField string, codec CursorCode
 
 	query := q.clone()
 	if hasAfter {
-		query = query.appendWhereField(pkField, ">", after)
+		query = query.appendWhereField(cursorField.source, ">", after)
 		if query.err != nil {
 			return nil, q.reportError("seek_page", query.err, nil)
 		}
 	}
-	query.order = pkField
+	query.order = cursorField.source
 	query.limit = pageSize + 1
 	query.offset = 0
 
@@ -122,6 +122,7 @@ func (q *Query) SeekPageWithCodec(pageSize int, pkField string, codec CursorCode
 
 type cursorResultField struct {
 	name          string
+	source        string
 	projection    string
 	oracleDialect bool
 }
@@ -136,7 +137,7 @@ func (field cursorResultField) read(row map[string]interface{}) (interface{}, bo
 
 // resolveCursorResultField 确认 SQL 投影确实包含游标列，追踪显式列别名并阻止其它列冒充游标。
 func (q *Query) resolveCursorResultField(name string, sqlProjection bool) (cursorResultField, error) {
-	field := cursorResultField{name: name, oracleDialect: q.isOracleDialect()}
+	field := cursorResultField{name: name, source: name, oracleDialect: q.isOracleDialect()}
 	if !sqlProjection {
 		return field, nil
 	}
@@ -152,6 +153,8 @@ func (q *Query) resolveCursorResultField(name string, sqlProjection bool) (curso
 
 	wildcardMatch := false
 	hijackedAlias := false
+	directMatch := false
+	sourceKnown := len(q.joins) == 0
 	for item := range strings.SplitSeq(projection, ",") {
 		column, alias := splitIdentifierAlias(strings.TrimSpace(item))
 		isDirect := false
@@ -161,14 +164,18 @@ func (q *Query) resolveCursorResultField(name string, sqlProjection bool) (curso
 			isDirect = column == name || (mainTable != "" && column == mainTable+"."+name)
 		}
 		if isDirect {
-			field.projection = name
-			if alias != "" {
-				field.projection = alias
+			if !directMatch {
+				field.projection = name
+				if alias != "" {
+					field.projection = alias
+				}
 			}
-			return field, nil
+			directMatch = true
+			sourceKnown = sourceKnown || column != leaf
+			continue
 		}
 		if column == "*" || (qualifier != "" && column == qualifier+".*") {
-			if !wildcardMatch {
+			if !directMatch && !wildcardMatch {
 				field.projection = name
 				wildcardMatch = true
 			}
@@ -184,6 +191,16 @@ func (q *Query) resolveCursorResultField(name string, sqlProjection bool) (curso
 		if strings.EqualFold(outputName, leaf) {
 			hijackedAlias = true
 		}
+	}
+	if directMatch {
+		if separator < 0 && hijackedAlias {
+			if !sourceKnown || mainTable == "" {
+				return cursorResultField{}, fmt.Errorf("%w: 排序别名与游标 %q 冲突，请限定游标源列", ErrInvalidDatabaseRow, name)
+			}
+			// ORDER BY 可优先匹配输出名；排序、边界过滤必须共同引用真实源列。
+			field.source = mainTable + "." + leaf
+		}
+		return field, nil
 	}
 	if wildcardMatch && !hijackedAlias {
 		return field, nil

@@ -112,7 +112,8 @@ func TestOTLPExportPreservesBusinessHeaders(t *testing.T) {
 	app, configuration := telemetryProviderTestApp(t)
 	values := enabledTelemetryValues()
 	values["endpoint"] = collector.URL + "/v1/traces"
-	headers := map[string]string{"Authorization": "Bearer synthetic-test", "X-Tenant": "tenant-test"}
+	const tenant = "tenant test\tregion"
+	headers := map[string]string{"Authorization": "Bearer synthetic-test", "X-Tenant": tenant}
 	values["headers"] = headers
 	if err := configuration.Set("telemetry", values); err != nil {
 		t.Fatal(err)
@@ -144,7 +145,7 @@ func TestOTLPExportPreservesBusinessHeaders(t *testing.T) {
 		if result.err != nil || result.header.Get("Content-Encoding") != "" || result.header.Get("Content-Type") != "application/x-protobuf" {
 			t.Fatalf("导出协议不一致: 请求头=%v，错误=%v", result.header, result.err)
 		}
-		if result.header.Get("Authorization") != "Bearer synthetic-test" || result.header.Get("X-Tenant") != "tenant-test" {
+		if result.header.Get("Authorization") != "Bearer synthetic-test" || result.header.Get("X-Tenant") != tenant {
 			t.Fatal("认证或业务请求头未被保留")
 		}
 		if result.header.Get("Accept-Encoding") != "gzip" {

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 )
 
@@ -25,9 +26,24 @@ func (handler *failingResponseHandler) Render(writer http.ResponseWriter, _ *htt
 	writer.WriteHeader(http.StatusOK)
 	_, _ = writer.Write([]byte("private details"))
 	if handler.panicOn == "render" {
+		if handler.failure == nil {
+			panic(nil)
+		}
 		panic("render failed")
 	}
 	return handler.failure
+}
+
+func TestRenderResponseDiscardsNilPanicOutput(t *testing.T) {
+	t.Setenv("GODEBUG", os.Getenv("GODEBUG")+",panicnil=1")
+	for _, phase := range []string{"report", "render"} {
+		handler := &failingResponseHandler{panicOn: phase}
+		resp, err := RenderResponse(handler, nil, "原始异常")
+		if err == nil || handler.reports != 1 || resp.GetStatus() != http.StatusInternalServerError ||
+			resp.GetHeader("X-Partial") != "" || string(resp.GetBody()) != http.StatusText(http.StatusInternalServerError) {
+			t.Fatalf("%s 阶段异常后错误响应不完整：结果=%v，错误=%v", phase, resp, err)
+		}
+	}
 }
 
 // TestRenderResponseDiscardsFailedOutput 验证渲染返回错误与上报、渲染 panic 均不能发布部分成功响应。

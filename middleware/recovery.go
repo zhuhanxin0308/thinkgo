@@ -6,6 +6,7 @@ import (
 
 	"github.com/zhuhanxin0308/thinkgo/v3/context"
 	"github.com/zhuhanxin0308/thinkgo/v3/exception"
+	"github.com/zhuhanxin0308/thinkgo/v3/internal/cleanup"
 	frameworkLog "github.com/zhuhanxin0308/thinkgo/v3/log"
 )
 
@@ -19,42 +20,35 @@ type Recovery struct {
 }
 
 // Handle 处理请求并把 panic 转成统一异常响应，避免重复抛出导致重复日志。
-func (m *Recovery) Handle(req *context.Request, next func(*context.Request) *context.Response) (resp *context.Response) {
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			if recovered == http.ErrAbortHandler {
+func (m *Recovery) Handle(req *context.Request, next func(*context.Request) *context.Response) *context.Response {
+	return cleanup.Catch(func() *context.Response {
+		if resp := next(req); resp != nil {
+			return resp
+		}
+		return context.NewResponse()
+	}, func(recovered any) *context.Response {
+		if recovered == http.ErrAbortHandler {
+			panic(http.ErrAbortHandler)
+		}
+		if writer, exists := req.ResponseWriter(); exists {
+			if resetter, ok := writer.(interface{ ResetUncommitted() bool }); ok && !resetter.ResetUncommitted() {
+				// 已提交响应无法改写为错误页，必须保留客户端可见的传输失败。
 				panic(http.ErrAbortHandler)
 			}
-			if writer, exists := req.ResponseWriter(); exists {
-				if resetter, ok := writer.(interface{ ResetUncommitted() bool }); ok {
-					if !resetter.ResetUncommitted() {
-						// 已提交响应无法改写为错误页，必须保留客户端可见的传输失败。
-						panic(http.ErrAbortHandler)
-					}
-				}
-			}
-			handler := m.Handler
-			if handler == nil {
-				handler = &exception.Handle{App: m.App, Log: m.Log, TplDir: m.TplDir}
-			}
-
-			var err error
-			resp, err = exception.RenderResponse(handler, req.Raw(), recovered)
-			if err != nil && m.Log != nil {
-				// 只过滤日志专用字段；自定义 Handler 的报告和渲染已经独立完成。
-				if filter, ok := m.Log.(interface{ IsLevelEnabled(string) bool }); ok && !filter.IsLevelEnabled(frameworkLog.LevelError) {
-					return
-				}
+		}
+		handler := m.Handler
+		if handler == nil {
+			handler = &exception.Handle{App: m.App, Log: m.Log, TplDir: m.TplDir}
+		}
+		resp, err := exception.RenderResponse(handler, req.Raw(), recovered)
+		if err != nil && m.Log != nil {
+			// 自定义处理器已完成上报和渲染，这里仅记录渲染失败。
+			if filter, ok := m.Log.(interface{ IsLevelEnabled(string) bool }); !ok || filter.IsLevelEnabled(frameworkLog.LevelError) {
 				m.Log.ErrorCtx("渲染恢复异常失败", map[string]interface{}{"error": frameworkLog.SanitizeErrorText(err.Error())})
 			}
 		}
-	}()
-
-	resp = next(req)
-	if resp == nil {
-		return context.NewResponse()
-	}
-	return resp
+		return resp
+	})
 }
 
 // responseFromRecorder 把标准库 ResponseRecorder 转回框架 Response，便于继续走统一发送链路。
