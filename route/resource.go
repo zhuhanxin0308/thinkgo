@@ -122,7 +122,7 @@ func (r *ResourceRoute) filter(keep func(string) bool) error {
 	}
 	r.router.mu.Lock()
 	defer r.router.mu.Unlock()
-	if r.router.frozen {
+	if r.router.frozen.Load() {
 		return ErrRouterFrozen
 	}
 	for action, registered := range r.routes {

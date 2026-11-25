@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/zhuhanxin0308/thinkgo/v3/context"
 	"github.com/zhuhanxin0308/thinkgo/v3/middleware"
@@ -137,7 +138,7 @@ type Router struct {
 	missRoute     *Route
 	missRoutes    map[string]*Route
 	missList      []*Route
-	frozen        bool
+	frozen        atomic.Bool
 	freezeErr     error
 
 	autoRoute              bool
@@ -206,7 +207,7 @@ func NewRouter() *Router {
 func (r *Router) EnableAutoRoute(enable bool) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.frozen {
+	if r.frozen.Load() {
 		return ErrRouterFrozen
 	}
 	r.autoRoute = enable
@@ -220,7 +221,7 @@ func (r *Router) SetDefaultController(name string) error {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.frozen {
+	if r.frozen.Load() {
 		return ErrRouterFrozen
 	}
 	r.defaultController = name
@@ -234,7 +235,7 @@ func (r *Router) SetDefaultAction(name string) error {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.frozen {
+	if r.frozen.Load() {
 		return ErrRouterFrozen
 	}
 	r.defaultAction = name
@@ -245,7 +246,7 @@ func (r *Router) SetDefaultAction(name string) error {
 func (r *Router) SetCaseSensitive(caseSensitive bool) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.frozen {
+	if r.frozen.Load() {
 		return ErrRouterFrozen
 	}
 	if !caseSensitive && r.caseSensitive {
@@ -265,7 +266,7 @@ func (r *Router) SetCaseSensitive(caseSensitive bool) error {
 func (r *Router) SetCompleteMatch(completeMatch bool) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.frozen {
+	if r.frozen.Load() {
 		return ErrRouterFrozen
 	}
 	r.completeMatch = completeMatch
@@ -276,7 +277,7 @@ func (r *Router) SetCompleteMatch(completeMatch bool) error {
 func (r *Router) SetRemoveSlash(removeSlash bool) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.frozen {
+	if r.frozen.Load() {
 		return ErrRouterFrozen
 	}
 	if removeSlash && !r.removeSlash {
@@ -300,7 +301,7 @@ func (r *Router) SetDefaultExtension(extension string) error {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.frozen {
+	if r.frozen.Load() {
 		return ErrRouterFrozen
 	}
 	r.defaultExtension = normalized
@@ -318,7 +319,7 @@ func (r *Router) SetDefaultPattern(pattern string) error {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.frozen {
+	if r.frozen.Load() {
 		return ErrRouterFrozen
 	}
 	r.defaultPattern = pattern
@@ -334,7 +335,7 @@ func (r *Router) SetControllerLayer(layer string) error {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.frozen {
+	if r.frozen.Load() {
 		return ErrRouterFrozen
 	}
 	r.controllerLayer = layer
@@ -616,33 +617,31 @@ func isRedirectStatus(statusCode int) bool {
 
 // Freeze 原子构建全部只读索引，并封闭后续注册和修改。
 func (r *Router) Freeze() error {
-	r.mu.RLock()
-	if r.frozen {
-		err := r.freezeErr
-		r.mu.RUnlock()
-		return err
-	}
-	r.mu.RUnlock()
-
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.frozen {
+	if r.frozen.Load() {
 		return r.freezeErr
 	}
 
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.frozen.Load() {
+		r.freezeErr = r.buildIndexesLocked()
+		// 最后发布冻结状态，所有后续读者均可观察同一错误或完整的只读索引。
+		r.frozen.Store(true)
+	}
+	return r.freezeErr
+}
+
+// buildIndexesLocked 只在首次冻结持有写锁期间构建索引和路由元数据。
+func (r *Router) buildIndexesLocked() error {
 	staticRoutes := make(map[string]map[string][]*Route)
 	dynamicRoutes := make(map[string][]*Route)
 	for _, registered := range r.routes {
 		parts, optionalCount, err := parseRoutePath(registered.path)
 		if err != nil {
-			r.freezeErr = err
-			r.frozen = true
 			return err
 		}
 		if optionalCount > maxOptionalRouteSegments {
-			r.freezeErr = fmt.Errorf("%w: %s", ErrRouteTooComplex, registered.path)
-			r.frozen = true
-			return r.freezeErr
+			return fmt.Errorf("%w: %s", ErrRouteTooComplex, registered.path)
 		}
 		registered.pathParts = parts
 		if registered.ext == "" && r.defaultExtension != "" && !registered.jsonContract {
@@ -678,8 +677,6 @@ func (r *Router) Freeze() error {
 		if miss.missPrefix != "" {
 			parts, _, err := parseRoutePath(miss.missPrefix)
 			if err != nil {
-				r.freezeErr = err
-				r.frozen = true
 				return err
 			}
 			miss.missParts = parts
@@ -689,8 +686,6 @@ func (r *Router) Freeze() error {
 				}
 				regex, compileErr := compileRoutePattern(param, pattern)
 				if compileErr != nil {
-					r.freezeErr = compileErr
-					r.frozen = true
 					return compileErr
 				}
 				miss.compiled[param] = regex
@@ -700,8 +695,6 @@ func (r *Router) Freeze() error {
 	r.staticRoutes = staticRoutes
 	r.dynamicRoutes = dynamicRoutes
 	r.dynamicIndex = buildRouteIndex(dynamicRoutes)
-	r.freezeErr = nil
-	r.frozen = true
 	return nil
 }
 

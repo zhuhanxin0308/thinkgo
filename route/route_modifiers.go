@@ -26,7 +26,7 @@ func (g *Group) WithDomain(domain string) (*Group, error) {
 	}
 	g.router.mu.RLock()
 	defer g.router.mu.RUnlock()
-	if g.router.frozen {
+	if g.router.frozen.Load() {
 		return nil, ErrRouterFrozen
 	}
 	next := g.clone()
@@ -50,7 +50,7 @@ func (g *Group) ApplyDomainToRoutes(routes []*Route, domain string) (*Group, err
 	}
 	g.router.mu.Lock()
 	defer g.router.mu.Unlock()
-	if g.router.frozen {
+	if g.router.frozen.Load() {
 		return nil, ErrRouterFrozen
 	}
 	level := g.effectiveScopeDepth()
@@ -109,7 +109,7 @@ func (g *Group) WithExtension(extension string) (*Group, error) {
 	}
 	g.router.mu.RLock()
 	defer g.router.mu.RUnlock()
-	if g.router.frozen {
+	if g.router.frozen.Load() {
 		return nil, ErrRouterFrozen
 	}
 	next := g.clone()
@@ -131,7 +131,7 @@ func (g *Group) ApplyExtensionToRoutes(routes []*Route, extension string) (*Grou
 	}
 	g.router.mu.Lock()
 	defer g.router.mu.Unlock()
-	if g.router.frozen {
+	if g.router.frozen.Load() {
 		return nil, ErrRouterFrozen
 	}
 	level := g.effectiveScopeDepth()
@@ -194,7 +194,7 @@ func (g *Group) WithPatterns(patterns map[string]string) (*Group, error) {
 	_ = compiledMap
 	g.router.mu.RLock()
 	defer g.router.mu.RUnlock()
-	if g.router.frozen {
+	if g.router.frozen.Load() {
 		return nil, ErrRouterFrozen
 	}
 	next := g.clone()
@@ -225,7 +225,7 @@ func (g *Group) ApplyPatternsToRoutes(routes []*Route, patterns map[string]strin
 	}
 	g.router.mu.Lock()
 	defer g.router.mu.Unlock()
-	if g.router.frozen {
+	if g.router.frozen.Load() {
 		return nil, ErrRouterFrozen
 	}
 	level := g.effectiveScopeDepth()
@@ -336,7 +336,7 @@ func (r *Route) WithName(name string) error {
 	}
 	router.mu.Lock()
 	defer router.mu.Unlock()
-	if router.frozen {
+	if router.frozen.Load() {
 		return ErrRouterFrozen
 	}
 	if existing := router.namedRoutes[name]; existing != nil && existing != r {
@@ -370,7 +370,7 @@ func (r *Route) WithPattern(param, pattern string) error {
 	}
 	router.mu.Lock()
 	defer router.mu.Unlock()
-	if router.frozen {
+	if router.frozen.Load() {
 		return ErrRouterFrozen
 	}
 	if r.explicitPatterns == nil {
@@ -397,7 +397,7 @@ func (r *Route) WithDomain(domain string) error {
 	}
 	router.mu.Lock()
 	defer router.mu.Unlock()
-	if router.frozen {
+	if router.frozen.Load() {
 		return ErrRouterFrozen
 	}
 	if !r.isMiss {
@@ -424,7 +424,7 @@ func (r *Route) WithExtension(extension string) error {
 	}
 	router.mu.Lock()
 	defer router.mu.Unlock()
-	if router.frozen {
+	if router.frozen.Load() {
 		return ErrRouterFrozen
 	}
 	if !r.isMiss {

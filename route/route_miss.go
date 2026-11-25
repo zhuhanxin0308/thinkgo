@@ -13,7 +13,7 @@ func (r *Router) Miss(handler HandlerFunc) (*Route, error) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.frozen {
+	if r.frozen.Load() {
 		return nil, ErrRouterFrozen
 	}
 	if r.missRoute != nil {
@@ -53,7 +53,7 @@ func (g *Group) SetMiss(method string, handler HandlerFunc) (*Route, error) {
 	r := g.router
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.frozen {
+	if r.frozen.Load() {
 		return nil, ErrRouterFrozen
 	}
 	registered := newMissRoute(r, normalized, handler, g)
