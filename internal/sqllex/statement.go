@@ -20,7 +20,13 @@ func MigrationStatementCommand(text, dialect string) string {
 		}
 		if current == '#' && mysql || strings.HasPrefix(text[index:], "--") &&
 			(!mysql || index+2 == len(text) || text[index+2] <= ' ' || text[index+2] == 0x7f) {
-			lineEnd := strings.IndexAny(text[index:], "\r\n")
+			// MySQL 行注释只在 LF 或输入结束时终止；保留 Oracle 的 CR/LF 边界。
+			var lineEnd int
+			if mysql {
+				lineEnd = strings.IndexByte(text[index:], '\n')
+			} else {
+				lineEnd = strings.IndexAny(text[index:], "\r\n")
+			}
 			if lineEnd < 0 {
 				break
 			}
