@@ -71,6 +71,10 @@ func DecodeJSON[T any](response *httptest.ResponseRecorder) (T, error) {
 	if err != nil || media != "application/json" && !strings.HasSuffix(media, "+json") {
 		return value, fmt.Errorf("测试响应不是 JSON: %q", contentType)
 	}
+	// 标准记录器允许关闭正文缓冲区，此时与普通空正文保持相同的错误合同。
+	if response.Body == nil {
+		return value, io.EOF
+	}
 	decoder := json.NewDecoder(bytes.NewReader(response.Body.Bytes()))
 	decoder.UseNumber()
 	if err := decoder.Decode(&value); err != nil {
